@@ -1,67 +1,98 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Runtime.CompilerServices;
-using System.Text;
+namespace Simulator;
 
-namespace Simulator
+/// <summary>
+/// The world: four cities wired in a star around the capital, and the turn loop that
+/// drives them. Everything is deterministic for a given <see cref="SimulationConfig.Seed"/>.
+/// </summary>
+public class Simulation
 {
-    class Simulation
+    private readonly Random random;
+
+    public SimulationConfig Config { get; }
+    public City[] Cities { get; } = new City[4];
+    public int Turn { get; private set; }
+
+    /// <summary>Units of cargo lost on the road since the start of the run.</summary>
+    public double TotalCargoLost { get; private set; }
+
+    public Simulation(SimulationConfig? config = null)
     {
-        public City[] Cities = new City[4];
-        public int turn = 0;
+        Config = config ?? new SimulationConfig();
+        random = new Random(Config.Seed);
 
-        public Simulation()
+        Cities[0] = new City(CityTypes.Center, Config);
+        Cities[1] = new City(CityTypes.Plain, Config);
+        Cities[2] = new City(CityTypes.Forest, Config);
+        Cities[3] = new City(CityTypes.Mountains, Config);
+
+        ConnectCities(Cities[0], Cities[1]);
+        ConnectCities(Cities[0], Cities[2]);
+        ConnectCities(Cities[0], Cities[3]);
+    }
+
+    private static void ConnectCities(City first, City second)
+    {
+        first.NeighbourCities.Add(second);
+        second.NeighbourCities.Add(first);
+    }
+
+    /// <summary>
+    /// One turn, in the only order that makes the loop close:
+    /// produce -> price -> trade between cities -> local market -> consume -> spoil.
+    /// Trade has to run before the local market: once the locals have spent their money
+    /// on the (insufficient) local supply, there is nobody left to sell the imports to.
+    /// </summary>
+    public void RunTurn()
+    {
+        ++Turn;
+
+        foreach (City city in Cities) city.BeginTurn();
+
+        foreach (City city in Cities)
         {
-            Cities[0] = new City(CityTypes.center);
-            Cities[1] = new City(CityTypes.plain);
-            Cities[2] = new City(CityTypes.forest);
-            Cities[3] = new City(CityTypes.mountains);
-
-            ConnectCities(Cities[0], Cities[1]);
-            ConnectCities(Cities[0], Cities[2]);
-            ConnectCities(Cities[0], Cities[3]);
+            city.Produce(random);
+            city.CalculateNeed();
         }
 
-        private void ConnectCities(City city1, City city2)
+        // Prices react to this turn's stocks and needs before anybody trades on them.
+        foreach (City city in Cities) city.UpdateMarket();
+
+        // Traders move goods from the cheap market to the expensive one.
+        foreach (City city in Cities) city.Trade(Config.MaxDealsPerTurn);
+
+        // Whatever is left changes hands at home.
+        foreach (City city in Cities) city.ClearLocalMarket();
+
+        foreach (City city in Cities)
         {
-            city1.neighbourCities.Add(city2);
-            city2.neighbourCities.Add(city1);
+            city.Consume();
+            city.Spoil();
         }
 
-        public void Turn()
+        foreach (City city in Cities) TotalCargoLost += city.CargoLost;
+    }
+
+    /// <summary>All the money in the world. It is a closed system: this never changes.</summary>
+    public double TotalMoney
+    {
+        get
         {
-            ++turn;
-            foreach (City city in Cities)
-            {
-                city.market.CalculatePrice();
-                city.CalculateDemand();
-                city.Produce();
-            }
-
-            foreach (City city in Cities)
-            {
-                city.Trade();
-            }
-
-            foreach (City city in Cities)
-            {
-                city.CalculateOffer();
-            }
+            double total = 0;
+            foreach (City city in Cities) total += city.TotalMoney;
+            return total;
         }
+    }
 
-        public string CityView()
+    public string CityView()
+    {
+        var output = new System.Text.StringBuilder();
+        output.Append($"===== TURN {Turn} =====  money in the world: {TotalMoney:F1}  (cargo lost on the road so far: {TotalCargoLost:F1})\n");
+        foreach (City city in Cities)
         {
-            string output = "=====================CITIES OVERVIEW=====================\n";
-            foreach (City city in Cities)
-            {
-                output += city.name + "\n";
-                output += city.PopsInfo() + "\n";
-                //output += "\n-----------------\n";
-                output += city.ResourceInfo() + "\n";
-                output += "\n-----------------\n";
-            }
-
-            return output;
+            output.Append($"\n{city.Name} [{city.Type}]\n");
+            output.Append(city.PopsInfo());
+            output.Append(city.ResourceInfo());
         }
+        return output.ToString();
     }
 }
