@@ -1,0 +1,428 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TradeCraftSimulation — 300 turns of a toy economy</title>
+
+<style>
+  :root {
+    --bg: #fbfaf7;
+    --panel: #ffffff;
+    --ink: #1b1a17;
+    --muted: #6d6a62;
+    --line: #e2ded4;
+    --food: #4b8b3b;
+    --wood: #9a6b3f;
+    --tools: #3f6f9a;
+    --capital: #8a4f9e;
+    --plain: #4b8b3b;
+    --forest: #9a6b3f;
+    --mountains: #3f6f9a;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14140f;
+      --panel: #1c1c17;
+      --ink: #ece8dd;
+      --muted: #96918a;
+      --line: #33322b;
+      --food: #7bc264;
+      --wood: #c99a63;
+      --tools: #6ea6d9;
+      --capital: #bf85d4;
+      --plain: #7bc264;
+      --forest: #c99a63;
+      --mountains: #6ea6d9;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 2rem 1.25rem 4rem;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.6 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+
+  main { max-width: 1040px; margin: 0 auto; }
+
+  h1 { font-size: 1.6rem; margin: 0 0 .4rem; letter-spacing: -.01em; }
+  h2 { font-size: 1.05rem; margin: 2.5rem 0 .3rem; letter-spacing: -.01em; }
+  p  { margin: .3rem 0 1rem; color: var(--muted); max-width: 68ch; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+  }
+
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: .9rem; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: .5rem 1.1rem; margin: .1rem 0 1rem; font-size: .85rem; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: .4rem; }
+  .swatch { width: 12px; height: 3px; border-radius: 2px; }
+
+  .chart-title { font-size: .9rem; font-weight: 600; margin-bottom: .1rem; }
+  .chart-note  { font-size: .78rem; color: var(--muted); margin-bottom: .5rem; }
+
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .axis { stroke: var(--line); stroke-width: 1; }
+  .tick { fill: var(--muted); font-size: 9px; }
+  .grid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 4; }
+
+  .player { display: flex; align-items: center; gap: .8rem; margin: .2rem 0 1rem; flex-wrap: wrap; }
+  button {
+    font: inherit; color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 7px;
+    padding: .3rem .9rem; cursor: pointer; min-width: 5.5rem;
+  }
+  button:hover { border-color: var(--muted); }
+  input[type=range] { flex: 1; min-width: 200px; accent-color: var(--capital); }
+  .turn-readout { font-variant-numeric: tabular-nums; color: var(--muted); font-size: .85rem; min-width: 8.5rem; }
+
+  .board { display: grid; grid-template-columns: minmax(300px, 1.25fr) minmax(260px, 1fr); gap: .9rem; align-items: start; }
+  @media (max-width: 760px) { .board { grid-template-columns: 1fr; } }
+
+  table { border-collapse: collapse; width: 100%; font-size: .84rem; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: .28rem .4rem; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  .city-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: .45rem; vertical-align: 1px; }
+
+  .bar { height: 5px; border-radius: 3px; background: var(--line); position: relative; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--food); }
+
+  footer { margin-top: 3rem; font-size: .82rem; color: var(--muted); }
+  code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: .85em; }
+  a { color: inherit; }
+  .loading { color: var(--muted); padding: 2rem 0; }
+</style>
+
+<main>
+  <h1>Four cities, one toy economy</h1>
+  <p>
+    Nobody sets these prices. Each city has its own market, prices follow local supply and
+    demand, and merchants make a living carrying goods to wherever they are dear. This is one
+    run of 300 turns, seed 42 — the whole thing replays identically from the same seed.
+  </p>
+
+  <div id="app" class="loading">Loading the run…</div>
+</main>
+
+<template id="content">
+  <h2>Prices find their own level</h2>
+  <p>
+    Every good ends up cheapest in the city that specialises in it — that is the result the
+    model was built to produce, and nothing in the code puts it there.
+  </p>
+  <div class="legend" id="city-legend"></div>
+  <div class="charts" id="price-charts"></div>
+
+  <h2>Who ships what, and where</h2>
+  <p>
+    The provinces are only connected to the capital, so every shipment passes through it.
+    Arrows show the net flow of a good on that turn; thickness is the number of units.
+  </p>
+  <div class="player">
+    <button id="play">▶ Play</button>
+    <input type="range" id="scrub" min="1" value="1">
+    <span class="turn-readout" id="readout">turn 1</span>
+  </div>
+  <div class="board">
+    <div class="panel"><svg id="map" viewBox="0 0 520 400" role="img" aria-label="Trade flows between the four cities"></svg></div>
+    <div class="panel"><div id="snapshot"></div></div>
+  </div>
+</template>
+
+<script>
+(() => {
+  "use strict";
+
+  const RESOURCES = ["Food", "Wood", "Tools"];
+  const RESOURCE_COLOR = { Food: "--food", Wood: "--wood", Tools: "--tools" };
+
+  // Layout of the star: the capital in the middle, one province per spoke.
+  const CITIES = {
+    Capitalist: { x: 260, y: 205, label: "Capitalist", role: "the capital",   color: "--capital" },
+    Farmland:   { x:  78, y: 105, label: "Farmland",   role: "food",          color: "--plain" },
+    Forresty:   { x: 442, y: 105, label: "Forresty",   role: "wood",          color: "--forest" },
+    Craftovo:   { x: 260, y: 355, label: "Craftovo",   role: "tools",         color: "--mountains" },
+  };
+  const PROVINCES = ["Farmland", "Forresty", "Craftovo"];
+  const HUB = "Capitalist";
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  const el = (tag, attrs = {}, parent = null) => {
+    const node = document.createElementNS(SVG_NS, tag);
+    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+    if (parent) parent.appendChild(node);
+    return node;
+  };
+
+  /** Turns the simulator's own CSV into turns[turn][city][resource]. */
+  function parseCsv(text) {
+    const lines = text.trim().split(/\r?\n/);
+    const header = lines[0].split(",");
+    const turns = new Map();
+
+    for (let i = 1; i < lines.length; ++i) {
+      const cells = lines[i].split(",");
+      const row = {};
+      for (let c = 0; c < header.length; ++c) {
+        const raw = cells[c];
+        row[header[c]] = (c < 3) ? raw : Number(raw);
+      }
+      const turn = Number(row.turn);
+      if (!turns.has(turn)) turns.set(turn, {});
+      const byCity = turns.get(turn);
+      (byCity[row.city] ??= {})[row.resource] = row;
+    }
+
+    return [...turns.entries()].sort((a, b) => a[0] - b[0]).map(([, byCity]) => byCity);
+  }
+
+  // ---- price charts -------------------------------------------------------
+
+  function priceChart(resource, turns) {
+    const width = 320, height = 190;
+    const pad = { top: 8, right: 8, bottom: 20, left: 30 };
+    const names = Object.keys(CITIES);
+
+    let max = 0;
+    for (const turn of turns) for (const city of names) max = Math.max(max, turn[city][resource].price);
+    max = Math.ceil(max * 10) / 10 || 1;
+
+    const x = i => pad.left + (i / (turns.length - 1)) * (width - pad.left - pad.right);
+    const y = v => height - pad.bottom - (v / max) * (height - pad.top - pad.bottom);
+
+    const wrap = document.createElement("div");
+    wrap.className = "panel";
+    wrap.innerHTML =
+      `<div class="chart-title">${resource}</div>` +
+      `<div class="chart-note">price in money, per turn</div>`;
+
+    const svg = el("svg", { viewBox: `0 0 ${width} ${height}` });
+    wrap.appendChild(svg);
+
+    for (let step = 0; step <= 4; ++step) {
+      const value = (max / 4) * step;
+      el("line", { class: "grid", x1: pad.left, x2: width - pad.right, y1: y(value), y2: y(value) }, svg);
+      const label = el("text", { class: "tick", x: pad.left - 5, y: y(value) + 3, "text-anchor": "end" }, svg);
+      label.textContent = value.toFixed(1);
+    }
+    el("line", { class: "axis", x1: pad.left, x2: width - pad.right, y1: y(0), y2: y(0) }, svg);
+
+    for (const [first, last] of [[0, "1"], [turns.length - 1, String(turns.length)]]) {
+      const label = el("text", {
+        class: "tick", x: x(first), y: height - 6,
+        "text-anchor": first === 0 ? "start" : "end",
+      }, svg);
+      label.textContent = last;
+    }
+
+    for (const city of names) {
+      const points = turns.map((turn, i) => `${x(i).toFixed(1)},${y(turn[city][resource].price).toFixed(1)}`);
+      el("polyline", {
+        points: points.join(" "),
+        fill: "none",
+        stroke: css(CITIES[city].color),
+        "stroke-width": city === HUB ? 1.9 : 1.4,
+        "stroke-opacity": city === HUB ? 1 : .85,
+        "stroke-linejoin": "round",
+      }, svg);
+    }
+
+    return wrap;
+  }
+
+  // ---- trade map ----------------------------------------------------------
+
+  function drawMap(svg, turn) {
+    svg.textContent = "";
+
+    const defs = el("defs", {}, svg);
+    for (const resource of RESOURCES) {
+      const marker = el("marker", {
+        id: `arrow-${resource}`, viewBox: "0 0 10 10", refX: 8, refY: 5,
+        markerWidth: 5, markerHeight: 5, orient: "auto-start-reverse",
+      }, defs);
+      el("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: css(RESOURCE_COLOR[resource]) }, marker);
+    }
+
+    // The spokes themselves, drawn faint so the roads are visible even when idle.
+    for (const province of PROVINCES) {
+      el("line", {
+        x1: CITIES[HUB].x, y1: CITIES[HUB].y, x2: CITIES[province].x, y2: CITIES[province].y,
+        stroke: css("--line"), "stroke-width": 8, "stroke-linecap": "round",
+      }, svg);
+    }
+
+    let busiest = 0;
+    const flows = [];
+    for (const province of PROVINCES) {
+      for (const resource of RESOURCES) {
+        const row = turn[province][resource];
+        const net = row.imported - row.exported;   // + into the province, - out of it
+        if (Math.abs(net) < 0.05) continue;
+        flows.push({ province, resource, net });
+        busiest = Math.max(busiest, Math.abs(net));
+      }
+    }
+
+    for (const { province, resource, net } of flows) {
+      const hub = CITIES[HUB], spoke = CITIES[province];
+      // Nudge each resource onto its own lane so three flows on one road stay readable.
+      const dx = spoke.x - hub.x, dy = spoke.y - hub.y;
+      const length = Math.hypot(dx, dy);
+      const offset = (RESOURCES.indexOf(resource) - 1) * 9;
+      const ox = (-dy / length) * offset, oy = (dx / length) * offset;
+      const trim = 34 / length;
+
+      const from = net > 0 ? hub : spoke, to = net > 0 ? spoke : hub;
+      const fx = from.x + (to.x - from.x) * trim + ox;
+      const fy = from.y + (to.y - from.y) * trim + oy;
+      const tx = to.x - (to.x - from.x) * trim + ox;
+      const ty = to.y - (to.y - from.y) * trim + oy;
+
+      el("line", {
+        x1: fx, y1: fy, x2: tx, y2: ty,
+        stroke: css(RESOURCE_COLOR[resource]),
+        "stroke-width": 1 + (Math.abs(net) / busiest) * 6,
+        "stroke-linecap": "round",
+        "marker-end": `url(#arrow-${resource})`,
+        opacity: .9,
+      }, svg);
+    }
+
+    for (const [name, city] of Object.entries(CITIES)) {
+      const isHub = name === HUB;
+      el("circle", {
+        cx: city.x, cy: city.y, r: isHub ? 30 : 25,
+        fill: css("--panel"), stroke: css(city.color), "stroke-width": isHub ? 3 : 2,
+      }, svg);
+
+      const label = el("text", {
+        x: city.x, y: city.y + (isHub ? 48 : 43),
+        "text-anchor": "middle", fill: css("--ink"),
+        "font-size": 12, "font-weight": 600,
+      }, svg);
+      label.textContent = city.label;
+
+      const role = el("text", {
+        x: city.x, y: city.y + (isHub ? 62 : 57),
+        "text-anchor": "middle", fill: css("--muted"), "font-size": 10,
+      }, svg);
+      role.textContent = city.role;
+
+      const money = el("text", {
+        x: city.x, y: city.y + 4, "text-anchor": "middle",
+        fill: css("--muted"), "font-size": 10,
+      }, svg);
+      money.textContent = Math.round(turn[name].Food.city_money).toLocaleString("en-US");
+    }
+  }
+
+  // ---- the table beside the map -------------------------------------------
+
+  function drawSnapshot(node, turn) {
+    const rows = Object.keys(CITIES).map(name => {
+      const cells = RESOURCES.map(resource => {
+        const row = turn[name][resource];
+        return `<td>${row.price.toFixed(2)}</td>`;
+      }).join("");
+
+      const fed = RESOURCES.reduce((sum, r) => sum + turn[name][r].satisfaction, 0) / RESOURCES.length;
+
+      return `<tr>
+        <td><span class="city-dot" style="background:${css(CITIES[name].color)}"></span>${name}</td>
+        ${cells}
+        <td style="width:64px"><div class="bar"><i style="width:${(fed * 100).toFixed(0)}%"></i></div></td>
+      </tr>`;
+    }).join("");
+
+    node.innerHTML = `
+      <table>
+        <thead><tr><th>city</th><th>food</th><th>wood</th><th>tools</th><th>needs met</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  // ---- wiring -------------------------------------------------------------
+
+  function render(turns) {
+    const app = document.getElementById("app");
+    app.className = "";
+    app.textContent = "";
+    app.appendChild(document.getElementById("content").content.cloneNode(true));
+
+    const legend = document.getElementById("city-legend");
+    legend.innerHTML = Object.entries(CITIES).map(([name, city]) =>
+      `<span><i class="swatch" style="background:${css(city.color)}"></i>${name} — ${city.role}</span>`
+    ).join("");
+
+    const charts = document.getElementById("price-charts");
+    for (const resource of RESOURCES) charts.appendChild(priceChart(resource, turns));
+
+    const map = document.getElementById("map");
+    const snapshot = document.getElementById("snapshot");
+    const scrub = document.getElementById("scrub");
+    const readout = document.getElementById("readout");
+    const play = document.getElementById("play");
+
+    scrub.max = String(turns.length);
+    scrub.value = String(turns.length);
+
+    let timer = null;
+
+    const show = index => {
+      const turn = turns[index - 1];
+      drawMap(map, turn);
+      drawSnapshot(snapshot, turn);
+      const moved = PROVINCES.reduce((sum, p) =>
+        sum + RESOURCES.reduce((s, r) => s + turn[p][r].imported + turn[p][r].exported, 0), 0);
+      readout.textContent = `turn ${index} — ${moved.toFixed(0)} units shipped`;
+    };
+
+    const stop = () => { clearInterval(timer); timer = null; play.textContent = "▶ Play"; };
+
+    play.addEventListener("click", () => {
+      if (timer) return stop();
+      if (Number(scrub.value) >= turns.length) scrub.value = "1";
+      play.textContent = "❚❚ Pause";
+      timer = setInterval(() => {
+        const next = Number(scrub.value) + 1;
+        if (next > turns.length) return stop();
+        scrub.value = String(next);
+        show(next);
+      }, 70);
+    });
+
+    scrub.addEventListener("input", () => { stop(); show(Number(scrub.value)); });
+
+    show(turns.length);
+    addEventListener("resize", () => show(Number(scrub.value)));
+  }
+
+  fetch("run.csv")
+    .then(response => {
+      if (!response.ok) throw new Error(`run.csv: HTTP ${response.status}`);
+      return response.text();
+    })
+    .then(text => render(parseCsv(text)))
+    .catch(error => {
+      document.getElementById("app").innerHTML =
+        `<div class="panel">Could not load the run: ${error.message}</div>`;
+    });
+})();
+</script>
+
+<main>
+  <footer>
+    Generated by the simulator itself — the page reads the very CSV it writes:
+    <br><code>dotnet run --project TradeCraftSimulation -- --turns 300 --seed 42 --quiet --csv docs/run.csv</code>
+  </footer>
+</main>
