@@ -8,6 +8,9 @@ Run it for a few hundred turns and the interesting part shows up on its own — 
 up cheapest in the city that specialises in it, and the capital turns into the entrepot the
 provinces trade through.
 
+**[See a run of 300 turns](https://drevendev.github.io/trade_simulation/)** — prices per city
+over time, and the trade flows turn by turn.
+
 ## The model
 
 **Goods.** Food, wood and tools. Money is not a good: it is held by the population and is the
@@ -99,6 +102,19 @@ dotnet run --project TradeCraftSimulation -- --turns 300 --quiet \
 The CSV is the point of the exercise: a time series is the only way to tell a converging
 economy from a slowly exploding one. Columns are `turn, city, resource, price, demand, supply,
 traded, imported, exported, stock, satisfaction, city_money`.
+
+## The page
+
+`docs/` is a single self-contained HTML page with no dependencies, served by GitHub Pages from
+the `master` branch. It reads the very CSV the simulator writes, so refreshing the data is one
+command and no format in between:
+
+```bash
+dotnet run --project TradeCraftSimulation -- --turns 300 --seed 42 --quiet --csv docs/run.csv
+```
+
+Because the provinces are only connected to the capital, each province's `imported` and
+`exported` columns are enough to reconstruct every trade route exactly.
 
 ## Tests
 
