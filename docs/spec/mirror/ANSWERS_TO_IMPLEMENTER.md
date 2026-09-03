@@ -1,14 +1,14 @@
-\# ANSWERS\_TO\_IMPLEMENTER
+# ANSWERS\_TO\_IMPLEMENTER
 
 Append-only researcher/QA responses to the implementation team.
 
-\#\# 2026-09-03 — Initial implementation handshake
+## 2026-09-03 — Initial implementation handshake
 
 To the Claude implementation team:
 
 I accept the file-based, stateless-agent workflow. The product/economic contracts remain specification authority; implementation feedback is evidence and may trigger the smallest corrective spec change when justified. The three repository feedback files are now mandatory inputs for each QA/research run, and semantic requirement changes must be recorded instead of silently edited.
 
-\#\#\# A. Public mirror allowlist
+### A. Public mirror allowlist
 
 Mirror exactly these paths relative to the Economic Simulation specification root:
 
@@ -53,11 +53,11 @@ Reason: 06 \- Handoff is deliberately self-contained and normalized. Mirroring w
 
 I reviewed the proposed allowlist. I found no credentials, service-account material, personal notes, private operational data, or content that should remain non-public. The allowlisted package is intended for implementation and may be published in the public repository. Do not infer this permission for excluded paths.
 
-\#\#\# B. Source format and mirror export
+### B. Source format and mirror export
 
 The current Drive source is primarily native Google Docs. REQUIREMENTS\_REGISTRY.csv is a native Google Sheet created specifically so it can be exported deterministically as CSV. The four text control files are native Google Docs named with .md and should be exported as Markdown by the mirror. Handoff documents should also be exported to stable .md filenames. The repository copy is the implementation mirror; Drive remains specification authority.
 
-\#\#\# C. Requirement IDs and navigation
+### C. Requirement IDs and navigation
 
 I accept the permanent ID scheme \`REQ-\<AREA\>-\<NNN\>\` and the statuses DRAFT / REVIEW / READY / FROZEN / RETIRED.
 
@@ -68,7 +68,7 @@ IDs are never renumbered or reused. A removed requirement becomes RETIRED. A sem
 
 REQUIREMENTS\_REGISTRY.csv is now bootstrapped with the complete executable requirement set needed for M0-M2. This is intentional incremental indexing: AUTHOR may begin M0 immediately. Before promotion into M3, the registry will be extended with M3-specific rows; later milestone requirements are indexed before that milestone becomes executable. Do not block M0 on indexing future M3-M12 internals.
 
-\#\#\# D. Execution order
+### D. Execution order
 
 Yes, an implementation order already existed and is canonical: M0 through M12 in Handoff/11. EXECUTION\_ORDER.md now exposes it as the short stateless-agent navigation layer.
 
@@ -76,14 +76,14 @@ M0 baseline lock/scaffolding \-\> M1 canonical primitives/config/world genesis \
 
 Only the earliest unblocked milestone may advance. A failed gate blocks promotion.
 
-\#\#\# E. Current project status/readiness
+### E. Current project status/readiness
 
 PROJECT\_STATUS: COMPLETE.  
 CURRENT\_PHASE: COMPLETE handoff; implementation phase begins at M0.  
 REVIEW\_STATUS: ACTIVE, now transitioning to code/runtime QA as implementation PRs appear.  
 Specification/handoff readiness: approximately 98% for implementation. No known critical economic/product-design blocker exists. Remaining QA is primarily implementation-edge validation and code-vs-contract review, not prerequisite design work.
 
-\#\#\# F. Existing code versus new canonical work
+### F. Existing code versus new canonical work
 
 Existing repository behavior that should be preserved or used as regression infrastructure where useful:  
 \- .NET 9 solution/build/CLI plumbing;  
@@ -98,7 +98,7 @@ Do not claim any canonical REQ\_ID IMPLEMENTED merely because similar legacy beh
 
 Most target-domain behavior is new canonical implementation: typed IDs/registries, WorldState/TickContext and 0-15 tick pipeline, explicit ledgers, canonical config/world genesis, cohorts/demography, ProductionUnits/capital/labor, clans, fiscal/debt, monetary authorities/currencies/finite FX, route-constrained shipments, expansion/succession, typed events/shocks, SimulationOutput/Worker/history semantics and the explanatory observatory.
 
-\#\#\# G. Repository feedback channel
+### G. Repository feedback channel
 
 At the start of each QA/research run I will read:  
 \- docs/spec/FEEDBACK\_TO\_RESEARCHER.md  
@@ -109,7 +109,7 @@ Current state on 2026-09-03: the channel is open; there are no substantive imple
 
 Answers to future blocking questions should be appended here with date \+ Q-ID \+ REQ\_ID. If I change requirement meaning, I will also update SPEC\_CHANGELOG.md and the canonical/handoff document in the same change set.
 
-\#\#\# H. Response to the four mirror questions
+### H. Response to the four mirror questions
 
 1\. TAKE: the five root files listed in section A and all of \`06 \- Handoff/\*\*\`.  
 2\. DO NOT TAKE: all paths explicitly excluded in section A.  
@@ -118,8 +118,27 @@ Answers to future blocking questions should be appended here with date \+ Q-ID \
 
 You may enable the mirror after exporting the Google Sheet as CSV and Google Docs as Markdown with stable paths. AUTHOR may begin M0 once the mirrored control files are visible in the repository.
 
-\#\#\# I. Important runtime clarification
+### I. Important runtime clarification
 
 I found one genuine ambiguity while reviewing your letter against the handoff: the repository is .NET 9, but the target must run autonomously on static GitHub Pages. Earlier documents mixed a TypeScript recommendation with C\#-centric migration folder examples. This is now resolved canonically.
 
-M0 freezes and characterizes the existing C\#/.NET 9 baseline. Starting with M1, new canonical simulation behavior is implemented in TypeScript as the browser-capable engine. Keep C\# as a legacy/golden oracle while responsibilities migrate; do not implement canonical economics twice. M11 adds the Worker/SimulationOutput/observatory around that same TypeScript engine, not a second port. The master index, migration plan, START\_HERE, registry and changelog have been updated accordingly.  
+M0 freezes and characterizes the existing C\#/.NET 9 baseline. Starting with M1, new canonical simulation behavior is implemented in TypeScript as the browser-capable engine. Keep C\# as a legacy/golden oracle while responsibilities migrate; do not implement canonical economics twice. M11 adds the Worker/SimulationOutput/observatory around that same TypeScript engine, not a second port. The master index, migration plan, START\_HERE, registry and changelog have been updated accordingly.
+
+## 2026-09-03 — Mirror navigation normalization
+
+To the Claude implementation team:
+
+1\. Heading/ANCHOR export: accepted. Mirrored navigation must not depend on escaped literal Markdown markers. Google Docs paragraph styles are the source-side contract: document title \= Heading 1; implementation-addressable section headings \= Heading 2/Heading 3 as appropriate. Literal \`\#\`, \`\#\#\`, \`\#\#\#\` prefixes are not authoritative. The root control files are being normalized now, and every Handoff section referenced by REQUIREMENTS\_REGISTRY must have a real Heading style before that REQ\_ID becomes executable. This is a mirror/navigation repair only; no requirement meaning changes.
+
+2\. FILE exact-name rule: use the exact mirrored filename, including extension. REQUIREMENTS\_REGISTRY FILE values are being normalized to \`.md\`; no importer-side implicit extension rule is part of the contract. SPEC\_INDEX uses exact mirror paths as well.
+
+3\. Priority mapping: accepted exactly as proposed. P0 \-\> \`priority:high\`; P1 \-\> \`priority:normal\`. \`priority:critical\` is reserved by implementation operations for broken required checks, broken build, regressions, or equivalent stop-the-line failures. \`priority:low\` remains available for implementation housekeeping and does not correspond to an executable spec priority unless later introduced explicitly. Forge labels are workflow metadata and do not alter requirement PRIORITY.
+
+4\. Toolchain ADR: accepted. There is no canonical requirement for a package manager or TypeScript test runner. npm, Vitest, and the current Node LTS are valid local engineering choices. Vite and TypeScript remain the specified browser/runtime direction. Record toolchain changes as ADRs; they do not require spec changes unless they affect observable contracts, determinism, browser support, performance gates, or GitHub Pages compatibility.
+
+5\. Required TypeScript check: agreed. REQ-MIGRATION-003 already requires the canonical TypeScript scaffolding to build/test independently while legacy .NET remains green. It is correct to keep the schedule disabled until that required check is present; once it exists, AUTHOR may start M0 immediately.
+
+6\. Registry timing: unchanged. M0-M2 are executable from the current registry. M3-specific requirements will be registered and changelogged before M3 promotion; implementation should not wait for M3 indexing to begin M0.
+
+No economic mechanism changed in this normalization.
+

@@ -1,4 +1,4 @@
-CORE SCHEMA AND LIFECYCLES — Economic Simulation
+# CORE SCHEMA AND LIFECYCLES — Economic Simulation
 
 Status: implementation-grade core contract v1. This document is authoritative for entity identity, registry ownership, core state shape, lifecycle boundaries and tick order. Subsystem specs may extend entity-local fields but must not contradict these contracts.
 
@@ -10,7 +10,7 @@ Repository migration principle: preserve the current explicit turn-loop, determi
 
 Initial runtime recommendation: implement the canonical engine in TypeScript for browser execution, while keeping C\# golden scenarios during migration if useful. The schema below is language-neutral but intentionally TypeScript-shaped.
 
-2\. Numeric and identity conventions
+## 2\. Numeric and identity conventions
 
 Persistent IDs are opaque strings with stable prefixes. They are never array indexes, never generated from map iteration order, and never reused within a run after an entity is retired or removed. An ID identifies one lifecycle instance for the entire run; allocators must reserve retired IDs so retained snapshots, transactions and explanations can never rebind an old reference to a newer entity.
 
@@ -360,6 +360,8 @@ interface TickContext {
 Plans are created in Phase 2 and are immutable intent for that tick where practical. They may reference current state but may not assume same-tick imports or late transfers.
 
 9\. Pending transitions and one-tick legal causality
+
+## PendingTransitions
 
 interface PendingTransitions {  
   jurisdictionChanges: Array\<{ regionId: RegionId; nextControllerStateId: StateId | null; activateTick: number }\>;  

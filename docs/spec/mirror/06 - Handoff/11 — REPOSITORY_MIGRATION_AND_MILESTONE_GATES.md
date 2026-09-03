@@ -1,4 +1,4 @@
-Economic Simulation — Repository Migration & Milestone Gates
+# Economic Simulation — Repository Migration & Milestone Gates
 
 Purpose  
 This document defines the ordered implementation path from the current trade\_simulation repository to the canonical autonomous economic simulation specified in Drive. It is not a subsystem design document. It exists to prevent a coding agent from attempting a big-bang rewrite, mixing legacy and canonical accounting, or implementing UI before the simulation spine is testable.
@@ -30,7 +30,8 @@ Do not split into many projects initially. Keep one production project and one t
 \- Presentation: immutable read models / ExplanationFacts only after the simulation spine is stable.  
 Legacy City/Pop/Market/Deal may coexist temporarily under Legacy or their current namespace, but canonical code must never silently read/write the same stock through both models.
 
-Non-negotiable migration rules  
+## Non-negotiable migration rules
+
 1\. One authoritative owner per stock. During dual-running, legacy stocks and canonical stocks are separate worlds; do not mirror mutations bidirectionally.  
 2\. No hidden compatibility magic. If an adapter exists, it converts at a boundary and has tests.  
 3\. Determinism is a milestone gate, not final polish. Canonical code must not accept a shared mutable Random.  
@@ -42,7 +43,8 @@ Non-negotiable migration rules
 9\. No banks/private credit in core v1.  
 10\. No multi-hop trade pathfinding or all-pairs routing in core v1; use explicit sparse TransportLinks.
 
-Milestone 0 — Baseline lock and migration scaffolding  
+## Milestone 0 — Baseline lock and migration scaffolding
+
 Goal: make the starting repository reproducible before structural change.  
 Implementation:  
 \- Record current default-branch test result and representative 30-turn seeded output/hash.  
@@ -57,7 +59,8 @@ Gate M0:
 \- no canonical subsystem behavior has been introduced yet.  
 Rollback point: repository state before canonical entities.
 
-Milestone 1 — Canonical primitives, config and world genesis  
+## Milestone 1 — Canonical primitives, config and world genesis
+
 Goal: create the target data spine without markets or autonomous behavior.  
 Implementation:  
 \- Implement typed IDs and primitive value/domain types required by CORE\_SCHEMA\_AND\_LIFECYCLES.  
@@ -76,15 +79,18 @@ Gate M1:
 \- legacy test suite remains green.  
 Deliverable state: CanonicalWorldBuilder can build but not yet advance the economy.
 
-Milestone 2 — Canonical tick orchestrator and ledger framework  
+## Milestone 2 — Canonical tick orchestrator and ledger framework
+
 Goal: establish causality and reconciliation before implementing economic richness.  
 Implementation:  
 \- Implement WorldState, TickContext and canonical phase orchestrator with no-op phase handlers.  
 \- Implement PendingTransitions and deterministic phase barriers.  
 \- Implement typed flow/ledger entries required for goods, money and physical losses.  
 \- Implement phase-level invariant hooks and fail-fast diagnostic mode.  
-\- Add canonical CLI mode behind an explicit switch or scenario argument; do not silently replace legacy default yet.  
-Gate M2:  
+\- Add canonical CLI mode behind an explicit switch or scenario argument; do not silently replace legacy default yet.
+
+### Gate M2:
+
 \- 100+ no-op ticks preserve all stocks exactly except explicitly time-derived counters.  
 \- phase order is asserted by a trace test.  
 \- a handler cannot mutate a phase-owned future transition early.  

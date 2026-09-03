@@ -28,12 +28,14 @@ Canonical reading order
 Authority and conflicts  
 Start with 00\. It defines precedence and canonical normalizations. When documents disagree, follow its conflict order. Never average formulas, merge superseded schemas, or invent a third mechanic. If a material choice is still missing, treat it as a specification defect and stop that milestone.
 
-Canonical product boundary  
+## Canonical product boundary
+
 The target is a deterministic autonomous simulation with no player-controlled economy. Core v1 includes multiple States and currencies, endogenous local markets, production chains, labor and wages, population cohorts and demography, Clans, fiscal policy and laws, sovereign debt, monetary authorities and finite FX, regional/international trade, migration, settlement/state formation, bounded shocks and a GitHub Pages observatory.
 
 The model is intentionally mesoscopic. Population is represented by cohorts; firms by ProductionUnits; Clans are social/ownership/political actors rather than containers replacing every household, firm and market. Goods, money, population, debt, inventories, capital and physical resources use explicit stock/flow accounting.
 
-Hard v1 exclusions  
+## Hard v1 exclusions
+
 Do not add commercial banks/private credit, individuals, fractional firm equity markets, private securities, speculative FX/order books, dynamic currencies/redenomination, endogenous monetary-union accession, multi-hop route optimization, land/property/housing markets, warfare, dozens of goods, persistent worker-employer matching matrices, a second household shopping loop, arbitrary macro-stat modifiers, or unbounded transaction history unless a later explicit design change is approved.
 
 Tick and causality  
