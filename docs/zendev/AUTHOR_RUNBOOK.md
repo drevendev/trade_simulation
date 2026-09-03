@@ -15,6 +15,27 @@ gh pr list --state open --json number,title,headRefName,isDraft,statusCheckRollu
 git log --oneline -10
 ```
 
+### Reconcile implementation status
+
+Before selecting work, bring `docs/spec/IMPLEMENTATION_STATUS.md` into agreement with
+the merge state of the pull requests it already references:
+
+```sh
+gh pr list --state merged --json number,mergeCommit,mergedAt --limit 50
+```
+
+For every row already in the table whose `Issue`/`Merged in` column names a pull
+request that has since merged, flip its status to `IMPLEMENTED`, and record the merge
+commit and the proving test named in that pull request's body. Update the summary
+line so it agrees with the corrected rows. Carry the correction in the same pull
+request as this run's own work — or, if reconciliation is the only change this run
+makes, hand it off on its own.
+
+This step only reconciles rows that already exist in the table against pull requests
+that have already merged. It is not licence to add new rows, map more requirement
+IDs, or read anything beyond `gh pr list` and the pull request bodies it names — a
+run choosing or reading a new requirement is still bounded by section 4.
+
 ## 2. Select one unit of work
 
 Take the first applicable item and stop searching:
