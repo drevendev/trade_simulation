@@ -1,8 +1,11 @@
 name: Spec sync
 
-# Mirrors the Google Drive specification folder into docs/spec/mirror/ and proposes it
-# as a pull request. This workflow never runs a model: it only copies bytes, so that
-# untrusted specification text can never reach an agent before review.
+# Mirrors the allowlisted part of the Google Drive specification folder into
+# docs/spec/mirror/ and proposes it as a pull request. This workflow never runs a
+# model: it only copies bytes, so untrusted specification text cannot reach an agent
+# before it has been through a reviewable diff.
+#
+# What is copied is decided by docs/zendev/spec-mirror-allowlist.txt, not here.
 
 on:
   schedule:
@@ -32,6 +35,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
 
       - name: Require configuration
         env:
@@ -66,7 +73,7 @@ jobs:
           umask 077
           printf '%s' "${SA_JSON}" > "${RUNNER_TEMP}/gdrive-sa.json"
 
-      - name: Mirror the specification folder
+      - name: Copy the allowlisted paths into a staging directory
         env:
           RCLONE_CONFIG_GDRIVE_TYPE: drive
           RCLONE_CONFIG_GDRIVE_SCOPE: drive.readonly
@@ -74,31 +81,52 @@ jobs:
           RCLONE_CONFIG_GDRIVE_ROOT_FOLDER_ID: ${{ vars.GDRIVE_FOLDER_ID }}
         run: |
           set -euo pipefail
-          mkdir -p docs/spec/mirror
-          rclone sync gdrive: docs/spec/mirror \
-            --drive-export-formats md,csv,txt \
-            --drive-acknowledge-abuse=false \
+          rm -rf "${RUNNER_TEMP}/mirror"
+          mkdir -p "${RUNNER_TEMP}/mirror"
+          # Staging, not the committed mirror: names are normalized afterwards, and
+          # renaming files underneath rclone would make every later sync see them as
+          # missing, re-download them and delete the renamed ones on every run.
+          rclone sync gdrive: "${RUNNER_TEMP}/mirror" \
+            --filter-from docs/zendev/spec-mirror-allowlist.txt \
+            --drive-export-formats md,csv \
             --max-size 5M \
-            --exclude "*.exe" --exclude "*.dll" --exclude "*.zip" --exclude "*.sh" \
-            --exclude "*.ps1" --exclude "*.py" --exclude "*.yml" --exclude "*.yaml" \
             --transfers 4 --checkers 8 --stats-one-line -v
 
-      - name: Refuse an implausible mirror
+      - name: Remove credentials
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/gdrive-sa.json"
+
+      - name: Normalize exported filenames
+        run: python scripts/normalize_mirror.py "${RUNNER_TEMP}/mirror"
+
+      - name: Replace the committed mirror
+        run: |
+          set -euo pipefail
+          rm -rf docs/spec/mirror
+          mkdir -p docs/spec
+          cp -a "${RUNNER_TEMP}/mirror" docs/spec/mirror
+
+      - name: Report what arrived
         run: |
           set -euo pipefail
           size_kb=$(du -sk docs/spec/mirror | cut -f1)
           count=$(find docs/spec/mirror -type f | wc -l)
           echo "mirror: ${count} file(s), ${size_kb} KiB"
+          find docs/spec/mirror -type f -printf '  %P\n' | sort
           if [ "${size_kb}" -gt 51200 ]; then
             echo "::error::mirror exceeds 50 MiB; refusing to propose it"; exit 1
           fi
           if [ "${count}" -eq 0 ]; then
-            echo "::warning::mirror is empty — the folder may not be shared with the service account"
+            echo "::warning::mirror is empty — check that the folder is shared with the service account"
           fi
-
-      - name: Remove credentials
-        if: always()
-        run: rm -f "${RUNNER_TEMP}/gdrive-sa.json"
+          # The four navigation files are what make the specification readable one
+          # slice at a time. Their absence is not fatal here, but the author loop will
+          # block on it, so it is worth seeing in this log.
+          for required in REQUIREMENTS_REGISTRY.csv SPEC_INDEX.md EXECUTION_ORDER.md SPEC_CHANGELOG.md; do
+            if [ ! -f "docs/spec/mirror/${required}" ]; then
+              echo "::warning::navigation file ${required} is missing from the mirror"
+            fi
+          done
 
       - name: Propose the mirror as a pull request
         uses: peter-evans/create-pull-request@v8
@@ -113,7 +141,9 @@ jobs:
             type:docs
             area:spec
           body: |
-            Automated mirror of the Google Drive specification folder.
+            Automated mirror of the allowlisted part of the Google Drive specification
+            folder. What is included is decided by
+            `docs/zendev/spec-mirror-allowlist.txt`, which is a policy file.
 
             This pull request contains **no code**: the diff is confined to
             `docs/spec/mirror/**`. Its content is written by the researcher agent and
@@ -122,8 +152,7 @@ jobs:
 
             Acceptance for this pull request is narrow: confirm the diff touches only
             `docs/spec/mirror/**`, that no credential-shaped string appears, and that
-            the navigation files (`REQUIREMENTS_REGISTRY.csv`, `SPEC_CHANGELOG.md`,
-            `EXECUTION_ORDER.md`) are present or explicitly still absent.
+            nothing outside the allowlist arrived.
 
             Check outcomes are whatever the checks tab reports for the head revision
             of this pull request. This body asserts none of them.

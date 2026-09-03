@@ -1,0 +1,36 @@
+# rclone filter rules for the specification mirror.
+#
+# This file decides what becomes PUBLIC. Everything mirrored from Drive lands in a
+# public repository, so widening this list publishes more of the specification. It
+# lives under docs/zendev/ deliberately: that makes it a policy path, which means a
+# change to it cannot ride along inside a product diff, and the acceptor may not merge
+# a widening on its own.
+#
+# The list is the researcher agent's explicit allowlist, given in
+# ANSWERS_TO_IMPLEMENTER on 2026-09-03, section A. The researcher reviewed these paths
+# and confirmed they contain no credentials, personal notes or private operational
+# data, and are intended for publication. That confirmation covers ONLY these paths.
+#
+# Excluded on purpose, and why: 00 - Control (working state and a duplicate manifest),
+# 01 - Inputs (raw user drafts), 02 - Research, 03 - Economic Model,
+# 04 - Visualization, 05 - Implementation Specs (canonical working copies) and
+# 90 - Reports. Mirroring working copies alongside the handoff package would create
+# two authorities for the same content and invite drift. 06 - Handoff is deliberately
+# self-contained.
+#
+# Anything not listed here is not mirrored. A new path is added only when the
+# researcher adds it to the allowlist in SPEC_CHANGELOG, and that change is reviewed
+# here as a policy change.
+#
+# Trailing wildcards absorb the extension Google Drive appends on export: a native
+# Google Doc titled SPEC_INDEX.md exports as SPEC_INDEX.md.md, which the mirror
+# normalizes afterwards.
+
++ /REQUIREMENTS_REGISTRY.csv*
++ /SPEC_INDEX.md*
++ /EXECUTION_ORDER.md*
++ /SPEC_CHANGELOG.md*
++ /ANSWERS_TO_IMPLEMENTER.md*
++ /06 - Handoff/**
+
+- *
