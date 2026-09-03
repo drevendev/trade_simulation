@@ -26,13 +26,13 @@ claim without a proving merge.
 
 | REQ ID | Status | Issue | Merged in | Proving test |
 | --- | --- | --- | --- | --- |
-| REQ-MIGRATION-001 | `IN_PROGRESS` | #23 | pending (open pull request, not yet merged) | `dotnet build --configuration Release` (0 warnings, 0 errors) and the full `TradeCraftSimulation.Tests` suite (44/44 passed, 0 failed, 0 skipped) at revision `10af216915bd96f680ec6da4197f408175c96509`, matching Gate M0's "build succeeds and all existing tests pass unchanged" |
+| REQ-MIGRATION-001 | `IMPLEMENTED` | #23 | #24, `7d732d1ffe3f73f202d63dc82baf8f3125a13ce9` | `dotnet build --configuration Release` (0 warnings, 0 errors) and the full `TradeCraftSimulation.Tests` suite (44/44 passed, 0 failed, 0 skipped) at revision `10af216915bd96f680ec6da4197f408175c96509`, matching Gate M0's "build succeeds and all existing tests pass unchanged" |
 | REQ-MIGRATION-002 | `IMPLEMENTED` | #17 | #18, `2ee9a06633ad051887ec527acda1240f26557d0c` | `TradeCraftSimulation.Tests.LegacyBaselineSnapshotTests.The_same_seed_produces_the_same_normalized_snapshot_hash` (and `A_different_seed_produces_a_different_normalized_snapshot_hash` for the non-constant sanity check) |
 
-**Summary: 1 of 19 requirements implemented; 1 in progress.** REQ-MIGRATION-001 moves to
-`IMPLEMENTED` once its pull request merges. The other 17 requirement identifiers in
-`docs/spec/mirror/REQUIREMENTS_REGISTRY.csv` are not yet mapped to this table; that
-mapping is separate follow-up work, not evidence that they are unimplemented.
+**Summary: 2 of 19 requirements implemented; 0 in progress.** The other 17
+requirement identifiers in `docs/spec/mirror/REQUIREMENTS_REGISTRY.csv` are not yet
+mapped to this table; that mapping is separate follow-up work, not evidence that they
+are unimplemented.
 
 ## Pre-existing behavior
 
