@@ -87,6 +87,13 @@ Post the accepted revision and the evidence on the Issue, and confirm the Issue 
 If merged code satisfies the Issue only partially, keep the Issue open and narrow it
 with a recorded correction rather than closing it optimistically.
 
+Once the Issue is confirmed closed, remove every `status:*` label it still carries —
+a closed Issue carries no active `status:*` label, since the forge closed state and
+its reason are the durable resolution. If the merge did not close the Issue
+automatically (no `Closes #<issue>` took effect, or the Issue was already closed by
+other means), close it yourself and then remove its `status:*` label(s); do not skip
+the removal because the automatic close did not fire.
+
 ## 5. When you cannot decide
 
 If the required information is missing — checks never ran, the environment was

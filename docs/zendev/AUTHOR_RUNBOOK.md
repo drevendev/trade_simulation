@@ -58,7 +58,9 @@ pull request, a `status:in-progress` label, or a branch for that Issue — do no
 ## 3. Claim before mutating
 
 Comment on the Issue with: role, intended scope, the branch name you will use, and
-any known blocker. Set `status:in-progress`. Only then create the branch:
+any known blocker. Set `status:in-progress`, replacing any `status:*` label already
+on the Issue — the label catalog allows at most one `status:*` at a time, so an
+Issue never carries two. Only then create the branch:
 
 ```sh
 git switch -c claude/issue-<number>-<slug>
@@ -130,8 +132,9 @@ hopeful pull request. Record the failure on the Issue and stop.
 
 Push the branch and open a pull request whose body follows
 [the pull request template](../../.github/PULL_REQUEST_TEMPLATE.md) completely, with
-`Closes #<issue>`. Set `status:needs-review` on the Issue. Post a handoff comment
-naming the branch, the tested revision, checks, decisions, and what remains.
+`Closes #<issue>`. Set `status:needs-review` on the Issue, replacing
+`status:in-progress`. Post a handoff comment naming the branch, the tested revision,
+checks, decisions, and what remains.
 
 You do not approve and you do not merge. The run ends here.
 
@@ -149,5 +152,6 @@ append-only.
 
 Stop and record on the Issue: the exact gate, a stable reason code, what you already
 tried, and the specific event or grant that would make the work eligible again. Set
-`status:blocked`. Do not mark the unit of work complete. Do not invent a workaround
+`status:blocked`, replacing any `status:*` label already on the Issue. Do not mark
+the unit of work complete. Do not invent a workaround
 that changes what the task means.
