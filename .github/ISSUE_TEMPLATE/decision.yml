@@ -1,0 +1,52 @@
+name: Decision
+description: A choice that must be made before implementation can proceed
+title: "<decision to make>"
+labels: ["type:architecture", "status:needs-decision"]
+body:
+  - type: textarea
+    id: decision
+    attributes:
+      label: Decision to make
+      description: Stated as a choice, not as a problem.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: >-
+        Requirement IDs, invariants, performance limits, and anything already decided
+        that this choice may not contradict.
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options and tradeoffs
+      value: |
+        ### Option A
+        - Consequences:
+        - Cost of reversal:
+
+        ### Option B
+        - Consequences:
+        - Cost of reversal:
+    validations:
+      required: true
+  - type: textarea
+    id: blocks
+    attributes:
+      label: What this blocks
+      description: Which Issues cannot proceed until this is decided.
+    validations:
+      required: true
+  - type: textarea
+    id: owner
+    attributes:
+      label: Who decides
+      description: >-
+        An agent may decide reversible technical questions. Product direction,
+        anything expensive to reverse, and anything widening automated authority is
+        decided by the repository owner.
+    validations:
+      required: true

@@ -1,0 +1,78 @@
+name: Task
+description: A bounded change with observable completion criteria
+title: "<observable outcome>"
+labels: ["status:needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        An Issue is the durable work contract. It must let a fresh agent decide what
+        is true, what is requested, and how success will be proven — without the
+        conversation that produced it.
+
+        Before this Issue may be claimed it needs exactly one `priority:*`, exactly
+        one `type:*`, and at least one `area:*` label.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: The state that should become true. Not a list of steps.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: >-
+        Observed facts, sources, current behavior, constraints, and relevant
+        requirement IDs from the specification. Mark conclusions, assumptions, and
+        unknowns as such rather than presenting them as facts.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Included behavior and the boundary of the change.
+    validations:
+      required: true
+  - type: textarea
+    id: non-goals
+    attributes:
+      label: Non-goals
+      description: Adjacent work deliberately excluded from this Issue.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: >-
+        Observable conditions as a task list. Conditions, not coding steps.
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: >-
+        The commands, scenarios, or independent evidence required on the final
+        revision.
+      value: |
+        ```sh
+        dotnet build --configuration Release
+        dotnet test --configuration Release
+        ```
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Dependencies, authority, and risks
+      description: >-
+        Blocking Issues, required decisions, permissions the work would need, and
+        risks worth knowing before it is claimed. Write "none known" if that is true.
+    validations:
+      required: false

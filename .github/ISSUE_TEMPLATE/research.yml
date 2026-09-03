@@ -1,0 +1,37 @@
+name: Research
+description: A time-bounded investigation that must end in durable evidence
+title: "<question to answer>"
+labels: ["type:research", "status:needs-triage"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Research question
+      description: One question, answerable, with a decidable answer.
+    validations:
+      required: true
+  - type: textarea
+    id: method
+    attributes:
+      label: Method
+      description: Which sources, experiments, or measurements will be used.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: >-
+        The durable artifact this produces — an ADR, a decision-ready comparison, a
+        benchmark, a specification note. A collection of links is not an output.
+    validations:
+      required: true
+  - type: textarea
+    id: stop
+    attributes:
+      label: Stop condition
+      description: >-
+        What makes this research finished, including the answer "not decidable with
+        the available evidence".
+    validations:
+      required: true

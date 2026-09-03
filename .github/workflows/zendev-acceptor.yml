@@ -1,0 +1,70 @@
+name: ZenDev acceptor
+
+# Independent review of one open pull request per run: accept and merge, or request
+# changes. This role never implements. Authoring lives in zendev-author.yml.
+
+on:
+  schedule:
+    - cron: "43 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+  actions: read
+
+concurrency:
+  group: zendev-acceptor
+  cancel-in-progress: false
+
+jobs:
+  acceptor:
+    if: vars.ZENDEV_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.ZENDEV_PAT || github.token }}
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '9.0.x'
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Review one pull request
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.ZENDEV_PAT }}
+          settings: |
+            {
+              "permissions": {
+                "allow": ["Bash", "Read", "Glob", "Grep", "TodoWrite"]
+              }
+            }
+          prompt: |
+            You are the ACCEPTOR role of an unattended ZenDev run on
+            drevendev/trade_simulation. You have no memory of previous runs.
+
+            Read AGENTS.md and then docs/zendev/ACCEPTOR_RUNBOOK.md, and follow the
+            runbook exactly, in order, from section 1 to the end.
+
+            Non-negotiable for this run:
+            - Review exactly one pull request, reach one verdict, then stop.
+            - You never implement and never push commits to a pull request branch. If
+              code must change, request changes and stop.
+            - Merge only after you have observed every required check green at the
+              current head revision yourself. pending, skipped, neutral and unknown
+              are not green. Do not take the pull request body's word for anything.
+            - Never merge a change to .github/workflows/**, AGENTS.md or
+              docs/zendev/** that widens what agents may do. Label it
+              status:needs-decision and stop; a human accepts that class of change.
+            - If you cannot decide, name the exact gate in a comment and leave the
+              pull request open. Never merge to clear a queue.
