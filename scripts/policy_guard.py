@@ -25,6 +25,9 @@ POLICY_PREFIXES = (
 POLICY_FILES = ("AGENTS.md",)
 
 PRODUCT_PREFIXES = (
+    # Canonical TypeScript engine. Everything from M1 lives here.
+    "src/",
+    # Legacy C#, kept as a reference oracle until M12.
     "TradeCraftSimulation/",
     "TradeCraftSimulation.Tests/",
 )
