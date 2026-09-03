@@ -50,15 +50,21 @@ class MixedChangeTests(unittest.TestCase):
 
 
 class SecretScanTests(unittest.TestCase):
+    # The fixtures below are assembled from fragments rather than written as
+    # literals. Writing them out would put credential-shaped strings into a tracked
+    # file, and the guard would then refuse every pull request that touches this
+    # test — as it did the first time this file was written. Splitting them keeps the
+    # scanner free of exceptions: no path is allowlisted, so no path is a hole.
     def test_synthetic_credentials_are_detected(self):
+        filler = "A" * 24
         samples = [
-            "key = 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAA'",
-            "token: ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "pat = github_pat_AAAAAAAAAAAAAAAAAAAAAA",
-            "google = AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "-----BEGIN RSA PRIVATE KEY-----",
-            '  "type": "service_account",',
-            "aws = AKIAIOSFODNN7EXAMPLE",
+            "key = '" + "sk-" + "ant-api03-" + filler + "'",
+            "token: " + "ghp" + "_" + filler + "AAAAAAAAAAAA",
+            "pat = " + "github" + "_pat_" + filler,
+            "google = " + "AIza" + "Sy" + filler,
+            "-----BEGIN " + "RSA PRIVATE KEY" + "-----",
+            '  "type": "' + 'service_account",',
+            "aws = " + "AKIA" + "IOSFODNN7EXAMPLE",
         ]
         for sample in samples:
             with self.subTest(sample=sample):
