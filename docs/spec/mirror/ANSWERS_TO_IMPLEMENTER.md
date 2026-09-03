@@ -1,0 +1,125 @@
+\# ANSWERS\_TO\_IMPLEMENTER
+
+Append-only researcher/QA responses to the implementation team.
+
+\#\# 2026-09-03 — Initial implementation handshake
+
+To the Claude implementation team:
+
+I accept the file-based, stateless-agent workflow. The product/economic contracts remain specification authority; implementation feedback is evidence and may trigger the smallest corrective spec change when justified. The three repository feedback files are now mandatory inputs for each QA/research run, and semantic requirement changes must be recorded instead of silently edited.
+
+\#\#\# A. Public mirror allowlist
+
+Mirror exactly these paths relative to the Economic Simulation specification root:
+
+\- REQUIREMENTS\_REGISTRY.csv  
+\- SPEC\_INDEX.md  
+\- EXECUTION\_ORDER.md  
+\- SPEC\_CHANGELOG.md  
+\- ANSWERS\_TO\_IMPLEMENTER.md  
+\- 06 \- Handoff/\*\*
+
+06 \- Handoff currently contains the implementation package:  
+\- START\_HERE — Economic Simulation Implementation Handoff  
+\- 00 — MASTER\_IMPLEMENTATION\_INDEX  
+\- 01 — CORE\_SCHEMA\_AND\_LIFECYCLES  
+\- 02 — IMPLEMENTATION\_CONTRACT\_CONSISTENCY\_REVIEW\_01  
+\- 03 — CANONICAL\_CONFIG\_AND\_WORLD\_GENERATION  
+\- 04 — MARKETS\_TRADE\_FX\_CONTRACTS  
+\- 05 — PRODUCTION\_CAPITAL\_LABOR\_CONTRACTS  
+\- 06 — POPULATION\_DEMOGRAPHY\_CLANS\_CONTRACTS  
+\- 07 — STATE\_FISCAL\_LAWS\_CONTRACTS  
+\- 08 — MONETARY\_CURRENCY\_CONTRACTS  
+\- 09 — EXPANSION\_SETTLEMENT\_CONTRACTS  
+\- 10 — EVENTS\_SHOCKS\_CONTRACTS  
+\- 11 — REPOSITORY\_MIGRATION\_AND\_MILESTONE\_GATES  
+\- 12 — ACCEPTANCE\_BENCHMARK\_PERFORMANCE\_SUITE  
+\- 13 — VISUALIZATION\_AND\_EXPLAINABILITY  
+\- 90 — USER\_DRAFT\_SYNTHESIS\_AND\_TRACEABILITY  
+\- 91 — REPOSITORY\_AUDIT\_BASELINE  
+\- 99 — PROJECT\_MANIFEST
+
+Do not mirror:  
+\- 00 \- Control/\*\*, including STATE\_AND\_QUEUE and the duplicate working PROJECT\_MANIFEST. Handoff/99 is the public implementation copy.  
+\- 01 \- Inputs/\*\* (raw user drafts).  
+\- 02 \- Research/\*\*.  
+\- 03 \- Economic Model/\*\*.  
+\- 04 \- Visualization/\*\* canonical working copies.  
+\- 05 \- Implementation Specs/\*\* canonical working copies.  
+\- 90 \- Reports/\*\*.  
+\- Any future file not explicitly added to the allowlist in SPEC\_CHANGELOG.
+
+Reason: 06 \- Handoff is deliberately self-contained and normalized. Mirroring working copies, research and reports would create duplicate authorities and increase drift risk.
+
+I reviewed the proposed allowlist. I found no credentials, service-account material, personal notes, private operational data, or content that should remain non-public. The allowlisted package is intended for implementation and may be published in the public repository. Do not infer this permission for excluded paths.
+
+\#\#\# B. Source format and mirror export
+
+The current Drive source is primarily native Google Docs. REQUIREMENTS\_REGISTRY.csv is a native Google Sheet created specifically so it can be exported deterministically as CSV. The four text control files are native Google Docs named with .md and should be exported as Markdown by the mirror. Handoff documents should also be exported to stable .md filenames. The repository copy is the implementation mirror; Drive remains specification authority.
+
+\#\#\# C. Requirement IDs and navigation
+
+I accept the permanent ID scheme \`REQ-\<AREA\>-\<NNN\>\` and the statuses DRAFT / REVIEW / READY / FROZEN / RETIRED.
+
+Frozen AREA vocabulary:  
+CORE, CONFIG, MARKET, PRODUCTION, POPULATION, CLAN, FISCAL, MONETARY, EXPANSION, EVENTS, VISUALIZATION, MIGRATION, ACCEPTANCE, PERFORMANCE, SCOPE.
+
+IDs are never renumbered or reused. A removed requirement becomes RETIRED. A semantic change to a requirement must be recorded in SPEC\_CHANGELOG.md.
+
+REQUIREMENTS\_REGISTRY.csv is now bootstrapped with the complete executable requirement set needed for M0-M2. This is intentional incremental indexing: AUTHOR may begin M0 immediately. Before promotion into M3, the registry will be extended with M3-specific rows; later milestone requirements are indexed before that milestone becomes executable. Do not block M0 on indexing future M3-M12 internals.
+
+\#\#\# D. Execution order
+
+Yes, an implementation order already existed and is canonical: M0 through M12 in Handoff/11. EXECUTION\_ORDER.md now exposes it as the short stateless-agent navigation layer.
+
+M0 baseline lock/scaffolding \-\> M1 canonical primitives/config/world genesis \-\> M2 tick/ledger spine \-\> M3 local markets \-\> M4 production/labor/population closed economy \-\> M5 transport/trade/FX \-\> M6 fiscal/laws/clans/debt \-\> M7 monetary/currency \-\> M8 demography/migration/expansion/succession \-\> M9 events/shocks \-\> M10 whole-system acceptance/performance \-\> M11 browser/GitHub Pages observatory \-\> M12 legacy removal/release candidate.
+
+Only the earliest unblocked milestone may advance. A failed gate blocks promotion.
+
+\#\#\# E. Current project status/readiness
+
+PROJECT\_STATUS: COMPLETE.  
+CURRENT\_PHASE: COMPLETE handoff; implementation phase begins at M0.  
+REVIEW\_STATUS: ACTIVE, now transitioning to code/runtime QA as implementation PRs appear.  
+Specification/handoff readiness: approximately 98% for implementation. No known critical economic/product-design blocker exists. Remaining QA is primarily implementation-edge validation and code-vs-contract review, not prerequisite design work.
+
+\#\#\# F. Existing code versus new canonical work
+
+Existing repository behavior that should be preserved or used as regression infrastructure where useful:  
+\- .NET 9 solution/build/CLI plumbing;  
+\- seeded legacy run capability;  
+\- Storage/inventory concepts where semantics fit;  
+\- local Market concept as a legacy reference, not as canonical settlement authority;  
+\- focused unit-test structure;  
+\- existing money/stock conservation tests;  
+\- current repository/GitHub Pages/deployment plumbing where reusable.
+
+Do not claim any canonical REQ\_ID IMPLEMENTED merely because similar legacy behavior exists. IMPLEMENTATION\_STATUS.md must map each requirement to merged code plus a proving test.
+
+Most target-domain behavior is new canonical implementation: typed IDs/registries, WorldState/TickContext and 0-15 tick pipeline, explicit ledgers, canonical config/world genesis, cohorts/demography, ProductionUnits/capital/labor, clans, fiscal/debt, monetary authorities/currencies/finite FX, route-constrained shipments, expansion/succession, typed events/shocks, SimulationOutput/Worker/history semantics and the explanatory observatory.
+
+\#\#\# G. Repository feedback channel
+
+At the start of each QA/research run I will read:  
+\- docs/spec/FEEDBACK\_TO\_RESEARCHER.md  
+\- docs/spec/OPEN\_QUESTIONS.md  
+\- docs/spec/IMPLEMENTATION\_STATUS.md
+
+Current state on 2026-09-03: the channel is open; there are no substantive implementation feedback entries or open domain questions yet, and implementation coverage is 0/0 because the mirror/registry had not yet been synchronized. After this handshake, the registry gives the implementation side stable IDs to populate that table.
+
+Answers to future blocking questions should be appended here with date \+ Q-ID \+ REQ\_ID. If I change requirement meaning, I will also update SPEC\_CHANGELOG.md and the canonical/handoff document in the same change set.
+
+\#\#\# H. Response to the four mirror questions
+
+1\. TAKE: the five root files listed in section A and all of \`06 \- Handoff/\*\*\`.  
+2\. DO NOT TAKE: all paths explicitly excluded in section A.  
+3\. Folder revision: the project root contains research/history/working duplicates that are useful for QA but are intentionally excluded from public implementation mirroring. I found no accidental file inside the 06 \- Handoff allowlist that should be removed. The duplicate working copies outside Handoff should remain in Drive for QA, not be mirrored.  
+4\. Publication confirmation: yes. I found nothing in the proposed allowlist that is prohibited or inappropriate to publish. This confirmation applies only to the explicit allowlist.
+
+You may enable the mirror after exporting the Google Sheet as CSV and Google Docs as Markdown with stable paths. AUTHOR may begin M0 once the mirrored control files are visible in the repository.
+
+\#\#\# I. Important runtime clarification
+
+I found one genuine ambiguity while reviewing your letter against the handoff: the repository is .NET 9, but the target must run autonomously on static GitHub Pages. Earlier documents mixed a TypeScript recommendation with C\#-centric migration folder examples. This is now resolved canonically.
+
+M0 freezes and characterizes the existing C\#/.NET 9 baseline. Starting with M1, new canonical simulation behavior is implemented in TypeScript as the browser-capable engine. Keep C\# as a legacy/golden oracle while responsibilities migrate; do not implement canonical economics twice. M11 adds the Worker/SimulationOutput/observatory around that same TypeScript engine, not a second port. The master index, migration plan, START\_HERE, registry and changelog have been updated accordingly.  
