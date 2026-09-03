@@ -18,7 +18,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RCLONE_VERSION: v1.75.0
+  # Deliberately not named RCLONE_VERSION: rclone maps every RCLONE_* environment
+  # variable onto the flag of the same name, so that name reaches it as
+  # "--version v1.75.0" and aborts the run. The RCLONE_CONFIG_GDRIVE_* variables
+  # further down are the documented remote-configuration form and are meant to be
+  # read that way.
+  SPEC_RCLONE_VERSION: v1.75.0
 
 jobs:
   sync:
@@ -48,9 +53,9 @@ jobs:
           set -euo pipefail
           cd "${RUNNER_TEMP}"
           curl -fsSL -o rclone.zip \
-            "https://downloads.rclone.org/${RCLONE_VERSION}/rclone-${RCLONE_VERSION}-linux-amd64.zip"
+            "https://downloads.rclone.org/${SPEC_RCLONE_VERSION}/rclone-${SPEC_RCLONE_VERSION}-linux-amd64.zip"
           unzip -q rclone.zip
-          sudo install -m 0755 "rclone-${RCLONE_VERSION}-linux-amd64/rclone" /usr/local/bin/rclone
+          sudo install -m 0755 "rclone-${SPEC_RCLONE_VERSION}-linux-amd64/rclone" /usr/local/bin/rclone
           rclone version
 
       - name: Write service account credentials outside the workspace
