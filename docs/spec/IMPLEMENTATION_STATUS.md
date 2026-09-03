@@ -18,16 +18,20 @@ proves it. "The code looks right" is not evidence.
 | `DEFERRED` | Deliberately out of scope for now, with a recorded reason |
 | `CONTESTED` | Implementable only after the researcher resolves a contradiction |
 
+Only `IMPLEMENTED` rows are evidence: a merge commit plus a named test that fails
+without it. Every other status, including a row not yet present in this table, is a
+claim without a proving merge.
+
 ## Coverage
 
 | REQ ID | Status | Issue | Merged in | Proving test |
 | --- | --- | --- | --- | --- |
-| REQ-MIGRATION-002 | `IN_PROGRESS` | #17 | pending (open pull request, not yet merged) | `TradeCraftSimulation.Tests.LegacyBaselineSnapshotTests.The_same_seed_produces_the_same_normalized_snapshot_hash` (and `A_different_seed_produces_a_different_normalized_snapshot_hash` for the non-constant sanity check) |
+| REQ-MIGRATION-002 | `IMPLEMENTED` | #17 | #18, `2ee9a06633ad051887ec527acda1240f26557d0c` | `TradeCraftSimulation.Tests.LegacyBaselineSnapshotTests.The_same_seed_produces_the_same_normalized_snapshot_hash` (and `A_different_seed_produces_a_different_normalized_snapshot_hash` for the non-constant sanity check) |
 
-**Summary: 0 of 19 requirements implemented; 1 in progress.** REQ-MIGRATION-002 moves to
-`IMPLEMENTED` once its pull request merges. The other 18 requirement identifiers in
-`docs/spec/mirror/REQUIREMENTS_REGISTRY.csv` are not yet mapped to this table; that
-mapping is separate follow-up work, not evidence that they are unimplemented.
+**Summary: 1 of 19 requirements implemented; 0 in progress.** The other 18 requirement
+identifiers in `docs/spec/mirror/REQUIREMENTS_REGISTRY.csv` are not yet mapped to this
+table; that mapping is separate follow-up work, not evidence that they are
+unimplemented.
 
 ## Pre-existing behavior
 
