@@ -22,16 +22,17 @@ proves it. "The code looks right" is not evidence.
 
 | REQ ID | Status | Issue | Merged in | Proving test |
 | --- | --- | --- | --- | --- |
-| — | — | — | — | — |
+| REQ-MIGRATION-002 | `IN_PROGRESS` | #17 | pending (open pull request, not yet merged) | `TradeCraftSimulation.Tests.LegacyBaselineSnapshotTests.The_same_seed_produces_the_same_normalized_snapshot_hash` (and `A_different_seed_produces_a_different_normalized_snapshot_hash` for the non-constant sanity check) |
 
-**Summary: 0 of 0 requirements implemented.** The specification mirror is not yet
-synchronized, so no requirement identifiers exist to track.
+**Summary: 0 of 19 requirements implemented; 1 in progress.** REQ-MIGRATION-002 moves to
+`IMPLEMENTED` once its pull request merges. The other 18 requirement identifiers in
+`docs/spec/mirror/REQUIREMENTS_REGISTRY.csv` are not yet mapped to this table; that
+mapping is separate follow-up work, not evidence that they are unimplemented.
 
 ## Pre-existing behavior
 
 The repository already contains a working simulation — four cities, three goods,
-supply-and-demand pricing, merchant arbitrage, and 42 passing tests including money
-and stock conservation invariants. None of it is yet mapped to requirement
-identifiers. Mapping the existing code onto the registry is the first substantive
-unit of work once the registry exists; until then the table above is empty by fact,
-not by omission.
+supply-and-demand pricing, merchant arbitrage, and (as of this update) 44 passing
+tests including money and stock conservation invariants. Apart from
+REQ-MIGRATION-002 above, none of it is yet mapped to requirement identifiers.
+Mapping the rest of the existing code onto the registry remains follow-up work.
