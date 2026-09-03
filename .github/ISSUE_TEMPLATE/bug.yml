@@ -1,0 +1,52 @@
+name: Bug
+description: Verified behavior differs from the intended contract
+title: "<what is wrong, observably>"
+labels: ["type:bug", "status:needs-triage"]
+body:
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: The smallest repeatable sequence, with the revision and environment.
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: What actually happens. Values, not adjectives.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: >-
+        What should happen, and which requirement, invariant, or test establishes it.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who or what is affected, and how badly. This drives priority.
+    validations:
+      required: true
+  - type: textarea
+    id: cause
+    attributes:
+      label: Suspected cause
+      description: >-
+        Optional. A suspected cause is an inference until demonstrated — label it as
+        one.
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      value: |
+        - [ ] A regression test fails before the fix and passes after it
+        - [ ]
+    validations:
+      required: true
