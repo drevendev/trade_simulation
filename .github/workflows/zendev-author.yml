@@ -39,6 +39,7 @@ jobs:
           python-version: '3.12'
 
       - name: Run one AUTHOR unit of work
+        id: claude
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -70,3 +71,21 @@ jobs:
               promote one to another, and never open a pull request on a failing check.
             - If you are blocked, say so on the Issue with the exact gate and stop.
               A blocked run that reports honestly is a successful run.
+
+      # Telemetry only. This repository is public, so the numbers go to a private
+      # ledger. It never fails the run: a missing token or an unreachable ledger is a
+      # warning, because a loop that stops over bookkeeping is worse than a gap in the
+      # bookkeeping.
+      - name: Record what this run consumed
+        if: always()
+        env:
+          TELEMETRY_TOKEN: ${{ secrets.TELEMETRY_PAT }}
+        run: |
+          python scripts/record_usage.py \
+            --execution-file "${{ steps.claude.outputs.execution_file }}" \
+            --conclusion "${{ steps.claude.outputs.conclusion }}" \
+            --role author \
+            --ledger-repo drevendev/zen-telemetry \
+            --run-id "${{ github.run_id }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --commit "${{ github.sha }}"
