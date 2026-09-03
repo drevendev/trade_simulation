@@ -1,4 +1,4 @@
-VISUALIZATION AND EXPLAINABILITY — Economic Simulation
+# VISUALIZATION AND EXPLAINABILITY — Economic Simulation
 
 Status  
 Mature subsystem design. This document specifies the GitHub Pages experience and the browser-facing observation layer for the autonomous simulation. It does not redefine economics; it exposes the existing model faithfully, compactly, and causally.
@@ -298,7 +298,7 @@ Endogenous consequences: shortages, price changes, migration, fiscal stress, inf
 
 This distinction is mandatory because events must not be credited with macro effects they do not directly set.
 
-13\. Timeline, replay and comparison
+## 13\. Timeline, replay and comparison
 
 The simulation is deterministic, so replay is central.
 

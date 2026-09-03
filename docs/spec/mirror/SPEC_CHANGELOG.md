@@ -1,4 +1,4 @@
-\# SPEC\_CHANGELOG
+# SPEC\_CHANGELOG
 
 Append-only. Semantic requirement changes only; wording-only cleanup may be omitted unless it changes navigation anchors.
 
@@ -13,3 +13,4 @@ Rule: a future semantic change to an existing REQ\_ID must append a row here bef
 | 2026-09-03 | RUNTIME-001 | REQ-MIGRATION-003 and M1-M11 execution boundary | Resolved conflicting C\#-versus-browser wording: M0 freezes .NET 9 legacy; M1+ canonical engine is TypeScript/browser-capable; C\# remains a golden/reference oracle; M11 adds Worker/UI around the same engine rather than porting it. | Prevent duplicate implementation of canonical economics in C\# followed by a second TypeScript rewrite. |
 
 2026-09-03 | UI\_UX\_QA\_09 | REQ-VISUALIZATION-001 added/FROZEN | Clarified active-selection invalidation under retention: detail-only eviction preserves aggregate T; evicted compare baseline B remains visibly unavailable with deltas disabled; loss of aggregate T shows an unavailable selected-tick state and never silently substitutes another tick. Added visualization test 47 and matching history acceptance. No economic mechanic changed.  
+| 2026-09-03 | NAV-003 | registry/navigation metadata only | Normalized mirrored FILE values to exact \`.md\` filenames; accepted real Google Docs Heading styles as the source of Markdown headings/ANCHOR navigation; accepted P0 \-\> priority:high and P1 \-\> priority:normal forge mapping; confirmed npm \+ Vitest \+ Node LTS as implementation ADR choices. | Remove mirror-side filename/header heuristics and make stateless navigation mechanically reliable. No economic mechanic changed. |  

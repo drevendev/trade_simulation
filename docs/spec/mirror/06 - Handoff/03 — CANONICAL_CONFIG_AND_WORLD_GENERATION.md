@@ -1,4 +1,4 @@
-CANONICAL CONFIGURATION AND WORLD GENERATION — Economic Simulation
+# CANONICAL CONFIGURATION AND WORLD GENERATION — Economic Simulation
 
 Status: implementation-grade configuration/world-initialization contract v1. Authoritative together with CORE\_SCHEMA\_AND\_LIFECYCLES and subsystem implementation contracts. This document owns configuration hierarchy, canonical defaults, scenario/world templates, initialization order, deterministic variation, validation and migration from the repository’s current SimulationConfig.cs. It does not redefine subsystem formulas.
 
@@ -12,7 +12,7 @@ The configuration system must satisfy four requirements simultaneously:
 
 No subsystem may introduce an unregistered magic number except local mathematical constants such as 0, 1, 2, or a documented unit conversion. All clamps, tolerances, cadences, EMA alphas, response strengths and thresholds that affect behavior must be configurable or definition-owned.
 
-2\. Configuration hierarchy
+## 2\. Configuration hierarchy
 
 Use exactly four layers:
 
@@ -458,6 +458,8 @@ Human-readable seed keys are converted to persistent IDs with deterministic pref
 
 17\. Default baseline world profile
 
+## Canonical baseline scenario
+
 Provide one checked-in scenario named baseline-multistate-v1 used for demos and most golden tests:  
 \- 24 fixed Regions arranged as a sparse connected graph, not a complete graph;  
 \- 4 initial States controlling most but not necessarily all Regions;  
@@ -533,7 +535,7 @@ interface GenesisRecord {
 
 Genesis records explain opening balance-sheet stocks but do not pretend that a historical counterparty transaction occurred before tick 0\. For every currency, sum actor/pool opening balances must exactly equal opening transaction money reported by the monetary diagnostic. For every good, opening inventories \+ capital-converted goods already represented as capital \+ shipments(0) must match genesis goods after documented conversion. Resource deposits are natural endowments and are not market inventory.
 
-21\. Validation rules
+## 21\. Validation rules
 
 Configuration validation fails fast on:  
 \- negative rates/quantities where forbidden;  
