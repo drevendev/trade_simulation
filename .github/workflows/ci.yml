@@ -32,6 +32,21 @@ jobs:
           path: '**/TestResults/*.trx'
           if-no-files-found: ignore
 
+  typescript:
+    name: typescript
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
   policy-guard:
     name: policy-guard
     runs-on: ubuntu-latest

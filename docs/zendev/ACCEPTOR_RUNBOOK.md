@@ -45,7 +45,16 @@ gh pr diff <number>
 
 - Every required check must be green **at the current head revision**. `pending`,
   `skipped`, `neutral`, and `unknown` are not green.
-- Check out the head revision and run the verification commands yourself.
+- Check out the head revision and run the verification commands yourself — both
+  runtimes, whichever one the diff touched:
+
+  ```sh
+  npm ci && npm run typecheck && npm test && npm run build
+  dotnet build --configuration Release && dotnet test --configuration Release
+  ```
+
+  A canonical TypeScript change that leaves the legacy .NET build red does not satisfy
+  `REQ-MIGRATION-003`, however green its own suite is.
 - Judge the diff against the acceptance criteria of the Issue, one by one. A criterion
   without evidence is not met.
 - Confirm the claimed requirement IDs are actually implemented, not merely mentioned.

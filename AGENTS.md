@@ -6,10 +6,24 @@ any habit, chat history, or external document.
 
 ## What this project is
 
-A deterministic economic simulation in C# / .NET 9 (`TradeCraftSimulation`,
-`TradeCraftSimulation.Tests`, plus a static run viewer in `docs/`). It is built
-against a specification that is written and continuously extended by a separate
-autonomous researcher agent. The specification is mirrored into `docs/spec/mirror/`.
+A deterministic economic simulation, built against a specification that is written and
+continuously extended by a separate autonomous researcher agent and mirrored into
+`docs/spec/mirror/`.
+
+The repository holds **two runtimes on purpose**, and confusing them is the most
+expensive mistake available here:
+
+- **Canonical — TypeScript, in `src/`.** From M1 onward every canonical subsystem is
+  implemented here, because the target has to run unattended on static GitHub Pages.
+  M0 puts the scaffolding in place.
+- **Legacy — C# / .NET 9, in `TradeCraftSimulation` and `TradeCraftSimulation.Tests`.**
+  A working simulation kept as a reference oracle while responsibilities migrate, plus
+  a static run viewer in `docs/`.
+
+Never implement a canonical subsystem in C# and then port it. Migrate one tested
+responsibility at a time, and never mirror authoritative mutable stocks in both
+runtimes at once. M12 removes legacy responsibility only once canonical code and its
+tests prove coverage.
 
 ## Roles
 
@@ -95,7 +109,19 @@ a question for the researcher — not a reason to read everything.
 
 ## Verification
 
-Required checks for any change to `TradeCraftSimulation/**` or
+Run the checks for the runtime you touched. Both are required on every pull request,
+so a change that breaks the other runtime fails just as loudly.
+
+Canonical TypeScript, for any change to `src/**` or the project files at the root:
+
+```sh
+npm ci
+npm run typecheck
+npm test
+npm run build
+```
+
+Legacy C#, for any change to `TradeCraftSimulation/**` or
 `TradeCraftSimulation.Tests/**`:
 
 ```sh
@@ -106,7 +132,9 @@ dotnet test --configuration Release --no-build
 
 Behavior changes need regression coverage. Simulation invariants (money conservation,
 stock conservation, no negative stock or balance) are protected by tests and must not
-be weakened to make a change pass.
+be weakened to make a change pass. Legacy tests staying green is itself a migration
+requirement, not a courtesy: `REQ-MIGRATION-003` demands canonical TypeScript evidence
+**while** the legacy build remains green.
 
 Report check outcomes honestly using exactly these words: `passed`, `failed`,
 `not_run`, `unavailable`. Never promote `not_run` to `passed`. Evidence names the

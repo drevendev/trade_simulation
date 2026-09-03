@@ -31,6 +31,20 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(policy, [])
         self.assertEqual(product, [])
 
+    def test_canonical_typescript_counts_as_product(self):
+        # From M1 the canonical engine lives in src/. If the guard did not know that,
+        # a policy change could ride along inside a canonical diff unnoticed.
+        policy, product = guard.classify(
+            ["src/index.ts", "src/domain/market.ts", "AGENTS.md"]
+        )
+        self.assertEqual(policy, ["AGENTS.md"])
+        self.assertEqual(product, ["src/domain/market.ts", "src/index.ts"])
+
+    def test_typescript_change_mixed_with_policy_is_refused(self):
+        violations = guard.check(["AGENTS.md", "src/index.ts"], added_lines=[])
+        self.assertEqual(len(violations), 1)
+        self.assertIn("split them", violations[0])
+
 
 class MixedChangeTests(unittest.TestCase):
     def test_mixed_change_is_refused(self):
