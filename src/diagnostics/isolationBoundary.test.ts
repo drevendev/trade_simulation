@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -18,6 +21,38 @@ describe("REQ-MIGRATION-004 isolation boundary", () => {
 
     expect(report.canonicalViolations).toEqual([]);
     expect(report.legacyViolations).toEqual([]);
+  });
+
+  it("negative control: auditRepositoryIsolationBoundary rejects a similarly-named-but-distinct file that the guard-module exclusion must not swallow", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "isolation-boundary-audit-"));
+
+    try {
+      mkdirSync(join(tempRoot, "src", "domain"), { recursive: true });
+      mkdirSync(join(tempRoot, "TradeCraftSimulation"), { recursive: true });
+
+      // Distinct from, but naming-adjacent to, the guard's own
+      // `diagnostics/isolationBoundary.ts`: a substring match on "isolationBoundary"
+      // would wrongly exclude this file too. It carries a genuine prohibited
+      // reference and must still be reported by the full traversal path.
+      writeFileSync(
+        join(tempRoot, "src", "domain", "isolationBoundaryBridge.ts"),
+        'import { readLegacyStorage } from "../../TradeCraftSimulation/Storage";',
+      );
+
+      const report = auditRepositoryIsolationBoundary(tempRoot);
+
+      expect(report.canonicalViolations).toEqual([
+        {
+          file: join("domain", "isolationBoundaryBridge.ts"),
+          line: 1,
+          marker: "TradeCraftSimulation",
+          excerpt: 'import { readLegacyStorage } from "../../TradeCraftSimulation/Storage";',
+        },
+      ]);
+      expect(report.legacyViolations).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("negative control: rejects a canonical file that imports the legacy tree", () => {

@@ -45,6 +45,18 @@ kind of forbidden reference described above and assert the scanner's pure functi
 what proves the guard is a real detector rather than a check that would pass
 vacuously against an empty ruleset.
 
+The real-tree audit excludes the guard's own two files
+(`diagnostics/isolationBoundary.ts`, `diagnostics/isolationBoundary.test.ts`) by
+**exact, normalized repository-relative path**, not by a substring match on their
+basename — a substring match would also silently exclude any unrelated file whose
+path merely contains the text `isolationBoundary` (for example a hypothetical
+`src/domain/isolationBoundaryBridge.ts`), letting a genuine prohibited reference in
+such a file escape the audit. A third negative-control test,
+`auditRepositoryIsolationBoundary rejects a similarly-named-but-distinct file that the
+guard-module exclusion must not swallow`, builds such a file in a temporary directory
+and runs it through the full `auditRepositoryIsolationBoundary` traversal (not just
+the pure `findCrossRuntimeReferences` scan) to prove this exclusion stays exact.
+
 ## Limits of this evidence
 
 This is a source-level guard, not a runtime one:
@@ -53,10 +65,11 @@ This is a source-level guard, not a runtime one:
   currently *names* the other tree in source, not that no process-external bridge
   (a CI step, a generated file, a shared data file outside both trees) could exist;
 - it runs as an ordinary `vitest` test today; it is not yet wired as a standalone CI
-  gate distinct from `npm test` — the existing `build-and-test` required check already
-  runs the full `npm test` suite, so this guard already gates every pull request, but
-  a reviewer looking for it by name should look inside that check's output rather than
-  a separately named job;
+  gate distinct from `npm test` — the existing `typescript` required check already
+  runs the full `npm test` suite (per `.github/workflows/ci.yml`; `build-and-test` is
+  the legacy `dotnet` job and does not run it), so this guard already gates every
+  pull request, but a reviewer looking for it by name should look inside the
+  `typescript` check's output rather than a separately named job;
 - it says nothing about *economic* correctness or accounting invariants — only about
   the structural rule that the two runtimes' stocks are not wired together;
 - as canonical stocks arrive from M1 onward, the marker lists above may need

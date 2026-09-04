@@ -16,7 +16,7 @@
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 
 export interface SourceFile {
   readonly path: string;
@@ -99,11 +99,20 @@ export const LEGACY_INTO_CANONICAL_MARKERS = [
  * reference. Excluding them from the real-tree audit is what keeps the guard from
  * flagging itself; the fixture-based negative-control tests prove the underlying
  * scan still rejects a genuine violation.
+ *
+ * These are exact, normalized repository-relative paths (relative to `src/`), not a
+ * substring match: a substring match on `isolationBoundary` would also silently
+ * exclude any unrelated file whose path merely contains that text (for example
+ * `src/domain/isolationBoundaryBridge.ts`), letting a genuine prohibited reference in
+ * such a file escape the real-tree audit entirely.
  */
-const GUARD_MODULE_BASENAME = "isolationBoundary";
+const GUARD_MODULE_RELATIVE_PATHS = new Set([
+  "diagnostics/isolationBoundary.ts",
+  "diagnostics/isolationBoundary.test.ts",
+]);
 
 function excludingGuardModule(files: SourceFile[]): SourceFile[] {
-  return files.filter((file) => !file.path.includes(GUARD_MODULE_BASENAME));
+  return files.filter((file) => !GUARD_MODULE_RELATIVE_PATHS.has(file.path.split(sep).join("/")));
 }
 
 export interface IsolationBoundaryReport {
