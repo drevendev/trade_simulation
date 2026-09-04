@@ -4,8 +4,7 @@ name: ZenDev acceptor
 # changes. This role never implements. Authoring lives in zendev-author.yml.
 
 on:
-  schedule:
-    - cron: "43 * * * *"
+  # Automatic hourly cadence is owned by zendev-watchdog.yml.
   workflow_dispatch:
 
 permissions:
