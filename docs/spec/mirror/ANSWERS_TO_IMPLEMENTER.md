@@ -142,3 +142,27 @@ To the Claude implementation team:
 
 No economic mechanism changed in this normalization.
 
+2026-09-03 — CODE\_RUNTIME\_QA\_02 — REQ-MIGRATION-002 baseline pin
+
+PR \#18 correctly proves repeated-run determinism and is otherwise within M0 scope, but it does not yet freeze the legacy baseline. Both same-seed hashes are computed fresh inside the test, so a future deterministic legacy behavior change could alter both values and still pass. That defeats M0's purpose of recording a reproducible baseline/golden oracle.
+
+Smallest correction: keep the current normalized snapshot utility and same-seed/different-seed tests, and add one checked-in expected SHA-256 for the representative 30-turn baseline using a fixed documented seed (seed 7 is acceptable if retained). The proving test must assert that the 30-turn run equals that exact expected digest. Update IMPLEMENTATION\_STATUS evidence after the corrective PR merges. This is a migration-evidence repair only; no legacy economic behavior or canonical economic mechanic should change.
+
+Until that follow-up merges, treat REQ-MIGRATION-002 as not fully closed under the corrected acceptance. Do not discard the useful implementation from PR \#18.
+
+## 2026-09-04 — CONSISTENCY/SIMPLICITY\_REVIEW — M0 mirror/status reconciliation
+
+Cross-check result: Drive specification authority is internally consistent, but the repository-facing copies are stale. The authoritative Drive registry currently contains 21 requirements, including REQ-CORE-002, and REQ-MIGRATION-002 now requires a fixed documented 30-turn seed plus a checked-in expected normalized SHA-256. The repository mirror currently contains 20 requirement rows, omits REQ-CORE-002, and still carries the pre-repair REQ-MIGRATION-002 acceptance. IMPLEMENTATION\_STATUS.md separately says “2 of 19 requirements implemented” and marks REQ-MIGRATION-002 IMPLEMENTED using only the same-seed/different-seed tests from PR \#18.
+
+Required reconciliation, without changing any economic mechanic: before the next AUTHOR requirement selection, refresh the allowlisted mirror from Drive and verify that the mirrored registry has 21 rows, includes REQ-CORE-002, and contains the pinned-digest acceptance for REQ-MIGRATION-002. Then reconcile IMPLEMENTATION\_STATUS.md against that refreshed registry. REQ-MIGRATION-001 may remain IMPLEMENTED on its existing build/test evidence. REQ-MIGRATION-002 must not remain IMPLEMENTED until a merged follow-up adds the fixed expected 30-turn SHA-256 assertion required by the current acceptance; preserve PR \#18 as partial evidence rather than discarding it. The coverage summary must be computed from the current mirrored registry rather than a hard-coded historical count.
+
+This is a mirror/evidence consistency repair only. No requirement meaning was changed in this review and no SPEC\_CHANGELOG entry is needed beyond the already-recorded CODE\_RUNTIME\_QA\_02 semantic correction.
+
+## 2026-09-04 — CODE\_RUNTIME\_QA\_03 — Issue \#27 evidence-state correction
+
+## Issue \#27 correctly selects REQ-MIGRATION-003 as the next substantive M0 scaffolding unit, but its final acceptance bullet required the implementation pull request to record its own merge commit in IMPLEMENTATION\_STATUS.md. That is impossible before merge and contradicts the repository's already-established AUTHOR\_RUNBOOK reconciliation flow.
+
+Smallest correction: in the implementation PR, add/update REQ-MIGRATION-003 as IN\_PROGRESS, name Issue \#27 and the proving tests, and leave Merged in as pending (or the repository's equivalent pre-merge marker). After the PR merges, the next bounded reconciliation step changes the row to IMPLEMENTED and records the actual merge commit. Only IMPLEMENTED is closing evidence. I posted this correction directly on Issue \#27 so the executable task contract is unambiguous before an AUTHOR run claims it.
+
+No product/economic requirement, M0 scope, or acceptance test meaning changed. This is repository evidence-state/process repair only; SPEC\_CHANGELOG does not need a semantic-change row.
+

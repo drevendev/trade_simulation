@@ -27,7 +27,7 @@ Do not split into many projects initially. Keep one production project and one t
 \- Simulation: WorldState, TickContext, phase orchestrator, reconciliation, keyed RNG.  
 \- Config: RunOptions, SimulationConfig, ScenarioDefinition, DefinitionPack, validators.  
 \- Diagnostics: accounting ledgers, invariant reports, benchmark snapshots.  
-\- Presentation: immutable read models / ExplanationFacts only after the simulation spine is stable.  
+\- Presentation: the final immutable SimulationOutput/read-model \+ ExplanationFacts architecture starts only after the simulation spine is stable at M11. Earlier milestone previews are transitional one-way diagnostic exports and must not become canonical Presentation/domain dependencies.  
 Legacy City/Pop/Market/Deal may coexist temporarily under Legacy or their current namespace, but canonical code must never silently read/write the same stock through both models.
 
 ## Non-negotiable migration rules
@@ -41,7 +41,44 @@ Legacy City/Pop/Market/Deal may coexist temporarily under Legacy or their curren
 7\. Do not delete working legacy tests until equivalent canonical tests exist. Tests that assert obsolete economics may be quarantined/renamed as Legacy rather than rewritten to bless new behavior.  
 8\. Do not preserve legacy formulas merely to minimize diff size. Preserve repository plumbing and useful concepts; replace obsolete economic mechanics explicitly.  
 9\. No banks/private credit in core v1.  
-10\. No multi-hop trade pathfinding or all-pairs routing in core v1; use explicit sparse TransportLinks.
+10\. No multi-hop trade pathfinding or all-pairs routing in core v1; use explicit sparse TransportLinks.  
+11\. Milestone visibility is continuous. For every M0–M12, at least 5% of planned implementation units, rounded up with a minimum of one unit per milestone, must be visualization/presentation work that produces a directly visible GitHub Pages change. M11 satisfies this inherently; before M11 use the lightweight milestone-preview boundary below rather than pulling the final observatory architecture forward.
+
+## Milestone preview scope (M0–M12)
+
+## The project should show visible progress throughout implementation without turning early milestones into UI-first work. Before M11, maintain one lightweight Milestone Preview area on the existing GitHub Pages site. A preview may consume a small deterministic static/generated JSON artifact or equivalent one-way export from that milestone's golden scenario. It is diagnostic/presentation output only: it must not mutate WorldState, consume economic RNG, become a second source of economic truth, or establish a competing browser API. Temporary preview adapters may be replaced at M11 by the canonical SimulationOutput \+ Worker architecture.
+
+## A unit counts toward the \>=5% visualization share only when its acceptance includes a user-visible Pages change and a basic build/render smoke check. Prefer one compact view with 1–3 legible visuals or metrics and a short plain-English explanation of what the milestone added. Do not create dashboard clutter or placeholder chrome merely to satisfy the quota.
+
+## Suggested visible slice by milestone:
+
+## \- M0: development-status strip showing the frozen legacy baseline seed/hash, current canonical-runtime/scaffolding status and milestone label.
+
+## \- M1: world-gen overview with scenario/seed plus State, Region, Currency, Clan and major entity counts/topology.
+
+## \- M2: canonical 0–15 phase trace, tick counter and zero-flow reconciliation/ledger health for the no-op scenario.
+
+## \- M3: one LocalMarket view with price, traded quantity, shortage/surplus and settlement totals.
+
+## \- M4: one-region economy view with production, employment/wages, needs satisfaction and key inventories/capital.
+
+## \- M5: transport/trade/FX view with active links/shipments, trade volumes and FX liquidity/rate movement.
+
+## \- M6: State/Clan/fiscal view with treasury flows, taxes/transfers, debt and ownership/influence summaries.
+
+## \- M7: monetary view with CPI/inflation, policy rate, transaction money and currency-regime/authority context.
+
+## \- M8: demography/expansion view with population change, migration flows, settlement state and jurisdiction/succession changes.
+
+## \- M9: event timeline plus before/after shock effects and a short causal propagation summary.
+
+## \- M10: integrated benchmark-health view with invariants, deterministic hash, runtime/snapshot budgets and a few long-run headline trends.
+
+## \- M11: replace/absorb milestone previews into the full canonical Worker \+ SimulationOutput observatory specified by VISUALIZATION\_AND\_EXPLAINABILITY.
+
+## \- M12: release-candidate polish: canonical scenario/version/build context is visible, obsolete legacy/development preview wiring is removed, and the final Pages default uses only the canonical runtime.
+
+## 
 
 ## Milestone 0 — Baseline lock and migration scaffolding
 
@@ -55,7 +92,7 @@ Implementation:
 Gate M0:  
 \- dotnet build succeeds.  
 \- all existing tests pass unchanged.  
-\- same legacy seed produces the same legacy snapshot across repeated runs on the same runtime.  
+\- a representative 30-turn legacy baseline uses a fixed documented seed and checks in the expected normalized snapshot/hash; repeated same-seed runs on the same runtime must reproduce that exact value, and a different seed must not collapse to the same hash.  
 \- no canonical subsystem behavior has been introduced yet.  
 Rollback point: repository state before canonical entities.
 
@@ -266,7 +303,7 @@ M0 \-\> M1 \-\> M2 \-\> M3 \-\> M4 \-\> M5 \-\> M6 \-\> M7 \-\> M8 \-\> M9 \-\> 
 Parallel work is allowed only inside a milestone when modules do not share mutable contracts. In particular, do not implement M7 monetary policy before M5 finite FX and M6 sovereign debt contracts exist; do not implement M8 migration before population wallets/inventories and routes are stable; do not implement M11 UI against legacy domain objects.
 
 Recommended commit/PR granularity for Codex/Claude  
-Each milestone should normally be 2–6 small commits/PR-sized changes, not one giant patch. Preferred sequence inside a milestone: schemas/types \-\> pure algorithms \-\> settlement/mutations \-\> orchestration \-\> invariants/tests \-\> scenario/golden test \-\> cleanup. A coding agent may subdivide further but must not move a later subsystem across a failed gate.
+Each milestone should normally be 2–6 small commits/PR-sized changes, not one giant patch. At least 5% of the milestone's planned implementation units, rounded up with a minimum of one, must be visualization/presentation units meeting the Milestone Preview rule above. Preferred sequence inside a milestone: schemas/types \-\> pure algorithms \-\> settlement/mutations \-\> orchestration \-\> invariants/tests \-\> scenario/golden test \-\> milestone preview \-\> cleanup. A coding agent may subdivide further but must not move a later subsystem across a failed gate.
 
 Legacy-to-canonical responsibility map  
 \- Simulation.cs: preserve the idea of one top-level orchestrator; replace hard-coded city world and six-step loop with WorldState \+ canonical phase pipeline.  
@@ -284,7 +321,7 @@ Test migration policy
 Create canonical test namespaces/folders rather than editing every existing test in place. Classify tests as: LEGACY\_REGRESSION (protects pre-migration behavior temporarily), CANONICAL\_UNIT, CANONICAL\_INVARIANT, GOLDEN\_SCENARIO, DETERMINISM, and PERFORMANCE. A legacy test may be removed only when the production responsibility it guards has been deleted or when an equivalent canonical test proves the retained property. Never rewrite an old expected value solely to make a new formula pass.
 
 Definition of a passed milestone  
-A milestone is passed only when all of the following are true: production build compiles; tests for previous passed milestones still pass; new required tests pass; deterministic replay check passes; relevant accounting invariants pass; its golden scenario runs through the public canonical orchestrator; no TODO requires a material economic/product-design choice; and repository documentation or migration notes identify any intentionally retained legacy surface.
+A milestone is passed only when all of the following are true: production build compiles; tests for previous passed milestones still pass; new required tests pass; deterministic replay check passes; relevant accounting invariants pass; its golden scenario runs through the public canonical orchestrator; the milestone's required visualization share is satisfied and the current milestone preview is visibly deployable on GitHub Pages (or, at M11, the canonical observatory gate is satisfied); no TODO requires a material economic/product-design choice; and repository documentation or migration notes identify any intentionally retained legacy surface.
 
 Stop/repair conditions  
 Stop forward implementation and repair the current milestone if any of these occur: unexplained stock drift; order-dependent deterministic failures; two writers for one stock; direct subsystem-specific FX transfer logic; UI mutation of domain state; a phase reads future-tick information; config value ownership is ambiguous; scenario initialization bypasses GenesisLedger; or a coding agent must invent a material formula not specified in the implementation contracts. These are architecture failures, not acceptable technical debt.

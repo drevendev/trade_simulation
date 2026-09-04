@@ -65,6 +65,7 @@ Decision rules
 \- Prefer emergent macro outcomes over directly scripted GDP/inflation/population outcomes.  
 \- Every mechanism must state inputs, outputs, units/scales, update timing, edge cases, tunable parameters and tests.  
 \- Each new subsystem must identify computational complexity and expected browser performance impact.  
+\- Implementation must show continuous visible progress: every M0–M12 allocates at least 5% of planned implementation units, rounded up with a minimum of one, to a directly visible GitHub Pages visualization/presentation change. Before M11 use a lightweight one-way Milestone Preview; do not pull the final SimulationOutput/Worker architecture forward merely to satisfy this cadence.  
 \- Do not introduce banks, securities, detailed individual agents or dozens of goods merely for realism. Add them only if they materially improve target behavior and remain implementable.  
 \- Multi-currency/FX is desirable because each state should have monetary policy, but planner may stage it after a simpler single-currency milestone if necessary.
 

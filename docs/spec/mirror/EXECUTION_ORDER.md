@@ -1,16 +1,16 @@
 # EXECUTION\_ORDER
 
 Status: FROZEN  
-Version: 1  
-Updated: 2026-09-03
+Version: 2  
+Updated: 2026-09-04
 
-Rule: AUTHOR takes exactly one bounded unit from the earliest milestone whose dependencies and requirement statuses are satisfied. Only READY/FROZEN requirements are executable. A failed gate blocks promotion. Do not skip ahead because a later task looks easier.
+Rule: AUTHOR takes exactly one bounded unit from the earliest milestone whose dependencies and requirement statuses are satisfied. Only READY/FROZEN requirements are executable. A failed gate blocks promotion. Do not skip ahead because a later task looks easier. Every M0–M12 must also satisfy the cross-cutting visibility rule from Handoff/11: at least 5% of planned implementation units, rounded up with a minimum of one, are user-visible GitHub Pages visualization/presentation units.
 
 ## Dependency order
 
-M0 Baseline lock/scaffolding — executable now. Depends only on existing repository and REQ-MIGRATION-001..004.  
-M1 Canonical primitives/config/world genesis — after M0 gate. Read 00, 01, 02, 03 and M1 rows in REQUIREMENTS\_REGISTRY.  
-M2 Tick/ledger spine — after M1 gate. Read 01, 02, 11 and M2 rows.  
+M0 Baseline lock/scaffolding — executable now. Complete REQ-MIGRATION-001..004, then REQ-VISUALIZATION-003 publishes the visible M0 Milestone Preview once its baseline/scaffolding dependencies are satisfied.  
+M1 Canonical primitives/config/world genesis — after M0 gate. Read 00, 01, 02, 03 and M1 rows in REQUIREMENTS\_REGISTRY; REQ-VISUALIZATION-004 is the required world-gen Milestone Preview.  
+M2 Tick/ledger spine — after M1 gate. Read 01, 02, 11 and M2 rows; REQ-VISUALIZATION-005 is the required phase/ledger Milestone Preview.  
 M3 Local markets — after M2. Read 04 plus relevant config/acceptance rows.  
 M4 Production/labor/population closed economy — after M3. Read 05, 06 plus relevant config/acceptance rows.  
 M5 Transport/trade/FX — after M4. Read 04 and 08 interfaces plus relevant rows.  
@@ -24,7 +24,7 @@ M12 Legacy removal/release candidate — after M11. Remove legacy responsibility
 
 ## First executable work
 
-Start with M0. Do not wait for the registry to enumerate later milestone internals before beginning M0. The registry is bootstrapped with all M0-M2 requirements needed to reach the first canonical runnable spine. Before promoting into M3, the researcher/QA side must extend the registry with M3-specific rows and record that extension in SPEC\_CHANGELOG.
+Start with M0. Do not wait for the registry to enumerate later milestone internals before beginning M0. The registry is bootstrapped with the M0-M2 simulation requirements plus REQ-VISUALIZATION-002..005 for the cross-cutting visibility rule and concrete M0/M1/M2 previews. Before promoting into M3, the researcher/QA side must extend the registry with M3-specific rows, including enough VISUALIZATION work to keep that milestone at or above the \>=5% share, and record that extension in SPEC\_CHANGELOG. Apply the same rule to every later milestone promotion.
 
 ## Per-run AUTHOR protocol
 
