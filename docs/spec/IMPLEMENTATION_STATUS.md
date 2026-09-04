@@ -28,8 +28,9 @@ claim without a proving merge.
 | --- | --- | --- | --- | --- |
 | REQ-MIGRATION-001 | `IMPLEMENTED` | #23 | #24, `7d732d1ffe3f73f202d63dc82baf8f3125a13ce9` | `dotnet build --configuration Release` (0 warnings, 0 errors) and the full `TradeCraftSimulation.Tests` suite (44/44 passed, 0 failed, 0 skipped) at revision `10af216915bd96f680ec6da4197f408175c96509`, matching Gate M0's "build succeeds and all existing tests pass unchanged" |
 | REQ-MIGRATION-002 | `IMPLEMENTED` | #17 | #18, `2ee9a06633ad051887ec527acda1240f26557d0c` | `TradeCraftSimulation.Tests.LegacyBaselineSnapshotTests.The_same_seed_produces_the_same_normalized_snapshot_hash` (and `A_different_seed_produces_a_different_normalized_snapshot_hash` for the non-constant sanity check) |
+| REQ-MIGRATION-003 | `IN_PROGRESS` | #27 | pending | `src/config/index.test.ts`, `src/domain/index.test.ts`, `src/simulation/index.test.ts`, `src/diagnostics/index.test.ts` (one per new module area) and `src/index.test.ts`'s `canonicalScaffolding` assertion, at the revision on branch `claude/issue-27-canonical-scaffolding`; `npm run typecheck`, `npm test`, `npm run build`, `dotnet build --configuration Release` and `dotnet test --configuration Release` all green in the same pull request |
 
-**Summary: 2 of 19 requirements implemented; 0 in progress.** The other 17
+**Summary: 2 of 19 requirements implemented; 1 in progress.** The other 16
 requirement identifiers in `docs/spec/mirror/REQUIREMENTS_REGISTRY.csv` are not yet
 mapped to this table; that mapping is separate follow-up work, not evidence that they
 are unimplemented.
