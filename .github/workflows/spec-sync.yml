@@ -141,6 +141,10 @@ jobs:
             type:docs
             area:spec
           body: |
+            **Class: machine-generated mirror, produced by `spec-sync.yml`.** It has no
+            linked Issue by construction and is accepted through section 2a of
+            `docs/zendev/ACCEPTOR_RUNBOOK.md`, not through the Issue contract.
+
             Automated mirror of the allowlisted part of the Google Drive specification
             folder. What is included is decided by
             `docs/zendev/spec-mirror-allowlist.txt`, which is a policy file.
