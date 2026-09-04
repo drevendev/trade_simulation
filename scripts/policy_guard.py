@@ -21,6 +21,11 @@ import sys
 POLICY_PREFIXES = (
     ".github/workflows/",
     "docs/zendev/",
+    # The control plane itself. Everything under scripts/ decides how the loop behaves:
+    # when agents wake, what may cross the mirror boundary, what this guard refuses.
+    # Left unclassified, an agent could weaken this very file, adjust its tests to
+    # match, and have the change merged with no person involved.
+    "scripts/",
 )
 POLICY_FILES = ("AGENTS.md",)
 
