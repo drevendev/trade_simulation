@@ -91,12 +91,12 @@ Rules:
 interface RegionState {  
   id: RegionId;  
   name: string;  
-  controllerStateId: StateId | null;  
-  pendingControllerStateId?: StateId | null;  
+  controllerStateId: StateId | null;
+
   marketId: MarketId;  
   settlementCurrencyId: CurrencyId;  
-  settlementLevel: number;  
-  marketStatus: 'ACTIVE' | 'DORMANT';  
+  settlementLevel: number;
+
   discoveryState: Record\<string, 'UNKNOWN' | 'KNOWN'\>;  
   resourceDeposits: Record\<string, ResourceDepositState\>;  
   infrastructure: Record\<string, InfrastructureState\>;  
@@ -106,6 +106,8 @@ interface RegionState {
 Binding rules:  
 \- the set of Region IDs is fixed at scenario initialization and never changes during a run;  
 \- controllerStateId is nullable and references zero or one live State;  
+\- future jurisdiction changes exist only in PendingTransitions.jurisdictionChanges; RegionState has no pending-controller field;  
+\- market lifecycle exists only in LocalMarketState.status; RegionState has no duplicate market-status field;  
 \- settlementLevel is built footprint not otherwise represented by named infrastructure and cannot be derived mechanically from population;  
 \- carrying capacity is derived, not stored as a freely mutable stock.
 
@@ -153,16 +155,24 @@ interface PopulationCohortState {
   regionId: RegionId;  
   clanId: ClanId;  
   ageBand: 'CHILD' | 'WORKING' | 'ELDER';  
-  stratum: 'LOWER' | 'MIDDLE' | 'UPPER';  
-  laborStatus: 'EMPLOYED' | 'UNEMPLOYED' | 'OUT\_OF\_LABOR\_FORCE';  
-  population: number;  
-  employedPersons: number;  
+  stratum: 'VULNERABLE' | 'WORKING\_MIDDLE' | 'AFFLUENT';  
+  laborCategory: string; // baseline GENERAL
+
+  population: number;
+
   wallet: Wallet;  
-  inventory: Inventory;  
-  health: number;  
-  prosperity: number;  
+  householdInventory: Inventory; // consumption carryover only  
+  healthIndex: number; // \[0,1\]  
+  prosperityEma: number; // \[0,1\]  
+  essentialSatisfactionEma: number; // \[0,1\]  
+  realIncomePerCapitaEma: number; // normalized \>=0  
+  employmentRateEma: number; // \[0,1\]  
+  migrationPressureEma: number; // bounded \[-1,1\]  
+  mobilityAccumulator: number; // bounded \[-1,1\]  
   wageSignal: number;  
 }
+
+Current-tick employment is not persistent cohort state; LaborSupplyPlan/LaborAllocation and TickContext own current employment until Phase-15 EMA updates.
 
 Cohort identity represents one homogeneous lifecycle bucket. Splits/merges are allowed only in Population Phase 13 and must conserve people, wallet balances by currency and inventories by good. Merge key must include all cohort dimensions required for behavior; do not merge cohorts merely because they share region/clan. A cohort retired by a split/merge keeps its CohortId reserved for historical references; newly created successor buckets receive fresh deterministic CohortIds and may link to predecessor IDs only as lineage metadata.
 
@@ -177,12 +187,15 @@ interface ProductionUnitState {
   wallet: Wallet;  
   inputInventory: Inventory;  
   outputInventory: Inventory;  
+  investmentInventory: Inventory;  
   installedCapital: number;  
-  condition: number;  
-  capacity: number;  
+  condition: number;
+
   wageOffer: number;  
   createdTick: number;  
 }
+
+installedCapital is the authoritative physical capital stock. Nameplate capacity is derived as installedCapital × recipe.batchesPerCapitalUnit; an implementation may cache that value only as non-authoritative reconstructable data and must never mutate it independently.
 
 Ownership is exactly one Clan or State in core v1. No fractional equity and no cross-holdings.
 
