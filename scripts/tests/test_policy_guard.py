@@ -31,6 +31,35 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(policy, [])
         self.assertEqual(product, [])
 
+    def test_the_control_plane_counts_as_policy(self):
+        # The guard, the dispatcher and the mirror tooling decide how the loop behaves.
+        # A change to any of them is a policy change, including a change to this guard.
+        policy, product = guard.classify(
+            [
+                "scripts/policy_guard.py",
+                "scripts/schedule_watchdog.py",
+                "scripts/tests/test_policy_guard.py",
+            ]
+        )
+        self.assertEqual(
+            policy,
+            [
+                "scripts/policy_guard.py",
+                "scripts/schedule_watchdog.py",
+                "scripts/tests/test_policy_guard.py",
+            ],
+        )
+        self.assertEqual(product, [])
+
+    def test_weakening_the_guard_alongside_product_code_is_refused(self):
+        # The specific attack this closes: relax the guard and ship a product change in
+        # the same breath, with the guard passing because it no longer objects.
+        violations = guard.check(
+            ["scripts/policy_guard.py", "src/index.ts"], added_lines=[]
+        )
+        self.assertEqual(len(violations), 1)
+        self.assertIn("split them", violations[0])
+
     def test_canonical_typescript_counts_as_product(self):
         # From M1 the canonical engine lives in src/. If the guard did not know that,
         # a policy change could ride along inside a canonical diff unnoticed.
