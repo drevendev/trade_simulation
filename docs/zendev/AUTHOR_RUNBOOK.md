@@ -49,11 +49,55 @@ Take the first applicable item and stop searching:
 5. an Issue labelled `status:needs-triage` — turn exactly one into a ready Issue
    (fill Goal, Evidence, Scope, Non-goals, Acceptance criteria, Verification and the
    label axes), then stop for this run;
-6. if the queue is empty: read the specification navigation files and create **one**
-   new ready Issue for the next unimplemented requirement, then stop.
+6. otherwise — the backlog holds no eligible pull request, unblockable Issue, ready
+   Issue, or triage Issue after evaluating 1–5 — read the specification navigation
+   files and create **one** new ready Issue for the next unimplemented requirement,
+   then stop.
 
 Closing work outranks opening work. If another run already holds the item — an open
 pull request, a `status:in-progress` label, or a branch for that Issue — do not take it.
+
+Evaluating 1–6 and finding nothing to mutate is never a silent success. Item 6 exists
+precisely so this cannot happen: whenever 1–5 yield no eligible item, item 6 always
+produces a durable record (a new ready Issue) before the run stops. A run must not
+exit having done nothing without one of a commit, a claim comment, a triage
+promotion, a new Issue, or a `status:blocked` record to show for it — green CI on an
+older, unrelated revision is not evidence that this run made progress.
+
+### Detecting "changes requested" (item 1)
+
+GitHub refuses to let the same account formally review its own pull request, so the
+ACCEPTOR's verdict on a pull request you authored is sometimes a formal review
+(`reviewDecision: CHANGES_REQUESTED`) and sometimes a plain comment posted instead,
+headed exactly `## ACCEPTOR verdict: REQUEST_CHANGES` (or `## ACCEPTOR verdict:
+ACCEPT`) and naming the reviewed revision as `` Head `<sha>` `` in its first
+paragraph — see `ACCEPTOR_RUNBOOK.md` section 1. Both forms count equally as a
+verdict. A human operator QA comment carrying an equivalent explicit marker (for
+example `## Operator QA: REQUEST_CHANGES`) counts the same way as supporting
+evidence, but only an ACCEPTOR or formal-review verdict decides whether item 1
+applies.
+
+To decide whether item 1 applies to one of your open pull requests:
+
+1. Collect every formal review on the pull request, and every comment on the pull
+   request and its linked Issue.
+2. Keep only the entries that carry an explicit verdict: a formal review's `state`,
+   or a comment beginning with an `ACCEPTOR verdict:` marker.
+3. Order the kept entries by timestamp and take the latest one.
+4. Item 1 applies only when that latest verdict is a change request
+   (`CHANGES_REQUESTED` / `REQUEST_CHANGES`) **and** the revision it names — the
+   review's own commit, or the `` Head `<sha>` `` the comment states — is exactly the
+   pull request's current `headRefOid`. A verdict naming an older head was already
+   superseded by whatever was pushed since; do not re-address it, and do not let it
+   block or repeat against the new head.
+5. A later `ACCEPT`/`APPROVED` verdict at the current head means item 1 does not
+   apply; move on to item 2.
+
+This is the same-account fallback `ACCEPTOR_RUNBOOK.md` section 1 already
+requires the ACCEPTOR to honor when posting a verdict. AUTHOR must recognize the
+identical fallback when consuming one, not just the formal-review path — otherwise a
+real change request goes unaddressed while later runs report green with nothing
+actually fixed.
 
 ## 3. Claim before mutating
 
