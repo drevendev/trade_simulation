@@ -1,0 +1,17 @@
+{
+  "milestone": "M0",
+  "milestoneLabel": "Milestone 0 — Baseline lock and migration scaffolding",
+  "legacyBaseline": {
+    "seed": 7,
+    "turns": 30,
+    "hash": "E7B06C845275F2B7274223261C163C5E930F2728BA33173694FB90E815B7CC67",
+    "reference": "docs/spec/LEGACY_BASELINE.md"
+  },
+  "canonicalScaffolding": {
+    "runtime": "typescript",
+    "present": true,
+    "hasEconomics": false,
+    "reference": "src/index.ts"
+  },
+  "requirement": "REQ-VISUALIZATION-003"
+}

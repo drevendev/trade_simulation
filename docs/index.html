@@ -98,6 +98,13 @@
   code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: .85em; }
   a { color: inherit; }
   .loading { color: var(--muted); padding: 2rem 0; }
+
+  .m0-preview dl { margin: 0; }
+  .m0-preview dt { color: var(--muted); margin: .6rem 0 0; }
+  .m0-preview dt:first-child { margin-top: 0; }
+  .m0-preview dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .m0-hash { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; word-break: break-all; overflow-wrap: anywhere; }
+  .m0-tag { display: inline-block; border-radius: 999px; padding: .05rem .55rem; font-size: .78rem; border: 1px solid var(--line); }
 </style>
 
 <main>
@@ -107,6 +114,15 @@
     demand, and merchants make a living carrying goods to wherever they are dear. This is one
     run of 300 turns, seed 42 — the whole thing replays identically from the same seed.
   </p>
+
+  <section class="panel m0-preview" id="m0-preview" aria-label="M0 milestone preview">
+    <div class="chart-title">Migration status — <span class="m0-tag" id="m0-milestone">M0</span></div>
+    <div class="chart-note">
+      A one-way, static diagnostic snapshot of migration progress. It does not read or affect
+      the run below, and it does not consume simulation randomness.
+    </div>
+    <div id="m0-preview-body">Loading migration status…</div>
+  </section>
 
   <div id="app" class="loading">Loading the run…</div>
 </main>
@@ -416,6 +432,45 @@
     .catch(error => {
       document.getElementById("app").innerHTML =
         `<div class="panel">Could not load the run: ${error.message}</div>`;
+    });
+})();
+</script>
+
+<script>
+(() => {
+  "use strict";
+
+  // Independent of the run viewer above: a one-way read of a static JSON artifact
+  // generated from the frozen legacy baseline and the canonical scaffolding status.
+  // It never touches run.csv, never mutates state, and never consumes simulation RNG.
+  const escapeHtml = value => String(value).replace(/[&<>"']/g, char => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char]
+  ));
+
+  fetch("m0-preview.json")
+    .then(response => {
+      if (!response.ok) throw new Error(`m0-preview.json: HTTP ${response.status}`);
+      return response.json();
+    })
+    .then(preview => {
+      document.getElementById("m0-milestone").textContent = preview.milestone;
+
+      const scaffolding = preview.canonicalScaffolding.present
+        ? (preview.canonicalScaffolding.hasEconomics ? "present, with economics" : "present, scaffolding only")
+        : "not yet present";
+
+      document.getElementById("m0-preview-body").innerHTML = `
+        <dl>
+          <dt>Milestone</dt><dd>${escapeHtml(preview.milestoneLabel ?? preview.milestone)}</dd>
+          <dt>Legacy baseline seed</dt><dd>${escapeHtml(preview.legacyBaseline.seed)}</dd>
+          <dt>Legacy baseline turns</dt><dd>${escapeHtml(preview.legacyBaseline.turns)}</dd>
+          <dt>Legacy baseline hash</dt><dd class="m0-hash">${escapeHtml(preview.legacyBaseline.hash)}</dd>
+          <dt>Canonical TypeScript scaffolding</dt><dd>${escapeHtml(scaffolding)}</dd>
+        </dl>`;
+    })
+    .catch(error => {
+      document.getElementById("m0-preview-body").innerHTML =
+        `<div>Migration status unavailable: ${escapeHtml(error.message)}</div>`;
     });
 })();
 </script>
