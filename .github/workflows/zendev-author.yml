@@ -45,6 +45,14 @@ jobs:
           # A PAT rather than the default token, so that pull requests this run opens
           # actually trigger the CI workflow. Events from GITHUB_TOKEN do not.
           github_token: ${{ secrets.ZENDEV_PAT }}
+          # The dispatcher runs this workflow with the repository's own GITHUB_TOKEN,
+          # so the triggering actor is github-actions[bot]. The action refuses a bot
+          # actor unless it is named here, which is why every watchdog-dispatched run
+          # failed before the model was even reached.
+          #
+          # Exactly this bot, never "*": on a public repository "*" would let any
+          # external app invoke this action with a prompt it controls.
+          allowed_bots: "github-actions"
           settings: |
             {
               "permissions": {

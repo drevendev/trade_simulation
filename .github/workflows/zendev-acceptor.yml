@@ -43,6 +43,14 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.ZENDEV_PAT }}
+          # The dispatcher runs this workflow with the repository's own GITHUB_TOKEN,
+          # so the triggering actor is github-actions[bot]. The action refuses a bot
+          # actor unless it is named here, which is why every watchdog-dispatched run
+          # failed before the model was even reached.
+          #
+          # Exactly this bot, never "*": on a public repository "*" would let any
+          # external app invoke this action with a prompt it controls.
+          allowed_bots: "github-actions"
           settings: |
             {
               "permissions": {
