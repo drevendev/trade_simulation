@@ -94,6 +94,36 @@ export interface IdAllocator {
 
   /** True once `id` has been allocated (retired or not) by this allocator. */
   isAllocated(id: string): boolean;
+
+  /**
+   * True once `creationKey` has already been used to allocate an identity for
+   * `kind` by this allocator (retired or not). A pure query — never mutates
+   * allocator state — so callers can preflight a batch for conflicts with
+   * prior allocations before reserving anything.
+   */
+  hasCreationKey<K extends IdKind>(kind: K, creationKey: string): boolean;
+}
+
+/**
+ * Validates a value is one of the 13 declared id kinds. Rejects non-string
+ * values and inherited (e.g. `Object.prototype`) properties: TypeScript
+ * brands are erased at runtime, so `kind` may arrive from an untyped or
+ * deserialized caller.
+ */
+function assertValidKind(kind: unknown): asserts kind is IdKind {
+  if (
+    typeof kind !== "string" ||
+    !Object.prototype.hasOwnProperty.call(ID_KIND_PREFIX, kind)
+  ) {
+    throw new Error(`unknown id kind: ${JSON.stringify(kind)}`);
+  }
+}
+
+/** Validates a value is a non-empty string, regardless of what TypeScript's erased brand claims. */
+function assertValidCreationKey(creationKey: unknown): asserts creationKey is string {
+  if (typeof creationKey !== "string" || creationKey.length === 0) {
+    throw new Error(`creationKey must be a non-empty string, got ${JSON.stringify(creationKey)}`);
+  }
 }
 
 /** Creates a fresh, independent identity allocator for exactly one run. */
@@ -105,9 +135,8 @@ export function createIdAllocator(): IdAllocator {
 
   return {
     allocate<K extends IdKind>(kind: K, creationKey: string): IdTypeByKind[K] {
-      if (creationKey.length === 0) {
-        throw new Error("creationKey must be a non-empty string");
-      }
+      assertValidKind(kind);
+      assertValidCreationKey(creationKey);
 
       let usedCreationKeys = usedCreationKeysByKind.get(kind);
       if (usedCreationKeys === undefined) {
@@ -154,6 +183,12 @@ export function createIdAllocator(): IdAllocator {
     isAllocated(id: string): boolean {
       return allocatedIds.has(id);
     },
+
+    hasCreationKey<K extends IdKind>(kind: K, creationKey: string): boolean {
+      assertValidKind(kind);
+      assertValidCreationKey(creationKey);
+      return usedCreationKeysByKind.get(kind)?.has(creationKey) ?? false;
+    },
   };
 }
 
@@ -168,13 +203,40 @@ export function createIdAllocator(): IdAllocator {
  * this the same `creationKeys` set from a shuffled array or an object built
  * in a different insertion order and the resulting key-to-ID mapping is
  * unchanged.
+ *
+ * Failure-atomic: the whole batch is validated — kind, each creation key's
+ * shape, in-batch duplicates, and overlap with creation keys this allocator
+ * already used (including for retired IDs) — before a single identity is
+ * reserved. A rejected batch leaves the allocator's reservations and future
+ * numbering exactly as they were.
  */
 export function allocateInCreationKeyOrder<K extends IdKind>(
   allocator: IdAllocator,
   kind: K,
   creationKeys: Iterable<string>,
 ): ReadonlyMap<string, IdTypeByKind[K]> {
-  const sortedKeys = [...creationKeys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  assertValidKind(kind);
+
+  const keys = [...creationKeys];
+  const seenInBatch = new Set<string>();
+  for (const creationKey of keys) {
+    assertValidCreationKey(creationKey);
+    if (seenInBatch.has(creationKey)) {
+      throw new Error(
+        `duplicate creation key ${JSON.stringify(creationKey)} for id kind "${kind}" ` +
+          "within the same batch: each creation key may allocate at most one identity per run",
+      );
+    }
+    seenInBatch.add(creationKey);
+    if (allocator.hasCreationKey(kind, creationKey)) {
+      throw new Error(
+        `creation key ${JSON.stringify(creationKey)} for id kind "${kind}" was already used ` +
+          "by this allocator: each creation key may allocate at most one identity per run",
+      );
+    }
+  }
+
+  const sortedKeys = keys.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const result = new Map<string, IdTypeByKind[K]>();
   for (const creationKey of sortedKeys) {
     result.set(creationKey, allocator.allocate(kind, creationKey));

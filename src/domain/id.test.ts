@@ -61,6 +61,28 @@ describe("allocation is never an array index or map-order artifact", () => {
     const allocator = createIdAllocator();
     expect(() => allocator.allocate("Region", "")).toThrow(/non-empty/);
   });
+
+  it("rejects an unknown id kind before allocating anything", () => {
+    const allocator = createIdAllocator();
+    expect(() => allocator.allocate("Unknown" as unknown as IdKind, "x")).toThrow(/unknown id kind/);
+    // Must not have consumed a sequence number for any kind.
+    expect(allocator.allocate("Region", "region-alpha")).toBe("r:1");
+  });
+
+  it("rejects an id kind that is only an inherited Object.prototype property", () => {
+    const allocator = createIdAllocator();
+    for (const prototypeKey of ["constructor", "toString", "hasOwnProperty"]) {
+      expect(() => allocator.allocate(prototypeKey as unknown as IdKind, "x")).toThrow(
+        /unknown id kind/,
+      );
+    }
+  });
+
+  it("rejects a non-string creation key without mutating allocator state", () => {
+    const allocator = createIdAllocator();
+    expect(() => allocator.allocate("Region", 123 as unknown as string)).toThrow(/non-empty string/);
+    expect(allocator.allocate("Region", "region-alpha")).toBe("r:1");
+  });
 });
 
 describe("deterministic replay across independent runs", () => {
@@ -104,6 +126,54 @@ describe("stable creation-key order contract", () => {
     expect(mappingFromInOrder.get("region-beta")).toBe("r:2");
     expect(mappingFromInOrder.get("region-delta")).toBe("r:3");
     expect(mappingFromInOrder.get("region-gamma")).toBe("r:4");
+  });
+
+  it("rejects an in-batch duplicate creation key without reserving any of the batch", () => {
+    const allocator = createIdAllocator();
+
+    expect(() => allocateInCreationKeyOrder(allocator, "Region", ["alpha", "alpha"])).toThrow(
+      /duplicate creation key/,
+    );
+
+    expect(allocator.isAllocated("r:1")).toBe(false);
+    expect(allocator.hasCreationKey("Region", "alpha")).toBe(false);
+    // Numbering must be unaffected by the rejected batch.
+    expect(allocator.allocate("Region", "beta")).toBe("r:1");
+  });
+
+  it("rejects a batch key that overlaps a creation key already used by this allocator, including a retired one", () => {
+    const allocator = createIdAllocator();
+    const priorId = allocator.allocate("Region", "region-alpha");
+    allocator.retire("Region", priorId);
+
+    expect(() =>
+      allocateInCreationKeyOrder(allocator, "Region", ["region-beta", "region-alpha"]),
+    ).toThrow(/already used/);
+
+    // Neither key in the batch was reserved: no r:2 was consumed.
+    expect(allocator.hasCreationKey("Region", "region-beta")).toBe(false);
+    expect(allocator.allocate("Region", "region-beta")).toBe("r:2");
+  });
+
+  it("rejects a batch containing a non-string creation key without reserving any of the batch", () => {
+    const allocator = createIdAllocator();
+
+    expect(() =>
+      allocateInCreationKeyOrder(allocator, "Region", ["alpha", 123 as unknown as string]),
+    ).toThrow(/non-empty string/);
+
+    expect(allocator.hasCreationKey("Region", "alpha")).toBe(false);
+    expect(allocator.allocate("Region", "alpha")).toBe("r:1");
+  });
+
+  it("rejects an unknown id kind for the batch helper before reserving anything", () => {
+    const allocator = createIdAllocator();
+
+    expect(() =>
+      allocateInCreationKeyOrder(allocator, "Unknown" as unknown as IdKind, ["alpha"]),
+    ).toThrow(/unknown id kind/);
+
+    expect(allocator.allocate("Region", "alpha")).toBe("r:1");
   });
 
   it("is unaffected by the iteration order of a Map the caller built differently", () => {
