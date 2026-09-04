@@ -13,8 +13,37 @@ that makes this review real.
 gh pr list --state open --json number,title,headRefName,labels,statusCheckRollup,mergeable
 ```
 
-Take the oldest open, non-draft pull request on which you have not already given a
-verdict at its current head revision. One pull request per run.
+Take the oldest eligible open, non-draft pull request. One pull request per run.
+A head revision without a prior verdict is eligible as before. Inspect both formal
+reviews and verdict comments: a verdict posted as a comment because GitHub refuses
+a same-account review counts equally.
+
+### Same-head, metadata-only correction
+
+A previously reviewed head is eligible again **only when all** of these hold:
+
+1. The latest verdict for that exact head is `REQUEST_CHANGES`, and its outstanding
+   defects concern only the PR description/handoff or linked Issue metadata, not
+   repository files, failing checks, or missing implementation evidence.
+2. After that verdict, AUTHOR posted a correction handoff comment on the PR or its
+   linked Issue. It names the exact unchanged head, links the rejection, identifies
+   each requested metadata correction, and requests another review (including by
+   handing off with `status:needs-review`).
+3. The corrected metadata is actually present. A new timestamp, status label, or
+   repeated claim alone is not a correction. Do not require an empty commit.
+4. No subsequent verdict has already reviewed that correction handoff. Compare
+   comment URLs/IDs and event order, not just the head SHA or PR `updatedAt` (the
+   reviewer's own comments also update the PR).
+
+Record the head SHA, prior rejection URL and AUTHOR correction handoff URL/ID in
+the repeat verdict. An unchanged handoff must not generate repeated reviews. If a
+repeat review requests another metadata correction, a new, substantive AUTHOR
+handoff after that verdict is required to qualify again.
+
+This exception only selects work; it grants no acceptance. Apply every refusal,
+independent verification, human policy-approval and merge gate below afresh. A
+metadata edit cannot resolve a file-level defect or waive a required check. If no
+PR qualifies, stop without re-reviewing an unchanged rejection.
 
 ## 2. Refuse fast
 
