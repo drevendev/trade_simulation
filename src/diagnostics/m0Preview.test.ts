@@ -22,9 +22,13 @@ function readM0Preview(): M0Preview {
   return JSON.parse(readFileSync(`${repoRoot}docs/m0-preview.json`, "utf8")) as M0Preview;
 }
 
-/** Extracts the Seed/Turns/expected-hash values documented in LEGACY_BASELINE.md. */
-function readDocumentedLegacyBaseline(): { seed: number; turns: number; hash: string } {
-  const text = readFileSync(`${repoRoot}docs/spec/LEGACY_BASELINE.md`, "utf8");
+/**
+ * Parses the Seed/Turns/expected-hash values out of LEGACY_BASELINE.md's markdown.
+ * Normalizes CRLF to LF first: a Windows checkout of this repo checks the file out
+ * with CRLF line endings, which an LF-only fence regex would silently fail to match.
+ */
+function parseDocumentedLegacyBaseline(rawText: string): { seed: number; turns: number; hash: string } {
+  const text = rawText.replace(/\r\n/g, "\n");
 
   const seedMatch = /\| Seed \| `(\d+)` \|/.exec(text);
   const turnsMatch = /\| Turns \| `(\d+)` \|/.exec(text);
@@ -38,6 +42,10 @@ function readDocumentedLegacyBaseline(): { seed: number; turns: number; hash: st
   }
 
   return { seed: Number(seed), turns: Number(turns), hash };
+}
+
+function readDocumentedLegacyBaseline(): { seed: number; turns: number; hash: string } {
+  return parseDocumentedLegacyBaseline(readFileSync(`${repoRoot}docs/spec/LEGACY_BASELINE.md`, "utf8"));
 }
 
 describe("M0 Milestone Preview diagnostic artifact (REQ-VISUALIZATION-003)", () => {
@@ -61,6 +69,15 @@ describe("M0 Milestone Preview diagnostic artifact (REQ-VISUALIZATION-003)", () 
     expect(preview.canonicalScaffolding.present).toBe(status.canonicalScaffolding);
     // M0 must not claim canonical economics exist; that arrives from M1 onward.
     expect(preview.canonicalScaffolding.hasEconomics).toBe(false);
+  });
+
+  it("parses identically regardless of the checkout's line endings (LF vs CRLF)", () => {
+    const lfFixture = ["| Seed | `7` |", "| Turns | `30` |", "", "```", "ABCDEF0123456789", "```", ""].join("\n");
+    const crlfFixture = lfFixture.replace(/\n/g, "\r\n");
+
+    const expected = { seed: 7, turns: 30, hash: "ABCDEF0123456789" };
+    expect(parseDocumentedLegacyBaseline(lfFixture)).toEqual(expected);
+    expect(parseDocumentedLegacyBaseline(crlfFixture)).toEqual(expected);
   });
 });
 
