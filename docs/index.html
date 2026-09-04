@@ -99,9 +99,10 @@
   a { color: inherit; }
   .loading { color: var(--muted); padding: 2rem 0; }
 
-  .m0-preview dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; margin: 0; }
-  .m0-preview dt { color: var(--muted); }
-  .m0-preview dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .m0-preview dl { margin: 0; }
+  .m0-preview dt { color: var(--muted); margin: .6rem 0 0; }
+  .m0-preview dt:first-child { margin-top: 0; }
+  .m0-preview dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .m0-hash { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; word-break: break-all; overflow-wrap: anywhere; }
   .m0-tag { display: inline-block; border-radius: 999px; padding: .05rem .55rem; font-size: .78rem; border: 1px solid var(--line); }
 </style>
