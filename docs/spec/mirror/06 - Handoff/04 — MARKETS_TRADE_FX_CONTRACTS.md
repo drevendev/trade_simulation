@@ -63,7 +63,7 @@ interface MarketExpectationState {
 
 All are non-negative except no signed field is required. Expectations are lagged signals updated after realized clearing. They are not inventories and cannot be sold or consumed.
 
-5\. Ephemeral MarketIntent contract
+## 5\. Ephemeral MarketIntent contract
 
 interface MarketIntent {  
   id: MarketIntentId;  
@@ -92,7 +92,7 @@ Validation:
 
 No limit-price field exists in core v1. Bounded price adjustment plus explicit budget and quantity intentions are the market mechanism.
 
-6\. Budget commitment rule
+## 6\. Budget commitment rule
 
 TickContext must maintain an ephemeral budget ledger keyed by actor \+ currency \+ planning envelope. Planners are responsible for ensuring that the sum of maxSpend commitments they submit from a given envelope does not exceed the cash allocated to that envelope.
 
@@ -129,7 +129,7 @@ Rules:
 \- tax treatment is known before affordability;  
 \- unused unmet input demand is recorded, not carried as a hidden order book.
 
-9\. Phase-6 price formation
+## 9\. Phase-6 price formation
 
 For active market m and good g, aggregate market-facing intentions after Phase-5 production:
 
@@ -159,7 +159,7 @@ If D and S are both approximately zero, price stays unchanged. Missing trades do
 
 Price updates exactly once per tick in Phase 6\. Phase 7 trade and Phase 8 clearing use the resulting Phase-6 price.
 
-10\. Deterministic local clearing primitive
+## 10\. Deterministic local clearing primitive
 
 For one region \+ good \+ pass:
 
@@ -185,7 +185,7 @@ Each matched lot q produces one atomic transaction bundle:
 
 No mutation is applied unless all debits and inventory removals pass preflight validation.
 
-11\. Local MarketAllocation schema
+## 11\. Local MarketAllocation schema
 
 interface MarketAllocation {  
   id: MarketAllocationId;  
@@ -210,7 +210,7 @@ MarketAllocation is ephemeral. Persistent truth after execution is actor stock \
 
 Inventory endpoint rule: local settlement debits sellerInventoryBucket and credits buyerInventoryBucket. For ProductionUnit, INPUT purchases enter inputInventory, INVESTMENT purchases enter investmentInventory, and normal output sales debit outputInventory. A settlement path that writes to an unspecified generic ProductionUnit inventory is invalid.
 
-12\. Transaction schemas for local trade
+## 12\. Transaction schemas for local trade
 
 MARKET\_SALE EconomicTransaction:  
 \- transactionId, bundleId, tick, phase;  
@@ -656,7 +656,7 @@ It may not inspect future jurisdiction or mutate policy.
 
 No generic hidden 'border friction' money sink is allowed. Any monetary friction must be tariff, transport fee or FX spread with an explicit accounting destination.
 
-33\. Market telemetry required for Phase 15 and UI
+## 33\. Market telemetry required for Phase 15 and UI
 
 Per region/good/pass:  
 \- desiredDemandQuantity;  
@@ -752,7 +752,7 @@ Programmer/invariant errors SHOULD fail validation/test execution:
 \- transaction bundle debits \!= credits by currency;  
 \- price NaN/Infinity/outside hard bounds.
 
-38\. Accounting invariants
+## 38\. Accounting invariants
 
 MTFX-I1 Local sale goods conservation: seller inventory decrease \== buyer inventory increase.  
 MTFX-I2 Local sale cash: buyer gross debit \== seller net receipt \+ collected consumption tax.  
@@ -780,7 +780,7 @@ MTFX-I23 Phase-14 jurisdiction changes cannot alter tick-N trade classification/
 MTFX-I24 Equal seed/config/version and semantically equal registry contents produce equal market/trade/FX results independent of insertion order.  
 MTFX-I25 Every ProductionUnit market transfer uses an explicit inventory bucket: INPUT purchases credit inputInventory, INVESTMENT purchases credit investmentInventory, output sales debit outputInventory, and delayed shipment delivery preserves the bucket chosen at dispatch.
 
-39\. Required unit/integration tests
+## 39\. Required unit/integration tests
 
 MTFX-T1 Zero D and zero S leaves price unchanged.  
 MTFX-T2 Extreme excess demand/supply respects max log step and price floor/ceiling.  
@@ -809,7 +809,7 @@ MTFX-T24 Per-currency transaction reconciliation passes after a 600-tick multi-s
 MTFX-T25 ProductionUnit INPUT and INVESTMENT purchases land in distinct inventories and output sales debit only outputInventory.  
 MTFX-T26 A positive-travel import preserves its destination inventory bucket through shipment persistence and credits that exact bucket on arrival.
 
-40\. Benchmark/golden scenarios
+## 40\. Benchmark/golden scenarios
 
 A. Local shortage: one region, fixed money, food supply shock. Price rises boundedly, effective demand rations, no money/goods appear.
 

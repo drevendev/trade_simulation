@@ -425,13 +425,19 @@ interface CohortSeed {
   regionKey: string;  
   clanKey: string;  
   ageBand: 'CHILD' | 'WORKING' | 'ELDER';  
-  stratum: 'LOWER' | 'MIDDLE' | 'UPPER';  
+  stratum: 'VULNERABLE' | 'WORKING\_MIDDLE' | 'AFFLUENT';  
+  laborCategory: string; // baseline GENERAL  
   population: number;  
   wallet: Record\<string, number\>;  
   householdInventory: Record\<string, number\>;  
-  healthIndex?: number;  
-  prosperityIndex?: number;  
-  wageSignal?: number;  
+  healthIndex: number; // \[0,1\]  
+  prosperityEma: number; // \[0,1\]  
+  essentialSatisfactionEma: number; // \[0,1\]  
+  realIncomePerCapitaEma: number; // normalized \>= 0  
+  employmentRateEma: number; // \[0,1\]  
+  migrationPressureEma: number; // bounded \[-1,1\]  
+  mobilityAccumulator: number; // bounded \[-1,1\]  
+  wageSignal: number; // settlement-currency units / worker-equivalent / tick  
 }
 
 interface ProductionUnitSeed {  
@@ -454,7 +460,7 @@ interface MarketSeed {
   initialPriceByGood: Record\<string, number\>;  
 }
 
-Human-readable seed keys are converted to persistent IDs with deterministic prefixes during world construction. Scenario files must never embed runtime sequence-dependent IDs.
+CohortSeed uses the same mature cohort vocabulary as PopulationCohortState. Seed files must provide every persistent cohort signal listed above explicitly; world generation must not translate legacy LOWER/MIDDLE/UPPER strata, rename prosperity fields, or invent omitted cohort-state defaults. Human-readable seed keys are converted to persistent IDs with deterministic prefixes during world construction. Scenario files must never embed runtime sequence-dependent IDs.
 
 17\. Default baseline world profile
 

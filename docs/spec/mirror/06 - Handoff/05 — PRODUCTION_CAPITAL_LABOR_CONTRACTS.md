@@ -47,11 +47,11 @@ ProductionUnitState \+= {
 
 investmentInventory is canonical physical stock reserved for capital formation/startup. It must not simultaneously appear in inputInventory or outputInventory.
 
-capacity in CORE\_SCHEMA means nameplate batch capacity per tick. installedCapital is the physical capital stock that supports it. They are linked deterministically by the current recipe:
+Nameplate batch capacity per tick is derived from the authoritative installedCapital stock and the current recipe:
 
 capacity \= installedCapital × recipe.batchesPerCapitalUnit
 
-Implementations may recompute capacity as a cached serialized field, but validation must reject a material mismatch. installedCapital is the authoritative physical stock.
+Preferred implementation exposes deriveNameplateCapacity(unit, recipe) and does not serialize capacity in canonical state. If a performance cache is retained, it is non-authoritative, recomputed after every capital mutation and validated at serialization boundaries.
 
 condition is separate from depreciation: depreciation shrinks installedCapital; condition captures damage/operational impairment and can recover only through an explicit repair mechanism if one is later added. Core v1 has no routine free repair. EVENTS may reduce condition or capital explicitly.
 
@@ -85,7 +85,7 @@ Fixed-proportion inputs are deliberate. Core v1 does not optimize input substitu
 
 For ACTIVE unit u:
 
-nameplateBatches \= u.capacity  
+nameplateBatches \= deriveNameplateCapacity(u, recipe)  
 conditionFactor \= clamp(u.condition, 0, 1\)  
 infrastructureFactor \= deriveInfrastructureFactor(world, u.regionId, recipe.infrastructureCategory)  
 resourceAccessFactor \= deriveResourceAccessFactor(world, u.regionId, recipe)  
@@ -470,7 +470,7 @@ Then:
 installedCapital\_preDep \= installedCapital \+ capitalBuilt  
 depreciationUnits \= installedCapital\_preDep × recipe.depreciationRatePerTick  
 installedCapital\_next \= max(0, installedCapital\_preDep \- depreciationUnits)  
-capacity\_next \= installedCapital\_next × recipe.batchesPerCapitalUnit
+derivedNameplateCapacity\_next \= installedCapital\_next × recipe.batchesPerCapitalUnit
 
 New capacity is available only next tick because Phase 12 occurs after current production.
 
@@ -485,7 +485,7 @@ Candidate evaluation occurs only on Production lifecycle review ticks in Phase 1
 \- owner makes an explicit cash transfer into the new ProductionUnit wallet or an already-settled grant provides cash;  
 \- no money, goods or capital are created by unit creation.
 
-New unit starts status=PLANNED, installedCapital=0 unless scenario initialization explicitly seeds existing capital, capacity=0, condition=1, inventories empty, and normal neutral signals.
+New unit starts status=PLANNED, installedCapital=0 unless scenario initialization explicitly seeds existing capital, derived nameplate capacity=0, condition=1, inventories empty, and normal neutral signals.
 
 A PLANNED unit submits INVESTMENT intents for startup goods using its own wallet. It does not hire or produce.
 
@@ -645,7 +645,7 @@ Invariant/programmer failures:
 \- input consumption not matching batch coefficients;  
 \- wages exceed Phase-3 obligation or payroll reserve;  
 \- worker allocated twice/above cohort supply;  
-\- capacity changes without real investment/depreciation/damage/retirement flow;  
+\- derived nameplate capacity does not match installedCapital × recipe.batchesPerCapitalUnit, or a cache is mutated independently;  
 \- unit bypasses MarketIntent for ordinary input/investment purchases or sales;  
 \- same investment good counted in two inventories;  
 \- same-tick imported input used in Phase 5 contrary to arrival rules;  
@@ -667,7 +667,7 @@ PCL-I11 Input procurement settled \<= MarketIntent maxSpend and does not consume
 PCL-I12 Investment goods bought are real inventory until consumed; cash spend alone never increases capital.  
 PCL-I13 Capital increase \== capitalBuilt from consumed investment recipe goods.  
 PCL-I14 Capital decrease outside explicit event/retirement \== configured depreciation exactly once per tick.  
-PCL-I15 capacity \== installedCapital × batchesPerCapitalUnit within tolerance.  
+PCL-I15 derived nameplate capacity \== installedCapital × batchesPerCapitalUnit within tolerance; any cache is non-authoritative.  
 PCL-I16 Phase-12 capital formed cannot affect Phase-5 output of the same tick.  
 PCL-I17 State- and Clan-owned identical units with identical state/inputs/labor produce identically.  
 PCL-I18 MOTHBALLED/CLOSING/PLANNED units produce zero normal output.  
@@ -692,8 +692,8 @@ PCL-T11 Prior-tick shipment delivered in Phase 1 can be used in current Phase-4 
 PCL-T12 Output enters unit inventory first and sale revenue appears only through canonical market/trade transaction.  
 PCL-T13 Export sale uses the same ProductionUnit output inventory and does not create a second export stock.  
 PCL-T14 Investment purchase changes investmentInventory but not installedCapital immediately.  
-PCL-T15 Phase-12 conversion consumes exact investment goods and increases installedCapital/capacity once.  
-PCL-T16 Depreciation reduces installedCapital/capacity exactly once and creates no cash flow.  
+PCL-T15 Phase-12 conversion consumes exact investment goods and increases installedCapital once; derived nameplate capacity changes exactly with it.  
+PCL-T16 Depreciation reduces installedCapital exactly once, reduces derived nameplate capacity accordingly, and creates no cash flow.  
 PCL-T17 Event damage to condition lowers effective capacity without deleting unrelated cash/inventory.  
 PCL-T18 Finite deposit depletion caps extraction and never produces negative deposit quantity.  
 PCL-T19 Unprofitable/underutilized ACTIVE unit requires configured consecutive review failures before MOTHBALLED.  
