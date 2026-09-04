@@ -68,7 +68,7 @@ P0–P3 profiles, A01–A14 scenarios, global accounting, determinism, CI tiers 
 L. REPOSITORY\_MIGRATION\_AND\_MILESTONE\_GATES — Economic Simulation  
 M0–M12 strangler migration, legacy-to-canonical responsibility map, test migration policy, stop conditions and milestone promotion rules.
 
-Visualization source of truth for M11:
+Visualization source of truth for the final M11 observatory (pre-M11 Milestone Preview work follows document L):
 
 M. 04 \- Visualization / VISUALIZATION\_AND\_EXPLAINABILITY — Economic Simulation  
 Read-model boundaries, observatory views, ExplanationFacts, timeline/replay, Worker/UI separation and GitHub Pages presentation behavior. Its performance targets are operationalized by document K.
@@ -124,7 +124,8 @@ One stock, one authoritative owner. One realized transfer, one settlement path.
 
 7\. Master implementation execution order
 
-Implement strictly through the existing M0–M12 gates. Do not collapse gates into a big-bang rewrite.
+Implement strictly through the existing M0–M12 gates. Do not collapse gates into a big-bang rewrite.  
+Cross-cutting visibility rule: every milestone M0–M12 allocates at least 5% of planned implementation units, rounded up with a minimum of one, to user-visible visualization/presentation work on GitHub Pages. For M0–M10 this is a lightweight Milestone Preview fed by deterministic one-way diagnostic/golden output, not the final browser API; M11 replaces/absorbs those previews into the canonical SimulationOutput \+ Worker observatory; M12 removes obsolete preview/legacy wiring and leaves the canonical Pages experience. A visualization unit counts only when its acceptance includes a visible Pages change plus a basic build/render smoke check.
 
 M0 Baseline lock/scaffolding — preserve current build/tests and legacy seeded baseline.  
 M1 Canonical primitives/config/world genesis — typed IDs, registries, config split, keyed RNG, baseline scenario, GenesisLedger.  
@@ -140,7 +141,7 @@ M10 Whole-system acceptance/performance — P2/P3, A13/A14, long deterministic/a
 M11 Browser/GitHub Pages observatory — immutable versioned SimulationOutput read models, Worker host, timeline/replay and explanatory visualization. SimulationOutput is the browser-facing ownership boundary: top-level outputSchemaVersion \= 1 for v1, and RunMetadata carries the canonical runIdentity. For v1, scenarioHash, configHash and definitionPackHash are SHA-256 digests of normalized canonical JSON; runIdentity is SHA-256 over the named canonical identity { scenarioId, scenarioHash, seed, configHash, definitionPackHash, engineBuildId }. Schema-defined unordered keyed collections are sorted by stable key/id, genuinely ordered arrays preserve order, and process-local hashes, insertion order, timestamps, random UUIDs or ambiguous build labels are forbidden identity inputs. HistoryRetentionMetadata travels with the observations it describes and exposes authoritative aggregateTickRanges/detailedTickRanges for retained tick membership; earliest/latest fields are convenience bounds only. These ranges are compact metadata projections of retained observations, not a second history store, and they never recreate evicted data. SimulationOutput also carries EntityLifecycleRecord\[\] as lifecycle truth for typed stable references; those records follow the same reference-bounded retention as retained observation data, and predecessor/successor links do not recursively pin old history. Every active-run payload, retained snapshot and cached DefinitionBundle must match both outputSchemaVersion and runIdentity; unsupported schemas fail before partial UI parsing, and a different run identity resets run-scoped history/selection/cache state before rendering. Share/deep-link URLs are navigation hints only: direct-open/refresh must remain GitHub-Pages-safe under the repository base path, and URL state may be restored only against retained data from a verified compatible run, never used to create, override or prove runIdentity.  
 M12 Legacy removal/release candidate — one canonical simulation remains; clean-clone build/test/benchmark/Pages gates pass.
 
-A milestone may be subdivided into small PRs in the order schemas/types \-\> pure algorithms \-\> settlement/mutations \-\> orchestration \-\> invariants/tests \-\> golden scenario \-\> cleanup. A failed milestone gate blocks later milestone promotion.
+A milestone may be subdivided into small PRs in the order schemas/types \-\> pure algorithms \-\> settlement/mutations \-\> orchestration \-\> invariants/tests \-\> golden scenario \-\> milestone preview \-\> cleanup. The \>=5% visualization-share rule from REPOSITORY\_MIGRATION\_AND\_MILESTONE\_GATES is part of milestone completion, not optional polish. A failed milestone gate blocks later milestone promotion.
 
 8\. Final consistency review result
 
