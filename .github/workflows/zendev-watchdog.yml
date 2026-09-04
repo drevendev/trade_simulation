@@ -37,6 +37,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ZENDEV_ENABLED: ${{ vars.ZENDEV_ENABLED }}
+          ZENDEV_INTERVAL_MINUTES: ${{ vars.ZENDEV_INTERVAL_MINUTES }}
           RECOVER: ${{ github.event_name == 'schedule' || inputs.dispatch }}
         run: |
           if [ "$RECOVER" = "true" ]; then

@@ -20,14 +20,49 @@ def attempt(age=30, status="completed", conclusion="success", **fields):
             **fields}
 
 
+class IntervalTests(unittest.TestCase):
+    """The cadence variable is the only ceiling on how often paid runs start."""
+
+    def resolve(self, value):
+        env = {"GITHUB_ACTIONS": "true"}
+        if value is not None:
+            env["ZENDEV_INTERVAL_MINUTES"] = value
+        with patch.dict(os.environ, env, clear=True):
+            return watchdog.resolve_interval()
+
+    def test_unset_and_blank_use_the_default(self):
+        self.assertEqual(self.resolve(None), watchdog.INTERVAL)
+        self.assertEqual(self.resolve("   "), watchdog.INTERVAL)
+
+    def test_operator_value_inside_the_range_is_honoured(self):
+        self.assertEqual(self.resolve("30"), timedelta(minutes=30))
+        self.assertEqual(self.resolve("15"), watchdog.MIN_INTERVAL)
+        self.assertEqual(self.resolve("360"), watchdog.MAX_INTERVAL)
+
+    def test_unusable_values_fall_back_and_never_widen_silently(self):
+        for value in ("14", "0", "-30", "361", "abc", "30.5", ""):
+            with self.subTest(value=value):
+                self.assertEqual(self.resolve(value), watchdog.INTERVAL)
+
+    def test_actions_reads_the_env_not_the_variables_api(self):
+        with patch.object(watchdog, "api", side_effect=AssertionError("no API call")):
+            self.assertEqual(self.resolve("30"), timedelta(minutes=30))
+
+    def test_run_does_not_resolve_the_cadence_itself(self):
+        """main() resolves once; run() must add no API call to the dispatch path."""
+        with patch.object(watchdog, "is_enabled", return_value=False),                 patch.object(watchdog, "api") as api:
+            watchdog.run(dispatch=True, now=NOW)
+        api.assert_not_called()
+
+
 class InspectTests(unittest.TestCase):
-    def inspect(self, recent=(), active=(), state="active"):
+    def inspect(self, recent=(), active=(), state="active", interval=watchdog.INTERVAL):
         def history(endpoint, **filters):
             return list(active) if filters.get("status") == "waiting" else (
                 [] if "status" in filters else list(recent))
         with patch.object(watchdog, "api", return_value={"state": state, "id": 1}), \
                 patch.object(watchdog, "read_runs", side_effect=history):
-            return watchdog.inspect_target(watchdog.TARGETS[0], NOW)
+            return watchdog.inspect_target(watchdog.TARGETS[0], NOW, interval)
 
     def test_recent_success_failed_and_cancelled_attempts_suppress_retry(self):
         for conclusion in ("success", "failure", "cancelled", "skipped", "timed_out"):
@@ -38,6 +73,13 @@ class InspectTests(unittest.TestCase):
         self.assertEqual(self.inspect([attempt(age=59.99)])["decision"], "recent")
         self.assertEqual(self.inspect([attempt(age=60)])["decision"], "due")
         self.assertEqual(self.inspect()["decision"], "due")
+
+    def test_boundary_follows_the_configured_interval(self):
+        half = timedelta(minutes=30)
+        self.assertEqual(self.inspect([attempt(age=29.99)], interval=half)["decision"], "recent")
+        self.assertEqual(self.inspect([attempt(age=30)], interval=half)["decision"], "due")
+        # The same run is still inside the default hour: cadence is the only difference.
+        self.assertEqual(self.inspect([attempt(age=30)])["decision"], "recent")
 
     def test_old_waiting_approval_blocks(self):
         self.assertEqual(self.inspect(active=[attempt(age=180, status="waiting")])["decision"], "active")
@@ -97,7 +139,7 @@ class DispatchTests(unittest.TestCase):
             api.assert_not_called()
 
     def test_dispatches_each_due_target_once_to_master(self):
-        with patch.object(watchdog, "inspect_target", side_effect=lambda target, now: {
+        with patch.object(watchdog, "inspect_target", side_effect=lambda target, now, interval=None: {
             "workflow": target, "decision": "due"}), patch.object(watchdog, "api") as api:
             watchdog.run(dispatch=True, now=NOW)
             self.assertEqual(api.call_count, 3)
