@@ -71,6 +71,43 @@ An API error or incomplete history fails the watchdog visibly; it is never treat
 as an empty queue. A dispatch timeout is not immediately retried because the server
 may already have accepted it. A later pass reads current history again.
 
+## Cadence
+
+`ZENDEV_INTERVAL_MINUTES` is a repository variable holding the minimum gap between two
+dispatches of the same workflow. Unset means 60. The accepted range is 15 to 360; a
+missing, malformed or out-of-range value falls back to 60 and says so in the run
+summary, because a typo must never widen the cadence silently.
+
+This is the **only ceiling on how often paid model runs start**. Whatever wakes this
+dispatcher — GitHub cron, a manual dispatch, an external timer — cannot make a target
+run sooner than the interval allows. Set the cadence here; set the poke frequency
+wherever the timer lives.
+
+```sh
+gh variable set ZENDEV_INTERVAL_MINUTES -R drevendev/trade_simulation --body "30"
+```
+
+Cost scales roughly linearly with it. Measured on 2026-09-04: an author run averaged
+$0.96 and an acceptor run $0.42, so halving the interval roughly doubles the ceiling.
+An idle acceptor is cheap (about $0.07); an idle author is not, because an empty queue
+sends it to create one ready Issue rather than to stop.
+
+## External timer
+
+GitHub cron delivery has been unreliable for this repository, and the watchdog runs on
+the same scheduler it is meant to repair. An external timer that pokes
+`zendev-watchdog.yml` via `workflow_dispatch` removes that shared dependency.
+
+The timer is deliberately dumb: it decides nothing and holds no cadence. Every
+admission check — the `ZENDEV_ENABLED` switch, the interval cooldown, the active-run
+check, fail-closed on API trouble — stays here, tested, in the repository. Poking more
+often than `ZENDEV_INTERVAL_MINUTES` allows is harmless and changes nothing.
+
+Before enabling one, record its owner, its least-authority credential, how overlap is
+prevented, its retry bound, how to disable and revoke it, and the observation window
+that will decide whether it worked. A timer that nobody can turn off is worse than a
+missed schedule.
+
 ## Permissions and opt-out
 
 The watchdog uses the ephemeral repository `GITHUB_TOKEN` with `actions: write` and

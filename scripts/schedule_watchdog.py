@@ -18,7 +18,15 @@ REPOSITORY = "drevendev/trade_simulation"
 BRANCH = "master"
 TARGETS = ("spec-sync.yml", "zendev-author.yml", "zendev-acceptor.yml")
 ACTIVE_STATUSES = ("queued", "in_progress", "waiting", "pending", "requested")
+
+# Minimum gap between two dispatches of the same workflow. This is the only ceiling
+# on how often paid model runs start: an external timer may poke this dispatcher as
+# often as it likes and cannot make a target run sooner than this.
 INTERVAL = timedelta(hours=1)
+# Operator range. Below the floor a slow run would be overtaken by its own successor;
+# above the ceiling the loop is not usefully scheduled at all.
+MIN_INTERVAL = timedelta(minutes=15)
+MAX_INTERVAL = timedelta(hours=6)
 
 
 def api(path: str, *, payload: dict | None = None):
@@ -63,7 +71,7 @@ def read_runs(endpoint: str, **filters) -> list[dict]:
     raise RuntimeError("Incomplete workflow history; refusing to dispatch")
 
 
-def inspect_target(target: str, now: datetime) -> dict:
+def inspect_target(target: str, now: datetime, interval: timedelta = INTERVAL) -> dict:
     if target not in TARGETS:
         raise ValueError("Workflow is not allowlisted")
     endpoint = f"repos/{REPOSITORY}/actions/workflows/{target}"
@@ -84,17 +92,44 @@ def inspect_target(target: str, now: datetime) -> dict:
 
     # Failed/cancelled attempts count too: do not turn a permanent failure into
     # a paid retry storm. No historic catch-up; at most one dispatch per target.
-    recent = read_runs(endpoint, created=">=" + (now - INTERVAL).isoformat())
+    recent = read_runs(endpoint, created=">=" + (now - interval).isoformat())
     for run in recent:
         if run["head_branch"] != BRANCH or run["workflow_id"] != workflow["id"]:
             raise ValueError("Workflow history is outside the requested target")
         if run["status"] != "completed":
             return {"workflow": target, "decision": "active", "run_ids": [run["id"]]}
     latest = max(recent, key=lambda r: timestamp(r["created_at"]), default=None)
-    if latest is not None and now - timestamp(latest["created_at"]) < INTERVAL:
+    if latest is not None and now - timestamp(latest["created_at"]) < interval:
         return {"workflow": target, "decision": "recent", "run_id": latest["id"],
                 "created_at": latest["created_at"], "conclusion": latest["conclusion"]}
     return {"workflow": target, "decision": "due"}
+
+
+def resolve_interval() -> timedelta:
+    """Read the operator cadence, falling back to the default on anything unusable.
+
+    A malformed or out-of-range value must never widen the cadence silently, so it
+    falls back to the conservative default rather than to the caller's intent.
+    """
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        raw = os.environ.get("ZENDEV_INTERVAL_MINUTES", "")
+    else:
+        try:
+            raw = api(f"repos/{REPOSITORY}/actions/variables/ZENDEV_INTERVAL_MINUTES")["value"]
+        except (RuntimeError, ValueError, KeyError, TypeError):
+            return INTERVAL
+    if not raw.strip():
+        return INTERVAL
+    try:
+        minutes = int(raw.strip())
+    except ValueError:
+        print(f"::warning::ZENDEV_INTERVAL_MINUTES is not an integer; using {INTERVAL}")
+        return INTERVAL
+    candidate = timedelta(minutes=minutes)
+    if not MIN_INTERVAL <= candidate <= MAX_INTERVAL:
+        print(f"::warning::ZENDEV_INTERVAL_MINUTES out of range; using {INTERVAL}")
+        return INTERVAL
+    return candidate
 
 
 def is_enabled() -> bool:
@@ -108,19 +143,21 @@ def is_enabled() -> bool:
     return api(f"repos/{REPOSITORY}/actions/variables/ZENDEV_ENABLED")["value"] == "true"
 
 
-def run(*, dispatch: bool = False, now: datetime | None = None) -> list[dict]:
+def run(*, dispatch: bool = False, now: datetime | None = None,
+        interval: timedelta = INTERVAL) -> list[dict]:
+    """The caller resolves the cadence, so this adds no API call of its own."""
     if not is_enabled():
         return [{"decision": "disabled", "reason": "ZENDEV_ENABLED is not true"}]
     results = []
     for target in TARGETS:
-        result = inspect_target(target, now or datetime.now(timezone.utc))
+        result = inspect_target(target, now or datetime.now(timezone.utc), interval)
         if result["decision"] == "due" and dispatch:
             # Re-read immediately before POST to reduce races with an operator's
             # manual dispatch. Cross-workflow API operations are not atomic.
             if not is_enabled():
                 results.append({"workflow": target, "decision": "disabled"})
                 break
-            result = inspect_target(target, now or datetime.now(timezone.utc))
+            result = inspect_target(target, now or datetime.now(timezone.utc), interval)
             if result["decision"] == "due":
                 api(f"repos/{REPOSITORY}/actions/workflows/{target}/dispatches",
                     payload={"ref": BRANCH})
@@ -136,8 +173,14 @@ def main() -> int:
     parser.add_argument("--dispatch", action="store_true")
     args = parser.parse_args()
     try:
-        results = run(dispatch=args.dispatch)
-        report = "## ZenDev scheduling watchdog\n\n```json\n" + json.dumps(results, indent=2) + "\n```\n"
+        interval = resolve_interval()
+        results = run(dispatch=args.dispatch, interval=interval)
+        minutes = int(interval.total_seconds() // 60)
+        report = (
+            "## ZenDev scheduling watchdog\n\n"
+            f"Dispatch interval: {minutes} minutes.\n\n"
+            "```json\n" + json.dumps(results, indent=2) + "\n```\n"
+        )
         print(report)
         if os.environ.get("GITHUB_STEP_SUMMARY"):
             with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
