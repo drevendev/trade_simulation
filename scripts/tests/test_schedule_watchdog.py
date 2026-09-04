@@ -139,11 +139,16 @@ class DispatchTests(unittest.TestCase):
             api.assert_not_called()
 
     def test_dispatches_each_due_target_once_to_master(self):
+        # Only one model target is simultaneously due here, so alternation never
+        # kicks in and every due target -- spec-sync plus the one model target --
+        # dispatches. See AlternationDispatchTests for the both-due case.
         with patch.object(watchdog, "inspect_target", side_effect=lambda target, now, interval=None: {
-            "workflow": target, "decision": "due"}), patch.object(watchdog, "api") as api:
+            "workflow": target, "decision": "due" if target != "zendev-acceptor.yml" else "recent"}), \
+                patch.object(watchdog, "api") as api:
             watchdog.run(dispatch=True, now=NOW)
-            self.assertEqual(api.call_count, 3)
-            for call, target in zip(api.call_args_list, watchdog.TARGETS):
+            self.assertEqual(api.call_count, 2)
+            expected = ("spec-sync.yml", "zendev-author.yml")
+            for call, target in zip(api.call_args_list, expected):
                 self.assertEqual(call.args[0], f"repos/{watchdog.REPOSITORY}/actions/workflows/{target}/dispatches")
                 self.assertEqual(call.kwargs, {"payload": {"ref": "master"}})
 
@@ -166,7 +171,10 @@ class DispatchTests(unittest.TestCase):
         api.assert_not_called()
 
     def test_uncertain_dispatch_is_not_retried(self):
-        with patch.object(watchdog, "inspect_target", return_value={"decision": "due"}), \
+        # Only spec-sync is due, so this exercises the POST failure itself rather
+        # than the (separately tested) alternation tie-break lookup.
+        with patch.object(watchdog, "inspect_target", side_effect=lambda target, now, interval=None: (
+                {"decision": "due"} if target == "spec-sync.yml" else {"decision": "recent"})), \
                 patch.object(watchdog, "api", side_effect=RuntimeError("network")) as api, \
                 self.assertRaises(RuntimeError):
             watchdog.run(dispatch=True, now=NOW)
@@ -204,6 +212,146 @@ class EnvironmentTests(unittest.TestCase):
             watchdog.api("endpoint", payload={"ref": "master"})
             self.assertIn("POST", process.call_args.args[0])
             self.assertEqual(process.call_args.kwargs["input"], '{"ref": "master"}')
+
+
+class LastRunTimeTests(unittest.TestCase):
+    def test_returns_the_newest_run_timestamp(self):
+        with patch.object(watchdog, "api", return_value={"workflow_runs": [attempt(age=5)]}) as api:
+            when = watchdog.last_run_time(watchdog.MODEL_TARGETS[0])
+        self.assertEqual(when, NOW - timedelta(minutes=5))
+        self.assertIn("per_page=1", api.call_args.args[0])
+
+    def test_no_history_returns_none(self):
+        with patch.object(watchdog, "api", return_value={"workflow_runs": []}):
+            self.assertIsNone(watchdog.last_run_time(watchdog.MODEL_TARGETS[0]))
+
+    def test_wrong_branch_fails_closed(self):
+        with patch.object(watchdog, "api", return_value={"workflow_runs": [attempt(head_branch="untrusted")]}):
+            with self.assertRaises(ValueError):
+                watchdog.last_run_time(watchdog.MODEL_TARGETS[0])
+
+    def test_malformed_response_fails_closed(self):
+        for response in ({"workflow_runs": "nope"}, {}, "nope"):
+            with self.subTest(response=response):
+                with patch.object(watchdog, "api", return_value=response):
+                    with self.assertRaises(ValueError):
+                        watchdog.last_run_time(watchdog.MODEL_TARGETS[0])
+
+
+class SelectModelTargetTests(unittest.TestCase):
+    def test_picks_the_target_run_less_recently(self):
+        author, acceptor = watchdog.MODEL_TARGETS
+        with patch.object(watchdog, "last_run_time", side_effect=lambda target: (
+                NOW - timedelta(hours=1) if target == author else NOW - timedelta(hours=3))):
+            self.assertEqual(watchdog.select_model_target([author, acceptor]), acceptor)
+
+    def test_never_run_sorts_oldest(self):
+        author, acceptor = watchdog.MODEL_TARGETS
+        with patch.object(watchdog, "last_run_time", side_effect=lambda target: (
+                None if target == acceptor else NOW)):
+            self.assertEqual(watchdog.select_model_target([author, acceptor]), acceptor)
+
+    def test_genuine_tie_breaks_by_declared_order(self):
+        author, acceptor = watchdog.MODEL_TARGETS
+        for shared in (None, NOW):
+            with self.subTest(shared=shared):
+                with patch.object(watchdog, "last_run_time", return_value=shared):
+                    self.assertEqual(watchdog.select_model_target([acceptor, author]), author)
+
+
+class AlternationDispatchTests(unittest.TestCase):
+    """At most one model target dispatches per pass; spec-sync is unaffected."""
+
+    def setUp(self):
+        self.enabled = patch.object(watchdog, "is_enabled", return_value=True)
+        self.enabled.start()
+        self.addCleanup(self.enabled.stop)
+
+    def decide(self, decisions):
+        return lambda target, now, interval=None: {"workflow": target, "decision": decisions[target]}
+
+    def test_both_due_dispatches_only_the_target_run_less_recently(self):
+        decisions = {"spec-sync.yml": "recent", "zendev-author.yml": "due", "zendev-acceptor.yml": "due"}
+        with patch.object(watchdog, "inspect_target", side_effect=self.decide(decisions)), \
+                patch.object(watchdog, "select_model_target",
+                              return_value="zendev-acceptor.yml") as select, \
+                patch.object(watchdog, "api") as api:
+            results = watchdog.run(dispatch=True, now=NOW)
+        select.assert_called_once_with(["zendev-author.yml", "zendev-acceptor.yml"])
+        self.assertEqual(api.call_count, 1)
+        self.assertEqual(api.call_args.args[0],
+                          f"repos/{watchdog.REPOSITORY}/actions/workflows/zendev-acceptor.yml/dispatches")
+        by_workflow = {r.get("workflow"): r["decision"] for r in results}
+        self.assertEqual(by_workflow["zendev-acceptor.yml"], "dispatched")
+        self.assertEqual(by_workflow["zendev-author.yml"], "deferred")
+
+    def test_one_due_dispatches_without_consulting_alternation(self):
+        decisions = {"spec-sync.yml": "recent", "zendev-author.yml": "due", "zendev-acceptor.yml": "active"}
+        with patch.object(watchdog, "inspect_target", side_effect=self.decide(decisions)), \
+                patch.object(watchdog, "select_model_target") as select, \
+                patch.object(watchdog, "api") as api:
+            results = watchdog.run(dispatch=True, now=NOW)
+        select.assert_not_called()
+        self.assertEqual(api.call_count, 1)
+        by_workflow = {r.get("workflow"): r["decision"] for r in results}
+        self.assertEqual(by_workflow["zendev-author.yml"], "dispatched")
+        self.assertEqual(by_workflow["zendev-acceptor.yml"], "active")
+
+    def test_neither_due_dispatches_nothing(self):
+        decisions = {"spec-sync.yml": "recent", "zendev-author.yml": "recent", "zendev-acceptor.yml": "active"}
+        with patch.object(watchdog, "inspect_target", side_effect=self.decide(decisions)), \
+                patch.object(watchdog, "select_model_target") as select, \
+                patch.object(watchdog, "api") as api:
+            watchdog.run(dispatch=True, now=NOW)
+        select.assert_not_called()
+        api.assert_not_called()
+
+    def test_one_active_is_left_untouched_by_alternation(self):
+        decisions = {"spec-sync.yml": "due", "zendev-author.yml": "active", "zendev-acceptor.yml": "due"}
+        with patch.object(watchdog, "inspect_target", side_effect=self.decide(decisions)), \
+                patch.object(watchdog, "select_model_target") as select, \
+                patch.object(watchdog, "api") as api:
+            results = watchdog.run(dispatch=True, now=NOW)
+        select.assert_not_called()
+        by_workflow = {r.get("workflow"): r["decision"] for r in results}
+        self.assertEqual(by_workflow["zendev-acceptor.yml"], "dispatched")
+        self.assertEqual(by_workflow["zendev-author.yml"], "active")
+
+    def test_dry_run_never_consults_alternation_or_the_network(self):
+        decisions = {"spec-sync.yml": "recent", "zendev-author.yml": "due", "zendev-acceptor.yml": "due"}
+        with patch.object(watchdog, "inspect_target", side_effect=self.decide(decisions)), \
+                patch.object(watchdog, "select_model_target") as select, \
+                patch.object(watchdog, "api") as api:
+            results = watchdog.run(now=NOW)
+        select.assert_not_called()
+        api.assert_not_called()
+        by_workflow = {r.get("workflow"): r["decision"] for r in results}
+        self.assertEqual(by_workflow["zendev-author.yml"], "due")
+        self.assertEqual(by_workflow["zendev-acceptor.yml"], "due")
+
+    def test_consecutive_passes_alternate_on_a_genuine_tie(self):
+        """The rate stays the same, spread across two half-length passes instead of
+        one -- proving the half-interval equivalence the Issue's trade-off table
+        claims, without needing to fabricate a full wall-clock simulation."""
+        decisions = {"spec-sync.yml": "recent", "zendev-author.yml": "due", "zendev-acceptor.yml": "due"}
+        with patch.object(watchdog, "inspect_target", side_effect=self.decide(decisions)), \
+                patch.object(watchdog, "last_run_time", return_value=None), \
+                patch.object(watchdog, "api"):
+            first = watchdog.run(dispatch=True, now=NOW)
+        first_by = {r.get("workflow"): r["decision"] for r in first}
+        self.assertEqual(first_by["zendev-author.yml"], "dispatched")
+        self.assertEqual(first_by["zendev-acceptor.yml"], "deferred")
+
+        # After the author's dispatch its last run is the most recent: the tie
+        # breaks the other way, and the acceptor dispatches on the next pass.
+        with patch.object(watchdog, "inspect_target", side_effect=self.decide(decisions)), \
+                patch.object(watchdog, "last_run_time", side_effect=lambda target: (
+                        NOW if target == "zendev-author.yml" else None)), \
+                patch.object(watchdog, "api"):
+            second = watchdog.run(dispatch=True, now=NOW)
+        second_by = {r.get("workflow"): r["decision"] for r in second}
+        self.assertEqual(second_by["zendev-acceptor.yml"], "dispatched")
+        self.assertEqual(second_by["zendev-author.yml"], "deferred")
 
 
 class WiringTests(unittest.TestCase):

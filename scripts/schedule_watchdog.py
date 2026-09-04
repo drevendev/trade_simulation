@@ -16,7 +16,10 @@ from urllib.parse import urlencode
 
 REPOSITORY = "drevendev/trade_simulation"
 BRANCH = "master"
-TARGETS = ("spec-sync.yml", "zendev-author.yml", "zendev-acceptor.yml")
+# Model-running targets alternate, at most one dispatched per pass. spec-sync runs no
+# model and stays outside that rotation, dispatched every pass like before.
+MODEL_TARGETS = ("zendev-author.yml", "zendev-acceptor.yml")
+TARGETS = ("spec-sync.yml",) + MODEL_TARGETS
 ACTIVE_STATUSES = ("queued", "in_progress", "waiting", "pending", "requested")
 
 # Minimum gap between two dispatches of the same workflow. This is the only ceiling
@@ -105,6 +108,42 @@ def inspect_target(target: str, now: datetime, interval: timedelta = INTERVAL) -
     return {"workflow": target, "decision": "due"}
 
 
+def last_run_time(target: str) -> datetime | None:
+    """The most recent run of `target` on the trusted branch, of any status.
+
+    Used only to break a tie between two simultaneously due model targets — never to
+    decide whether a target itself is due, which stays `inspect_target`'s job.
+    """
+    endpoint = f"repos/{REPOSITORY}/actions/workflows/{target}"
+    query = urlencode({"branch": BRANCH, "per_page": 1, "page": 1})
+    response = api(f"{endpoint}/runs?{query}")
+    batch = response.get("workflow_runs") if isinstance(response, dict) else None
+    if not isinstance(batch, list):
+        raise ValueError("Invalid workflow history response")
+    if not batch:
+        return None
+    run = batch[0]
+    if run["head_branch"] != BRANCH:
+        raise ValueError("Workflow history is outside the requested target")
+    return timestamp(run["created_at"])
+
+
+def select_model_target(candidates: list[str]) -> str:
+    """Among due model targets, choose the one run least recently.
+
+    No turn is stored: each pass recomputes the choice from actual run history, so
+    consecutive passes alternate for as long as both stay due. A target that has never
+    run sorts oldest. A genuine tie (including "neither has ever run") breaks by
+    `MODEL_TARGETS` declaration order, deterministically.
+    """
+    ages = {target: last_run_time(target) for target in candidates}
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    return min(
+        candidates,
+        key=lambda target: (ages[target] or epoch, MODEL_TARGETS.index(target)),
+    )
+
+
 def resolve_interval() -> timedelta:
     """Read the operator cadence, falling back to the default on anything unusable.
 
@@ -148,24 +187,43 @@ def run(*, dispatch: bool = False, now: datetime | None = None,
     """The caller resolves the cadence, so this adds no API call of its own."""
     if not is_enabled():
         return [{"decision": "disabled", "reason": "ZENDEV_ENABLED is not true"}]
-    results = []
+    when = now or datetime.now(timezone.utc)
+    results = {target: inspect_target(target, when, interval) for target in TARGETS}
+
+    if dispatch:
+        # At most one model target dispatches per pass. When both are simultaneously
+        # due, defer the one run more recently rather than starting two at once. Dry
+        # runs skip this: it costs an extra API call, and nothing is dispatched anyway.
+        due_model_targets = [t for t in MODEL_TARGETS if results[t]["decision"] == "due"]
+        if len(due_model_targets) > 1:
+            chosen = select_model_target(due_model_targets)
+            for target in due_model_targets:
+                if target != chosen:
+                    results[target] = {
+                        "workflow": target,
+                        "decision": "deferred",
+                        "reason": "alternation: yielding this pass to the model target that ran less recently",
+                    }
+
+    ordered = []
     for target in TARGETS:
-        result = inspect_target(target, now or datetime.now(timezone.utc), interval)
+        result = results[target]
         if result["decision"] == "due" and dispatch:
             # Re-read immediately before POST to reduce races with an operator's
             # manual dispatch. Cross-workflow API operations are not atomic.
             if not is_enabled():
-                results.append({"workflow": target, "decision": "disabled"})
+                result = {"workflow": target, "decision": "disabled"}
+                ordered.append(result)
                 break
-            result = inspect_target(target, now or datetime.now(timezone.utc), interval)
+            result = inspect_target(target, when, interval)
             if result["decision"] == "due":
                 api(f"repos/{REPOSITORY}/actions/workflows/{target}/dispatches",
                     payload={"ref": BRANCH})
                 result["decision"] = "dispatched"
                 # Emit immediately: retain a receipt if a later target fails.
                 print(json.dumps(result), flush=True)
-        results.append(result)
-    return results
+        ordered.append(result)
+    return ordered
 
 
 def main() -> int:
