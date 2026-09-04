@@ -5,6 +5,8 @@
  * inventories, registries and the World/Market/Production/Population/Clans/
  * Fiscal/Monetary/Expansion/Events domains — from Milestone 1 onward.
  * REQ-CORE-001 (see ./id.ts) is the first canonical behavior to land here.
+ * REQ-CORE-002 (see ./numeric.ts, ./ordering.ts) adds the finite-number and
+ * deterministic-ordering primitives every later canonical subsystem builds on.
  */
 export const DOMAIN_MODULE_AREA = "domain" as const;
 
@@ -29,3 +31,7 @@ export {
   type StateId,
   type TransportLinkId,
 } from "./id";
+
+export { assertFiniteCanonicalNumber, isFiniteCanonicalNumber } from "./numeric";
+
+export { sortByPersistentId, stableOrderBy } from "./ordering";
