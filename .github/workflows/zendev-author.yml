@@ -4,8 +4,7 @@ name: ZenDev author
 # This role never merges. Acceptance lives in zendev-acceptor.yml.
 
 on:
-  schedule:
-    - cron: "17 * * * *"
+  # Automatic hourly cadence is owned by zendev-watchdog.yml.
   workflow_dispatch:
 
 permissions:
@@ -19,8 +18,8 @@ concurrency:
 
 jobs:
   author:
-    # The schedule stays inert until the repository variable ZENDEV_ENABLED is 'true'.
-    # A manual dispatch always runs, so the loop can be validated before it is armed.
+    # The dispatcher respects ZENDEV_ENABLED. Direct operator dispatch remains
+    # available for maintenance even while automatic scheduling is paused.
     if: vars.ZENDEV_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45

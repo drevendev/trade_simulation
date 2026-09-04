@@ -10,8 +10,7 @@ describe("canonical toolchain", () => {
     expect(toolchainStatus().runtime).toBe("typescript");
   });
 
-  it("does not yet claim canonical scaffolding exists", () => {
-    // Flips to true in REQ-MIGRATION-003, which is where the scaffolding belongs.
-    expect(toolchainStatus().canonicalScaffolding).toBe(false);
+  it("claims canonical scaffolding exists now that REQ-MIGRATION-003 is done", () => {
+    expect(toolchainStatus().canonicalScaffolding).toBe(true);
   });
 });

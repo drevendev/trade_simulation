@@ -1,0 +1,46 @@
+name: ZenDev scheduling watchdog
+
+# GitHub-only recovery is best effort, not an external availability guarantee.
+# The lightweight probe runs four times/hour; models are dispatched at most once
+# per hour by this probe. It is the only automatic cadence owner.
+on:
+  schedule:
+    - cron: "11,26,41,56 * * * *"
+  workflow_dispatch:
+    inputs:
+      dispatch:
+        description: "Recover due workflows (false performs read-only diagnostics)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: zendev-scheduling-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    if: github.repository == 'drevendev/trade_simulation' && github.ref == 'refs/heads/master' && vars.ZENDEV_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Recover missed hourly dispatches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZENDEV_ENABLED: ${{ vars.ZENDEV_ENABLED }}
+          RECOVER: ${{ github.event_name == 'schedule' || inputs.dispatch }}
+        run: |
+          if [ "$RECOVER" = "true" ]; then
+            python scripts/schedule_watchdog.py --dispatch
+          else
+            python scripts/schedule_watchdog.py
+          fi

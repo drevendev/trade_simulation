@@ -8,8 +8,7 @@ name: Spec sync
 # What is copied is decided by docs/zendev/spec-mirror-allowlist.txt, not here.
 
 on:
-  schedule:
-    - cron: "5 * * * *"
+  # Automatic hourly cadence is owned by zendev-watchdog.yml.
   workflow_dispatch:
 
 permissions:
