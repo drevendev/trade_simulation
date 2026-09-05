@@ -6,6 +6,11 @@ name: ZenDev author
 on:
   # Automatic hourly cadence is owned by zendev-watchdog.yml.
   workflow_dispatch:
+    inputs:
+      smoke:
+        description: "Prove the identity only: mint the token, say who this run is, start no model"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -17,17 +22,78 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  author:
+  # Who this run is, before it does anything. The role acts through its own GitHub App
+  # (docs/adr/0006-github-apps-as-loop-identities.md): an installation token minted for
+  # this repository alone and revoked when the job ends. Printing the identity on every
+  # run makes a swapped key or a mis-installed app visible in the log; with `smoke` set,
+  # this job is the whole run — how a fresh project proves its setup without spending a
+  # model.
+  identity:
     # The dispatcher respects ZENDEV_ENABLED. Direct operator dispatch remains
     # available for maintenance even while automatic scheduling is paused.
     if: vars.ZENDEV_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Act as the AUTHOR identity
+        id: identity
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ZENDEV_AUTHOR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZENDEV_AUTHOR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Say who this run is
+        env:
+          GH_TOKEN: ${{ steps.identity.outputs.token }}
+          APP_SLUG: ${{ steps.identity.outputs.app-slug }}
+          INSTALLATION: ${{ steps.identity.outputs.installation-id }}
+        run: |
+          echo "identity: ${APP_SLUG}[bot], installation ${INSTALLATION}"
+          gh api "repos/${GITHUB_REPOSITORY}" --jq '"reaches: " + .full_name'
+
+      # The ledger is written by the MACHINE identity into a private repository. Proved
+      # here too, so a smoke run answers for every credential the real run will need.
+      - name: Act as the MACHINE identity towards the ledger
+        id: ledger
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ZENDEV_MACHINE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZENDEV_MACHINE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: zen-telemetry
+
+      - name: Say that the ledger is reachable
+        env:
+          GH_TOKEN: ${{ steps.ledger.outputs.token }}
+          APP_SLUG: ${{ steps.ledger.outputs.app-slug }}
+        run: |
+          echo "ledger identity: ${APP_SLUG}[bot]"
+          gh api "repos/${GITHUB_REPOSITORY_OWNER}/zen-telemetry" --jq '"ledger reaches: " + .full_name'
+
+  author:
+    needs: identity
+    # Not when `smoke` is set: proving the identity was the whole point of that run.
+    if: ${{ !inputs.smoke }}
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      # Minted again: a token does not cross jobs, and the one above is already revoked.
+      # Scoped to this repository, gone with the job.
+      - name: Act as the AUTHOR identity
+        id: identity
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ZENDEV_AUTHOR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZENDEV_AUTHOR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          token: ${{ secrets.ZENDEV_PAT || github.token }}
+          token: ${{ steps.identity.outputs.token }}
 
       - uses: actions/setup-dotnet@v6
         with:
@@ -66,9 +132,11 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # A PAT rather than the default token, so that pull requests this run opens
-          # actually trigger the CI workflow. Events from GITHUB_TOKEN do not.
-          github_token: ${{ secrets.ZENDEV_PAT }}
+          # The AUTHOR app's token, not GITHUB_TOKEN: pushes and pull requests made with
+          # it trigger checks, which events from GITHUB_TOKEN do not. Unlike the personal
+          # token it replaced, it names the role, carries the Workflows permission the
+          # role needs to propose a control-plane change, and expires with the job.
+          github_token: ${{ steps.identity.outputs.token }}
           # The dispatcher runs this workflow with the repository's own GITHUB_TOKEN,
           # so the triggering actor is github-actions[bot]. The action refuses a bot
           # actor unless it is named here, which is why every watchdog-dispatched run
@@ -119,6 +187,21 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: python "${RUNNER_TEMP}/subscription_usage.py" --out "${RUNNER_TEMP}/usage-after.json"
 
+      # The ledger lives in a private repository and is written by the MACHINE identity.
+      # Its token is minted here, at the end, scoped to that repository alone: the model
+      # never holds it. A failed mint is a gap in the bookkeeping, not a failed run —
+      # the recorder warns that no token was set and exits 0.
+      - name: Act as the MACHINE identity towards the ledger
+        id: ledger
+        if: always()
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ZENDEV_MACHINE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZENDEV_MACHINE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: zen-telemetry
+
       # Telemetry only. This repository is public, so the numbers go to a private
       # ledger. It never fails the run: a missing token or an unreachable ledger is a
       # warning, because a loop that stops over bookkeeping is worse than a gap in the
@@ -126,7 +209,7 @@ jobs:
       - name: Record what this run consumed
         if: always()
         env:
-          TELEMETRY_TOKEN: ${{ secrets.TELEMETRY_PAT }}
+          TELEMETRY_TOKEN: ${{ steps.ledger.outputs.token }}
         run: |
           python "${RUNNER_TEMP}/record_usage.py" \
             --execution-file "${{ steps.claude.outputs.execution_file }}" \

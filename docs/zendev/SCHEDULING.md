@@ -111,11 +111,13 @@ missed schedule.
 ## Permissions and opt-out
 
 The watchdog uses the ephemeral repository `GITHUB_TOKEN` with `actions: write` and
-`contents: read`. It receives no model token, Drive credential or `ZENDEV_PAT`.
+`contents: read`. It receives no model token, Drive credential or GitHub App key.
 GitHub permits `workflow_dispatch` from `GITHUB_TOKEN` to create a new run:
 [Triggering workflows](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
-The existing model-job credentials and permissions are unchanged. In particular this
-does **not** resolve the workflow-file push permission problem tracked by Issue #33.
+The roles it dispatches act through their own GitHub Apps
+([ADR 0006](../adr/0006-github-apps-as-loop-identities.md)); the workflow-file push
+permission problem once tracked by Issue #33 is resolved by the AUTHOR app's Workflows
+permission, not by anything the watchdog holds.
 
 The Actions `vars` context supplies `ZENDEV_ENABLED` to the script; the default
 `GITHUB_TOKEN` is not given extra access to the repository Variables API. Local

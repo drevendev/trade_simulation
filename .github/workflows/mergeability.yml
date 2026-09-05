@@ -81,16 +81,30 @@ jobs:
       # credential that can push. `master` is the reviewed definition — and `master`
       # moving is exactly when branches fall behind.
       #
-      # The loop's token, not `github.token`: a push made with the workflow token starts
-      # no workflows, so the updated branch would sit with the stale checks it had
-      # before, measured on a revision that no longer exists.
+      # The MACHINE identity's token, not `github.token`: a push made with the workflow
+      # token starts no workflows, so the updated branch would sit with the stale checks
+      # it had before, measured on a revision that no longer exists. Minted for this
+      # repository alone and revoked with the job (docs/adr/0006-github-apps-as-loop-
+      # identities.md). A failed mint leaves the branch to the author and warns; it does
+      # not paint master red.
+      - name: Act as the MACHINE identity
+        id: identity
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ZENDEV_MACHINE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZENDEV_MACHINE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - name: Update loop branches that are merely behind
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         env:
-          GH_TOKEN: ${{ secrets.ZENDEV_PAT }}
+          GH_TOKEN: ${{ steps.identity.outputs.token }}
         run: |
           if [ -z "${GH_TOKEN}" ]; then
-            echo "::warning::ZENDEV_PAT is not available; branches that are behind stay with the author"
+            echo "::warning::no MACHINE identity token; branches that are behind stay with the author"
             exit 0
           fi
           python scripts/update_branches.py --repo "${{ github.repository }}" --all-open

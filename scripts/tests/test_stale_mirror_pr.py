@@ -92,10 +92,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertLess(closing, proposing)
 
     def test_closing_uses_the_same_token_as_proposing(self):
+        # Both act as the MACHINE identity: the token minted once at the top of the job.
         text = WORKFLOW.read_text(encoding="utf-8")
         closing = text.index("scripts/stale_mirror_pr.py")
         step = text[text.rfind("- name:", 0, closing):closing]
-        self.assertIn("secrets.ZENDEV_PAT || github.token", step)
+        self.assertIn("GH_TOKEN: ${{ steps.identity.outputs.token }}", step)
+        proposing = text.index("peter-evans/create-pull-request")
+        proposal = text[proposing:text.index("add-paths:", proposing)]
+        self.assertIn("token: ${{ steps.identity.outputs.token }}", proposal)
 
 
 if __name__ == "__main__":

@@ -94,10 +94,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("refs/heads/master", step)
         self.assertIn("github.event_name != 'pull_request'", step)
 
-    def test_the_sweep_uses_the_loop_token_so_the_push_triggers_checks(self):
-        sweep = self.text().index("scripts/update_branches.py")
-        step = self.text()[self.text().rfind("- name:", 0, sweep):sweep]
-        self.assertIn("secrets.ZENDEV_PAT", step)
+    def test_the_sweep_acts_as_the_machine_identity_so_the_push_triggers_checks(self):
+        text = self.text()
+        sweep = text.index("scripts/update_branches.py")
+        step = text[text.rfind("- name:", 0, sweep):sweep]
+        self.assertIn("GH_TOKEN: ${{ steps.identity.outputs.token }}", step)
+        # The identity is minted right before, under the same master-only condition,
+        # from the MACHINE app — a role that runs no model.
+        mint = text[text.rfind("- name: Act as the MACHINE identity", 0, sweep):sweep]
+        self.assertIn("vars.ZENDEV_MACHINE_APP_CLIENT_ID", mint)
+        self.assertIn("refs/heads/master", mint)
+        self.assertNotIn("ZENDEV_PAT", text)
 
 
 if __name__ == "__main__":

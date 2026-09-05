@@ -6,6 +6,11 @@ name: ZenDev acceptor
 on:
   # Automatic hourly cadence is owned by zendev-watchdog.yml.
   workflow_dispatch:
+    inputs:
+      smoke:
+        description: "Prove the identity only: mint the token, say who this run is, start no model"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -19,15 +24,72 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  acceptor:
+  # Who this run is, before it does anything. The role acts through its own GitHub App
+  # (docs/adr/0006-github-apps-as-loop-identities.md), a different one from the AUTHOR's,
+  # which is what lets the forge tell the two roles apart. An installation token minted
+  # for this repository alone and revoked when the job ends. With `smoke` set, this job
+  # is the whole run.
+  identity:
     if: vars.ZENDEV_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Act as the ACCEPTOR identity
+        id: identity
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ZENDEV_ACCEPTOR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZENDEV_ACCEPTOR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Say who this run is
+        env:
+          GH_TOKEN: ${{ steps.identity.outputs.token }}
+          APP_SLUG: ${{ steps.identity.outputs.app-slug }}
+          INSTALLATION: ${{ steps.identity.outputs.installation-id }}
+        run: |
+          echo "identity: ${APP_SLUG}[bot], installation ${INSTALLATION}"
+          gh api "repos/${GITHUB_REPOSITORY}" --jq '"reaches: " + .full_name'
+
+      - name: Act as the MACHINE identity towards the ledger
+        id: ledger
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ZENDEV_MACHINE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZENDEV_MACHINE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: zen-telemetry
+
+      - name: Say that the ledger is reachable
+        env:
+          GH_TOKEN: ${{ steps.ledger.outputs.token }}
+          APP_SLUG: ${{ steps.ledger.outputs.app-slug }}
+        run: |
+          echo "ledger identity: ${APP_SLUG}[bot]"
+          gh api "repos/${GITHUB_REPOSITORY_OWNER}/zen-telemetry" --jq '"ledger reaches: " + .full_name'
+
+  acceptor:
+    needs: identity
+    # Not when `smoke` is set: proving the identity was the whole point of that run.
+    if: ${{ !inputs.smoke }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      # Minted again: a token does not cross jobs, and the one above is already revoked.
+      - name: Act as the ACCEPTOR identity
+        id: identity
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ZENDEV_ACCEPTOR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZENDEV_ACCEPTOR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          token: ${{ secrets.ZENDEV_PAT || github.token }}
+          token: ${{ steps.identity.outputs.token }}
 
       - uses: actions/setup-dotnet@v6
         with:
@@ -62,7 +124,7 @@ jobs:
       - name: Choose the pull request to review
         id: select
         env:
-          GH_TOKEN: ${{ secrets.ZENDEV_PAT || github.token }}
+          GH_TOKEN: ${{ steps.identity.outputs.token }}
         run: python scripts/select_review_target.py --repo "${{ github.repository }}"
 
       # The subscription is metered in rolling windows, not dollars. One reading before
@@ -82,7 +144,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.ZENDEV_PAT }}
+          # The ACCEPTOR app's token: a different identity from the AUTHOR's, so a merge
+          # or a verdict is attributable to the role that made it, and the forge could
+          # one day require the two to differ. Expires with the job.
+          github_token: ${{ steps.identity.outputs.token }}
           # The dispatcher runs this workflow with the repository's own GITHUB_TOKEN,
           # so the triggering actor is github-actions[bot]. The action refuses a bot
           # actor unless it is named here, which is why every watchdog-dispatched run
@@ -158,11 +223,25 @@ jobs:
             --repo "${{ github.repository }}" \
             --pull "${{ steps.select.outputs.target }}"
 
+      # The ledger lives in a private repository and is written by the MACHINE identity.
+      # Its token is minted here, at the end, scoped to that repository alone: the model
+      # never holds it. A failed mint is a gap in the bookkeeping, not a failed run.
+      - name: Act as the MACHINE identity towards the ledger
+        id: ledger
+        if: always()
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ZENDEV_MACHINE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZENDEV_MACHINE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: zen-telemetry
+
       # Telemetry only. See the note in zendev-author.yml: this never fails the run.
       - name: Record what this run consumed
         if: always()
         env:
-          TELEMETRY_TOKEN: ${{ secrets.TELEMETRY_PAT }}
+          TELEMETRY_TOKEN: ${{ steps.ledger.outputs.token }}
         run: |
           python "${RUNNER_TEMP}/record_usage.py" \
             --execution-file "${{ steps.claude.outputs.execution_file }}" \

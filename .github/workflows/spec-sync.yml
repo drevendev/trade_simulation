@@ -43,6 +43,27 @@ jobs:
         with:
           python-version: '3.12'
 
+      # The sync acts as the MACHINE identity (docs/adr/0006-github-apps-as-loop-
+      # identities.md): a token for this repository alone, minted here and revoked with
+      # the job. It closes, opens and arms the mirror proposal; it never runs a model.
+      # The proposal's author becomes zendev-machine[bot]; its commits stay *committed*
+      # by github-actions[bot], set explicitly on the proposing step below, so the
+      # committer gate in machine_pr_guard is unchanged.
+      - name: Act as the MACHINE identity
+        id: identity
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ZENDEV_MACHINE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZENDEV_MACHINE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Say who this run is
+        env:
+          APP_SLUG: ${{ steps.identity.outputs.app-slug }}
+          INSTALLATION: ${{ steps.identity.outputs.installation-id }}
+        run: echo "identity: ${APP_SLUG}[bot], installation ${INSTALLATION}"
+
       - name: Require configuration
         env:
           SA_JSON: ${{ secrets.GDRIVE_SA_JSON }}
@@ -159,16 +180,20 @@ jobs:
       # docs/zendev/MACHINE_PULL_REQUESTS.md, "Recovering one".
       - name: Close a stale refused proposal
         env:
-          GH_TOKEN: ${{ secrets.ZENDEV_PAT || github.token }}
+          GH_TOKEN: ${{ steps.identity.outputs.token }}
         run: python scripts/stale_mirror_pr.py --repo "${{ github.repository }}"
 
       - name: Propose the mirror as a pull request
         id: mirror_pr
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.ZENDEV_PAT || github.token }}
+          token: ${{ steps.identity.outputs.token }}
           branch: spec-mirror
           base: master
+          # Explicit, because machine_pr_guard accepts this class on the committer of
+          # its head commit. The action's default is the same identity; naming it here
+          # keeps the gate's expectation and the producer's behaviour in one place.
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
           add-paths: |
             docs/spec/mirror
             docs/spec/IMPLEMENTATION_STATUS.md
@@ -220,7 +245,7 @@ jobs:
       # operator.
       - name: Arm auto-merge on the mirror
         env:
-          GH_TOKEN: ${{ secrets.ZENDEV_PAT || github.token }}
+          GH_TOKEN: ${{ steps.identity.outputs.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.mirror_pr.outputs.pull-request-number }}
         run: |
