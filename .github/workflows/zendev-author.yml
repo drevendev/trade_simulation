@@ -53,6 +53,16 @@ jobs:
           # Exactly this bot, never "*": on a public repository "*" would let any
           # external app invoke this action with a prompt it controls.
           allowed_bots: "github-actions"
+          # Pinned deliberately. Left unset, the action runs whatever it defaults to
+          # today, which can change under an unattended loop with no signal but the
+          # bill. The model is part of what governs a run, so it is declared here and
+          # recorded in the telemetry ledger for every run.
+          #
+          # Circuit breaker, not a budget: expected author spend on this model is
+          # well under a dollar, so this only fires on a genuine runaway. A hard stop
+          # here is ungraceful — the run cannot report its own blocker — which is why
+          # the ceiling is generous rather than tight.
+          claude_args: --model claude-haiku-4-5 --max-budget-usd 3.00
           settings: |
             {
               "permissions": {

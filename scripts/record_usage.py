@@ -55,6 +55,23 @@ def read_messages(path: str):
     return data, None
 
 
+def extract_model(messages):
+    """Which model produced this run.
+
+    Without it the ledger cannot be read back: a cost or quality change is
+    indistinguishable from a model change, and the model can change without anyone
+    editing the workflow. Checked in several places because the shape differs between
+    the final result message and the assistant messages.
+    """
+    for message in reversed(messages):
+        if not isinstance(message, dict):
+            continue
+        for candidate in (message.get("model"), (message.get("message") or {}).get("model")):
+            if isinstance(candidate, str) and candidate:
+                return candidate
+    return None
+
+
 def extract_usage(messages):
     """Prefer the final result message; fall back to summing assistant messages.
 
@@ -133,15 +150,19 @@ def main() -> int:
     if problem:
         warn(problem)
         tokens = {field: None for field in TOKEN_FIELDS}
-        extra, source = {}, "unavailable"
+        extra, source, model = {}, "unavailable", None
     else:
         tokens, extra, source = extract_usage(messages)
+        model = extract_model(messages)
+        if model is None:
+            warn("the execution file names no model; recording null")
 
     now = dt.datetime.now(dt.timezone.utc)
     record = {
         "recorded_at": now.isoformat(timespec="seconds"),
         "role": args.role,
         "conclusion": args.conclusion,
+        "model": model,
         "usage_source": source,
         **tokens,
         "total_cost_usd": extra.get("total_cost_usd"),
