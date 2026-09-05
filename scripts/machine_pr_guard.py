@@ -8,8 +8,10 @@ a code pull request is waiting for.
 This guard is that predicate. It decides two things and nothing else:
 
 1. A pull request whose head branch belongs to a machine class must stay inside the
-   paths that class owns, must satisfy that class's own allowlist, and its head commit
-   must be *committed* by the workflow identity that produces it. The author of that
+   paths that class owns — plus any file generated from them, which the producing
+   workflow has to regenerate in the same pull request or ship a snapshot that
+   contradicts its own sources — must satisfy that class's own allowlist, and its head
+   commit must be *committed* by the workflow identity that produces it. The author of that
    commit records who triggered the run and may be a person; the committer records what
    wrote it, and only that answers the question this guard is asking.
 2. Nobody else may write those paths. An agent branch — or a person — editing
@@ -44,6 +46,15 @@ class MachineClass:
     # Path prefixes this class owns. Nothing else may appear in its diff, and no other
     # branch may touch them.
     roots: tuple[str, ...]
+    # Files derived from the roots that the producing workflow must regenerate in the
+    # same pull request, because a check compares them against their sources.
+    #
+    # These are *not* owned. An ordinary branch may write them too — an AUTHOR adding a
+    # ledger row regenerates the same table — so they are excluded from the
+    # exclusive-write rule below and only widen what this class may carry. Nothing here
+    # asserts the generated content is right: the generator's own `--check` runs in CI
+    # over the same diff and refuses a table that does not match its sources.
+    generated: tuple[str, ...]
     # The commit identity the producing workflow writes under — the *committer*, which
     # is what wrote the bytes. Not the author: `peter-evans/create-pull-request`
     # defaults the author to whoever triggered the run, so an operator dispatching the
@@ -60,6 +71,7 @@ MACHINE_CLASSES = (
         branch="spec-mirror",
         producer=".github/workflows/spec-sync.yml",
         roots=("docs/spec/mirror/",),
+        generated=("docs/spec/IMPLEMENTATION_STATUS.md",),
         committer="github-actions[bot]",
         allowlist="docs/zendev/spec-mirror-allowlist.txt",
     ),
@@ -122,11 +134,17 @@ def check(head_ref: str, paths, allowlist_text, tip_committer):
             )
         return violations
 
-    outside = sorted(p for p in paths if not p.startswith(cls.roots))
+    permitted = sorted(p for p in paths if not p.startswith(cls.roots))
+    outside = [p for p in permitted if p not in cls.generated]
     if outside:
         violations.append(
-            "%s must stay inside %s; it also changed:\n  %s"
-            % (cls.branch, ", ".join(cls.roots), "\n  ".join(outside))
+            "%s must stay inside %s (or regenerate %s); it also changed:\n  %s"
+            % (
+                cls.branch,
+                ", ".join(cls.roots),
+                ", ".join(cls.generated) or "nothing",
+                "\n  ".join(outside),
+            )
         )
 
     if cls.allowlist is not None:
