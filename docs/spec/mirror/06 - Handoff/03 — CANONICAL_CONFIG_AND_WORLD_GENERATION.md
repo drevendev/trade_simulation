@@ -110,11 +110,14 @@ MarketConfig baseline:
 \- shortageSignalWeight \= 0.65  
 \- inventorySignalWeight \= 0.35  
 \- expectationAlpha \= 0.25  
+\- targetInventoryCoverageTicks \= 1.0; one tick of expected effective demand is the neutral baseline for the Phase-6 inventory-coverage signal  
 \- minimumPrice \= 0.01 currency units  
 \- maximumPrice \= 1\_000\_000 currency units  
 \- maxIntentBudgetShareOfWallet \= 1.0  
 \- localClearingResidualTolerance \= quantityEpsilon  
 \- affordabilityRevalidation \= true
+
+\`targetInventoryCoverageTicks\` is a global core-v1 market-response parameter. It is a pricing-signal target only: it does not reserve inventory, create a market-owned stock, or override actor-specific reserve rules. Core v1 intentionally uses one baseline value rather than hidden per-good coverage targets; a different named config profile may tune it explicitly.
 
 Prices have no universal hard-coded “natural” price. GoodDefinition or Scenario MarketSeed supplies initial/reference prices. Clamps are safety rails only and must not be used as equilibrium targets.
 
@@ -547,6 +550,7 @@ Configuration validation fails fast on:
 \- negative rates/quantities where forbidden;  
 \- min \> max;  
 \- EMA alpha outside (0,1\];  
+\- targetInventoryCoverageTicks \<= 0 or non-finite;  
 \- probability/share outside \[0,1\] unless explicitly allowed;  
 \- cadence \< 1;  
 \- soft maxima below target values;  
@@ -645,7 +649,7 @@ At minimum test these invariants on every scenario build:
 Unit tests:  
 \- rejects duplicate scenario keys;  
 \- rejects missing references;  
-\- rejects invalid config share/rate/alpha/cadence bounds;  
+\- rejects invalid config share/rate/alpha/cadence bounds, including non-positive/non-finite market targetInventoryCoverageTicks;  
 \- stable ID generation independent of declaration order;  
 \- sparse zero normalization;  
 \- market-price fallback to referencePrice;  

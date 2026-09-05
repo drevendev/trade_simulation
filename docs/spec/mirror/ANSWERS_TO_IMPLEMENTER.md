@@ -221,4 +221,8 @@ Fresh-implementer M3 readiness review found one remaining implementation blocker
 
 A fresh implementer therefore must choose both the inventory-coverage target and the lagged-expectation semantics, which materially changes price dynamics. Do not promote REQ-MARKET-002 or M3 to READY until a separate repair run assigns targetCoverage to one canonical config/definition owner and specifies exact initialization/update behavior using the existing expectationAlpha, or an equally explicit canonical rule, without adding a parallel market mechanism.
 
-STATUS: OPEN.  
+STATUS: OPEN.
+
+2026-09-05 — HANDOFF-REPAIR-007 — resolves HANDOFF-FRESH-007 / REQ-MARKET-002
+
+Resolved the remaining M3 Phase-6 expectation ambiguity. \`SimulationConfig.markets.targetInventoryCoverageTicks\` now owns the inventory-coverage target with canonical baseline 1.0 tick. \`MarketExpectationState\` has an explicit \`observationCount\` bootstrap marker; all expectation fields start at zero; no-information MAIN passes leave the state unchanged; the first informative Phase-8 MAIN observation initializes expected-use/shortage/surplus EMAs directly; later informative observations use \`expectationAlpha\`. Phase-6 uses current effective demand only while no informative observation exists, then uses the lagged \`expectedUseEma\`. Expected use is based on effective demand rather than cleared quantity so rationing does not erase budget-backed unmet use. Phase 4 never updates this expectation state. Added MTFX-T27 and strengthened REQ-MARKET-002 acceptance. No forecasting agent, speculative demand, market-owned inventory, price target, or other new economic mechanism was introduced. M3 remains REVIEW until a separate fresh-implementer readiness pass.  

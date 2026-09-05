@@ -58,6 +58,7 @@ These fields are required for tax linkage, FX reconciliation and causal explaina
 MarketExpectationState minimum fields:
 
 interface MarketExpectationState {  
+  observationCount: number;          // integer \>= 0; informative MAIN clearings only  
   expectedUseEma: number;  
   shortageEma: number;  
   surplusEma: number;  
@@ -66,7 +67,7 @@ interface MarketExpectationState {
   lastClearedQuantity: number;  
 }
 
-All are non-negative except no signed field is required. Expectations are lagged signals updated after realized clearing. They are not inventories and cannot be sold or consumed.
+All fields are finite and non-negative; observationCount is an integer. Expectations are weak lagged signals, not inventories or forecasts, and cannot be sold or consumed. At LocalMarket genesis every market/good starts with observationCount \= 0 and every EMA/last-observation field \= 0\. Zero is a valid economic observation, so observationCount—not expectedUseEma \== 0—is the bootstrap marker.
 
 ## 5\. Ephemeral MarketIntent contract
 
@@ -144,8 +145,11 @@ V \= max(D \+ S, quantityEpsilon)
 excess \= clamp((D \- S) / V, \-1, 1\)
 
 marketFacingStock \= Σ inventory explicitly offered/available above reserves  
-expectedUse \= max(expectation.expectedUseEma, quantityEpsilon)  
+expectedUse \= expectation.observationCount \== 0  
+  ? max(D, quantityEpsilon)  
+  : max(expectation.expectedUseEma, quantityEpsilon)  
 inventoryCoverage \= marketFacingStock / expectedUse  
+targetCoverage \= SimulationConfig.markets.targetInventoryCoverageTicks  
 inventoryGap \= clamp((targetCoverage \- inventoryCoverage) / max(targetCoverage, quantityEpsilon), \-1, 1\)
 
 pressure \= wExcess × excess \+ wInventory × inventoryGap  
@@ -158,7 +162,20 @@ wInventory \= SimulationConfig.markets.inventorySignalWeight
 priceSpeed \= SimulationConfig.markets.basePriceAdjustmentSpeed  
 maxLogPriceStep \= SimulationConfig.markets.maxAbsoluteLogPriceMovePerTick
 
-CANONICAL\_CONFIG\_AND\_WORLD\_GENERATION section 4 is the sole owner of baseline numeric values for these fields. This contract owns the Phase-6 formula and must not publish a competing default set.
+CANONICAL\_CONFIG\_AND\_WORLD\_GENERATION section 4 is the sole owner of baseline numeric values for these fields, including expectationAlpha and targetInventoryCoverageTicks. This contract owns the Phase-6 formula and must not publish a competing default set.
+
+Expectation update occurs exactly once after Phase-8 MAIN local clearing, never after the Phase-4 pre-production pass. Let effectiveDemandQuantity, offeredQuantity and clearedQuantity be the realized MAIN-pass aggregates for this market/good. If both effectiveDemandQuantity \<= quantityEpsilon and offeredQuantity \<= quantityEpsilon, the pass contains no market information: leave MarketExpectationState unchanged. Otherwise compute:
+
+observedUse \= effectiveDemandQuantity  
+unmet \= max(0, effectiveDemandQuantity \- clearedQuantity)  
+unsold \= max(0, offeredQuantity \- clearedQuantity)  
+shortageRate \= effectiveDemandQuantity \> quantityEpsilon ? unmet / effectiveDemandQuantity : 0  
+surplusRate \= offeredQuantity \> quantityEpsilon ? unsold / offeredQuantity : 0  
+alpha \= SimulationConfig.markets.expectationAlpha
+
+If observationCount \== 0, initialize expectedUseEma \= observedUse, shortageEma \= shortageRate and surplusEma \= surplusRate directly. Otherwise update each as alpha × observation \+ (1 \- alpha) × previous EMA. Then set lastEffectiveDemand \= effectiveDemandQuantity, lastOfferedQuantity \= offeredQuantity, lastClearedQuantity \= clearedQuantity and increment observationCount by 1\.
+
+Using effective demand rather than cleared quantity for expectedUse prevents rationing from teaching the market that budget-backed unmet use disappeared. Phase-6 may use current D only while observationCount \== 0; after the first informative MAIN observation it always uses the lagged expectedUseEma. These EMAs do not add trend extrapolation, speculative demand or a second price target.
 
 If D and S are both approximately zero, price stays unchanged. Missing trades do not imply zero price. Dormant markets do not reprice.
 
@@ -812,7 +829,8 @@ MTFX-T22 Trade policy change decided in N but activating N+1 leaves N bundles un
 MTFX-T23 Monetary-union regions with same currency require no FX even when different States.  
 MTFX-T24 Per-currency transaction reconciliation passes after a 600-tick multi-state/multi-currency benchmark.  
 MTFX-T25 ProductionUnit INPUT and INVESTMENT purchases land in distinct inventories and output sales debit only outputInventory.  
-MTFX-T26 A positive-travel import preserves its destination inventory bucket through shipment persistence and credits that exact bucket on arrival.
+MTFX-T26 A positive-travel import preserves its destination inventory bucket through shipment persistence and credits that exact bucket on arrival.  
+MTFX-T27 Market expectations bootstrap deterministically: a no-information MAIN pass leaves expectation state unchanged; the first informative MAIN pass initializes expected-use/shortage/surplus EMAs directly from realized aggregates; later informative passes apply expectationAlpha; Phase-6 uses current D only before the first observation and lagged expectedUseEma afterward; targetInventoryCoverageTicks controls only inventory-gap pressure and never owns or reserves stock.
 
 ## 40\. Benchmark/golden scenarios
 
