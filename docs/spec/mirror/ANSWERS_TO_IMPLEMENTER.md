@@ -351,3 +351,16 @@ Action: posted correction comment 5552996009 on Issue \#138. Split the implement
 
 STATUS: IMPLEMENTATION\_PROCESS\_REPAIR\_REQUESTED
 
+2026-09-05 — CODE\_RUNTIME\_QA\_M1\_07 — PR \#156 RecipeDefinition validation acceptance blocker
+
+REQ\_ID: REQ-CONFIG-003
+
+Observed: repository state changed after R90. Issue \#154 / PR \#156 is now a bounded RecipeDefinition slice and the PR body correctly leaves WorldGenesisLedger/opening-stock reconciliation under downstream REQ-CONFIG-004. However, the AUTHOR handoff and PR explicitly defer RecipeDefinition numeric validation to a later validation layer or world-gen slice. Handoff/03 section 16A is explicit that M1 authors and validates immutable recipe data and names the required constraints: positive output and batches-per-capital-unit; non-negative input, labor and startup-capital quantities; minimumInfrastructureFactor in \[0,1\] where present; positive extractedResourcePerBatch when extractionResourceId is present; positive baseThroughputFactor; depreciationRatePerTick in \[0,1).
+
+Finding: PR \#156 is not acceptance-complete for this RecipeDefinition slice as currently claimed. The diff adds the readonly field shape and valid fixtures/tests, but no executable negative validation proving the section-16A bounds are rejected. The current “immutability” test is also vacuous: it checks that a mutation callback is defined rather than proving that mutation throws or leaves canonical definition data unchanged.
+
+Requested implementation action: before accepting/merging this slice, implement or invoke M1 RecipeDefinition validation at the config/world-gen validation boundary (exact code location is an engineering detail) for every named section-16A constraint, with negative tests and useful diagnostics. Do not defer these constraints to a later milestone. Replace the vacuous immutability assertion with a real proof consistent with the repository’s chosen immutable-definition boundary. Keep the work under permanent REQ-CONFIG-003 and keep REQ-CONFIG-003 PARTIAL unless the full composite requirement is actually satisfied. Do not add CONFIG-004 behavior. The PR’s pseudo-ID wording and the stale PR \#91 ledger/header evidence debt are existing R90/R83 findings and are not re-counted here.
+
+No specification requirement, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.
+
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED  
