@@ -39,7 +39,14 @@ def api(path: str, *, payload: dict | None = None):
         command += ["--method", "POST", "--input", "-"]
         data = json.dumps(payload)
     result = subprocess.run(
-        command, input=data, capture_output=True, text=True, timeout=30
+        command,
+        input=data,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        # See the note in machine_pr_guard.py: decoding by locale turns a non-ASCII
+        # byte in a forge response into a failure several frames away from its cause.
+        encoding="utf-8",
     )
     if result.returncode:
         # Never echo token-bearing command environments or arbitrary server output.

@@ -76,8 +76,14 @@ def classify(mergeable, mergeable_state):
 
 
 def _gh(args):
+    # UTF-8 explicitly, not by locale. Without it Python decodes with the platform's
+    # preferred encoding, which on a Windows console is cp1252: a comment or title
+    # holding an em dash then raises inside the reader thread, `stdout` comes back as
+    # None, and the caller fails several frames later on something that looks unrelated.
+    # The runner's UTF-8 locale hides this, so it only ever appears off the runner —
+    # where the control plane is developed. Same fix as machine_pr_guard.py carries.
     return subprocess.run(
-        ["gh", *args], check=True, capture_output=True, text=True
+        ["gh", *args], check=True, capture_output=True, text=True, encoding="utf-8"
     ).stdout
 
 
