@@ -19,7 +19,13 @@ eligible the model is not started at all.
 * it is a draft, or closed;
 * a human owns it — `status:needs-decision` means the decision was handed to a
   person, and a review run cannot take it back;
+* the `mergeability` check is failing, so a control has already established that the
+  branch cannot be accepted whatever its contents; the next move belongs to the
+  author, and the failing check is already on the author's own ladder;
 * its current head already carries a verdict, and no correction has been posted since.
+
+Eligibility means a review is *owed and possible*, not merely owed. Handing the role
+work whose outcome is already determined spends a run to restate a check.
 
 ## How a verdict is tied to a head
 
@@ -72,6 +78,7 @@ MARKED_VERDICT = re.compile(
 BARE_VERDICT = re.compile(r"^\s*(?:ACCEPT|REQUEST_CHANGES)\b", re.MULTILINE)
 
 HUMAN_OWNED_LABEL = "status:needs-decision"
+MERGEABILITY_CHECK = "mergeability"
 
 
 def is_verdict(body: str) -> bool:
@@ -88,6 +95,24 @@ def judges_head(comment, head_sha: str, head_committed_at: str) -> bool:
     return comment["createdAt"] >= head_committed_at
 
 
+def conflicts_with_base(pull) -> bool:
+    """Whether the mergeability check has already ruled this branch out.
+
+    Only an explicit failure counts. A missing check is not a failure — a pull request
+    opened before the check existed must stay reviewable — and `pending` is not one
+    either: it means GitHub has not answered yet, it clears within a minute, and
+    treating it as a refusal would let a transient unknown stall the queue.
+    """
+    for check in pull.get("statusCheckRollup") or []:
+        name = check.get("name") or check.get("context")
+        if name != MERGEABILITY_CHECK:
+            continue
+        outcome = (check.get("conclusion") or check.get("state") or "").upper()
+        if outcome == "FAILURE":
+            return True
+    return False
+
+
 def eligible(pull, head_committed_at: str, comments):
     """Return (bool, reason). Pure: no network, no clock."""
     if pull.get("isDraft"):
@@ -95,6 +120,9 @@ def eligible(pull, head_committed_at: str, comments):
     labels = {label["name"] for label in pull.get("labels", [])}
     if HUMAN_OWNED_LABEL in labels:
         return False, f"{HUMAN_OWNED_LABEL}: a person owns this decision"
+
+    if conflicts_with_base(pull):
+        return False, f"{MERGEABILITY_CHECK} is failing: the author must rebase first"
 
     head_sha = pull["headRefOid"]
     verdicts = [c for c in comments if judges_head(c, head_sha, head_committed_at)]
@@ -138,7 +166,7 @@ def load_pulls(repo: str):
             "--limit",
             "100",
             "--json",
-            "number,createdAt,isDraft,labels,headRefOid",
+            "number,createdAt,isDraft,labels,headRefOid,statusCheckRollup",
         ]
     )
     return json.loads(raw)
