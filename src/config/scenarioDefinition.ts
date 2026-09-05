@@ -39,8 +39,16 @@ export interface TransportLinkSeed {
   readonly feeReceiverStateKey?: string | null;
 }
 
-/** Concrete fields land with the requirement that owns `StatePolicySeed` (Handoff/06). */
-export interface StateSeed {}
+export interface StatePolicySeed {}
+
+export interface StateSeed {
+  readonly key: string;
+  readonly name: string;
+  readonly treasury: Readonly<Record<string, number>>;
+  readonly publicInventory: Readonly<Record<string, number>>;
+  readonly policy: StatePolicySeed;
+  readonly effectiveCurrencyRegime: CurrencyRegimeSeed;
+}
 
 export interface CurrencyRegimeSeed {
   readonly currencyKey: string;
@@ -54,14 +62,28 @@ export interface CurrencySeed {
   readonly issuerAuthorityKey: string | null;
 }
 
-/** Concrete fields land with the requirement that owns `FxPoolSeed` (Handoff/08). */
-export interface MonetaryAuthoritySeed {}
+export interface FxPoolSeed {}
 
-/**
- * Concrete fields land with the requirement that owns `ClanPreferenceState` and
- * `ClanStateRelationSeed` (Handoff/06).
- */
-export interface ClanSeed {}
+export interface MonetaryAuthoritySeed {
+  readonly key: string;
+  readonly currencyKey: string;
+  readonly memberStateKeys: readonly string[];
+  readonly wallet: Readonly<Record<string, number>>;
+  readonly policyRateAnnual?: number;
+  readonly fxPools: readonly FxPoolSeed[];
+}
+
+export interface ClanPreferenceState {}
+
+export interface ClanStateRelationSeed {}
+
+export interface ClanSeed {
+  readonly key: string;
+  readonly name: string;
+  readonly treasury: Readonly<Record<string, number>>;
+  readonly preferences: ClanPreferenceState;
+  readonly initialRelations?: Readonly<Record<string, ClanStateRelationSeed>>;
+}
 
 export interface CohortSeed {
   readonly key: string;

@@ -81,10 +81,10 @@ function describeShape(value: unknown): string {
  */
 export function validateScenarioContent(scenario: ScenarioDefinition): void {
   const regionKeySet = new Set(scenario.geography.map((r) => r.key));
-  const stateKeySet = new Set(scenario.states.map((s) => (s as Record<string, unknown>)?.key).filter((k) => typeof k === "string"));
+  const stateKeySet = new Set(scenario.states.map((s) => s.key));
   const currencyKeySet = new Set(scenario.currencies.map((c) => c.key));
-  const authorityKeySet = new Set(scenario.monetaryAuthorities.map((a) => (a as Record<string, unknown>)?.key).filter((k) => typeof k === "string"));
-  const clanKeySet = new Set(scenario.clans.map((cl) => (cl as Record<string, unknown>)?.key).filter((k) => typeof k === "string"));
+  const authorityKeySet = new Set(scenario.monetaryAuthorities.map((a) => a.key));
+  const clanKeySet = new Set(scenario.clans.map((cl) => cl.key));
 
   for (const region of scenario.geography) {
     validateRegionSeed(region, stateKeySet, currencyKeySet);

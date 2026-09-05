@@ -3,14 +3,17 @@ import { describe, expect, it } from "vitest";
 import type { GoodDefinition } from "./definitionPack";
 import type { GoodId } from "../domain/id";
 import type {
+  ClanSeed,
   CohortSeed,
   CurrencyRegimeSeed,
   CurrencySeed,
   MarketSeed,
+  MonetaryAuthoritySeed,
   ProductionUnitSeed,
   RegionSeed,
   ScenarioDefinition,
   ScenarioVariationConfig,
+  StateSeed,
   TransportLinkSeed,
 } from "./scenarioDefinition";
 import { assertNoBehavioralOverrides, validateScenarioContent } from "./validation";
@@ -113,10 +116,36 @@ describe("assertNoBehavioralOverrides", () => {
       policyAuthorityKey: "state-1",
     };
 
+    const state: StateSeed = {
+      key: "state-1",
+      name: "Rivercountry",
+      treasury: { "currency-1": 10000 },
+      publicInventory: { food: 500 },
+      policy: {},
+      effectiveCurrencyRegime: currencyRegime,
+    };
+
     const currency: CurrencySeed = {
       key: "currency-1",
       code: "RVB",
       issuerAuthorityKey: "state-1",
+    };
+
+    const monetaryAuthority: MonetaryAuthoritySeed = {
+      key: "cb-1",
+      currencyKey: "currency-1",
+      memberStateKeys: ["state-1"],
+      wallet: { "currency-1": 50000 },
+      policyRateAnnual: 0.03,
+      fxPools: [],
+    };
+
+    const clan: ClanSeed = {
+      key: "clan-1",
+      name: "Merchant House",
+      treasury: { "currency-1": 5000 },
+      preferences: {},
+      initialRelations: {},
     };
 
     const cohort: CohortSeed = {
@@ -178,7 +207,10 @@ describe("assertNoBehavioralOverrides", () => {
       ...minimalScenario(),
       geography: [region],
       transportLinks: [transportLink],
+      states: [state],
       currencies: [currency],
+      monetaryAuthorities: [monetaryAuthority],
+      clans: [clan],
       cohorts: [cohort],
       productionUnits: [productionUnit],
       markets: [market],
@@ -187,9 +219,13 @@ describe("assertNoBehavioralOverrides", () => {
 
     expect(() => assertNoBehavioralOverrides(scenario)).not.toThrow();
     // The fixture exercises every new type's concrete fields, including the
-    // standalone CurrencyRegimeSeed (not yet embedded via the still-placeholder
-    // StateSeed) and GoodDefinition (part of DefinitionPack, not ScenarioDefinition).
+    // standalone CurrencyRegimeSeed and the new StateSeed, MonetaryAuthoritySeed,
+    // and ClanSeed types. GoodDefinition (part of DefinitionPack, not
+    // ScenarioDefinition) is also exercised.
     expect(currencyRegime.regimeType).toBe("INDEPENDENT_FLOAT");
+    expect(state.key).toBe("state-1");
+    expect(monetaryAuthority.memberStateKeys).toContain("state-1");
+    expect(clan.name).toBe("Merchant House");
     expect(goodDefinition.tradable).toBe(true);
   });
 });
