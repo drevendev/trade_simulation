@@ -107,7 +107,10 @@ def lint(rows, summary, merged_pull_numbers, requirements_claimed_by_merged):
         for number in unmerged:
             violations.append(
                 f"{row['req']}: the Merged in column cites #{number}, which has not "
-                "merged; this document may not assert the outcome of an open change"
+                "merged; write (open) instead and let a later reconciliation record "
+                "the pull request and its squash commit once it lands. A pull request "
+                "may not cite itself here either: it is not true when this check runs, "
+                "and a pull request closed without merging would leave it false forever"
             )
         if row["status"] == IMPLEMENTED and not cited:
             violations.append(

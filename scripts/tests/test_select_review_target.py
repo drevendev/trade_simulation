@@ -16,14 +16,19 @@ HEAD = "d8e28d3e2df15c93c1df3e41eceb640996024907"
 COMMITTED = "2026-09-05T05:35:00Z"
 
 
-def pull(number=84, created="2026-09-05T05:35:16Z", draft=False, labels=()):
+def pull(number=84, created="2026-09-05T05:35:16Z", draft=False, labels=(), checks=()):
     return {
         "number": number,
         "createdAt": created,
         "isDraft": draft,
         "labels": [{"name": name} for name in labels],
         "headRefOid": HEAD,
+        "statusCheckRollup": list(checks),
     }
+
+
+def check(name, conclusion):
+    return {"name": name, "conclusion": conclusion}
 
 
 def comment(body, created):
@@ -87,6 +92,35 @@ class EligibilityTests(unittest.TestCase):
         )
         self.assertFalse(ok)
         self.assertIn("person owns", reason)
+
+    def test_a_conflicting_branch_is_not_handed_to_the_reviewer(self):
+        # A control has already established that this cannot be accepted whatever it
+        # contains. Selecting it spends a run to restate a check, and the failing
+        # check is already item 2 on the AUTHOR's own ladder.
+        conflicting = pull(checks=[check("mergeability", "FAILURE")])
+        ok, reason = select.eligible(conflicting, COMMITTED, [])
+        self.assertFalse(ok)
+        self.assertIn("rebase", reason)
+
+    def test_a_pending_mergeability_does_not_block_selection(self):
+        # Pending means GitHub has not answered yet and clears within a minute.
+        # Refusing on it would let a transient unknown stall the queue.
+        waiting = pull(checks=[check("mergeability", None)])
+        waiting["statusCheckRollup"][0]["state"] = "PENDING"
+        ok, _ = select.eligible(waiting, COMMITTED, [])
+        self.assertTrue(ok)
+
+    def test_a_missing_mergeability_check_is_not_a_failure(self):
+        # A pull request opened before the check existed must stay reviewable.
+        ok, _ = select.eligible(pull(checks=[check("typescript", "SUCCESS")]), COMMITTED, [])
+        self.assertTrue(ok)
+
+    def test_other_failing_checks_do_not_block_selection(self):
+        # A red test suite is a defect for the reviewer to name, not a reason to
+        # withhold the review. Only an unmergeable branch has a predetermined outcome.
+        red = pull(checks=[check("typescript", "FAILURE")])
+        ok, _ = select.eligible(red, COMMITTED, [])
+        self.assertTrue(ok)
 
     def test_a_draft_is_skipped(self):
         ok, reason = select.eligible(pull(draft=True), COMMITTED, [])

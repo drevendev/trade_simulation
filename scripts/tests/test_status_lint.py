@@ -73,6 +73,21 @@ class UnmergedCitationTests(unittest.TestCase):
         self.assertIn("#84", violations[0])
         self.assertIn("has not merged", violations[0])
 
+    def test_a_row_may_not_cite_the_pull_request_that_writes_it(self):
+        # Observed on #91 within the hour: the author recorded its own open number as
+        # the merge. It is false when the check runs, and a pull request closed
+        # without merging — as #84 was — would leave it false forever.
+        row = "| REQ-CONFIG-003 | `IN_PROGRESS` | #83 | #91 | slice two |\n"
+        text = document([row], implemented=0, in_progress=1)
+        violations = status_lint.lint(
+            status_lint.parse_rows(text),
+            status_lint.parse_summary(text),
+            merged_pull_numbers={79},
+            requirements_claimed_by_merged={},
+        )
+        self.assertEqual(len(violations), 1)
+        self.assertIn("write (open) instead", violations[0])
+
     def test_the_issue_column_may_cite_an_open_issue(self):
         # Issues are cited while open by design; only the Merged in column is checked.
         text = document([ROW_OPEN], implemented=0, in_progress=1)
