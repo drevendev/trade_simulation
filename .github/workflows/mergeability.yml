@@ -1,14 +1,25 @@
 name: Mergeability
 
 # A pull request stops merging when its base moves, and GitHub does not re-run that
-# pull request's checks when `master` advances. So this runs in two places: on the
-# pull request itself, and on every push to `master` over all open pull requests.
-# The second trigger is the one that matters — it is the moment a conflict is created.
+# pull request's checks when `master` advances. So this also runs on pushes, fanning
+# out over every open pull request.
+#
+# The fan-out runs on pushes to **any** branch, not only `master`, because of a
+# property that cost a review run to discover: a conflicting pull request gets no
+# checks at all. GitHub runs `pull_request` workflows against `refs/pull/N/merge`, and
+# for a conflicting pull request that ref cannot be built — so no workflow fires, this
+# one included. A branch force-pushed into a conflicting state would therefore carry
+# stale checks or none, be selected for review as if unmeasured meant clean, and be
+# invisible to the AUTHOR's own "failing required check" rule, since there is no
+# failing check to see.
+#
+# A commit status does not need the merge ref, so the fan-out can still mark that head
+# red from a push event. That single status is what returns the pull request to the
+# author's queue.
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
   push:
-    branches: [master]
   workflow_dispatch:
 
 # `statuses: write` is the whole grant. This workflow writes one commit status and

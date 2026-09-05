@@ -16,14 +16,22 @@ HEAD = "d8e28d3e2df15c93c1df3e41eceb640996024907"
 COMMITTED = "2026-09-05T05:35:00Z"
 
 
-def pull(
-    number=84,
-    created="2026-09-05T05:35:16Z",
-    draft=False,
-    labels=(),
-    checks=(),
-    head_ref="claude/issue-84-example",
-):
+def check(name, conclusion):
+    return {"name": name, "conclusion": conclusion}
+
+
+# A head that has been measured and is clean. This is the default because it is the
+# ordinary case; an empty rollup means *nothing has reported yet*, which is its own
+# condition and is asserted for explicitly below.
+MEASURED_CLEAN = (
+    check("mergeability", "SUCCESS"),
+    check("typescript", "SUCCESS"),
+    check("build-and-test", "SUCCESS"),
+    check("policy-guard", "SUCCESS"),
+)
+
+
+def pull(number=84, created="2026-09-05T05:35:16Z", draft=False, labels=(), checks=None, head_ref="claude/issue-84-example"):
     return {
         "number": number,
         "createdAt": created,
@@ -31,12 +39,8 @@ def pull(
         "labels": [{"name": name} for name in labels],
         "headRefName": head_ref,
         "headRefOid": HEAD,
-        "statusCheckRollup": list(checks),
+        "statusCheckRollup": list(MEASURED_CLEAN if checks is None else checks),
     }
-
-
-def check(name, conclusion):
-    return {"name": name, "conclusion": conclusion}
 
 
 def comment(body, created):
@@ -130,6 +134,23 @@ class EligibilityTests(unittest.TestCase):
         # the refusal certain — what the review can add is.
         red = pull(checks=[check("typescript", "FAILURE")])
         ok, _ = select.eligible(red, COMMITTED, [])
+        self.assertTrue(ok)
+
+    def test_a_head_nothing_has_reported_on_is_not_selected(self):
+        # Observed at 08:10: a branch force-pushed minutes earlier had no checks at
+        # all, so the mergeability rule found nothing to object to and the head was
+        # handed to the model — which spent a run discovering the conflict by hand.
+        # Unmeasured is not clean.
+        ok, reason = select.eligible(pull(checks=()), COMMITTED, [])
+        self.assertFalse(ok)
+        self.assertIn("unmeasured is not clean", reason)
+
+    def test_a_head_with_other_checks_but_no_mergeability_is_still_selected(self):
+        # The legacy case this must not swallow: a pull request older than the
+        # mergeability check has been measured, just not by that check.
+        ok, _ = select.eligible(
+            pull(checks=[check("typescript", "SUCCESS")]), COMMITTED, []
+        )
         self.assertTrue(ok)
 
     def test_a_draft_is_skipped(self):
