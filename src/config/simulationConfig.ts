@@ -12,7 +12,14 @@
  */
 
 /** Concrete fields land with the numeric-tolerance requirement that owns them (section 3). */
-export interface NumericConfig {}
+export interface NumericConfig {
+  readonly moneyEpsilon?: number;
+  readonly quantityEpsilon?: number;
+  readonly populationEpsilon?: number;
+  readonly rateEpsilon?: number;
+  readonly reconciliationRelativeTolerance?: number;
+  readonly maxFiniteMagnitude?: number;
+}
 
 /** Concrete fields land with the cadence-scheduling requirement that owns them (section 3). */
 export interface CadenceConfig {}
