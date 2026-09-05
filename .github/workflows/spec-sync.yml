@@ -62,7 +62,8 @@ jobs:
         env:
           APP_SLUG: ${{ steps.identity.outputs.app-slug }}
           INSTALLATION: ${{ steps.identity.outputs.installation-id }}
-        run: echo "identity: ${APP_SLUG}[bot], installation ${INSTALLATION}"
+        run: |
+          echo "identity: ${APP_SLUG}[bot], installation ${INSTALLATION}"
 
       - name: Require configuration
         env:
