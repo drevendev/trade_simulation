@@ -140,13 +140,20 @@ def check(paths, added_lines):
 
 
 def _git(args):
+    # UTF-8 explicitly, not by locale: a path this guard classifies may carry bytes
+    # that a cp1252 console would decode into a different string.
     return subprocess.run(
-        ["git", *args], check=True, capture_output=True, text=True
+        ["git", *args], check=True, capture_output=True, text=True, encoding="utf-8"
     ).stdout
 
 
 def collect(base: str):
-    paths = [p for p in _git(["diff", "--name-only", f"{base}...HEAD"]).splitlines() if p]
+    # `-z` and a NUL split. Without it git C-quotes any path holding a byte outside
+    # ASCII, and a quoted path matches neither POLICY_PREFIXES nor PRODUCT_PREFIXES —
+    # so a policy/product mix involving such a filename would pass unrefused. That is
+    # the quiet half of the defect that made machine_pr_guard refuse #109 loudly.
+    listing = _git(["diff", "--name-only", "-z", f"{base}...HEAD"])
+    paths = [path for path in listing.split("\x00") if path]
     diff = _git(["diff", "--unified=0", f"{base}...HEAD"])
     added = [
         line[1:]

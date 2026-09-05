@@ -151,13 +151,29 @@ def check(head_ref: str, paths, allowlist_text, tip_committer):
 
 
 def _git(args):
+    # UTF-8 explicitly, not by locale: a path this guard classifies may carry bytes
+    # that a cp1252 console would decode into a different string.
     return subprocess.run(
-        ["git", *args], check=True, capture_output=True, text=True
+        ["git", *args], check=True, capture_output=True, text=True, encoding="utf-8"
     ).stdout
 
 
 def changed_paths(base: str):
-    return [p for p in _git(["diff", "--name-only", base + "...HEAD"]).splitlines() if p]
+    """Changed paths, as git actually spells them.
+
+    Read with `-z` and split on NUL, never `splitlines()` over the default output.
+    Without `-z`, git C-quotes any path holding a byte outside ASCII: it wraps the path
+    in double quotes and replaces each such byte with an octal escape, so a mirrored
+    handoff document whose name contains an em dash arrives as a quoted string carrying
+    three escape sequences where the dash was. That string starts with a quote, so no
+    prefix test can match it, and this guard refused the first real mirror to reach it,
+    #109, for being outside a directory it was inside. Every file under
+    `06 - Handoff/` carries an em dash, which was most of the specification.
+
+    `-z` also keeps a newline inside a filename from splitting one path into two.
+    """
+    out = _git(["diff", "--name-only", "-z", base + "...HEAD"])
+    return [path for path in out.split("\x00") if path]
 
 
 def commit_author(sha: str):
