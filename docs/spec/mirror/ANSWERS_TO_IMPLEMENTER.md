@@ -215,3 +215,10 @@ Resolved without moving M6 fiscal behavior into M3. Market settlement now consum
 
 The same repair fixed a linked cash-semantics contradiction in Fiscal section 7: assessedTaxPerUnit \= sellerNetPrice \* statutory rate, collectedTaxPerUnit \= assessedTaxPerUnit \* collectionEfficiency, and buyerGrossPrice \= sellerNetPrice \+ collectedTaxPerUnit. Only collected tax is debited/credited; assessed-but-uncollected tax stays with the payer and is telemetry only. getCollectionEfficiency(stateId) was added to the pure law-gate API. MTFX-T4 and REQ-MARKET-004 acceptance now require a fixture with collectionEfficiency strictly between 0 and 1, proving M3 neither assumes 1.0 nor requires M6 dynamics. Canonical \+ Handoff Markets and Fiscal contracts, registry acceptance and SPEC\_CHANGELOG were updated together. HANDOFF-FRESH-006 is resolved. No fiscal policy dynamics, tax rate defaults, market-clearing rule, phase order or v1 scope was expanded.
 
+2026-09-05 — HANDOFF-FRESH-007 — REQ-MARKET-002
+
+Fresh-implementer M3 readiness review found one remaining implementation blocker in Phase-6 pricing. Handoff/04 uses \`targetCoverage\` in the inventory-gap formula but does not bind it to a SimulationConfig or definition field, while Handoff/03 intentionally owns all numeric defaults and currently has no target-coverage field. The same requirement relies on MarketExpectationState, but the handoff does not define deterministic initialization/update equations for expectedUseEma, shortageEma and surplusEma; only expectationAlpha exists in config.
+
+A fresh implementer therefore must choose both the inventory-coverage target and the lagged-expectation semantics, which materially changes price dynamics. Do not promote REQ-MARKET-002 or M3 to READY until a separate repair run assigns targetCoverage to one canonical config/definition owner and specifies exact initialization/update behavior using the existing expectationAlpha, or an equally explicit canonical rule, without adding a parallel market mechanism.
+
+STATUS: OPEN.  
