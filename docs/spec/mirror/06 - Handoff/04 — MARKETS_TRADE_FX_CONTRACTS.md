@@ -871,14 +871,16 @@ Never generate all region pairs. Never generate all seller×buyer pairs. Never c
 
 42\. Configuration surface
 
-MarketConfig:  
-\- priceSpeed;  
-\- maxLogPriceStep;  
-\- min/max price by good/category;  
-\- targetInventoryCoverage;  
-\- wExcess, wInventory;  
-\- expectation EMA coefficients;  
-\- quantity/money epsilon.
+Market pricing and expectation configuration is not redefined here. Use the exact canonical fields owned by CANONICAL\_CONFIG\_AND\_WORLD\_GENERATION section 4 and bound by section 9:  
+\- SimulationConfig.markets.basePriceAdjustmentSpeed;  
+\- SimulationConfig.markets.maxAbsoluteLogPriceMovePerTick;  
+\- SimulationConfig.markets.minimumPrice;  
+\- SimulationConfig.markets.maximumPrice;  
+\- SimulationConfig.markets.targetInventoryCoverageTicks;  
+\- SimulationConfig.markets.shortageSignalWeight;  
+\- SimulationConfig.markets.inventorySignalWeight;  
+\- SimulationConfig.markets.expectationAlpha.  
+SimulationConfig.numeric.quantityEpsilon and moneyEpsilon remain numeric-domain thresholds owned by NumericConfig; they are not MarketConfig fields.
 
 TradeConfig:  
 \- tradeProfitWeight;  
