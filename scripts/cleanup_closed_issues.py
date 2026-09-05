@@ -13,6 +13,8 @@ import argparse
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
 from typing import Optional
 
 
@@ -40,6 +42,48 @@ def get_status_labels(labels: list[dict]) -> list[str]:
     return [label["name"] for label in labels if label["name"].startswith("status:")]
 
 
+def remove_label_from_issue(
+    issue_number: int,
+    label_name: str,
+    repo: str,
+    github_token: str,
+) -> tuple[bool, str]:
+    """Remove a single label from a GitHub Issue via API.
+
+    Args:
+        issue_number: GitHub Issue number
+        label_name: Name of the label to remove
+        repo: Repository in format owner/name
+        github_token: GitHub API token
+
+    Returns:
+        (success: bool, message: str)
+    """
+    if not github_token:
+        return False, f"Issue #{issue_number}: no GitHub token provided"
+
+    api_url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/labels/{label_name}"
+
+    try:
+        request = urllib.request.Request(
+            api_url,
+            method="DELETE",
+            headers={
+                "Authorization": f"Bearer {github_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "trade-simulation-label-cleanup",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            response.read()
+        return True, f"Removed label '{label_name}' from Issue #{issue_number}"
+    except urllib.error.HTTPError as e:
+        return False, f"Failed to remove '{label_name}' from Issue #{issue_number}: HTTP {e.code}"
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return False, f"API error removing '{label_name}' from Issue #{issue_number}: {e}"
+
+
 def remove_status_labels_from_issue(
     issue_number: int,
     issue_labels: list[dict],
@@ -62,12 +106,28 @@ def remove_status_labels_from_issue(
     if not status_labels:
         return True, f"Issue #{issue_number}: no status:* labels found"
 
-    # In actual execution, would use GitHub API to remove labels
-    # For now, return success with details about what would be removed
-    return True, (
-        f"Issue #{issue_number}: would remove {len(status_labels)} "
-        f"status:* label(s): {', '.join(status_labels)}"
-    )
+    if not github_token:
+        return False, f"Issue #{issue_number}: no GitHub token provided; cannot remove {len(status_labels)} label(s)"
+
+    messages = []
+    all_succeeded = True
+
+    for label in status_labels:
+        success, message = remove_label_from_issue(
+            issue_number,
+            label,
+            repo,
+            github_token,
+        )
+        messages.append(message)
+        if not success:
+            all_succeeded = False
+
+    result_msg = f"Issue #{issue_number}: {'removed' if all_succeeded else 'partially removed'} {len(status_labels)} status:* label(s)"
+    if messages:
+        result_msg += f" ({'; '.join(messages)})"
+
+    return all_succeeded, result_msg
 
 
 def main() -> int:

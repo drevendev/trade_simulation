@@ -9,6 +9,7 @@ Negative controls:
 import pathlib
 import sys
 import unittest
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -110,8 +111,15 @@ class GetStatusLabelsTests(unittest.TestCase):
 class RemoveStatusLabelsTests(unittest.TestCase):
     """Test the main label removal function."""
 
-    def test_issue_with_status_labels_reports_removal(self):
-        """An Issue with status:* labels reports what would be removed."""
+    @patch("cleanup_closed_issues.urllib.request.urlopen")
+    def test_issue_with_status_labels_removes_all(self, mock_urlopen):
+        """An Issue with status:* labels removes them all via API."""
+        mock_response = MagicMock()
+        mock_response.read.return_value = b""
+        mock_response.__enter__.return_value = mock_response
+        mock_response.__exit__.return_value = None
+        mock_urlopen.return_value = mock_response
+
         labels = [
             {"name": "status:in-progress"},
             {"name": "priority:normal"},
@@ -121,12 +129,31 @@ class RemoveStatusLabelsTests(unittest.TestCase):
             issue_number=121,
             issue_labels=labels,
             repo="owner/repo",
+            github_token="test-token",
         )
         self.assertTrue(success)
         self.assertIn("121", message)
-        self.assertIn("status:in-progress", message)
-        self.assertIn("status:blocked", message)
+        self.assertIn("removed", message)
+        self.assertIn("2", message)  # two status labels
         self.assertNotIn("priority:normal", message)
+        # Verify API was called twice (once per status label)
+        self.assertEqual(mock_urlopen.call_count, 2)
+
+    def test_issue_with_status_labels_without_token_fails(self):
+        """An Issue with status:* labels fails if no token is provided."""
+        labels = [
+            {"name": "status:in-progress"},
+            {"name": "status:blocked"},
+        ]
+        success, message = cleanup_closed_issues.remove_status_labels_from_issue(
+            issue_number=121,
+            issue_labels=labels,
+            repo="owner/repo",
+            github_token=None,
+        )
+        self.assertFalse(success)
+        self.assertIn("121", message)
+        self.assertIn("no GitHub token", message)
 
     def test_issue_with_no_status_labels_reports_none_found(self):
         """An Issue without status:* labels reports no action needed."""
@@ -138,6 +165,7 @@ class RemoveStatusLabelsTests(unittest.TestCase):
             issue_number=100,
             issue_labels=labels,
             repo="owner/repo",
+            github_token="test-token",
         )
         self.assertTrue(success)
         self.assertIn("100", message)
@@ -149,13 +177,21 @@ class RemoveStatusLabelsTests(unittest.TestCase):
             issue_number=50,
             issue_labels=[],
             repo="owner/repo",
+            github_token="test-token",
         )
         self.assertTrue(success)
         self.assertIn("50", message)
         self.assertIn("no status:* labels", message)
 
-    def test_multiple_status_labels_are_reported(self):
-        """When multiple status:* labels are present, all are reported."""
+    @patch("cleanup_closed_issues.urllib.request.urlopen")
+    def test_multiple_status_labels_are_removed(self, mock_urlopen):
+        """When multiple status:* labels are present, all are removed via API."""
+        mock_response = MagicMock()
+        mock_response.read.return_value = b""
+        mock_response.__enter__.return_value = mock_response
+        mock_response.__exit__.return_value = None
+        mock_urlopen.return_value = mock_response
+
         labels = [
             {"name": "status:in-progress"},
             {"name": "status:ready"},
@@ -166,11 +202,36 @@ class RemoveStatusLabelsTests(unittest.TestCase):
             issue_number=42,
             issue_labels=labels,
             repo="owner/repo",
+            github_token="test-token",
         )
         self.assertTrue(success)
         self.assertIn("42", message)
-        self.assertIn("3", message)  # count
-        self.assertIn("would remove", message)
+        self.assertIn("3", message)  # count of status labels
+        self.assertIn("removed", message)
+        # Verify API was called once per status label
+        self.assertEqual(mock_urlopen.call_count, 3)
+
+    @patch("cleanup_closed_issues.urllib.request.urlopen")
+    def test_api_failure_is_reported(self, mock_urlopen):
+        """API failures are properly reported."""
+        import urllib.error
+
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "url", 404, "Not Found", {}, None
+        )
+
+        labels = [
+            {"name": "status:ready"},
+        ]
+        success, message = cleanup_closed_issues.remove_status_labels_from_issue(
+            issue_number=99,
+            issue_labels=labels,
+            repo="owner/repo",
+            github_token="test-token",
+        )
+        self.assertFalse(success)
+        self.assertIn("99", message)
+        self.assertIn("Failed", message)
 
 
 if __name__ == "__main__":
