@@ -82,13 +82,13 @@ that fact; this file does not.
 | REQ-VISUALIZATION-003 | `READY` | `IMPLEMENTED` | #42 | #45, `d27a94e63580a2d7d0da005a245ae36fec5560fd` | `src/diagnostics/m0Preview.test.ts` — asserts `docs/m0-preview.json`'s legacy baseline seed/turns/hash match `docs/spec/LEGACY_BASELINE.md` exactly, its canonical-scaffolding flag matches the real `toolchainStatus()` in `src/index.ts`, and `docs/index.html` fetches the static artifact without referencing any canonical or legacy runtime module path. Manual build/render smoke check (headless-Chromium screenshots at 1280×1000, 360×900, and a full-page 1100×1900 capture) against a local static server, described in `docs/spec/M0_PREVIEW.md`; 7 files / 16 tests passed and both runtime suites green at merge commit `d27a94e63580a2d7d0da005a245ae36fec5560fd`. Actual production GitHub Pages deployment was explicitly out of AUTHOR scope in #45 and has not been independently re-verified by this reconciliation, which is bounded to `gh pr list` and the merged pull request's own body per `AUTHOR_RUNBOOK.md` section 1. |
 | REQ-VISUALIZATION-004 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-VISUALIZATION-005 | `READY` | `NOT_STARTED` | — | — | — |
-| REQ-MARKET-001 | `REVIEW` | `NOT_STARTED` | — | — | — |
-| REQ-MARKET-002 | `REVIEW` | `NOT_STARTED` | — | — | — |
-| REQ-MARKET-003 | `REVIEW` | `NOT_STARTED` | — | — | — |
-| REQ-MARKET-004 | `REVIEW` | `NOT_STARTED` | — | — | — |
-| REQ-MARKET-005 | `REVIEW` | `NOT_STARTED` | — | — | — |
-| REQ-ACCEPTANCE-004 | `REVIEW` | `NOT_STARTED` | — | — | — |
-| REQ-VISUALIZATION-006 | `REVIEW` | `NOT_STARTED` | — | — | — |
+| REQ-MARKET-001 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MARKET-002 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MARKET-003 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MARKET-004 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MARKET-005 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-004 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-006 | `READY` | `NOT_STARTED` | — | — | — |
 
 **Summary: 11 of 32 requirement identifiers implemented.**
 Also recorded: 1 partial.
