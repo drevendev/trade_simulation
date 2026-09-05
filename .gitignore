@@ -360,6 +360,21 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
-# Node / canonical TypeScript engine
-node_modules/
+# Node / canonical TypeScript engine (node_modules/ is already ignored above)
 dist/
+coverage/
+*.tsbuildinfo
+
+# Python control plane under scripts/
+.venv/
+.pytest_cache/
+
+# Local environment, editors, operating system and coding-agent state
+.env
+.env.*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/
+.codex/
