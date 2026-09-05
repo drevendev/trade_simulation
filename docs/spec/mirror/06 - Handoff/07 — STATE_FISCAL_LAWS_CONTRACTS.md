@@ -86,14 +86,15 @@ The depreciation allowance derives from the same installedCapital depreciation r
 
 7\. Consumption tax — Phase 4/8 atomic market settlement
 
-buyerGrossPrice \= sellerNetPrice \* (1 \+ rate)  
-taxPerUnit \= sellerNetPrice \* rate  
+assessedTaxPerUnit \= sellerNetPrice \* rate  
+collectedTaxPerUnit \= assessedTaxPerUnit \* collectionEfficiency  
+buyerGrossPrice \= sellerNetPrice \+ collectedTaxPerUnit  
 For cleared quantity q:  
 buyer debit \= q \* buyerGrossPrice  
 seller credit \= q \* sellerNetPrice  
-State credit \= q \* taxPerUnit
+State credit \= q \* collectedTaxPerUnit
 
-Affordability uses gross price before clearing. Market price remains seller net price. No second Phase-10 debit. State self-purchases may be configured tax-exempt/netted.
+Affordability uses the collected-tax-inclusive gross price before clearing. assessedTaxPerUnit \- collectedTaxPerUnit remains with the buyer and is telemetry only; core v1 creates no arrears asset. Market price remains seller net price. No second Phase-10 debit. State self-purchases may be configured tax-exempt/netted.
 
 8\. Tariff — Phase 7
 
@@ -256,6 +257,7 @@ Expose side-effect-free functions using Phase-1 effective policy only:
 getLaborTaxPolicy(stateId)  
 getBusinessTaxPolicy(stateId)  
 getConsumptionTaxRate(stateId, goodCategory)  
+getCollectionEfficiency(stateId)  
 getTariffRate(originStateId|null, destinationStateId|null, goodCategory)  
 canCrossBorderTrade(...)  
 canOwnProperty(clanId, regionId)  
