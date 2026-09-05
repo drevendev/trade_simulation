@@ -167,9 +167,15 @@ hopeful pull request. Record the failure on the Issue and stop.
 
 ## 7. Hand off
 
-Record your evidence in the ledger **inside this same pull request**: append one row
-to `docs/spec/implementation_status.csv` for the requirement identifier your change
-resolves, then regenerate the table.
+Record your evidence in the ledger **inside this same pull request**: add or update
+exactly one row in `docs/spec/implementation_status.csv` for the requirement identifier
+your change resolves, then regenerate the table.
+
+Each requirement identifier has at most one ledger row. If a row for your requirement
+already exists (as `PARTIAL`, `BLOCKED`, `DEFERRED`, or `CONTESTED`), update it:
+change the `STATUS` to reflect your work, update the `PR` field to this pull request's
+number, and in the `EVIDENCE` cell name every pull request that contributed to that
+requirement (both prior work and this one). Then regenerate the table.
 
 ```sh
 python scripts/implementation_status.py
