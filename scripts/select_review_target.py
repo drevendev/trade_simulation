@@ -24,8 +24,16 @@ eligible the model is not started at all.
   author, and the failing check is already on the author's own ladder;
 * its current head already carries a verdict, and no correction has been posted since.
 
-Eligibility means a review is *owed and possible*, not merely owed. Handing the role
-work whose outcome is already determined spends a run to restate a check.
+Eligibility means a review is *owed and possible*, not merely owed. Withhold one only
+when it could add nothing the checks have not already said. An unmergeable branch is
+that case: it cannot be accepted whatever it contains, and the diff on offer is not
+the diff that would land, so the reviewer would be judging a text that no longer
+applies.
+
+Not "skip whatever will fail". Every failing required check determines the outcome,
+since none of them may be red at acceptance — so that reading would withhold most of
+the reviews worth having. A red test suite still selects, because the reviewer can
+judge the criteria too and return one complete list instead of two partial ones.
 
 ## How a verdict is tied to a head
 
