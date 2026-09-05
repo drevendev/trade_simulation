@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  ClanSeed,
   CohortSeed,
   CurrencyRegimeSeed,
+  MonetaryAuthoritySeed,
   ProductionUnitSeed,
+  StateSeed,
 } from "./scenarioDefinition";
 import type { GoodDefinition } from "./definitionPack";
 
@@ -50,10 +53,19 @@ describe("scenario seed and GoodDefinition shapes (compile-time)", () => {
     const mismatchedCurrencyRegime: CurrencyRegimeSeed = bareRecord;
     // @ts-expect-error a bare Record<string, unknown> is not assignable to GoodDefinition.
     const mismatchedGoodDefinition: GoodDefinition = bareRecord;
+    // @ts-expect-error a bare Record<string, unknown> is not assignable to StateSeed.
+    const mismatchedState: StateSeed = bareRecord;
+    // @ts-expect-error a bare Record<string, unknown> is not assignable to MonetaryAuthoritySeed.
+    const mismatchedMonetaryAuthority: MonetaryAuthoritySeed = bareRecord;
+    // @ts-expect-error a bare Record<string, unknown> is not assignable to ClanSeed.
+    const mismatchedClan: ClanSeed = bareRecord;
 
     void mismatchedCohort;
     void mismatchedProductionUnit;
     void mismatchedCurrencyRegime;
     void mismatchedGoodDefinition;
+    void mismatchedState;
+    void mismatchedMonetaryAuthority;
+    void mismatchedClan;
   });
 });

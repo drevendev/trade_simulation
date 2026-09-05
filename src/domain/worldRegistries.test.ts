@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  ClanSeed,
   CohortSeed,
   CurrencySeed,
   ProductionUnitSeed,
   RegionSeed,
   ScenarioDefinition,
+  StateSeed,
 } from "../config/scenarioDefinition";
 import { createIdAllocator } from "./id";
 import { buildWorldRegistries } from "./worldRegistries";
@@ -52,6 +54,33 @@ function cohort(key: string): CohortSeed {
   };
 }
 
+/** A minimal well-formed `StateSeed` (REQ-CONFIG-003), distinguished only by `key`. */
+function state(key: string): StateSeed {
+  return {
+    key,
+    name: key,
+    treasury: {},
+    publicInventory: {},
+    policy: {},
+    effectiveCurrencyRegime: {
+      currencyKey: "currency-0",
+      regimeType: "INDEPENDENT_FLOAT",
+      policyAuthorityKey: null,
+    },
+  };
+}
+
+/** A minimal well-formed `ClanSeed` (REQ-CONFIG-003), distinguished only by `key`. */
+function clan(key: string): ClanSeed {
+  return {
+    key,
+    name: key,
+    treasury: {},
+    preferences: {},
+    initialRelations: {},
+  };
+}
+
 /** A minimal well-formed `ProductionUnitSeed` (REQ-CONFIG-003), distinguished only by `key`. */
 function productionUnit(key: string): ProductionUnitSeed {
   return {
@@ -78,10 +107,10 @@ function fixtureScenario(): ScenarioDefinition {
     definitionPackId: "fixture-pack",
     geography: [region("region-1"), region("region-2"), region("region-3")],
     transportLinks: [],
-    states: [{}, {}],
+    states: [state("state-1"), state("state-2")],
     currencies: [currency("currency-1")],
     monetaryAuthorities: [],
-    clans: [{}, {}],
+    clans: [clan("clan-1"), clan("clan-2")],
     cohorts: [cohort("cohort-1"), cohort("cohort-2"), cohort("cohort-3"), cohort("cohort-4")],
     productionUnits: [
       productionUnit("unit-1"),
