@@ -97,5 +97,55 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(mergeability.classify(mergeable, "unknown")[0], "pending")
 
 
+class RecheckTests(unittest.TestCase):
+    """The second pass exists because this status is now a required check.
+
+    `pending` blocks, which was the right call while the status was advisory. As a
+    required check, a `pending` nobody clears is a merge freeze — and the moment it is
+    most likely is right after a merge, when GitHub invalidates mergeability for every
+    open pull request and recomputes it lazily.
+    """
+
+    def test_resolve_is_more_patient_when_asked(self):
+        calls = []
+
+        def counting(repo, number):
+            calls.append(number)
+            return ("sha", None, "unknown")
+
+        original = mergeability.read_pull
+        mergeability.read_pull = counting
+        try:
+            mergeability.resolve("o/r", 7, attempts=3, delay=0)
+            first_pass = len(calls)
+            mergeability.resolve("o/r", 7, attempts=15, delay=0)
+        finally:
+            mergeability.read_pull = original
+
+        self.assertEqual(first_pass, 3)
+        self.assertEqual(len(calls) - first_pass, 15)
+
+    def test_a_late_answer_is_still_an_answer(self):
+        # The case the recheck is for: unknown throughout the first pass, resolved
+        # during the second. Without it the pull request keeps a blocking `pending`
+        # until something unrelated pushes.
+        answers = [("sha", None, "unknown")] * 4 + [("sha", False, "dirty")]
+        seen = []
+
+        def late(repo, number):
+            seen.append(number)
+            return answers[min(len(seen) - 1, len(answers) - 1)]
+
+        original = mergeability.read_pull
+        mergeability.read_pull = late
+        try:
+            _, mergeable, state = mergeability.resolve("o/r", 7, attempts=10, delay=0)
+        finally:
+            mergeability.read_pull = original
+
+        self.assertIs(mergeable, False)
+        self.assertEqual(mergeability.classify(mergeable, state)[0], "failure")
+
+
 if __name__ == "__main__":
     unittest.main()

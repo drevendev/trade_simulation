@@ -140,11 +140,16 @@ def main() -> int:
     )
     parser.add_argument("--attempts", type=int, default=8)
     parser.add_argument("--delay", type=float, default=4.0)
+    # A second, more patient pass over whatever is still unknown after the first. See
+    # the note on `pending` below.
+    parser.add_argument("--recheck-attempts", type=int, default=15)
+    parser.add_argument("--recheck-delay", type=float, default=8.0)
     args = parser.parse_args()
 
     numbers = [args.pull] if args.pull else open_pull_numbers(args.repo)
 
     conflicted = []
+    unknown = []
     for number in numbers:
         head_sha, mergeable, state = resolve(
             args.repo, number, args.attempts, args.delay
@@ -152,6 +157,28 @@ def main() -> int:
         status, description = classify(mergeable, state)
         post_status(args.repo, head_sha, status, description)
         print(f"{CONTEXT}: #{number} {head_sha[:8]} -> {status} ({description})")
+        if status == "failure":
+            conflicted.append(number)
+        elif status == "pending":
+            unknown.append(number)
+
+    # `pending` is honest and it blocks, which was the right call while this status was
+    # advisory. Now that it is a required check, a `pending` that nobody clears is a
+    # merge freeze — and the moment it is most likely is exactly after a merge, when
+    # GitHub invalidates mergeability for every open pull request and recomputes it
+    # lazily, sometimes past the first pass's patience.
+    #
+    # So whatever is still unknown gets one more, slower pass in the same run. Bounded
+    # on purpose: this is a nudge for a value that arrives late, not a wait loop for one
+    # that never arrives. Anything still unknown afterwards stays `pending` and clears
+    # on the next push, which is the behaviour this had before.
+    for number in unknown:
+        head_sha, mergeable, state = resolve(
+            args.repo, number, args.recheck_attempts, args.recheck_delay
+        )
+        status, description = classify(mergeable, state)
+        post_status(args.repo, head_sha, status, description)
+        print(f"{CONTEXT}: #{number} {head_sha[:8]} -> {status} (recheck)")
         if status == "failure":
             conflicted.append(number)
 
