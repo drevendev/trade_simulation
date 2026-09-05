@@ -48,7 +48,9 @@ jobs:
       # request that edited that script would have had its version executed by the
       # reviewing workflow, with the ledger credential in the environment.
       - name: Stage the usage recorder outside the working tree
-        run: cp scripts/record_usage.py "${RUNNER_TEMP}/record_usage.py"
+        run: |
+          cp scripts/record_usage.py "${RUNNER_TEMP}/record_usage.py"
+          cp scripts/subscription_usage.py "${RUNNER_TEMP}/subscription_usage.py"
 
       # Section 1 of the runbook is a computation, and running it in the model cost
       # two consecutive runs on one ineligible pull request while three others went
@@ -60,6 +62,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ZENDEV_PAT || github.token }}
         run: python scripts/select_review_target.py --repo "${{ github.repository }}"
+
+      # The subscription is metered in rolling windows, not dollars. One reading before
+      # the model and one after; the recorder writes the difference to the private
+      # ledger. Only when a model run is about to happen: a run with no work spends
+      # nothing and needs no reading. The token reaches this step and the model step
+      # only, and the reading never prints what it read.
+      - name: Read the subscription windows before the model runs
+        if: steps.select.outputs.target != 'none'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: python "${RUNNER_TEMP}/subscription_usage.py" --out "${RUNNER_TEMP}/usage-before.json"
 
       - name: Review one pull request
         id: claude
@@ -121,6 +134,12 @@ jobs:
             - If you cannot decide, name the exact gate in a comment and leave the
               pull request open. Never merge to clear a queue.
 
+      - name: Read the subscription windows after the model ran
+        if: always() && steps.select.outputs.target != 'none'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: python "${RUNNER_TEMP}/subscription_usage.py" --out "${RUNNER_TEMP}/usage-after.json"
+
       # Telemetry only. See the note in zendev-author.yml: this never fails the run.
       - name: Record what this run consumed
         if: always()
@@ -134,4 +153,6 @@ jobs:
             --ledger-repo drevendev/zen-telemetry \
             --run-id "${{ github.run_id }}" \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --commit "${{ github.sha }}"
+            --commit "${{ github.sha }}" \
+            --usage-before "${RUNNER_TEMP}/usage-before.json" \
+            --usage-after "${RUNNER_TEMP}/usage-after.json"
