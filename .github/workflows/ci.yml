@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  # status-lint compares the status document against the merged pull requests.
+  pull-requests: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -63,3 +65,10 @@ jobs:
       - name: Guard this change
         if: github.event_name == 'pull_request'
         run: python scripts/policy_guard.py --base "origin/${{ github.base_ref }}"
+
+      # Runs on every event, not only on pull requests: the status document can go
+      # stale because something else merged, without anyone touching the document.
+      - name: Keep the status document honest about what merged
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/status_lint.py --repo "${{ github.repository }}"
