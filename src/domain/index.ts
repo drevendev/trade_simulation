@@ -41,3 +41,11 @@ export { sortByPersistentId, stableOrderBy } from "./ordering";
 export { buildWorldRegistries, type RegistryEntry, type WorldRegistries } from "./worldRegistries";
 
 export { buildDefinitionRegistry, type DefinitionRegistry } from "./definitionRegistry";
+
+export {
+  addGenesisRecord,
+  createEmptyWorldGenesisLedger,
+  type ActorRef,
+  type GenesisRecord,
+  type WorldGenesisLedger,
+} from "./genesisLedger";
