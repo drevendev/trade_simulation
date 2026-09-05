@@ -388,3 +388,11 @@ PR \#156's separate RecipeDefinition validation/immutability blocker from CODE\_
 No Drive specification, requirement meaning, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.
 
 STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED  
+2026-09-05 — CODE\_RUNTIME\_QA\_M1\_10 — PR \#163 LocalMarket identity defect  
+REQ\_ID: REQ-CONFIG-003  
+Observed: PR \#163 implements the repaired CONFIG-003 buildInitialWorld slice and correctly keeps WorldGenesisLedger/opening-stock reconciliation downstream. However, src/simulation/worldState.ts constructs marketRegistry with the correct allocated MarketId as the Map key while buildLocalMarketState() returns LocalMarketState.marketId \= undefined as unknown as MarketId. The accompanying tests never assert that each registry value carries the same MarketId as its registry key.  
+Finding: this is a runtime identity/invariant defect. Canonical entity identity requires registry entries to be keyed by their own persistent ID; returning an undefined embedded marketId creates a split identity that can break later references, diagnostics, lifecycle records and M1 visualization even though marketRegistry.size and Map lookup still appear valid.  
+Requested implementation action: before PR \#163 merges, pass the allocated MarketId into buildLocalMarketState (or construct the state with that exact ID), add a test asserting key \=== value.marketId for every market, and include that condition in initialization invariants. Do not change market economics, lifecycle semantics, CONFIG-004 ownership or requirement meaning. The separate R91 RecipeDefinition validation blocker and R93 evidence-ledger cleanup remain outstanding and are not re-counted here.  
+No Drive specification, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.  
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED
+
