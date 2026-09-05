@@ -465,6 +465,50 @@ interface MarketSeed {
 
 CohortSeed uses the same mature cohort vocabulary as PopulationCohortState. Seed files must provide every persistent cohort signal listed above explicitly; world generation must not translate legacy LOWER/MIDDLE/UPPER strata, rename prosperity fields, or invent omitted cohort-state defaults. Human-readable seed keys are converted to persistent IDs with deterministic prefixes during world construction. Scenario files must never embed runtime sequence-dependent IDs.
 
+## 16A. M1 executable initialization boundary (REQ-CONFIG-003)
+
+For M1, this document is the complete authoring surface for the baseline definition pack and baseline-multistate-v1 scenario. Do not open later subsystem contracts merely to invent dynamic fiscal, clan, event, monetary, or visualization state.
+
+RecipeDefinition is immutable DefinitionPack data. Its M1 field shape is the same definition-data contract owned by PRODUCTION\_CAPITAL\_LABOR\_CONTRACTS:  
+interface RecipeDefinition {  
+  id: string;  
+  outputGoodId: GoodId;  
+  outputPerBatch: number;  
+  inputsPerBatch: Record\<GoodId, number\>;  
+  laborCategory: string;  
+  laborPerBatch: number;  
+  batchesPerCapitalUnit: number;  
+  investmentGoodsPerCapitalUnit: Record\<GoodId, number\>;  
+  minimumStartupCapital: number;  
+  infrastructureCategory?: string;  
+  minimumInfrastructureFactor?: number;  
+  extractionResourceId?: string;  
+  extractedResourcePerBatch?: number;  
+  baseThroughputFactor: number;  
+  depreciationRatePerTick: number;  
+}  
+Validation is unchanged from the production contract: positive output and batches-per-capital-unit, non-negative input/labor/startup-capital quantities, \[0,1\] infrastructure factor where present, positive extraction amount when an extraction resource is named, positive baseThroughputFactor, and depreciationRatePerTick in \[0,1). M1 only authors and validates immutable recipe data; it does not implement production, labor allocation, investment, or depreciation behavior.
+
+FxPoolSeed is the scenario initialization projection of the canonical FxLiquidityPoolState owned by MARKETS\_TRADE\_FX\_CONTRACTS:  
+interface FxPoolSeed {  
+  key: string;  
+  baseCurrencyKey: string;  
+  quoteCurrencyKey: string;  
+  cash: Record\<string, number\>;  
+  spotRateQuotePerBase: number;  
+  targetBaseReserveShare: number;  
+  flowPressureEma: number;  
+  transactionSpread: number;  
+  minOperationalReserveBase: number;  
+  minOperationalReserveQuote: number;  
+  maxRateMovePerTick: number;  
+}  
+Each active pair exists exactly once, under the MonetaryAuthoritySeed that issues baseCurrencyKey. cash contains the explicit opening base/quote currency stocks and is included once in WorldGenesisLedger money reconciliation. In baseline-multistate-v1, flowPressureEma starts at 0\. M1 validates and constructs the opening pool stock only; it does not implement settleFx, trade allocation, or FX-rate updates.
+
+Later-owned payload staging rule: StatePolicySeed, ClanPreferenceState, ClanStateRelationSeed, BondSeed, InitialEventSeed, EventDefinition, and MetricDefinition are not M1 behavior contracts. For baseline-multistate-v1 at M1, StateSeed.policy and ClanSeed.preferences are intentional opaque empty objects; ClanSeed.initialRelations may be omitted or empty; bonds and initialEvents must be omitted or empty; DefinitionPack.eventDefinitions and metricDefinitions may be empty, and no M1 object may reference an absent Event/Metric ID. M1 code must not read these placeholders to alter simulation behavior. Their owning later milestone must replace each placeholder with its canonical subsystem schema before that behavior becomes active. Any such material ScenarioDefinition or DefinitionPack content change increments its version so scenarioHash/definitionPackHash and runIdentity remain truthful.
+
+This staging rule is a milestone boundary, not permission to invent alternate mechanics. It keeps M1 deterministic world construction self-contained while leaving later fiscal, clan, bond, event, metric, trade, and monetary dynamics to their owning contracts.
+
 17\. Default baseline world profile
 
 ## Canonical baseline scenario
