@@ -35,10 +35,26 @@ class ClassifyTests(unittest.TestCase):
         # `blocked` means another gate has not passed — a required check, a review.
         # That is not this check's question, and answering it here would make two
         # different failures indistinguishable on the pull request.
-        for api_state in ("blocked", "unstable", "behind", "has_hooks"):
+        for api_state in ("blocked", "unstable", "has_hooks"):
             with self.subTest(api_state=api_state):
                 state, _ = mergeability.classify(True, api_state)
                 self.assertEqual(state, "success")
+
+    def test_a_branch_behind_its_base_fails(self):
+        # It merges cleanly, and its green checks were measured against a base that no
+        # longer exists. #88 and #91 were textually independent and semantically not:
+        # the merge result did not typecheck.
+        state, description = mergeability.classify(True, "behind")
+        self.assertEqual(state, "failure")
+        self.assertIn("update the branch", description)
+
+    def test_being_behind_is_reported_rather_than_left_to_branch_protection(self):
+        # The alternative — GitHub's "require branches to be up to date" — blocks the
+        # merge and produces no check. Nothing shows red, so selection keeps offering
+        # the pull request and the AUTHOR's "failing required check" rule matches
+        # nothing: it belongs to no queue. This assertion is the difference.
+        self.assertEqual(mergeability.classify(True, "behind")[0], "failure")
+        self.assertNotEqual(mergeability.classify(True, "behind")[0], "success")
 
     def test_every_description_fits_the_api_limit(self):
         for mergeable in (True, False, None):
