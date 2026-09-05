@@ -147,13 +147,13 @@ pressure \= wExcess × excess \+ wInventory × inventoryGap
 logChange \= clamp(priceSpeed × pressure, \-maxLogPriceStep, \+maxLogPriceStep)  
 price\_nextPass \= clamp(price\_old × exp(logChange), minPrice\[g\], maxPrice\[g\])
 
-Recommended starting defaults:  
-wExcess \= 0.70  
-wInventory \= 0.30  
-priceSpeed \= 0.20 per month  
-maxLogPriceStep \= ln(1.15)
+Canonical configuration binding:  
+wExcess \= SimulationConfig.markets.shortageSignalWeight  
+wInventory \= SimulationConfig.markets.inventorySignalWeight  
+priceSpeed \= SimulationConfig.markets.basePriceAdjustmentSpeed  
+maxLogPriceStep \= SimulationConfig.markets.maxAbsoluteLogPriceMovePerTick
 
-These are config values, not hard-coded constants.
+CANONICAL\_CONFIG\_AND\_WORLD\_GENERATION section 4 is the sole owner of baseline numeric values for these fields. This contract owns the Phase-6 formula and must not publish a competing default set.
 
 If D and S are both approximately zero, price stays unchanged. Missing trades do not imply zero price. Dormant markets do not reprice.
 
