@@ -1,39 +1,118 @@
 /**
- * ScenarioDefinition layer (REQ-CONFIG-001).
+ * ScenarioDefinition layer (REQ-CONFIG-001; seed shapes REQ-CONFIG-003).
  *
  * See `docs/spec/mirror/06 - Handoff/03 — CANONICAL_CONFIG_AND_WORLD_GENERATION.md`
  * section 2: "ScenarioDefinition owns starting world stocks/topology/institutions."
- * The seed types below (section 16) are named placeholders — their concrete
- * fields land with the world-genesis requirement that consumes them
- * (`REQ-CONFIG-003`/`REQ-CORE-003`), not with this scaffolding requirement.
+ * Section 16 ("Scenario seed schemas") gives the field-level shape below for every
+ * seed type that document specifies standalone. `StateSeed`, `MonetaryAuthoritySeed`,
+ * `ClanSeed`, `BondSeed` and `InitialEventSeed` remain empty placeholders here: each
+ * references a nested type (`StatePolicySeed`, `FxPoolSeed`, `ClanPreferenceState`,
+ * `ClanStateRelationSeed`, or a bond/event shape) owned by a different domain
+ * document that `REQ-CONFIG-003`'s bounded first slice does not read.
  */
 
-/** Concrete fields land with world genesis (section 16). */
-export interface RegionSeed {}
+export interface RegionSeed {
+  readonly key: string;
+  readonly name: string;
+  readonly controllerStateKey: string | null;
+  readonly settlementCurrencyKey: string;
+  readonly settlementLevel: number;
+  readonly infrastructure: Readonly<Record<string, number>>;
+  readonly climateHabitabilityInputs: Readonly<Record<string, number>>;
+  readonly deposits: readonly {
+    readonly resourceId: string;
+    readonly initialQuantity: number;
+    readonly initiallyKnown: boolean;
+  }[];
+}
 
-/** Concrete fields land with world genesis (section 16). */
-export interface TransportLinkSeed {}
+export interface TransportLinkSeed {
+  readonly key: string;
+  readonly fromRegionKey: string;
+  readonly toRegionKey: string;
+  readonly bidirectional?: boolean;
+  readonly distance: number;
+  readonly baseCapacity: number;
+  readonly condition: number;
+  readonly baseTransportCost: number;
+  readonly transitTicks?: number;
+  readonly feeReceiverStateKey?: string | null;
+}
 
-/** Concrete fields land with world genesis (section 16). */
+/** Concrete fields land with the requirement that owns `StatePolicySeed` (Handoff/06). */
 export interface StateSeed {}
 
-/** Concrete fields land with world genesis (section 16). */
-export interface CurrencySeed {}
+export interface CurrencyRegimeSeed {
+  readonly currencyKey: string;
+  readonly regimeType: "INDEPENDENT_FLOAT" | "MONETARY_UNION" | "FOREIGN_LEGAL_TENDER";
+  readonly policyAuthorityKey: string | null;
+}
 
-/** Concrete fields land with world genesis (section 16). */
+export interface CurrencySeed {
+  readonly key: string;
+  readonly code: string;
+  readonly issuerAuthorityKey: string | null;
+}
+
+/** Concrete fields land with the requirement that owns `FxPoolSeed` (Handoff/08). */
 export interface MonetaryAuthoritySeed {}
 
-/** Concrete fields land with world genesis (section 16). */
+/**
+ * Concrete fields land with the requirement that owns `ClanPreferenceState` and
+ * `ClanStateRelationSeed` (Handoff/06).
+ */
 export interface ClanSeed {}
 
-/** Concrete fields land with world genesis (section 16). */
-export interface CohortSeed {}
+export interface CohortSeed {
+  readonly key: string;
+  readonly regionKey: string;
+  readonly clanKey: string;
+  readonly ageBand: "CHILD" | "WORKING" | "ELDER";
+  readonly stratum: "VULNERABLE" | "WORKING_MIDDLE" | "AFFLUENT";
+  /** Baseline value is `GENERAL`; other categories land with the labor requirement. */
+  readonly laborCategory: string;
+  readonly population: number;
+  readonly wallet: Readonly<Record<string, number>>;
+  readonly householdInventory: Readonly<Record<string, number>>;
+  /** `[0,1]`. */
+  readonly healthIndex: number;
+  /** `[0,1]`. */
+  readonly prosperityEma: number;
+  /** `[0,1]`. */
+  readonly essentialSatisfactionEma: number;
+  /** Normalized, `>= 0`. */
+  readonly realIncomePerCapitaEma: number;
+  /** `[0,1]`. */
+  readonly employmentRateEma: number;
+  /** Bounded `[-1,1]`. */
+  readonly migrationPressureEma: number;
+  /** Bounded `[-1,1]`. */
+  readonly mobilityAccumulator: number;
+  /** Settlement-currency units per worker-equivalent per tick. */
+  readonly wageSignal: number;
+}
 
-/** Concrete fields land with world genesis (section 16). */
-export interface ProductionUnitSeed {}
+export interface ProductionUnitSeed {
+  readonly key: string;
+  readonly regionKey: string;
+  readonly owner:
+    | { readonly type: "CLAN"; readonly key: string }
+    | { readonly type: "STATE"; readonly key: string };
+  readonly recipeId: string;
+  readonly status: "ACTIVE" | "PLANNED" | "MOTHBALLED";
+  readonly wallet: Readonly<Record<string, number>>;
+  readonly inputInventory: Readonly<Record<string, number>>;
+  readonly outputInventory: Readonly<Record<string, number>>;
+  readonly investmentInventory?: Readonly<Record<string, number>>;
+  readonly installedCapital: number;
+  readonly condition: number;
+  readonly wageOffer?: number;
+}
 
-/** Concrete fields land with world genesis (section 16). */
-export interface MarketSeed {}
+export interface MarketSeed {
+  readonly regionKey: string;
+  readonly initialPriceByGood: Readonly<Record<string, number>>;
+}
 
 /** Concrete fields land with world genesis (section 16, bond opening positions). */
 export interface BondSeed {}
@@ -41,8 +120,14 @@ export interface BondSeed {}
 /** Concrete fields land with world genesis (section 16, initial scheduled events). */
 export interface InitialEventSeed {}
 
-/** Concrete fields land with deterministic bounded scenario variation (section 18). */
-export interface ScenarioVariationConfig {}
+export interface ScenarioVariationConfig {
+  readonly enabled: boolean;
+  readonly populationFactorRange?: readonly [number, number];
+  readonly depositQuantityFactorRange?: readonly [number, number];
+  readonly startingInventoryFactorRange?: readonly [number, number];
+  readonly startingCashFactorRange?: readonly [number, number];
+  readonly infrastructureFactorRange?: readonly [number, number];
+}
 
 export interface ScenarioDefinition {
   readonly id: string;
