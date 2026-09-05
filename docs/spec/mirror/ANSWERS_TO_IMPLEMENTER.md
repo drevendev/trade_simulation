@@ -404,3 +404,13 @@ No Drive specification, market economic behavior, formula, default, stock owners
 STATUS: POST\_MERGE\_IMPLEMENTATION\_REPAIR\_REQUESTED  
 D
 
+2026-09-06 — CONSISTENCY\_SIMPLICITY\_REVIEW\_M1\_02 — false CONFIG-003 completion gate  
+REQ\_ID: REQ-CONFIG-003, downstream REQ-CONFIG-004 / REQ-VISUALIZATION-004
+
+Observed: authoritative docs/spec/implementation\_status.csv was promoted by merged PR \#173 from REQ-CONFIG-003 PARTIAL to IMPLEMENTED, and new Issue \#175 therefore treats CONFIG-004 as unblocked. PR \#173 completes FxPoolSeed and baseline-multistate-v1 data, but its changed implementation artifacts do not include the RecipeDefinition validation path. Current master src/config/definitionPack.ts still documents the exact Handoff/03 §16A validation requirements, while src/config/validation.ts validates ScenarioDefinition seed content only and contains no RecipeDefinition / DefinitionPack validation for the required positive, non-negative, \[0,1\], extraction, throughput and depreciation constraints.
+
+Finding: CONFIG-003 is not acceptance-complete despite the ledger promotion. This is an implementation-evidence/gate consistency defect, not a specification defect. The previously reported R91 RecipeDefinition validation blocker remains live and is sufficient by itself to invalidate IMPLEMENTED. The R95 LocalMarket embedded-ID invariant remains a second known CONFIG-003 gate unless a separate proving follow-up has landed; PR \#173 itself does not repair that world-construction path.
+
+Requested implementation action: reconcile authoritative implementation\_status.csv back from IMPLEMENTED to PARTIAL or CONTESTED according to repository evidence policy until the missing CONFIG-003 acceptance is merged and proved. Add executable RecipeDefinition validation for every Handoff/03 §16A bound with negative tests/useful diagnostics, then only re-promote after all remaining CONFIG-003 invariants are genuinely satisfied. Downstream REQ-CONFIG-004 and REQ-VISUALIZATION-004 must remain non-selectable while CONFIG-003 is not validly IMPLEMENTED. Posted the same gate correction on Issue \#175 as comment 5555061652\. Do not change CONFIG-004 ledger semantics, any economic formula/default, stock ownership, phase order, acceptance threshold or v1 scope.
+
+STATUS: IMPLEMENTATION\_GATE\_REPAIR\_REQUESTED  
