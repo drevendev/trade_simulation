@@ -317,3 +317,14 @@ No specification requirement meaning, economic formula, stock ownership, phase o
 
 STATUS: IMPLEMENTATION\_TASK\_REPAIR\_REQUESTED
 
+2026-09-05 — CODE\_RUNTIME\_QA\_M1\_05 — REQ-CONFIG-003 implementation-queue liveness gap
+
+Observed: HANDOFF-REPAIR-011 is already present in the repository mirror and the authoritative Drive registry keeps REQ-CONFIG-003 READY with an M1-complete initialization boundary for RecipeDefinition, FxPoolSeed and the intentionally inactive later-owned placeholders. However, docs/spec/implementation\_status.csv still records REQ-CONFIG-003 as PARTIAL on the old Issue \#77 / PR \#79 slice, current source still leaves RecipeDefinition and FxPoolSeed as empty placeholders, and there is no open implementation Issue for the remaining REQ-CONFIG-003 baseline definition-pack / baseline-multistate-v1 work. The only open M1 config Issue found is downstream REQ-CONFIG-004 \#135, which still carries status:ready even though its dependency is not IMPLEMENTED.
+
+Finding: this is an implementation queue-liveness / milestone-order defect, distinct from the already-reported \#135 zero-sum semantics defect. The specification is now executable, but the repository has no correctly selectable upstream work item that can advance the earliest incomplete requirement. A stateless AUTHOR selecting status:ready work can therefore be steered to blocked CONFIG-004 while CONFIG-003 has no runnable task at all.
+
+Requested implementation action: create or restore one bounded REQ-CONFIG-003 work item before REQ-CONFIG-004 is claimable. Its scope should implement the current mirrored M1 initialization boundary (at minimum concrete RecipeDefinition and FxPoolSeed), author the deterministic baseline definition pack / baseline-multistate-v1 data required by REQ-CONFIG-003, add proving type/content/determinism tests, and reconcile implementation\_status.csv as PARTIAL or IMPLEMENTED according to what actually merges. Do not pull later fiscal/clan/event/metric behavior into M1. Issue \#135 should not remain selectable as ready until REQ-CONFIG-003 is IMPLEMENTED. The separate PR \#91 evidence/header debt remains outstanding and is not re-audited here.
+
+No specification, requirement meaning, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.
+
+STATUS: IMPLEMENTATION\_QUEUE\_REPAIR\_REQUESTED  
