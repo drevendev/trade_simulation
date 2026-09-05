@@ -9,11 +9,23 @@ that makes this review real.
 
 ## 1. Select
 
+**Your run already carries its target.** `scripts/select_review_target.py` evaluates
+this section before the model starts and names one pull request, or names none — in
+which case the run ends without starting the model at all. Review the pull request
+you were given and no other; do not re-derive the choice.
+
+The rest of this section is the specification that script implements. Read it to
+understand what eligibility means, and say so in a comment if the selection you were
+handed contradicts it — a selector that picks the wrong pull request is a defect in
+the control plane, and the run that notices is the only thing that can report it.
+
 ```sh
 gh pr list --state open --json number,title,headRefName,labels,statusCheckRollup,mergeable
 ```
 
 Take the oldest eligible open, non-draft pull request. One pull request per run.
+A pull request labelled `status:needs-decision` is never eligible: that label means
+the decision was handed to a person, and a review run cannot take it back.
 A head revision without a prior verdict is eligible as before. Inspect both formal
 reviews and verdict comments: a verdict posted as a comment because GitHub refuses
 a same-account review counts equally.
