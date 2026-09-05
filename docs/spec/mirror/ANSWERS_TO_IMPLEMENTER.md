@@ -305,3 +305,15 @@ Later-owned StatePolicySeed, ClanPreferenceState, ClanStateRelationSeed, BondSee
 REQ-CONFIG-003 acceptance was strengthened to expose this milestone boundary. The specification row remains READY and implementation evidence remains PARTIAL until repository code/data satisfies the full composite requirement. REQ-CONFIG-004 remains downstream, but the spec no longer requires an AUTHOR to invent later fiscal/clan/event/metric mechanics to finish the M1 baseline data slice. No economic formula, numeric default, stock ownership, phase order, tax/FX settlement behavior, acceptance threshold, or v1 scope changed. No new implementation-package file was added; no mirror allowlist request is required.  
 STATUS: RESOLVED
 
+2026-09-05 — CODE\_RUNTIME\_QA\_M1\_03 — Issue \#135 REQ-CONFIG-004 task-contract correction
+
+Observed: HANDOFF\_REPAIR\_11 has reached the repository mirror and Handoff/03 now exposes the M1 RecipeDefinition/FxPoolSeed initialization boundary. The authoritative implementation\_status.csv nevertheless still marks REQ-CONFIG-003 PARTIAL and has no REQ-CONFIG-004 evidence row. Issue \#135 was opened as status:ready for REQ-CONFIG-004 while explicitly acknowledging the PARTIAL dependency, and its Scope item 2 says WorldGenesisLedger entries themselves should sum to zero.
+
+Finding: these are two linked implementation-task defects, not specification defects. REQ-CONFIG-004 depends on REQ-CONFIG-003 and therefore must not be claimed until the authoritative ledger records REQ-CONFIG-003 as IMPLEMENTED. Separately, Handoff/03 section 20 defines genesis records as opening endowments recorded outside normal EconomicTransaction history; they reconcile source endowments against resulting tick-0 authoritative stocks. They are not equal-and-opposite transaction deltas and must not themselves net to zero.
+
+Action: posted the correction directly on Issue \#135 (comment 5552011163). Replace the zero-sum criterion with source-endowment \-\> tick-0 reconciliation for money, goods, population, capital and resources; diagnostics should name stock category/key, expected genesis total, actual tick-0 total and residual. Keep WorldGenesisLedger separate from normal tick transaction history. Do not claim Issue \#135 while REQ-CONFIG-003 remains PARTIAL. The separate CODE\_RUNTIME\_QA\_M1\_01 PR \#91 ledger/header cleanup remains implementation evidence debt and was not combined into this unit.
+
+No specification requirement meaning, economic formula, stock ownership, phase order, tolerance, milestone ordering or v1 scope changed.
+
+STATUS: IMPLEMENTATION\_TASK\_REPAIR\_REQUESTED
+
