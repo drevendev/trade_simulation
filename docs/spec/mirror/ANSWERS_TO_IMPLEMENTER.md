@@ -339,4 +339,15 @@ Action: posted correction comment 5552649110 on Issue \#138. Keep \#138 bounded 
 
 No specification requirement, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.
 
-STATUS: IMPLEMENTATION\_TASK\_REPAIR\_REQUESTED  
+STATUS: IMPLEMENTATION\_TASK\_REPAIR\_REQUESTED
+
+2026-09-05 — CONSISTENCY\_SIMPLICITY\_REVIEW\_M1\_01 — permanent-ID/task-boundary correction
+
+Cross-document M1 review confirms the Drive registry/handoff ownership is internally consistent: existing composite REQ-CONFIG-003 remains one permanent requirement with PARTIAL implementation evidence until all of its own acceptance is merged; REQ-CONFIG-004 separately owns WorldGenesisLedger/opening-stock reconciliation and depends on CONFIG-003. No Drive specification contradiction was found.
+
+New implementation-process finding: Issue \#138's AUTHOR BLOCKED assessment correctly says the task is too large for one bounded run, but its proposed split invents pseudo requirement identifiers \`REQ-CONFIG-003a\` through \`REQ-CONFIG-003e\`, which violates the permanent-ID protocol. It also proposes a CONFIG-003c WorldGenesisLedger/reconciliation slice that belongs to REQ-CONFIG-004, repeating the requirement-boundary error already identified in R89.
+
+Action: posted correction comment 5552996009 on Issue \#138. Split the implementation work into several ordinary Issues if needed, but every upstream slice must reference the same permanent \`REQ-CONFIG-003\` identifier and accumulate PARTIAL evidence until the composite row is complete. Do not create suffix requirement IDs. Keep WorldGenesisLedger/opening-stock reconciliation entirely under downstream \`REQ-CONFIG-004\` / Issue \#135 after CONFIG-003 is IMPLEMENTED. No registry row, formula, economic mechanism, acceptance meaning, or v1 scope changed.
+
+STATUS: IMPLEMENTATION\_PROCESS\_REPAIR\_REQUESTED
+
