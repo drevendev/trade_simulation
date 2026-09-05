@@ -694,6 +694,7 @@ Per region/good/pass:
 \- unmetDemandQuantity;  
 \- unsoldOfferQuantity;  
 \- shortageRate;  
+\- surplusRate;  
 \- importDispatchedQuantity;  
 \- importArrivedQuantity;  
 \- exportDispatchedQuantity;  
@@ -714,6 +715,7 @@ Per FX pair:
 \- spot used;  
 \- spread.
 
+Canonical shortage/surplus telemetry uses the same realized ratios as section 9: shortageRate \= effectiveDemandQuantity \> quantityEpsilon ? unmetDemandQuantity / effectiveDemandQuantity : 0; surplusRate \= offeredQuantity \> quantityEpsilon ? unsoldOfferQuantity / offeredQuantity : 0\. For the M3 Milestone Preview, display the realized Phase-8 MAIN-pass shortageRate and surplusRate; do not derive a second surplus metric. PRE\_PRODUCTION telemetry may use the same ratio definitions where emitted, but it never updates MarketExpectationState.  
 Telemetry is not mutable economic truth and may be aggregated/discarded after snapshot generation according to retention policy.
 
 34\. ExplanationFacts

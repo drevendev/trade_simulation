@@ -58,7 +58,7 @@ Legacy City/Pop/Market/Deal may coexist temporarily under Legacy or their curren
 
 ## \- M2: canonical 0–15 phase trace, tick counter and zero-flow reconciliation/ledger health for the no-op scenario.
 
-## \- M3: one LocalMarket view with price, traded quantity, shortage/surplus and settlement totals.
+## \- M3: one LocalMarket view with price, traded quantity, the Section-33 realized Phase-8 MAIN-pass shortageRate and surplusRate, and settlement totals. Do not derive a second surplus metric for the preview.
 
 ## \- M4: one-region economy view with production, employment/wages, needs satisfaction and key inventories/capital.
 
