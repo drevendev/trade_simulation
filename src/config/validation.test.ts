@@ -9,10 +9,11 @@ import type {
   MarketSeed,
   ProductionUnitSeed,
   RegionSeed,
+  ScenarioDefinition,
   ScenarioVariationConfig,
   TransportLinkSeed,
 } from "./scenarioDefinition";
-import { assertNoBehavioralOverrides } from "./validation";
+import { assertNoBehavioralOverrides, validateScenarioContent } from "./validation";
 
 /** A minimal, well-formed `ScenarioDefinition`-shaped object (required keys only). */
 function minimalScenario(): Record<string, unknown> {
@@ -190,5 +191,394 @@ describe("assertNoBehavioralOverrides", () => {
     // StateSeed) and GoodDefinition (part of DefinitionPack, not ScenarioDefinition).
     expect(currencyRegime.regimeType).toBe("INDEPENDENT_FLOAT");
     expect(goodDefinition.tradable).toBe(true);
+  });
+});
+
+describe("validateScenarioContent", () => {
+  function createScenario(overrides: Record<string, unknown>): ScenarioDefinition {
+    return {
+      id: "test-scenario",
+      version: "1.0.0",
+      name: "Test",
+      description: "Test",
+      definitionPackId: "test-pack",
+      geography: [],
+      transportLinks: [],
+      states: [],
+      currencies: [],
+      monetaryAuthorities: [],
+      clans: [],
+      cohorts: [],
+      productionUnits: [],
+      ...overrides,
+    } as unknown as ScenarioDefinition;
+  }
+
+  it("accepts a minimal well-formed scenario", () => {
+    const scenario = createScenario({
+      geography: [
+        {
+          key: "r-1",
+          name: "Region 1",
+          controllerStateKey: null,
+          settlementCurrencyKey: "c-1",
+          settlementLevel: 1,
+          infrastructure: {},
+          climateHabitabilityInputs: {},
+          deposits: [],
+        },
+      ],
+      currencies: [{ key: "c-1", code: "CUR", issuerAuthorityKey: null }],
+    });
+    expect(() => validateScenarioContent(scenario)).not.toThrow();
+  });
+
+  it("rejects a region with invalid controllerStateKey", () => {
+    const scenario = createScenario({
+      geography: [
+        {
+          key: "r-1",
+          name: "Region 1",
+          controllerStateKey: "nonexistent",
+          settlementCurrencyKey: "c-1",
+          settlementLevel: 1,
+          infrastructure: {},
+          climateHabitabilityInputs: {},
+          deposits: [],
+        },
+      ],
+      currencies: [{ key: "c-1", code: "CUR", issuerAuthorityKey: null }],
+    });
+    expect(() => validateScenarioContent(scenario)).toThrow(/controllerStateKey.*non-existent State/);
+  });
+
+  it("rejects a region with invalid settlementCurrencyKey", () => {
+    const scenario = createScenario({
+      geography: [
+        {
+          key: "r-1",
+          name: "Region 1",
+          controllerStateKey: null,
+          settlementCurrencyKey: "nonexistent",
+          settlementLevel: 1,
+          infrastructure: {},
+          climateHabitabilityInputs: {},
+          deposits: [],
+        },
+      ],
+    });
+    expect(() => validateScenarioContent(scenario)).toThrow(/settlementCurrencyKey.*non-existent Currency/);
+  });
+
+  it("rejects a region with non-finite settlementLevel", () => {
+    const scenario = createScenario({
+      geography: [
+        {
+          key: "r-1",
+          name: "Region 1",
+          controllerStateKey: null,
+          settlementCurrencyKey: "c-1",
+          settlementLevel: Number.NaN,
+          infrastructure: {},
+          climateHabitabilityInputs: {},
+          deposits: [],
+        },
+      ],
+      currencies: [{ key: "c-1", code: "CUR", issuerAuthorityKey: null }],
+    });
+    expect(() => validateScenarioContent(scenario)).toThrow(/settlementLevel.*NaN/);
+  });
+
+  it("rejects a transport link with invalid region references", () => {
+    const scenario = createScenario({
+      geography: [
+        {
+          key: "r-1",
+          name: "Region 1",
+          controllerStateKey: null,
+          settlementCurrencyKey: "c-1",
+          settlementLevel: 1,
+          infrastructure: {},
+          climateHabitabilityInputs: {},
+          deposits: [],
+        },
+      ],
+      transportLinks: [
+        {
+          key: "link-1",
+          fromRegionKey: "r-1",
+          toRegionKey: "nonexistent",
+          distance: 100,
+          baseCapacity: 50,
+          condition: 0.9,
+          baseTransportCost: 1,
+        },
+      ],
+      currencies: [{ key: "c-1", code: "CUR", issuerAuthorityKey: null }],
+    });
+    expect(() => validateScenarioContent(scenario)).toThrow(/toRegionKey.*non-existent Region/);
+  });
+
+  it("rejects a transport link with condition out of [0,1]", () => {
+    const scenario = createScenario({
+      geography: [
+        {
+          key: "r-1",
+          name: "Region 1",
+          controllerStateKey: null,
+          settlementCurrencyKey: "c-1",
+          settlementLevel: 1,
+          infrastructure: {},
+          climateHabitabilityInputs: {},
+          deposits: [],
+        },
+        {
+          key: "r-2",
+          name: "Region 2",
+          controllerStateKey: null,
+          settlementCurrencyKey: "c-1",
+          settlementLevel: 1,
+          infrastructure: {},
+          climateHabitabilityInputs: {},
+          deposits: [],
+        },
+      ],
+      transportLinks: [
+        {
+          key: "link-1",
+          fromRegionKey: "r-1",
+          toRegionKey: "r-2",
+          distance: 100,
+          baseCapacity: 50,
+          condition: 1.5,
+          baseTransportCost: 1,
+        },
+      ],
+      currencies: [{ key: "c-1", code: "CUR", issuerAuthorityKey: null }],
+    });
+    expect(() => validateScenarioContent(scenario)).toThrow(/condition.*\[0,1\]/);
+  });
+
+  it("rejects a cohort with invalid regionKey", () => {
+    const scenario = createScenario({
+      geography: [
+        {
+          key: "r-1",
+          name: "Region 1",
+          controllerStateKey: null,
+          settlementCurrencyKey: "c-1",
+          settlementLevel: 1,
+          infrastructure: {},
+          climateHabitabilityInputs: {},
+          deposits: [],
+        },
+      ],
+      currencies: [{ key: "c-1", code: "CUR", issuerAuthorityKey: null }],
+      clans: [{ key: "clan-1" } as unknown as CohortSeed],
+      cohorts: [
+        {
+          key: "cohort-1",
+          regionKey: "nonexistent",
+          clanKey: "clan-1",
+          ageBand: "WORKING",
+          stratum: "WORKING_MIDDLE",
+          laborCategory: "GENERAL",
+          population: 100,
+          wallet: { "c-1": 1000 },
+          householdInventory: {},
+          healthIndex: 0.8,
+          prosperityEma: 0.5,
+          essentialSatisfactionEma: 0.7,
+          realIncomePerCapitaEma: 10,
+          employmentRateEma: 0.9,
+          migrationPressureEma: 0,
+          mobilityAccumulator: 0,
+          wageSignal: 2,
+        } as unknown as CohortSeed,
+      ],
+    });
+    expect(() => validateScenarioContent(scenario)).toThrow(/regionKey.*non-existent Region/);
+  });
+
+  it("rejects a cohort with negative population", () => {
+    const scenario = createScenario({
+      geography: [
+        {
+          key: "r-1",
+          name: "Region 1",
+          controllerStateKey: null,
+          settlementCurrencyKey: "c-1",
+          settlementLevel: 1,
+          infrastructure: {},
+          climateHabitabilityInputs: {},
+          deposits: [],
+        },
+      ],
+      currencies: [{ key: "c-1", code: "CUR", issuerAuthorityKey: null }],
+      clans: [{ key: "clan-1" } as unknown as CohortSeed],
+      cohorts: [
+        {
+          key: "cohort-1",
+          regionKey: "r-1",
+          clanKey: "clan-1",
+          ageBand: "WORKING",
+          stratum: "WORKING_MIDDLE",
+          laborCategory: "GENERAL",
+          population: -100,
+          wallet: { "c-1": 1000 },
+          householdInventory: {},
+          healthIndex: 0.8,
+          prosperityEma: 0.5,
+          essentialSatisfactionEma: 0.7,
+          realIncomePerCapitaEma: 10,
+          employmentRateEma: 0.9,
+          migrationPressureEma: 0,
+          mobilityAccumulator: 0,
+          wageSignal: 2,
+        } as unknown as CohortSeed,
+      ],
+    });
+    expect(() => validateScenarioContent(scenario)).toThrow(/population.*positive/);
+  });
+
+  it("rejects a cohort with out-of-range healthIndex", () => {
+    const scenario = createScenario({
+      geography: [
+        {
+          key: "r-1",
+          name: "Region 1",
+          controllerStateKey: null,
+          settlementCurrencyKey: "c-1",
+          settlementLevel: 1,
+          infrastructure: {},
+          climateHabitabilityInputs: {},
+          deposits: [],
+        },
+      ],
+      currencies: [{ key: "c-1", code: "CUR", issuerAuthorityKey: null }],
+      clans: [{ key: "clan-1" } as unknown as CohortSeed],
+      cohorts: [
+        {
+          key: "cohort-1",
+          regionKey: "r-1",
+          clanKey: "clan-1",
+          ageBand: "WORKING",
+          stratum: "WORKING_MIDDLE",
+          laborCategory: "GENERAL",
+          population: 100,
+          wallet: { "c-1": 1000 },
+          householdInventory: {},
+          healthIndex: 1.5,
+          prosperityEma: 0.5,
+          essentialSatisfactionEma: 0.7,
+          realIncomePerCapitaEma: 10,
+          employmentRateEma: 0.9,
+          migrationPressureEma: 0,
+          mobilityAccumulator: 0,
+          wageSignal: 2,
+        } as unknown as CohortSeed,
+      ],
+    });
+    expect(() => validateScenarioContent(scenario)).toThrow(/healthIndex.*\[0,1\]/);
+  });
+
+  it("rejects a production unit with invalid owner reference", () => {
+    const scenario = createScenario({
+      geography: [
+        {
+          key: "r-1",
+          name: "Region 1",
+          controllerStateKey: null,
+          settlementCurrencyKey: "c-1",
+          settlementLevel: 1,
+          infrastructure: {},
+          climateHabitabilityInputs: {},
+          deposits: [],
+        },
+      ],
+      currencies: [{ key: "c-1", code: "CUR", issuerAuthorityKey: null }],
+      clans: [{ key: "clan-1" } as unknown as CohortSeed],
+      productionUnits: [
+        {
+          key: "unit-1",
+          regionKey: "r-1",
+          owner: { type: "CLAN", key: "nonexistent-clan" },
+          recipeId: "recipe-1",
+          status: "ACTIVE",
+          wallet: {},
+          inputInventory: {},
+          outputInventory: {},
+          installedCapital: 10,
+          condition: 0.9,
+        } as unknown as ProductionUnitSeed,
+      ],
+    });
+    expect(() => validateScenarioContent(scenario)).toThrow(/owner Clan key.*non-existent Clan/);
+  });
+
+  it("rejects a market with zero or negative price", () => {
+    const scenario = createScenario({
+      geography: [
+        {
+          key: "r-1",
+          name: "Region 1",
+          controllerStateKey: null,
+          settlementCurrencyKey: "c-1",
+          settlementLevel: 1,
+          infrastructure: {},
+          climateHabitabilityInputs: {},
+          deposits: [],
+        },
+      ],
+      currencies: [{ key: "c-1", code: "CUR", issuerAuthorityKey: null }],
+      markets: [
+        {
+          regionKey: "r-1",
+          initialPriceByGood: { food: 0 },
+        } as unknown as MarketSeed,
+      ],
+    });
+    expect(() => validateScenarioContent(scenario)).toThrow(/initialPriceByGood\["food"\].*positive/);
+  });
+
+  it("rejects non-finite values in numeric fields", () => {
+    const scenario = createScenario({
+      geography: [
+        {
+          key: "r-1",
+          name: "Region 1",
+          controllerStateKey: null,
+          settlementCurrencyKey: "c-1",
+          settlementLevel: 1,
+          infrastructure: {},
+          climateHabitabilityInputs: {},
+          deposits: [],
+        },
+      ],
+      currencies: [{ key: "c-1", code: "CUR", issuerAuthorityKey: null }],
+      clans: [{ key: "clan-1" } as unknown as CohortSeed],
+      cohorts: [
+        {
+          key: "cohort-1",
+          regionKey: "r-1",
+          clanKey: "clan-1",
+          ageBand: "WORKING",
+          stratum: "WORKING_MIDDLE",
+          laborCategory: "GENERAL",
+          population: 100,
+          wallet: { "c-1": Number.POSITIVE_INFINITY },
+          householdInventory: {},
+          healthIndex: 0.8,
+          prosperityEma: 0.5,
+          essentialSatisfactionEma: 0.7,
+          realIncomePerCapitaEma: 10,
+          employmentRateEma: 0.9,
+          migrationPressureEma: 0,
+          mobilityAccumulator: 0,
+          wageSignal: 2,
+        } as unknown as CohortSeed,
+      ],
+    });
+    expect(() => validateScenarioContent(scenario)).toThrow(/wallet\["c-1"\].*Infinity/);
   });
 });
