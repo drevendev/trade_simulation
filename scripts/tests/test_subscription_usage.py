@@ -1,6 +1,7 @@
 """A reading that cannot be taken must say so, and a reading that can must say only
 what the ledger asked for."""
 
+import io
 import json
 import pathlib
 import sys
@@ -54,13 +55,45 @@ class ReadTests(unittest.TestCase):
         self.assertIn("no token", reading["reason"])
         self.assertIsNone(reading["five_hour"])
 
-    def test_a_rate_limit_is_recorded_by_status_code_only(self):
+    def test_a_refusal_records_the_status_and_the_error_type_and_keeps_the_message(self):
+        # Every live reading so far: 403, and a status code alone cannot say why.
+        body = io.BytesIO(
+            b'{"type":"error","error":{"type":"permission_error",'
+            b'"message":"This token does not have the required scope"}}'
+        )
+
         def refuse(token):
-            raise urllib.error.HTTPError("u", 429, "Too Many Requests", {}, None)
+            raise urllib.error.HTTPError("u", 403, "Forbidden", {}, body)
+
+        reading = usage.read("secret-token", fetcher=refuse)
+        self.assertFalse(reading["available"])
+        self.assertEqual(reading["reason"], "HTTP 403 permission_error")
+        self.assertEqual(reading["error_message"], "This token does not have the required scope")
+        self.assertNotIn("secret-token", json.dumps(reading))
+
+    def test_a_refusal_without_a_json_body_records_the_status_code_only(self):
+        def refuse(token):
+            raise urllib.error.HTTPError("u", 429, "Too Many Requests", {}, io.BytesIO(b"<html>rate limited</html>"))
 
         reading = usage.read("t", fetcher=refuse)
-        self.assertFalse(reading["available"])
         self.assertEqual(reading["reason"], "HTTP 429")
+        self.assertIsNone(reading["error_message"])
+
+    def test_a_refusal_with_no_body_at_all_is_still_recorded(self):
+        def refuse(token):
+            raise urllib.error.HTTPError("u", 403, "Forbidden", {}, None)
+
+        reading = usage.read("t", fetcher=refuse)
+        self.assertEqual(reading["reason"], "HTTP 403")
+        self.assertIsNone(reading["error_message"])
+
+    def test_a_long_message_is_cut_so_the_ledger_never_carries_a_page(self):
+        body = io.BytesIO(json.dumps({"error": {"type": "x", "message": "m" * 5000}}).encode())
+
+        def refuse(token):
+            raise urllib.error.HTTPError("u", 403, "Forbidden", {}, body)
+
+        self.assertEqual(len(usage.read("t", fetcher=refuse)["error_message"]), 200)
 
     def test_a_network_failure_is_recorded_by_class(self):
         def drop(token):

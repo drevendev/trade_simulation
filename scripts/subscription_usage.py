@@ -77,13 +77,44 @@ def summarize(payload):
     return windows
 
 
-def unavailable(reason: str):
+def unavailable(reason: str, error_message=None):
     return {
         "available": False,
         "reason": reason,
+        "error_message": error_message,
         "fetched_at": now_iso(),
         **{name: None for name in WINDOWS},
     }
+
+
+def error_detail(exc):
+    """The API's own account of a refusal: its error type and message. Pure over the body.
+
+    Every reading since the first one came back `HTTP 403`, and a status code alone
+    cannot say whether the token lacks a scope, the endpoint moved, or a proxy refused
+    the runner. The error body can: it is JSON with an `error.type` and an
+    `error.message`, and neither carries the token. The type joins the reason, which is
+    printed; the message stays in the reading, which reaches the private ledger only.
+    """
+    try:
+        # Enough for any error document; the message itself is cut to 200 characters
+        # below, so what reaches the ledger is a line, never a page.
+        body = exc.read(65536)
+    except (OSError, AttributeError, ValueError):
+        return None, None
+    try:
+        data = json.loads(body.decode("utf-8", "replace"))
+    except (json.JSONDecodeError, AttributeError):
+        return None, None
+    error = data.get("error") if isinstance(data, dict) else None
+    if not isinstance(error, dict):
+        return None, None
+    kind = error.get("type")
+    message = error.get("message")
+    return (
+        kind if isinstance(kind, str) and kind else None,
+        message[:200] if isinstance(message, str) and message else None,
+    )
 
 
 def fetch(token: str, timeout: float = 20.0):
@@ -107,15 +138,23 @@ def read(token: str, fetcher=fetch):
     try:
         payload = fetcher(token)
     except urllib.error.HTTPError as exc:
-        # The status code and nothing else: the body of a refusal is not ours to log.
-        return unavailable(f"HTTP {exc.code}")
+        # The status code and the API's error type go into the reason; the error
+        # message goes into the reading only. Neither contains the token.
+        kind, message = error_detail(exc)
+        return unavailable(f"HTTP {exc.code}" + (f" {kind}" if kind else ""), message)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         return unavailable(type(exc).__name__)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return unavailable("malformed body")
     if not isinstance(payload, dict):
         return unavailable("malformed body")
-    return {"available": True, "reason": None, "fetched_at": now_iso(), **summarize(payload)}
+    return {
+        "available": True,
+        "reason": None,
+        "error_message": None,
+        "fetched_at": now_iso(),
+        **summarize(payload),
+    }
 
 
 def main() -> int:
