@@ -7,6 +7,8 @@
  * REQ-CORE-001 (see ./id.ts) is the first canonical behavior to land here.
  * REQ-CORE-002 (see ./numeric.ts, ./ordering.ts) adds the finite-number and
  * deterministic-ordering primitives every later canonical subsystem builds on.
+ * REQ-CORE-003 (see ./worldRegistries.ts, ./definitionRegistry.ts) adds the
+ * stable, ID-keyed world entity and definitions registries.
  */
 export const DOMAIN_MODULE_AREA = "domain" as const;
 
@@ -35,3 +37,7 @@ export {
 export { assertFiniteCanonicalNumber, isFiniteCanonicalNumber } from "./numeric";
 
 export { sortByPersistentId, stableOrderBy } from "./ordering";
+
+export { buildWorldRegistries, type RegistryEntry, type WorldRegistries } from "./worldRegistries";
+
+export { buildDefinitionRegistry, type DefinitionRegistry } from "./definitionRegistry";
