@@ -73,10 +73,18 @@ Completion gate
 PROJECT\_STATUS may become COMPLETE only when: repository audit exists; all four drafts are incorporated or explicitly rejected with reasons; core model is internally coherent; market, production, population, clans, fiscal, monetary, expansion, laws/events and visualization have implementation specs; tick order and accounting/invariants are explicit; config/data schemas exist; migration plan from current repo exists; tests/benchmark scenarios exist; GitHub Pages UX is specified; a master Codex/Claude implementation plan exists; and a final handoff audit finds no critical ambiguity.
 
 Implementation feedback channel  
-At the beginning of every REVIEW/QA run, after reading PROJECT\_MANIFEST and STATE\_AND\_QUEUE, read the repository feedback channel when available:  
+At the beginning of every REVIEW/QA run, after reading PROJECT\_MANIFEST and STATE\_AND\_QUEUE, read the repository feedback channel when available:
+
+Protocol amendment — 2026-09-05 (authoritative for REVIEW/QA and future milestone indexing):  
+\- Read docs/spec/implementation\_status.csv as the implementation-evidence source, not the rendered IMPLEMENTATION\_STATUS.md. The ledger columns are REQ\_ID, STATUS, ISSUE, PR, MERGE\_COMMIT, EVIDENCE; STATUS may be IMPLEMENTED, PARTIAL, BLOCKED, DEFERRED or CONTESTED. A registry identifier absent from the ledger has no implementation evidence. The rendered Markdown is presentation only.  
+\- When a new file enters the implementation package, record the addition in SPEC\_CHANGELOG and append an explicit request to ANSWERS\_TO\_IMPLEMENTER in the exact form “please add \<path\> to the mirror allowlist”. Until that repository-side allowlist change lands, the file’s absence from the mirror is expected and must not be diagnosed as synchronization failure.  
+\- Any rename of a file listed in SPEC\_INDEX is a breaking navigation change. Announce the exact old→new filename in ANSWERS\_TO\_IMPLEMENTER and SPEC\_CHANGELOG before performing the rename. Exported filenames must exactly match the mirrored filenames.  
+\- docs/spec/mirror/ is write-protected to the implementation side: only the synchronization workflow may write it. Google Drive remains the sole specification authority. If the mirror is wrong, implementation reports the discrepancy; neither agents nor people patch the mirror directly.  
+\- Registry granularity rule: when indexing a future milestone, split acceptance into separate requirement rows where the enumerated artifacts are independently implementable and independently verifiable. Keep one row when the acceptance is genuinely atomic. Never renumber or reuse identifiers. Existing composite rows remain stable; retroactive splitting requires an explicit indexed/changelogged change with new IDs. PARTIAL is the correct intermediate evidence status for an existing composite row.
+
 \- docs/spec/FEEDBACK\_TO\_RESEARCHER.md — implementation evidence about contradictions, missing formulas/units, unverifiable requirements and proposed minimal fixes.  
 \- docs/spec/OPEN\_QUESTIONS.md — only implementation-blocking questions tied to requirement IDs.  
-\- docs/spec/IMPLEMENTATION\_STATUS.md — implementation coverage and proving tests; this is authoritative for what is actually implemented, not for what the specification requires.  
+\- docs/spec/implementation\_status.csv — implementation coverage and proving tests; this is authoritative for what is actually implemented, not for what the specification requires.  
 Treat repository feedback as evidence, not specification authority. Resolve questions and accepted corrections in Drive, record semantic changes in SPEC\_CHANGELOG.md, and append dated answers keyed by REQ\_ID/Q-ID to ANSWERS\_TO\_IMPLEMENTER.md. Never silently change requirement meaning. A coding implementation does not override a canonical contract merely because it exists in code.
 
 Implementation navigation layer  
