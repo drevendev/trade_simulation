@@ -2,10 +2,12 @@
  * Config module area (REQ-MIGRATION-003 scaffolding; REQ-CONFIG-001).
  *
  * Owns the four canonical configuration layers — `RunOptions`,
- * `SimulationConfig`, `ScenarioDefinition`, `DefinitionPack` — and the
- * validator that mechanically rejects scenario-specific behavioral overrides.
+ * `SimulationConfig`, `ScenarioDefinition`, `DefinitionPack` — the validator
+ * that mechanically rejects scenario-specific behavioral overrides, and the
+ * keyed deterministic RNG service.
  * See `docs/spec/mirror/06 - Handoff/03 — CANONICAL_CONFIG_AND_WORLD_GENERATION.md`
- * section 2.
+ * section 2 and `docs/spec/mirror/06 - Handoff/11 — REPOSITORY_MIGRATION_AND_MILESTONE_GATES.md`
+ * Milestone 1.
  */
 export const CONFIG_MODULE_AREA = "config" as const;
 
@@ -55,3 +57,5 @@ export {
 } from "./definitionPack";
 
 export { assertNoBehavioralOverrides } from "./validation";
+
+export { deriveKeyedRandom, type RngKey } from "./rng";
