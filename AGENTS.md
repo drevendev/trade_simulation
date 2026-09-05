@@ -77,7 +77,7 @@ Capability is not permission. A missing grant is a denial.
 | Edit in-scope files, add tests, create a branch under `claude/**` | Force-pushing shared history, deleting branches other than your own |
 | Push that branch and open a pull request | Pushing directly to `master` |
 | Update the Issue you claimed | Changing workflows, `AGENTS.md`, or runbooks to widen your own run |
-| Write to `docs/spec/FEEDBACK_TO_RESEARCHER.md`, `OPEN_QUESTIONS.md`, `IMPLEMENTATION_STATUS.md` | Any external side effect: publishing, spending, messaging, deleting data |
+| Write to `docs/spec/FEEDBACK_TO_RESEARCHER.md`, `OPEN_QUESTIONS.md`, `implementation_status.csv` | Any external side effect: publishing, spending, messaging, deleting data |
 
 Invariants that repository policy may narrow but never grant:
 
@@ -163,6 +163,11 @@ A pull request body is complete only if it states:
 9. any remaining gate, or an explicit statement that none remains.
 
 "Done" is not a handoff. A pull request without a linked Issue is not a handoff.
+
+Evidence that a requirement identifier is satisfied lives in
+`docs/spec/implementation_status.csv`, one row appended by the pull request that earns
+it; `docs/spec/IMPLEMENTATION_STATUS.md` is generated from it and is never edited by
+hand. A row's presence on `master` is its merge evidence, so no run reconciles it later.
 
 ## Blockers
 
