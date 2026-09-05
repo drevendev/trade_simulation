@@ -74,6 +74,32 @@ class MirrorBranchTests(unittest.TestCase):
             [],
         )
 
+    def test_the_generated_coverage_table_may_ride_along(self):
+        # The table is rendered from the registry this branch replaces, and a check
+        # compares the two. Without this, a sync that changed any registry status
+        # produced a pull request contradicting its own source — unmergeable, and
+        # unfixable from outside, because on master the old registry and the old table
+        # still agree.
+        self.assertEqual(
+            self.check(
+                [
+                    MIRROR + "REQUIREMENTS_REGISTRY.csv",
+                    "docs/spec/IMPLEMENTATION_STATUS.md",
+                ]
+            ),
+            [],
+        )
+
+    def test_the_exception_covers_that_file_and_nothing_near_it(self):
+        # A named file, not a prefix. The ledger it is rendered from lives one
+        # directory up from the mirror and is written by AUTHOR runs; a sync that
+        # rewrote it would be editing the evidence rather than the specification.
+        violations = self.check(
+            [MIRROR + "SPEC_INDEX.md", "docs/spec/implementation_status.csv"]
+        )
+        self.assertEqual(len(violations), 1)
+        self.assertIn("docs/spec/implementation_status.csv", violations[0])
+
     def test_a_path_outside_the_mirror_is_refused(self):
         violations = self.check(
             [MIRROR + "SPEC_INDEX.md", ".github/workflows/spec-sync.yml"]
@@ -136,6 +162,20 @@ class OrdinaryBranchTests(unittest.TestCase):
                     "docs/spec/IMPLEMENTATION_STATUS.md",
                     "docs/spec/FEEDBACK_TO_RESEARCHER.md",
                 ]
+            ),
+            [],
+        )
+
+    def test_an_ordinary_branch_may_still_write_the_generated_table(self):
+        # The exception widens what the mirror may carry; it claims nothing. An AUTHOR
+        # adding a ledger row regenerates the same table, and a rule that made the file
+        # machine-owned would refuse every one of those pull requests.
+        self.assertEqual(
+            guard.check(
+                "claude/issue-42-example",
+                ["docs/spec/implementation_status.csv", "docs/spec/IMPLEMENTATION_STATUS.md"],
+                REAL_ALLOWLIST,
+                None,
             ),
             [],
         )

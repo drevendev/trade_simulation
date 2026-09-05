@@ -22,12 +22,37 @@ check on every pull request — not by a reader.
 
 The classes today:
 
-| Branch | Produced by | Owns | Allowlist |
-| --- | --- | --- | --- |
-| `spec-mirror` | `.github/workflows/spec-sync.yml` | `docs/spec/mirror/**` | `docs/zendev/spec-mirror-allowlist.txt` |
+| Branch | Produced by | Owns | Also regenerates | Allowlist |
+| --- | --- | --- | --- | --- |
+| `spec-mirror` | `.github/workflows/spec-sync.yml` | `docs/spec/mirror/**` | `docs/spec/IMPLEMENTATION_STATUS.md` | `docs/zendev/spec-mirror-allowlist.txt` |
 
 Adding a class is a policy change to the guard, its tests and this table, reviewed like
 any other policy change and accepted by a person.
+
+### Owning a path is not the same as regenerating one
+
+The fourth column exists because a machine class can be blocked by its own correctness.
+The coverage table is rendered from the registry the mirror replaces, and a check
+compares the two, so a sync that changed a registry status and left the table alone
+proposed a snapshot contradicting its own source. That pull request could not merge —
+and could not be repaired from anywhere else either, because on `master` the old
+registry and the old table still agreed. The contradiction existed only inside the
+proposal. It happened, on #125, and it would have happened on every sync that moved a
+status.
+
+So the producing workflow regenerates the derived file in the same pull request, and
+the guard permits that one named file alongside the roots.
+
+**Regenerating is not owning.** A path in the fourth column is not machine-exclusive:
+an AUTHOR adding a ledger row regenerates the same table, and a rule that made the file
+machine-owned would refuse every one of those pull requests. Only the third column is
+enforced against other branches.
+
+Nor does permitting the file assert its contents. The guard checks paths; the
+generator's own `--check` runs in CI over the same diff and refuses a table that does
+not match its sources. A sync writing a fabricated table would pass this guard and fail
+that check, which is the correct division: this one answers *may these paths change*,
+that one answers *is the derived file derived*.
 
 ## The gate runs in both directions
 

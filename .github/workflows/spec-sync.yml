@@ -109,6 +109,26 @@ jobs:
           mkdir -p docs/spec
           cp -a "${RUNNER_TEMP}/mirror" docs/spec/mirror
 
+      # The coverage table is generated from the registry this sync just replaced, and
+      # a check compares the two. A mirror that brought a changed registry and left the
+      # table alone would carry a snapshot contradicting its own source, fail that
+      # check, and be unmergeable — and unfixable from outside, because on `master` the
+      # old registry and the old table agree. The regeneration has to happen here, in
+      # the pull request that moves the registry.
+      #
+      # A failure is warned about rather than fatal, on purpose. The generator refuses
+      # when the registry and the ledger disagree — a ledger row for an identifier the
+      # specification dropped, say — and that disagreement is worth seeing on the pull
+      # request, where the content that caused it is visible, rather than in a red sync
+      # run nobody opens. The stale table then fails the check on the pull request,
+      # which is the outcome we want: proposed, refused, and legible.
+      - name: Regenerate the coverage table from the new registry
+        run: |
+          python scripts/implementation_status.py || {
+            echo "::warning::could not regenerate docs/spec/IMPLEMENTATION_STATUS.md;"
+            echo "::warning::the mirror will be proposed and its check will refuse it."
+          }
+
       - name: Report what arrived
         run: |
           set -euo pipefail
@@ -138,7 +158,9 @@ jobs:
           token: ${{ secrets.ZENDEV_PAT || github.token }}
           branch: spec-mirror
           base: master
-          add-paths: docs/spec/mirror
+          add-paths: |
+            docs/spec/mirror
+            docs/spec/IMPLEMENTATION_STATUS.md
           commit-message: "spec: sync specification mirror from Drive"
           title: "spec: sync specification mirror from Drive"
           labels: |
