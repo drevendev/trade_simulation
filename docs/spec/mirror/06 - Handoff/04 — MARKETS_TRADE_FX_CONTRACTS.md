@@ -17,11 +17,16 @@ It is not tax-inclusive and it is not a cross-currency world price.
 For buyer b in region r:
 
 sellerNetUnitPrice \= market.priceByGood\[g\]  
-consumptionTaxRate \= applicableConsumptionTaxRate(b, r, g, purpose)  
-realizedConsumptionTaxRate \= consumptionTaxRate × collectionEfficiency(r.controllerStateId)  
-buyerGrossUnitPrice \= sellerNetUnitPrice × (1 \+ realizedConsumptionTaxRate)
+destinationStateId \= r.controllerStateId from Phase-1 effective jurisdiction  
+statutoryConsumptionTaxRate \= destinationStateId \== null ? 0 : taxPolicy.getConsumptionTaxRate(destinationStateId, goodCategory(g))  
+collectionEfficiency \= destinationStateId \== null ? 0 : taxPolicy.getCollectionEfficiency(destinationStateId)  
+assessedTaxPerUnit \= sellerNetUnitPrice × statutoryConsumptionTaxRate  
+collectedTaxPerUnit \= assessedTaxPerUnit × collectionEfficiency  
+buyerGrossUnitPrice \= sellerNetUnitPrice \+ collectedTaxPerUnit
 
-Affordability always uses buyerGrossUnitPrice. Seller revenue uses sellerNetUnitPrice. The collected tax is transferred to the effective destination State treasury with the sale. Assessed-but-uncollected tax is telemetry only and remains with the buyer.
+Tax-policy integration boundary: market pricing/clearing consumes only the two side-effect-free reads above. The market subsystem never owns or mutates fiscal policy. Before the full Fiscal/Laws subsystem becomes active in M6, M3 tests and deterministic local-market fixtures must inject an immutable taxPolicy provider with explicit finite rates and collectionEfficiency in \[0,1\]. Those fixture values are test/scenario inputs, not new canonical defaults. When M6 is implemented, the same reads are backed by Phase-1 effective FiscalPolicyState without changing market settlement.
+
+Affordability always uses buyerGrossUnitPrice. Seller revenue uses sellerNetUnitPrice. Only collectedTaxPerUnit is debited from the buyer and transferred to the effective destination State treasury with the sale. assessedTaxPerUnit \- collectedTaxPerUnit is telemetry only, remains with the buyer, and creates no arrears asset in core v1.
 
 State self-procurement is exempt/netted from consumption tax by default. Export shipment invoice value is not charged source consumption tax. If the destination buyer is a final household consumer, destination consumption tax may apply to the import purchase in addition to tariff.
 
@@ -785,7 +790,7 @@ MTFX-I25 Every ProductionUnit market transfer uses an explicit inventory bucket:
 MTFX-T1 Zero D and zero S leaves price unchanged.  
 MTFX-T2 Extreme excess demand/supply respects max log step and price floor/ceiling.  
 MTFX-T3 Consumption tax reduces affordable quantity at fixed cash and splits buyer debit exactly seller/State.  
-MTFX-T4 collectionEfficiency \< 1 credits only collected tax and leaves uncollected amount with buyer.  
+MTFX-T4 An injected taxPolicy fixture with collectionEfficiency strictly between 0 and 1 credits only collected tax, leaves assessed-but-uncollected tax with the buyer, and proves M3 does not assume collectionEfficiency \= 1 or require M6 policy dynamics.  
 MTFX-T5 Proportional seller/buyer rationing conserves quantity and is insertion-order invariant.  
 MTFX-T6 Buyer maxSpend and seller reserve are never violated after floating residual correction.  
 MTFX-T7 Phase-4 procurement cannot consume a Phase-7 same-tick import.  
