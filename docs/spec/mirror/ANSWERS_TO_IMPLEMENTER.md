@@ -103,7 +103,7 @@ Most target-domain behavior is new canonical implementation: typed IDs/registrie
 At the start of each QA/research run I will read:  
 \- docs/spec/FEEDBACK\_TO\_RESEARCHER.md  
 \- docs/spec/OPEN\_QUESTIONS.md  
-\- docs/spec/IMPLEMENTATION\_STATUS.md
+\- docs/spec/implementation\_status.csv
 
 Current state on 2026-09-03: the channel is open; there are no substantive implementation feedback entries or open domain questions yet, and implementation coverage is 0/0 because the mirror/registry had not yet been synchronized. After this handshake, the registry gives the implementation side stable IDs to populate that table.
 
@@ -234,4 +234,31 @@ Disposition: keep all M3 rows in REVIEW. Do not change mechanics in this pass. A
 STATUS: OPEN.
 
 2026-09-05 — HANDOFF-REPAIR-008 — RESOLUTION OF HANDOFF-FRESH-008 — REQ-MARKET-001, REQ-MARKET-003  
-Resolved as a navigation-slice defect only. REQ-MARKET-001 now explicitly states that Handoff/04 sections 5 and 6 form one executable slice: section 5 owns MarketIntent shape/validation and section 6 owns the required budget-ledger/planning-envelope semantics. REQ-MARKET-003 now explicitly states that sections 7, 10 and 11 form its executable slice: section 7 defines sellable\_i/effectiveDemand\_j inputs, section 10 defines deterministic proportional allocation/matching, and section 11 defines the MarketAllocation output schema. Handoff/04 carries matching inline registry-slice notes so a stateless AUTHOR does not have to search neighboring prose or decide what is normative. No market formula, budget rule, clearing rule, schema field, acceptance criterion, dependency ordering or v1 scope changed. HANDOFF-FRESH-008 is resolved. All M3 rows remain REVIEW until a separate fresh-implementer promotion pass.  
+Resolved as a navigation-slice defect only. REQ-MARKET-001 now explicitly states that Handoff/04 sections 5 and 6 form one executable slice: section 5 owns MarketIntent shape/validation and section 6 owns the required budget-ledger/planning-envelope semantics. REQ-MARKET-003 now explicitly states that sections 7, 10 and 11 form its executable slice: section 7 defines sellable\_i/effectiveDemand\_j inputs, section 10 defines deterministic proportional allocation/matching, and section 11 defines the MarketAllocation output schema. Handoff/04 carries matching inline registry-slice notes so a stateless AUTHOR does not have to search neighboring prose or decide what is normative. No market formula, budget rule, clearing rule, schema field, acceptance criterion, dependency ordering or v1 scope changed. HANDOFF-FRESH-008 is resolved. All M3 rows remain REVIEW until a separate fresh-implementer promotion pass.
+
+2026-09-05 — M3\_READY\_PROMOTION\_QA\_03 — HANDOFF-FRESH-009  
+REQ\_ID: REQ-MARKET-005, REQ-VISUALIZATION-006  
+Finding: the M3 executable telemetry/UI slice still leaves the surplus signal underdefined. Handoff/04 section 33 names \`shortageRate\` and \`unsoldOfferQuantity\`, but does not name or define a telemetry \`surplusRate\`. REQ-MARKET-005 acceptance requires “shortage/surplus signals”, REQ-VISUALIZATION-006 requires the visible M3 preview to show “shortage/surplus”, and Handoff/11 repeats that presentation requirement. Section 9 does compute \`surplusRate \= offeredQuantity \> quantityEpsilon ? unsold / offeredQuantity : 0\` for expectation updates, but section 33 never states whether that exact value is the telemetry/UI signal or whether the preview should derive another measure. A stateless implementer can therefore satisfy the market math while exposing incompatible surplus semantics to diagnostics/UI.  
+Disposition: keep all seven M3 rows in REVIEW. Do not change economics in this pass. A separate HANDOFF\_REPAIR\_09 should bind section 33 and the M3 preview to one explicit surplus telemetry field/definition, preferably reusing the existing Section-9 realized MAIN-pass \`surplusRate\` rather than inventing another metric. Visualization share remains 1/7 \= 14.3%, above the \>=5% milestone rule.  
+STATUS: OPEN
+
+2026-09-05 — PROTOCOL-UPDATE-001 — mirror/evidence/indexing protocol
+
+To the implementation team:
+
+1\. B1 — CONFIRMED AND APPLIED. Section G now reads docs/spec/implementation\_status.csv instead of IMPLEMENTATION\_STATUS.md. REVIEW/QA runs treat the CSV ledger as the implementation-evidence source; the rendered Markdown is presentation only. Ledger columns are REQ\_ID, STATUS, ISSUE, PR, MERGE\_COMMIT, EVIDENCE. An identifier absent from the ledger has no implementation evidence. PARTIAL is recognized as merged evidence for a named slice without falsely closing the full requirement. FEEDBACK\_TO\_RESEARCHER.md and OPEN\_QUESTIONS.md remain mandatory inputs.
+
+2\. B2 — CONFIRMED AND APPLIED. Every new file entering the implementation package must be recorded in SPEC\_CHANGELOG and accompanied by an explicit ANSWERS\_TO\_IMPLEMENTER request in the form: “please add \<path\> to the mirror allowlist”. Until the repository-side policy change lands, absence of that file from the mirror is expected and is not a synchronization failure. This protocol update adds no new mirrored file, so no allowlist addition is requested by this entry.
+
+3\. B3 — CONFIRMED AND APPLIED. Renaming any file listed in SPEC\_INDEX is a breaking navigation change. Before such a rename, I will announce the exact old→new path in ANSWERS\_TO\_IMPLEMENTER and SPEC\_CHANGELOG; only after that announcement may the source file be renamed. Exported filenames must exactly match mirrored filenames. A blocked sync after an unannounced/suffix-surviving rename is treated as a source-side protocol defect, not something implementation should work around.
+
+4\. C — ACCEPTED for indexing-time granularity. When a future milestone is indexed, acceptance that enumerates independently implementable and independently verifiable artifacts will be split into separate requirement rows unless the artifacts form one genuinely atomic contract. IDs remain permanent: never renumber or reuse them. Existing composite rows such as current M1 config requirements are not silently split retroactively; PARTIAL records their intermediate implementation state honestly. Any later retroactive split requires an explicit registry/changelog change with new IDs. M4 indexing must apply this granularity rule from the start.
+
+5\. B4 — CONFIRMED AS OPERATING ASSUMPTION. docs/spec/mirror/ is write-protected to implementation: only the synchronization workflow writes it. Google Drive is the sole specification-content authority. If the mirror is wrong, report the mismatch back through the established channel; do not patch the mirror directly.
+
+These are process/indexing changes only. They do not alter any economic requirement or transfer specification authority to implementation.  
+.  
+2026-09-05 — HANDOFF-REPAIR-009 — RESOLUTION OF HANDOFF-FRESH-009 — REQ-MARKET-005, REQ-VISUALIZATION-006  
+Resolved with the smallest telemetry/presentation clarification. The existing section-9 realized MAIN-pass ratio is now the only canonical surplus signal: surplusRate \= offeredQuantity \> quantityEpsilon ? unsoldOfferQuantity / offeredQuantity : 0\. Section 33 exposes surplusRate alongside shortageRate and explicitly binds both telemetry ratios to the same realized formulas already used by MarketExpectationState. The M3 Milestone Preview must display the realized Phase-8 MAIN-pass shortageRate and surplusRate and must not derive a second surplus measure. PRE\_PRODUCTION telemetry may use the same ratio definitions where emitted, but it does not update expectations. Canonical and Handoff copies of the Markets and Migration contracts were updated together. No price, clearing, expectation, tax, settlement, default, phase-order, acceptance-threshold or v1-scope mechanic changed. HANDOFF-FRESH-009 is resolved. All seven M3 rows remain REVIEW until a separate fresh-implementer readiness-promotion pass succeeds.  
+STATUS: RESOLVED
+
