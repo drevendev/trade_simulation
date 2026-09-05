@@ -1,29 +1,42 @@
-"""Keep `docs/spec/IMPLEMENTATION_STATUS.md` honest about what actually merged.
+"""Keep the implementation ledger honest about what actually merged.
 
-That document is the repository's answer to "is the specification implemented?", and
-it is maintained by hand inside pull requests. Two ways it drifted, both observed:
+`docs/spec/implementation_status.csv` is the repository's answer to "is the
+specification implemented?", and `docs/spec/IMPLEMENTATION_STATUS.md` is rendered from
+it by `implementation_status.py`. This checks the one thing that rendering cannot: how
+the ledger relates to the pull request graph, which is outside the repository.
 
-* **A requirement claimed by a merged pull request had no row at all.** `REQ-CONFIG-005`
-  was implemented in part by #76 and never appeared in the table, so a later AUTHOR run
-  opened a fresh Issue for it without noticing the overlap. Absence is invisible: no
-  reader can miss a row that was never written.
-* **A row cited a pull request that had not merged.** A proposed edit recorded a
-  pending pull request and described its contents as evidence, which would have made
-  the merged document assert the outcome of an unmerged change — the same error as
-  promoting a check that never ran.
+Two rules remain here, and each is a thing that went wrong rather than a thing that
+might:
 
-Both are arithmetic over the document and the pull request graph, so neither belongs
-in a model run.
+1. **Every requirement identifier named by a merged pull request's title has a ledger
+   row.** `REQ-CONFIG-005` was implemented in part by #76 and recorded nowhere, so a
+   later AUTHOR run opened #86 for it without noticing the overlap. Absence is
+   invisible: no reader can miss a row that was never written. The rendered table now
+   shows every registry identifier, so absence shows up as `NOT_STARTED` beside a
+   requirement that demonstrably was started — which is a lie of the same shape.
 
-Three rules, and each one is a thing that went wrong rather than a thing that might:
+2. **Every pull request a ledger row cites has merged** — except the pull request being
+   checked, which is the row's own. That exception is new, and it is the mechanism that
+   removed reconciliation runs: a row is appended by the pull request that earns it, so
+   the row and the citation land together. A pull request closed without merging takes
+   its row with it, and a row can never outlive the merge it claims. Any *other* open
+   citation is still a document asserting the outcome of a change that has not landed,
+   which is how #87 came to propose recording `#84 (pending merge)` as evidence.
 
-1. Every requirement identifier named by a merged pull request's title has a row.
-2. Every pull request cited in the `Merged in` column has actually merged.
-3. The summary counts equal the rows they claim to count.
+Rules that used to live here and no longer can fail:
 
-What this deliberately does not check: whether a row's *evidence* is any good, whether
-the named test proves the requirement, or whether `IMPLEMENTED` is deserved. Those are
-judgements, and a linter that pretended to make them would be trusted for something it
+* *a malformed row* — rows are CSV, and `implementation_status.validate` refuses a row
+  with an unknown status, a missing identifier or no evidence;
+* *`IMPLEMENTED` citing no pull request* — same validator, and it needs no network, so
+  it belongs there rather than here;
+* *summary arithmetic* — the summary is computed by the generator from the rows it
+  renders, and `implementation_status.py --check` proves the document matches. A parser
+  re-deriving those counts here would be a second, weaker copy of an arithmetic that
+  cannot disagree with itself.
+
+What this deliberately does not check: whether a row's evidence is any good, whether the
+named test proves the requirement, or whether `IMPLEMENTED` is deserved. Those are
+judgements, and a linter pretending to make them would be trusted for something it
 cannot do.
 """
 
@@ -31,107 +44,56 @@ from __future__ import annotations
 
 import argparse
 import json
-import pathlib
 import re
 import subprocess
 import sys
 
+# Same directory. This module is run as `python scripts/status_lint.py`, so that
+# directory is already first on the path; the tests put it there explicitly.
+import implementation_status
+
 REQ_ID = re.compile(r"\bREQ-[A-Z]+-\d{3}\b")
-ROW = re.compile(r"^\|\s*(REQ-[A-Z]+-\d{3})\s*\|(.*)$")
-PR_REF = re.compile(r"#(\d+)")
-SUMMARY = re.compile(
-    r"\*\*Summary:\s*(\d+)\s+of\s+(\d+)\s+requirements implemented;\s*(\d+)\s+in progress\.\*\*"
+
+# Statuses that assert merged code. A row carrying one is claiming the pull request it
+# cites actually landed.
+CITES_MERGED_CODE = tuple(
+    status for status, needs_pull in implementation_status.STATUSES.items() if needs_pull
 )
 
-IMPLEMENTED = "IMPLEMENTED"
-IN_PROGRESS = "IN_PROGRESS"
 
-
-def parse_rows(text: str):
-    """Return [{req, status, issue_cell, merged_cell}] for every requirement row."""
-    rows = []
-    for line in text.splitlines():
-        match = ROW.match(line)
-        if not match:
-            continue
-        cells = [cell.strip() for cell in match.group(2).split("|")]
-        # status | issue | merged in | proving test  (the trailing empty cell is the
-        # row's closing pipe, and a short row is a malformed row, not a crash).
-        if len(cells) < 3:
-            rows.append(
-                {"req": match.group(1), "status": "", "issue": "", "merged": "", "malformed": True}
-            )
-            continue
-        rows.append(
-            {
-                "req": match.group(1),
-                "status": cells[0].strip("`"),
-                "issue": cells[1],
-                "merged": cells[2],
-                "malformed": False,
-            }
-        )
-    return rows
-
-
-def parse_summary(text: str):
-    match = SUMMARY.search(text)
-    if not match:
-        return None
-    return {
-        "implemented": int(match.group(1)),
-        "total": int(match.group(2)),
-        "in_progress": int(match.group(3)),
-    }
-
-
-def lint(rows, summary, merged_pull_numbers, requirements_claimed_by_merged):
+def lint(rows, merged_pull_numbers, requirements_claimed_by_merged, self_pull=None):
     """Pure. Returns a list of human-readable violations."""
     violations = []
-    documented = {row["req"] for row in rows}
+    recorded = {(row.get("REQ_ID") or "").strip() for row in rows}
 
-    for row in rows:
-        if row["malformed"]:
-            violations.append(f"{row['req']}: row has too few columns to read")
-
-    for req in sorted(set(requirements_claimed_by_merged) - documented):
-        where = ", ".join(f"#{p}" for p in sorted(requirements_claimed_by_merged[req]))
+    for req in sorted(set(requirements_claimed_by_merged) - recorded):
+        where = ", ".join("#%d" % p for p in sorted(requirements_claimed_by_merged[req]))
         violations.append(
-            f"{req} was claimed by merged pull request(s) {where} but has no row; "
-            "a requirement absent from the table cannot be noticed by a reader"
+            "%s was claimed by merged pull request(s) %s but has no ledger row; the "
+            "rendered table therefore calls it NOT_STARTED, which is false" % (req, where)
         )
 
     for row in rows:
-        cited = {int(n) for n in PR_REF.findall(row["merged"])}
-        unmerged = sorted(cited - merged_pull_numbers)
-        for number in unmerged:
-            violations.append(
-                f"{row['req']}: the Merged in column cites #{number}, which has not "
-                "merged; write (open) instead and let a later reconciliation record "
-                "the pull request and its squash commit once it lands. A pull request "
-                "may not cite itself here either: it is not true when this check runs, "
-                "and a pull request closed without merging would leave it false forever"
-            )
-        if row["status"] == IMPLEMENTED and not cited:
-            violations.append(
-                f"{row['req']}: marked {IMPLEMENTED} with no merged pull request cited"
-            )
-
-    if summary is None:
-        violations.append("the Summary line is missing or does not parse")
-    else:
-        actual_implemented = sum(1 for row in rows if row["status"] == IMPLEMENTED)
-        actual_in_progress = sum(1 for row in rows if row["status"] == IN_PROGRESS)
-        if summary["implemented"] != actual_implemented:
-            violations.append(
-                f"the Summary claims {summary['implemented']} implemented; "
-                f"{actual_implemented} rows say {IMPLEMENTED}"
-            )
-        if summary["in_progress"] != actual_in_progress:
-            violations.append(
-                f"the Summary claims {summary['in_progress']} in progress; "
-                f"{actual_in_progress} rows say {IN_PROGRESS}"
-            )
+        req = (row.get("REQ_ID") or "").strip()
+        status = (row.get("STATUS") or "").strip()
+        cited = (row.get("PR") or "").strip()
+        if not cited.isdigit():
+            # Absent or malformed citations are implementation_status.validate's
+            # business; it runs without a network and names them precisely.
+            continue
+        number = int(cited)
+        if number in merged_pull_numbers:
+            continue
+        if self_pull is not None and number == self_pull:
+            # The row travels inside this pull request. It becomes true at the moment
+            # it becomes visible on master, and false nowhere.
+            continue
+        violations.append(
+            "%s: the ledger cites #%d, which has not merged. A row may cite the pull "
+            "request that carries it — that one lands with the row — but no other open "
+            "pull request, or the ledger asserts an outcome that has not happened%s"
+            % (req, number, "" if status not in CITES_MERGED_CODE else " while claiming %s" % status)
+        )
 
     return violations
 
@@ -171,20 +133,27 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, help="owner/name")
     parser.add_argument(
-        "--file", default="docs/spec/IMPLEMENTATION_STATUS.md", help="status document"
+        "--self",
+        dest="self_pull",
+        default="",
+        help="the pull request being checked, whose own number a row may cite",
     )
     args = parser.parse_args()
 
-    text = pathlib.Path(args.file).read_text(encoding="utf-8")
+    rows = implementation_status.read_ledger()
+    self_pull = int(args.self_pull) if args.self_pull.strip().isdigit() else None
     merged_numbers, claimed = load_merged_pulls(args.repo)
-    violations = lint(parse_rows(text), parse_summary(text), merged_numbers, claimed)
+    violations = lint(rows, merged_numbers, claimed, self_pull)
 
     if not violations:
-        print(f"status-lint: {args.file} agrees with the merged pull requests")
+        print(
+            "status-lint: %d ledger row(s) agree with the merged pull requests"
+            % len(rows)
+        )
         return 0
 
     for violation in violations:
-        print(f"::error::status-lint: {violation}")
+        print("::error::status-lint: %s" % violation)
     return 1
 
 

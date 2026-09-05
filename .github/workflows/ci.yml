@@ -85,9 +85,25 @@ jobs:
             --head-ref "${HEAD_REF}" \
             --head-sha "${HEAD_SHA}"
 
-      # Runs on every event, not only on pull requests: the status document can go
-      # stale because something else merged, without anyone touching the document.
-      - name: Keep the status document honest about what merged
+      # Offline and unconditional. The rendered table is a function of the ledger and
+      # the mirrored registry, so regenerating and comparing catches both a hand-edited
+      # table and a ledger row whose author forgot to regenerate. Staleness is a
+      # property of the tree, not of a diff, so this runs on push as well.
+      - name: Guard the generated coverage table
+        run: python scripts/implementation_status.py --check
+
+      # Runs on every event, not only on pull requests: the ledger can go stale because
+      # something else merged, without anyone touching it.
+      #
+      # --self names the pull request being checked. A ledger row is appended by the
+      # pull request that earns it, so it cites a number that is still open while the
+      # check runs and becomes true at the moment it lands. Every other open citation is
+      # still refused. On push there is no pull request and the argument is empty, so
+      # every citation must already have merged.
+      - name: Keep the ledger honest about what merged
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python scripts/status_lint.py --repo "${{ github.repository }}"
+        run: |
+          python scripts/status_lint.py \
+            --repo "${{ github.repository }}" \
+            --self "${{ github.event.pull_request.number }}"

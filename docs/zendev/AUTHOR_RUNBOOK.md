@@ -15,26 +15,19 @@ gh pr list --state open --json number,title,headRefName,isDraft,statusCheckRollu
 git log --oneline -10
 ```
 
-### Reconcile implementation status
+### There is no reconciliation step
 
-Before selecting work, bring `docs/spec/IMPLEMENTATION_STATUS.md` into agreement with
-the merge state of the pull requests it already references:
+`docs/spec/IMPLEMENTATION_STATUS.md` is generated, not maintained. It is rendered from
+`docs/spec/implementation_status.csv` — the ledger — and the mirrored requirements
+registry by `scripts/implementation_status.py`, and the `policy-guard` check regenerates
+it and fails on any difference.
 
-```sh
-gh pr list --state merged --json number,mergeCommit,mergedAt --limit 50
-```
+A ledger row's presence on `master` **is** its merge evidence: the row lands in the same
+pull request as the work it describes, so it appears exactly when that work merges. No
+later run has to notice a merge and flip a status, and no run should spend itself doing
+so. If you find yourself about to reconcile this file, the correct action is none.
 
-For every row already in the table whose `Issue`/`Merged in` column names a pull
-request that has since merged, flip its status to `IMPLEMENTED`, and record the merge
-commit and the proving test named in that pull request's body. Update the summary
-line so it agrees with the corrected rows. Carry the correction in the same pull
-request as this run's own work — or, if reconciliation is the only change this run
-makes, hand it off on its own.
-
-This step only reconciles rows that already exist in the table against pull requests
-that have already merged. It is not licence to add new rows, map more requirement
-IDs, or read anything beyond `gh pr list` and the pull request bodies it names — a
-run choosing or reading a new requirement is still bounded by section 4.
+Section 7 says how to write your row.
 
 ## 2. Select one unit of work
 
@@ -174,6 +167,30 @@ hopeful pull request. Record the failure on the Issue and stop.
 
 ## 7. Hand off
 
+Record your evidence in the ledger **inside this same pull request**: append one row
+to `docs/spec/implementation_status.csv` for the requirement identifier your change
+resolves, then regenerate the table.
+
+```sh
+python scripts/implementation_status.py
+python scripts/implementation_status.py --check
+```
+
+A row carries `REQ_ID`, `STATUS`, `ISSUE`, `PR`, an optional `MERGE_COMMIT` and
+`EVIDENCE`. `IMPLEMENTED` names a merged pull request and a test that fails without the
+change; `PARTIAL` does the same for a named slice and says what is left open; `BLOCKED`,
+`DEFERRED` and `CONTESTED` carry their reason in the evidence cell. There is no
+`IN_PROGRESS` row — claimed work is a `status:in-progress` label on the Issue.
+
+`PR` is **this pull request's own number**, which is the one case where a row may name a
+pull request that has not merged yet: the row travels inside it, so it becomes true at
+the moment it becomes visible. Open the pull request first if you do not know the number,
+then add the row on the same branch. Naming any *other* open pull request is refused by
+`status_lint`.
+
+Never edit the generated block in `IMPLEMENTATION_STATUS.md` by hand. The check
+regenerates it and fails on the difference.
+
 Push the branch and open a pull request whose body follows
 [the pull request template](../../.github/PULL_REQUEST_TEMPLATE.md) completely, with
 `Closes #<issue>`. Set `status:needs-review` on the Issue, replacing
@@ -187,10 +204,10 @@ You do not approve and you do not merge. The run ends here.
 When the specification is contradictory, unmeasurable, missing units or formulas, or
 impossible to implement as written, append a dated entry to
 `docs/spec/FEEDBACK_TO_RESEARCHER.md` or `docs/spec/OPEN_QUESTIONS.md` **inside the
-same pull request**, referencing the requirement ID. Also refresh
-`docs/spec/IMPLEMENTATION_STATUS.md` for every requirement ID whose status your change
-alters. These files are the inbound channel of the researcher agent; keep them
-append-only.
+same pull request**, referencing the requirement ID. These files are the inbound
+channel of the researcher agent; keep them append-only. A requirement you could not
+implement because the specification blocks it belongs in the ledger too, as a `BLOCKED`
+or `CONTESTED` row naming the question.
 
 ## 8. Blocked
 
