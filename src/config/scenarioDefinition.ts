@@ -14,17 +14,52 @@ export interface RegionSeed {}
 /** Concrete fields land with world genesis (section 16). */
 export interface TransportLinkSeed {}
 
-/** Concrete fields land with world genesis (section 16). */
-export interface StateSeed {}
+export interface CurrencyRegimeSeed {
+  readonly currencyKey: string;
+  readonly regimeType: 'INDEPENDENT_FLOAT' | 'MONETARY_UNION' | 'FOREIGN_LEGAL_TENDER';
+  readonly policyAuthorityKey: string | null;
+}
+
+/** Concrete fields are owned by the fiscal/monetary policy domain documents; not redefined here (REQ-CONFIG-003). */
+export interface StatePolicySeed {}
+
+/** Concrete fields are owned by the monetary domain document; not redefined here (REQ-CONFIG-003). */
+export interface FxPoolSeed {}
+
+/** Concrete fields are owned by the clan domain document; not redefined here (REQ-CONFIG-003). */
+export interface ClanPreferenceState {}
+
+/** Concrete fields are owned by the clan domain document; not redefined here (REQ-CONFIG-003). */
+export interface ClanStateRelationSeed {}
+
+export interface StateSeed {
+  readonly key: string;
+  readonly name: string;
+  readonly treasury: Record<string, number>;
+  readonly publicInventory: Record<string, number>;
+  readonly policy: StatePolicySeed;
+  readonly effectiveCurrencyRegime: CurrencyRegimeSeed;
+}
 
 /** Concrete fields land with world genesis (section 16). */
 export interface CurrencySeed {}
 
-/** Concrete fields land with world genesis (section 16). */
-export interface MonetaryAuthoritySeed {}
+export interface MonetaryAuthoritySeed {
+  readonly key: string;
+  readonly currencyKey: string;
+  readonly memberStateKeys: readonly string[];
+  readonly wallet: Record<string, number>;
+  readonly policyRateAnnual?: number;
+  readonly fxPools: readonly FxPoolSeed[];
+}
 
-/** Concrete fields land with world genesis (section 16). */
-export interface ClanSeed {}
+export interface ClanSeed {
+  readonly key: string;
+  readonly name: string;
+  readonly treasury: Record<string, number>;
+  readonly preferences: ClanPreferenceState;
+  readonly initialRelations?: Record<string, ClanStateRelationSeed>;
+}
 
 /** Concrete fields land with world genesis (section 16). */
 export interface CohortSeed {}

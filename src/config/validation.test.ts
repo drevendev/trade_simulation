@@ -30,7 +30,52 @@ describe("assertNoBehavioralOverrides", () => {
     const scenario = {
       ...minimalScenario(),
       markets: [{ regionKey: "r-1", initialPriceByGood: {} }],
-      clans: [{ key: "c-1" }],
+      clans: [
+        {
+          key: "c-1",
+          name: "Clan One",
+          treasury: {},
+          preferences: {},
+        },
+      ],
+    };
+    expect(() => assertNoBehavioralOverrides(scenario)).not.toThrow();
+  });
+
+  it("accepts a well-formed scenario with concrete StateSeed, MonetaryAuthoritySeed, and ClanSeed", () => {
+    const scenario = {
+      ...minimalScenario(),
+      states: [
+        {
+          key: "s-1",
+          name: "State One",
+          treasury: {},
+          publicInventory: {},
+          policy: {},
+          effectiveCurrencyRegime: {
+            currencyKey: "curr-1",
+            regimeType: "INDEPENDENT_FLOAT" as const,
+            policyAuthorityKey: null,
+          },
+        },
+      ],
+      monetaryAuthorities: [
+        {
+          key: "ma-1",
+          currencyKey: "curr-1",
+          memberStateKeys: ["s-1"],
+          wallet: {},
+          fxPools: [],
+        },
+      ],
+      clans: [
+        {
+          key: "c-1",
+          name: "Clan One",
+          treasury: {},
+          preferences: {},
+        },
+      ],
     };
     expect(() => assertNoBehavioralOverrides(scenario)).not.toThrow();
   });
