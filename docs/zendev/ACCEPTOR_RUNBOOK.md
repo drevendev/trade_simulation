@@ -87,28 +87,30 @@ Post REQUEST_CHANGES and stop if any of these is true:
 
 ### Who decides each of these
 
-Two of them are already decided before you see the pull request, and six are yours. A
-gate belonging to neither would be the worst outcome — the contract would make it look
-enforced while nothing enforced it — so each is named here.
+Three of them are already decided before you see the pull request, and five are yours;
+one gate is split down the middle, and both halves are named. A gate belonging to
+neither would be the worst outcome — the contract would make it look enforced while
+nothing enforced it — so each is named here.
 
 | Gate | Decided by |
 | --- | --- |
 | Policy paths mixed with product paths | `scripts/policy_guard.py`, required |
 | Credentials, tokens, and local machine paths | `scripts/policy_guard.py`, required |
+| Every changed path is named in the handoff | `scripts/scope_guard.py`, required |
 | No linked Issue, or the Issue lacks a required section | you |
 | Label axes on the Issue | you |
 | The handoff record is incomplete | you |
-| The diff touches files outside the Issue's declared scope | you |
+| The declared set is what the Issue's scope allows, and no more | you |
 | Tests deleted, disabled, or weakened | you |
 | An invariant test relaxed without a Decision record | you |
 
-**For the two a check decides: read the check, do not re-derive it.** `policy-guard` runs
-on every pull request and its result is on the checks tab. Restating its finding costs a
-run and invites you to disagree with a control you cannot overrule. This does not excuse
-you from reading the diff — you read it for everything else in this section, and a guard
-that refused nothing is not a statement that there was nothing to find.
+**For the three a check decides: read the check, do not re-derive it.** `policy-guard`
+runs on every pull request and its result is on the checks tab. Restating its finding
+costs a run and invites you to disagree with a control you cannot overrule. This does not
+excuse you from reading the diff — you read it for everything else in this section, and a
+guard that refused nothing is not a statement that there was nothing to find.
 
-**For the six that are yours, the reason no check decides them** — each is a property of
+**For the five that are yours, the reason no check decides them** — each is a property of
 the gate, not a gap someone has yet to fill:
 
 - *Issue completeness and label axes* could be checked, and no run has yet failed them.
@@ -118,9 +120,11 @@ the gate, not a gap someone has yet to fill:
   the evidence honestly separates what was measured from what was assumed is the thing
   you exist to judge. Checking the first half alone would report a complete handoff for a
   record that says nothing.
-- *Declared scope* cannot be checked while `Scope` is prose. Making it checkable means
-  every Issue carrying a machine-readable path set — a tax on every future task for a
-  gate you close by reading the diff.
+- *Declared scope* splits the way handoff completeness does. Whether every changed path
+  is named in the body at all is a string search, and `scope_guard` performs it inside
+  `policy-guard` — the first revision of #130 changed ten files and declared two, and a
+  run was spent finding that. Whether the named set is what the Issue's `Scope` allows
+  cannot be checked while `Scope` is prose, and that half is yours.
 - *Tests deleted or disabled* is mechanically visible in its crudest forms — a removed
   file, `it.skip`, a fall in the discovered count — but a falling count is also what a
   legitimate consolidation looks like, and *weakened* is invisible to any count. A
@@ -131,7 +135,7 @@ the gate, not a gap someone has yet to fill:
   record nearby, but reporting is not refusing, and a control that never refuses teaches
   its reader to scroll past it.
 
-If you find a defect in one of the six, say so in your verdict and open an Issue for the
+If you find a defect in one of the five, say so in your verdict and open an Issue for the
 check. An observed failure is what moves a gate; symmetry is not.
 
 ## 2a. Machine-generated pull requests are not yours
