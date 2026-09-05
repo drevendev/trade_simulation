@@ -1,8 +1,72 @@
 import { describe, expect, it } from "vitest";
 
-import type { ScenarioDefinition } from "../config/scenarioDefinition";
+import type {
+  CohortSeed,
+  CurrencySeed,
+  ProductionUnitSeed,
+  RegionSeed,
+  ScenarioDefinition,
+} from "../config/scenarioDefinition";
 import { createIdAllocator } from "./id";
 import { buildWorldRegistries } from "./worldRegistries";
+
+/** A minimal well-formed `RegionSeed` (REQ-CONFIG-003), distinguished only by `key`. */
+function region(key: string): RegionSeed {
+  return {
+    key,
+    name: key,
+    controllerStateKey: null,
+    settlementCurrencyKey: "currency-0",
+    settlementLevel: 1,
+    infrastructure: {},
+    climateHabitabilityInputs: {},
+    deposits: [],
+  };
+}
+
+/** A minimal well-formed `CurrencySeed` (REQ-CONFIG-003), distinguished only by `key`. */
+function currency(key: string): CurrencySeed {
+  return { key, code: key, issuerAuthorityKey: null };
+}
+
+/** A minimal well-formed `CohortSeed` (REQ-CONFIG-003), distinguished only by `key`. */
+function cohort(key: string): CohortSeed {
+  return {
+    key,
+    regionKey: "region-0",
+    clanKey: "clan-0",
+    ageBand: "WORKING",
+    stratum: "WORKING_MIDDLE",
+    laborCategory: "GENERAL",
+    population: 10,
+    wallet: {},
+    householdInventory: {},
+    healthIndex: 0.5,
+    prosperityEma: 0.5,
+    essentialSatisfactionEma: 0.5,
+    realIncomePerCapitaEma: 1,
+    employmentRateEma: 0.5,
+    migrationPressureEma: 0,
+    mobilityAccumulator: 0,
+    wageSignal: 1,
+  };
+}
+
+/** A minimal well-formed `ProductionUnitSeed` (REQ-CONFIG-003), distinguished only by `key`. */
+function productionUnit(key: string): ProductionUnitSeed {
+  return {
+    key,
+    regionKey: "region-0",
+    owner: { type: "CLAN", key: "clan-0" },
+    recipeId: "recipe-0",
+    status: "ACTIVE",
+    wallet: {},
+    inputInventory: {},
+    outputInventory: {},
+    installedCapital: 0,
+    condition: 1,
+  };
+}
 
 /** A fixture scenario with distinct, non-zero counts per registry, plus two legitimately empty ones. */
 function fixtureScenario(): ScenarioDefinition {
@@ -12,14 +76,18 @@ function fixtureScenario(): ScenarioDefinition {
     name: "Fixture",
     description: "REQ-CORE-003 registry-population fixture",
     definitionPackId: "fixture-pack",
-    geography: [{}, {}, {}],
+    geography: [region("region-1"), region("region-2"), region("region-3")],
     transportLinks: [],
     states: [{}, {}],
-    currencies: [{}],
+    currencies: [currency("currency-1")],
     monetaryAuthorities: [],
     clans: [{}, {}],
-    cohorts: [{}, {}, {}, {}],
-    productionUnits: [{}, {}, {}],
+    cohorts: [cohort("cohort-1"), cohort("cohort-2"), cohort("cohort-3"), cohort("cohort-4")],
+    productionUnits: [
+      productionUnit("unit-1"),
+      productionUnit("unit-2"),
+      productionUnit("unit-3"),
+    ],
     // markets, bonds, initialEvents deliberately omitted: legitimately empty/non-active.
   };
 }
