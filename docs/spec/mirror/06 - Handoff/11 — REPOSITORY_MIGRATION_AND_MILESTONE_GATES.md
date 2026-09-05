@@ -132,7 +132,7 @@ Implementation:
 \- phase order is asserted by a trace test.  
 \- a handler cannot mutate a phase-owned future transition early.  
 \- deterministic replay hash is stable for at least 100 ticks.  
-\- zero-flow reconciliation passes for all tracked stock categories.
+\- zero-flow reconciliation passes for all tracked stock categories using the resolved SimulationConfig.numeric reconciliation policy. Use reconciliationRelativeTolerance where tolerance-based stock reconciliation is required; moneyEpsilon and quantityEpsilon remain domain zero/positivity thresholds only where their owning contracts say so. M2 must not introduce a milestone-local epsilon or tolerance.
 
 Milestone 3 — Local markets and transaction settlement  
 Goal: prove the smallest complete goods-for-money loop before trade, FX, production or demography.  
