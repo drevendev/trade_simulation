@@ -71,37 +71,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 
 import machine_pr_guard
-
-# A verdict announces itself, and the two shapes below are the two ways it does.
-#
-# Both anchor to the start of a line, so a sentence *about* a verdict stays prose —
-# "the previous REQUEST_CHANGES asked for a label fix" must remain a correction, or
-# the same-head exception could never fire and a corrected pull request would be
-# stuck forever.
-#
-# A heading or bold marker is matched case-insensitively, because a model writing
-# "## Accept" means the verdict and missing it would restart the re-review loop this
-# exists to stop. A bare word with no marker must be the shouted form the runbook
-# specifies; anything less would swallow ordinary sentences that open with "Accept".
-MARKED_VERDICT = re.compile(
-    r"^\s*(?:#{1,4}\s*|\*\*)\s*(?:VERDICT\s*[:\-—]\s*)?"
-    r"(?:ACCEPT|REQUEST_CHANGES)\b",
-    re.MULTILINE | re.IGNORECASE,
-)
-BARE_VERDICT = re.compile(r"^\s*(?:ACCEPT|REQUEST_CHANGES)\b", re.MULTILINE)
+import verdict
 
 HUMAN_OWNED_LABEL = "status:needs-decision"
 MERGEABILITY_CHECK = "mergeability"
 
 
 def is_verdict(body: str) -> bool:
-    body = body or ""
-    return bool(MARKED_VERDICT.search(body) or BARE_VERDICT.search(body))
+    return verdict.is_verdict(body)
 
 
 def judges_head(comment, head_sha: str, head_committed_at: str) -> bool:
