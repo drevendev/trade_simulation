@@ -177,6 +177,12 @@ gh pr diff <number>
   base moved. Read it before you judge anything else — a conflicting branch cannot be
   accepted whatever its contents, and discovering that after forming a verdict is how
   a run comes to post two contradictory verdicts on one head.
+
+  It fails on two conditions, not one. A branch that **conflicts** cannot merge. A
+  branch that is merely **behind** merges cleanly and is still refused, because its
+  green checks were measured against a base that no longer exists: they say nothing
+  about what would actually land. Two changes can be textually independent and
+  semantically incompatible, and that combination is invisible to every other gate.
 - Check out the head revision and run the verification commands yourself — both
   runtimes, whichever one the diff touched:
 

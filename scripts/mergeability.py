@@ -41,12 +41,31 @@ CONTEXT = "mergeability"
 MAX_DESCRIPTION = 140
 
 
+# The base moved and this branch has not caught up. It merges cleanly, but its green
+# checks were measured against a base that no longer exists, so they say nothing about
+# what would actually land — the case where two changes are textually independent and
+# semantically not.
+#
+# Reported as a failure rather than left to branch protection's "require branches to be
+# up to date". That setting blocks the merge and produces no check, so the branch shows
+# nothing red: selection would keep offering it and the AUTHOR's own "open pull request
+# with a failing required check" rule would match nothing. It would belong to no queue,
+# which is the trap this control plane has already had to close once. A red check
+# blocks the same merge and routes the work.
+STALE_BASE = "behind"
+
+
 def classify(mergeable, mergeable_state):
     """Map the API's answer to (state, description). Pure."""
     if mergeable is False:
         return (
             "failure",
             f"conflicts with the base branch ({mergeable_state}); rebase and push",
+        )
+    if mergeable is True and mergeable_state == STALE_BASE:
+        return (
+            "failure",
+            "the base has moved since this branch was measured; update the branch",
         )
     if mergeable is True:
         return ("success", f"merges cleanly into the base branch ({mergeable_state})")
