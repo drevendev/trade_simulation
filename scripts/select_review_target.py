@@ -17,6 +17,9 @@ eligible the model is not started at all.
 ## What makes a pull request ineligible
 
 * it is a draft, or closed;
+* it is machine-generated — a workflow produced it, mechanical gates decide it and
+  branch protection merges it, so a review run has nothing to add and merging one by
+  hand would restore the dependency that class removes;
 * a human owns it — `status:needs-decision` means the decision was handed to a
   person, and a review run cannot take it back;
 * the `mergeability` check is failing, so a control has already established that the
@@ -66,6 +69,8 @@ import os
 import re
 import subprocess
 import sys
+
+import machine_pr_guard
 
 # A verdict announces itself, and the two shapes below are the two ways it does.
 #
@@ -125,6 +130,17 @@ def eligible(pull, head_committed_at: str, comments):
     """Return (bool, reason). Pure: no network, no clock."""
     if pull.get("isDraft"):
         return False, "draft"
+
+    # Classified by head branch, the same way the guard that gates it does — one
+    # definition of the class, in machine_pr_guard.MACHINE_CLASSES, rather than a
+    # branch name repeated here to drift out of step with it.
+    machine = machine_pr_guard.classify(pull.get("headRefName") or "")
+    if machine is not None:
+        return False, (
+            "%s is machine-generated: %s produced it and branch protection merges it"
+            % (machine.branch, machine.producer)
+        )
+
     labels = {label["name"] for label in pull.get("labels", [])}
     if HUMAN_OWNED_LABEL in labels:
         return False, f"{HUMAN_OWNED_LABEL}: a person owns this decision"
@@ -174,7 +190,7 @@ def load_pulls(repo: str):
             "--limit",
             "100",
             "--json",
-            "number,createdAt,isDraft,labels,headRefOid,statusCheckRollup",
+            "number,createdAt,isDraft,labels,headRefName,headRefOid,statusCheckRollup",
         ]
     )
     return json.loads(raw)

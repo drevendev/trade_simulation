@@ -16,12 +16,20 @@ HEAD = "d8e28d3e2df15c93c1df3e41eceb640996024907"
 COMMITTED = "2026-09-05T05:35:00Z"
 
 
-def pull(number=84, created="2026-09-05T05:35:16Z", draft=False, labels=(), checks=()):
+def pull(
+    number=84,
+    created="2026-09-05T05:35:16Z",
+    draft=False,
+    labels=(),
+    checks=(),
+    head_ref="claude/issue-84-example",
+):
     return {
         "number": number,
         "createdAt": created,
         "isDraft": draft,
         "labels": [{"name": name} for name in labels],
+        "headRefName": head_ref,
         "headRefOid": HEAD,
         "statusCheckRollup": list(checks),
     }
@@ -166,6 +174,47 @@ class ChoiceTests(unittest.TestCase):
     def test_nothing_eligible_selects_nothing_rather_than_the_least_bad(self):
         candidates = [(84, "2026-09-05T05:35:16Z", False, "already judged")]
         self.assertIsNone(select.choose(candidates))
+
+
+
+
+class MachineGeneratedTests(unittest.TestCase):
+    """A workflow's own pull request is decided by checks, not by a reviewer."""
+
+    def test_the_mirror_branch_is_never_selected(self):
+        ok, reason = select.eligible(pull(head_ref="spec-mirror"), COMMITTED, [])
+        self.assertFalse(ok)
+        self.assertIn("machine-generated", reason)
+        self.assertIn("spec-sync.yml", reason)
+
+    def test_it_is_skipped_even_with_nothing_else_against_it(self):
+        # No verdict, no label, green checks — everything that would otherwise make
+        # it the obvious target. The class alone decides.
+        ok, _ = select.eligible(
+            pull(head_ref="spec-mirror", checks=[check("mergeability", "SUCCESS")]),
+            COMMITTED,
+            [],
+        )
+        self.assertFalse(ok)
+
+    def test_a_branch_that_merely_resembles_one_is_still_reviewed(self):
+        # Exact match only, or an agent could name a branch into the exemption.
+        for name in ("spec-mirror-2", "feature/spec-mirror", "claude/spec-mirror"):
+            ok, _ = select.eligible(pull(head_ref=name), COMMITTED, [])
+            self.assertTrue(ok, name)
+
+    def test_an_ordinary_branch_is_unaffected(self):
+        ok, reason = select.eligible(pull(), COMMITTED, [])
+        self.assertTrue(ok)
+        self.assertIn("no verdict", reason)
+
+    def test_the_oldest_eligible_is_still_chosen_when_a_mirror_is_older(self):
+        # The mirror is oldest, so a selector that only sorted would hand it over.
+        candidates = [
+            (101, "2026-09-05T07:00:00Z", False, "spec-mirror is machine-generated"),
+            (105, "2026-09-05T07:40:00Z", True, "no verdict on the current head"),
+        ]
+        self.assertEqual(select.choose(candidates), 105)
 
 
 if __name__ == "__main__":
