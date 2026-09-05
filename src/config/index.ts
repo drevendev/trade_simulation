@@ -65,3 +65,5 @@ export {
 } from "./shapeValidation";
 
 export { deriveKeyedRandom, type RngKey } from "./rng";
+
+export { baselineDefinitionPack } from "./fixtures/baselineDefinitionPack";
