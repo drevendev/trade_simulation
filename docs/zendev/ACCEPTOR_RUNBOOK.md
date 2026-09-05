@@ -223,6 +223,14 @@ Exactly one of the following.
 matters, and what would satisfy it. Set the Issue back to `status:in-progress`.
 Vague dissatisfaction is not a verdict.
 
+The third refusal on one pull request is the last. After your run, the forge counts the
+`REQUEST_CHANGES` verdicts on the pull request (`scripts/rework_limit.py`); at three it
+closes the pull request with the record of every verdict, deletes the loop's branch, and
+returns the Issue to `status:ready` with the same record. You do nothing differently —
+post the verdict as always — but know that a third refusal ends this branch, so it must
+name everything that is still wrong: the next AUTHOR starts from `master` with your
+verdicts as its work packet.
+
 Exactly one verdict per head revision, and it is the last thing the run does. Do not
 post a verdict and then continue checking; if a later check changes the answer, the
 first verdict is already standing and the AUTHOR — which has no memory and reads

@@ -105,6 +105,16 @@ identical fallback when consuming one, not just the formal-review path — other
 real change request goes unaddressed while later runs report green with nothing
 actually fixed.
 
+### The rework bound (items 1 and 2)
+
+Rework on one pull request is bounded at three `REQUEST_CHANGES` verdicts. At the third,
+the forge closes the pull request with the record of every verdict, deletes its branch,
+and returns the Issue to `status:ready` with the same record (`scripts/rework_limit.py`).
+A pull request closed this way is not yours to reopen, and its branch is gone: take the
+Issue through item 4, start from `master`, and read every verdict on the closed pull
+request before claiming — they are the work packet now. Its commits stay reachable from
+the closed pull request if you need them.
+
 ## 3. Claim before mutating
 
 Comment on the Issue with: role, intended scope, the branch name you will use, and
