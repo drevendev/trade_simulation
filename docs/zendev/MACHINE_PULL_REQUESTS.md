@@ -118,19 +118,27 @@ The procedure is:
 
 1. **Fix the cause and merge the fix**, as an ordinary policy change through the ordinary
    path. A guard defect is a defect like any other.
-2. **Close the refused pull request**, with a comment recording why it was refused, what
-   fixed it, and the evidence that the fix accepts its head — running the repaired guard
-   against `refs/pull/<n>/head` locally is enough and takes a moment.
-3. **Let the producer propose again.** The branch still holds the content, so the next
-   sync opens a fresh pull request whose checks resolve the current definition. Dispatch
-   the sync rather than waiting, if the pipeline is stalled behind it.
+2. **The producer closes the refused pull request itself.** Every sync runs
+   `scripts/stale_mirror_pr.py` before proposing: when the open proposal has carried a
+   *concluded* red check for longer than a bound (90 minutes by default), the sync closes
+   it with a comment saying so, deletes the branch, and proposes the current mirror afresh
+   in the same run, under the current workflow definitions. A pending or green proposal,
+   or a red one younger than the bound, is left alone.
+3. **Nothing else is needed for a cause that is already fixed.** Dispatch the sync rather
+   than waiting for the hour, if the pipeline is stalled behind it.
+
+A cause that is *not* fixed produces churn instead of a stall: the proposal is closed and
+re-proposed each time the bound elapses, and is red again each time. That churn is visible
+in the pull request list and harmless, and it is still a person's to end — by fixing the
+cause. The producer never touches the branch's content, never pushes to it, and never
+merges it; it only closes what it produced and produces again.
 
 Do not force-push the branch, do not push a commit to unstick it, and do not merge it by
 hand. Each of those defeats a different one of the four conditions above, and the guard is
 built to refuse the result.
 
 This was worked out twice from first principles, under a stalled specification pipeline
-both times — #109 and #112 — which is why it is written here.
+both times — #109 and #112 — which is why it was written here, and then automated.
 
 ## Cost, and why this exists
 

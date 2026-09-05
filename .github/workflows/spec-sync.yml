@@ -151,6 +151,17 @@ jobs:
             fi
           done
 
+      # A refused proposal releases nothing on its own: nobody may push to its branch,
+      # and re-running replays the definition that refused it. #109 and #112 each waited
+      # for a person for half an hour after their cause was already fixed on master. The
+      # producer now closes a proposal that has been red for a bound and proposes afresh
+      # below, under the current checks. A cause that is real stays a person's — see
+      # docs/zendev/MACHINE_PULL_REQUESTS.md, "Recovering one".
+      - name: Close a stale refused proposal
+        env:
+          GH_TOKEN: ${{ secrets.ZENDEV_PAT || github.token }}
+        run: python scripts/stale_mirror_pr.py --repo "${{ github.repository }}"
+
       - name: Propose the mirror as a pull request
         id: mirror_pr
         uses: peter-evans/create-pull-request@v8
