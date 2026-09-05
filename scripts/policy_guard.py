@@ -5,7 +5,8 @@ Two rules the ACCEPTOR role must not be the only thing enforcing:
 1. A change to automation policy (workflows, AGENTS.md, runbooks) may not be bundled
    with a change to product code. Policy is reviewed alone, so that widening what
    agents may do can never ride along inside a feature diff.
-2. No credential-shaped string enters the repository.
+2. No credential-shaped string, and no path into a local home directory, enters the
+   repository.
 
 Exit code 0 means the change is allowed to proceed, 1 means it is refused.
 The guard is intentionally simple: it is a negative control, not a linter.
@@ -49,6 +50,25 @@ SECRET_PATTERNS = (
     ("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
 )
 
+# A path into somebody's home directory names the machine a change was made on, and
+# usually the person. It is not a credential, so it gets its own class and its own
+# message, but it is refused for the same reason: it must not enter a public
+# repository, and until now noticing it was left entirely to the reviewing model.
+LOCAL_PATH_PATTERNS = (
+    (
+        "Windows home directory path",
+        re.compile(r"\b[A-Za-z]:[\\/](?:Users|home)[\\/][^\\/\s\"']+"),
+    ),
+    (
+        "POSIX home directory path",
+        re.compile(r"(?<![\w.-])/(?:home|Users)/[^/\s\"']+"),
+    ),
+)
+
+# The hosted runner's own working directory is a fixed, published path that names no
+# person and no private machine. Workflows may legitimately refer to it.
+LOCAL_PATH_EXEMPTIONS = (re.compile(r"^/home/runner(?:/|$)"),)
+
 
 def is_policy(path: str) -> bool:
     return path in POLICY_FILES or path.startswith(POLICY_PREFIXES)
@@ -77,6 +97,21 @@ def scan_secrets(added_lines):
     return findings
 
 
+def scan_local_paths(added_lines):
+    """Return (label, line) for every added line carrying a local machine path."""
+    findings = []
+    for line in added_lines:
+        for label, pattern in LOCAL_PATH_PATTERNS:
+            match = pattern.search(line)
+            if not match:
+                continue
+            if any(e.match(match.group(0)) for e in LOCAL_PATH_EXEMPTIONS):
+                continue
+            findings.append((label, line.strip()[:120]))
+            break
+    return findings
+
+
 def check(paths, added_lines):
     """Pure policy decision. Returns a list of human-readable violations."""
     violations = []
@@ -91,6 +126,9 @@ def check(paths, added_lines):
 
     for label, line in scan_secrets(added_lines):
         violations.append(f"possible {label} in an added line: {line}")
+
+    for label, line in scan_local_paths(added_lines):
+        violations.append(f"{label} in an added line: {line}")
 
     return violations
 
