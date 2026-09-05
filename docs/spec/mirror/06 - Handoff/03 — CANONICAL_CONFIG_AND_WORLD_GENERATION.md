@@ -567,14 +567,16 @@ buildInitialWorld(runOptions, configProfile, scenario, definitionPack) executes 
 13\. Instantiate explicitly scheduled starting events only; no stochastic event is realized during construction.  
 14\. Initialize empty shipments and PendingTransitions.  
 15\. Build immutable DefinitionRegistry and resolved SimulationConfig.  
-16\. Create WorldGenesisLedger, normalize all sparse maps and run every core/subsystem initialization invariant.  
+16\. Normalize all sparse maps and run the REQ-CONFIG-003 initialization invariants that do not require WorldGenesisLedger or opening-stock reconciliation.  
 17\. Compute the first derived diagnostic snapshot without mutating canonical economic stocks.
 
 No Phase 0–15 economic tick runs during initialization. Tick 0 is the post-genesis, pre-first-month state.
 
+REQ-CONFIG-004 is the immediate downstream genesis-accounting finalization. After REQ-CONFIG-003 constructs the deterministic tick-0 world, REQ-CONFIG-004 creates WorldGenesisLedger and runs opening-stock reconciliation against that constructed state before the M1 gate can close. Section 20, the genesis-reconciliation validation rule in section 21, initialization invariants 12 and 18 in section 24, and the genesis money/good reconciliation tests in section 25 belong to REQ-CONFIG-004. REQ-CONFIG-003 must not implement or claim them.
+
 20\. WorldGenesisLedger and opening accounting
 
-Starting assets are scenario endowments, not unexplained runtime creation. The constructor records them separately from normal EconomicTransaction history:
+Starting assets are scenario endowments, not unexplained runtime creation. Under REQ-CONFIG-004, genesis-accounting finalization records them separately from normal EconomicTransaction history:
 
 interface GenesisRecord {  
   type: 'MONEY\_ENDOWMENT' | 'GOOD\_ENDOWMENT' | 'POPULATION\_ENDOWMENT' | 'CAPITAL\_ENDOWMENT' | 'RESOURCE\_ENDOWMENT' | 'BOND\_OPENING\_POSITION';  
@@ -613,7 +615,7 @@ Configuration validation fails fast on:
 \- bond holdings not summing to principal;  
 \- cohort population \<= 0 after normalization;  
 \- inaccessible controlled Region with no graph path when scenario declares it economically connected;  
-\- initial money/goods stocks that fail genesis reconciliation.
+\- initial money/goods stocks that fail genesis reconciliation (REQ-CONFIG-004 post-construction accounting check, not REQ-CONFIG-003 step-1 validation).
 
 Warnings, not failures:  
 \- target-scale performance budget exceeded by scenario size;  
@@ -671,13 +673,13 @@ At minimum test these invariants on every scenario build:
 9\. Production capacity exactly matches installedCapital × recipe coefficient within tolerance.  
 10\. Production owner references exactly one Clan or State.  
 11\. Sum bond holdings equals bond principal.  
-12\. Each currency’s opening money diagnostic equals all opening balances under its money-supply contract.  
+12\. \[REQ-CONFIG-004\] Each currency’s opening money diagnostic equals all opening balances under its money-supply contract.  
 13\. FX pool reserves are included once, not duplicated in authority wallet and pool accounting.  
 14\. No initial shipment exists unless ScenarioDefinition explicitly declares a future extension that supports it; baseline starts with zero.  
 15\. PendingTransitions is empty at tick 0\.  
 16\. No stochastic EventInstance is realized during world generation.  
 17\. Resource discovery never alters deposit quantity.  
-18\. Good genesis reconciliation closes.  
+18\. \[REQ-CONFIG-004\] Good genesis reconciliation closes.  
 19\. Definition registry is immutable after construction.  
 20\. Resolved SimulationConfig is immutable after construction.  
 21\. Dynamic State sequence cannot collide with static IDs.  
@@ -703,8 +705,8 @@ Unit tests:
 \- rejects FOREIGN\_LEGAL\_TENDER with non-null policy authority or authority membership;  
 \- rejects duplicate State membership across authorities or membership mismatched to the Currency issuer;  
 \- foreign-legal-tender successor-compatible scenario validation;  
-\- genesis money reconciliation;  
-\- genesis good reconciliation;  
+\- \[REQ-CONFIG-004\] genesis money reconciliation;  
+\- \[REQ-CONFIG-004\] genesis good reconciliation;  
 \- keyed variation independence from array order;  
 \- canonical scenario/config/definition-pack hashes are declaration-order independent for schema-defined unordered keyed collections;  
 \- changing any material ScenarioDefinition field changes scenarioHash even if id/version is accidentally unchanged;  

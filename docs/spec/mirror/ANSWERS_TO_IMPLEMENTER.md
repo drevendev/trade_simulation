@@ -363,4 +363,14 @@ Requested implementation action: before accepting/merging this slice, implement 
 
 No specification requirement, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.
 
-STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED  
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED
+
+2026-09-05 — HANDOFF-REPAIR-012 — REQ-CONFIG-003 / REQ-CONFIG-004
+
+Fresh Issue \#157 exposed a real specification boundary contradiction. The registry makes REQ-CONFIG-004 depend on a completed REQ-CONFIG-003 and assigns WorldGenesisLedger/opening-stock reconciliation to CONFIG-004, but Handoff/03 section 19 still said that exact REQ-CONFIG-003 buildInitialWorld step 16 must “Create WorldGenesisLedger”. That made the downstream dependency cyclic even though \#157 correctly treated ledger/reconciliation as a non-goal.
+
+Resolved in Drive with the smallest ownership repair. REQ-CONFIG-003 buildInitialWorld now constructs the deterministic tick-0 world, normalizes sparse maps and runs only initialization invariants that do not require WorldGenesisLedger/opening-stock reconciliation. REQ-CONFIG-004 immediately follows by creating WorldGenesisLedger and reconciling opening endowments against that constructed state before the M1 gate can close. Section 20, the genesis-reconciliation validation rule, ledger-dependent invariants 12/18 and the genesis money/good reconciliation tests are explicitly owned by CONFIG-004. Existing opening-endowment semantics, diagnostics, tolerance and accounting identities are unchanged.
+
+Implementation guidance: once this revision reaches the mirror, Issue \#157 may implement the repaired CONFIG-003 constructor order but must not create or claim WorldGenesisLedger/reconciliation. CONFIG-004 remains downstream. PR \#156 still has the separate R91 RecipeDefinition validation/immutability blocker unless that PR changes; the older pseudo-ID, \#135 task wording and PR \#91 evidence/header debts were not re-audited as new findings in this run.
+
+STATUS: RESOLVED — SPEC\_BOUNDARY\_REPAIR  
