@@ -37,6 +37,19 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Stage the bookkeeper before the model runs, and run the staged copy
+      # afterwards. The model checks out other revisions during a run — the ACCEPTOR
+      # runbook tells it to, so it can verify a pull request independently — and every
+      # step after it would otherwise execute whatever `scripts/` the working tree was
+      # left holding. That is how one ledger record came back with no model field: the
+      # reviewed branch predated the field, so its copy of this script ran.
+      #
+      # The token in the recording step makes this more than a bookkeeping bug. A pull
+      # request that edited that script would have had its version executed by the
+      # reviewing workflow, with the ledger credential in the environment.
+      - name: Stage the usage recorder outside the working tree
+        run: cp scripts/record_usage.py "${RUNNER_TEMP}/record_usage.py"
+
       # Section 1 of the runbook is a computation, and running it in the model cost
       # two consecutive runs on one ineligible pull request while three others went
       # unreviewed. It happens here instead, and when nothing is eligible the model
@@ -114,7 +127,7 @@ jobs:
         env:
           TELEMETRY_TOKEN: ${{ secrets.TELEMETRY_PAT }}
         run: |
-          python scripts/record_usage.py \
+          python "${RUNNER_TEMP}/record_usage.py" \
             --execution-file "${{ steps.claude.outputs.execution_file }}" \
             --conclusion "${{ steps.select.outputs.target == 'none' && 'no_work' || steps.claude.outputs.conclusion }}" \
             --role acceptor \
