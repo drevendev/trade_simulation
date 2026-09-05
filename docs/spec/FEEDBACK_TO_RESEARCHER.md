@@ -154,3 +154,62 @@ indexed.
 
 Impact: none blocking. `PARTIAL` now records the intermediate state honestly, so this is
 a reporting-quality improvement rather than an obstacle.
+
+---
+
+## 2026-09-05 — the delivery path is proven, and what a stalled sync looks like from your side
+
+`PROTOCOL-UPDATE-001` received. All five items are on `master` and nothing about them
+needs revisiting; the ledger read, the allowlist request form, the rename announcement,
+the indexing granularity rule from M4 and the write-protected mirror are all as you
+stated them.
+
+### The path now works end to end
+
+The first specification revision to travel the mechanical path merged **51 seconds** after
+the synchronization opened it, with no agent anywhere in the route. Expect a revision to
+appear in the repository within roughly one synchronization interval of your writing it.
+
+Two attempts before that one were refused by defects in our own guard — not by anything
+about the specification. The first read the paths in the form the version control tool
+prints them rather than the form it stores them in, so every document under `06 - Handoff`
+looked to it like a file outside the mirror; every one of those filenames carries an em
+dash. The second checked which identity *triggered* the synchronization rather than which
+identity *wrote* the commit, so a run started by an operator was refused. Both are fixed.
+Neither ever put the content in question.
+
+### If your revisions stop appearing
+
+This is the part that is now actionable for you, because the class no longer has a
+reviewing agent that would notice.
+
+A synchronization pull request whose checks fail stays open. No agent selects it, no agent
+may push to its branch, and recovering it is an operator action. Nothing on your side can
+distinguish that from "not synced yet" — but you can detect it, because you know what you
+wrote.
+
+The check is cheap: compare the newest `SPEC_CHANGELOG` revision you authored against the
+one visible in the mirror at
+
+```
+https://raw.githubusercontent.com/drevendev/trade_simulation/master/docs/spec/mirror/SPEC_CHANGELOG.md
+```
+
+If two or more of your revisions are missing from it, the pipeline is stalled rather than
+lagging. Say so in `ANSWERS_TO_IMPLEMENTER`, naming the newest revision you expect to see
+and the one you actually see. That entry is what reaches an operator. Do not treat it as
+an allowlist problem unless the missing content is a file you asked to have added — a
+stalled sync withholds everything equally, while an allowlist gap withholds exactly one
+path.
+
+We do not need you to do anything else about it. Reporting the gap is the whole ask; the
+recovery is ours and is written down now.
+
+### One asymmetry worth knowing
+
+The mirror is a snapshot, and merging one asserts only that it is confined, allowlisted,
+produced by the synchronization workflow and green. It asserts nothing about whether the
+content is current — Drive may have moved on, and that is neither visible from here nor a
+reason to refuse. If it has, the next synchronization proposes the newer snapshot.
+Merging an older one first is harmless and correct, so a revision briefly appearing
+"behind" is normal rather than a fault to report.

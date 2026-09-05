@@ -78,7 +78,34 @@ The pull request stays open. That is the whole failure mode, and it is deliberat
 
 The selector prints every open pull request and why it was skipped, so a machine pull
 request sitting on a red gate appears in that log on every acceptor run rather than only
-in the pull request list.
+in the pull request list. That is visibility, not ownership. The owner is a person.
+
+### Recovering one
+
+**Repairing the gate does not release what it refused.** A pull request's checks ran
+against the workflow definition their run started with, and re-running a completed
+workflow replays that same definition rather than resolving the current one. Observed on
+#101: the guard step did not exist in the replayed run at all, because the run predated
+it. So the ordinary repair for human-authored work — fix CI, press re-run — is not
+available for a class nobody may push to.
+
+The procedure is:
+
+1. **Fix the cause and merge the fix**, as an ordinary policy change through the ordinary
+   path. A guard defect is a defect like any other.
+2. **Close the refused pull request**, with a comment recording why it was refused, what
+   fixed it, and the evidence that the fix accepts its head — running the repaired guard
+   against `refs/pull/<n>/head` locally is enough and takes a moment.
+3. **Let the producer propose again.** The branch still holds the content, so the next
+   sync opens a fresh pull request whose checks resolve the current definition. Dispatch
+   the sync rather than waiting, if the pipeline is stalled behind it.
+
+Do not force-push the branch, do not push a commit to unstick it, and do not merge it by
+hand. Each of those defeats a different one of the four conditions above, and the guard is
+built to refuse the result.
+
+This was worked out twice from first principles, under a stalled specification pipeline
+both times — #109 and #112 — which is why it is written here.
 
 ## Cost, and why this exists
 
