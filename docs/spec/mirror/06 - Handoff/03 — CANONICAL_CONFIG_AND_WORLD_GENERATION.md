@@ -579,7 +579,7 @@ REQ-CONFIG-004 is the immediate downstream genesis-accounting finalization. Afte
 Starting assets are scenario endowments, not unexplained runtime creation. Under REQ-CONFIG-004, genesis-accounting finalization records them separately from normal EconomicTransaction history:
 
 interface GenesisRecord {  
-  type: 'MONEY\_ENDOWMENT' | 'GOOD\_ENDOWMENT' | 'POPULATION\_ENDOWMENT' | 'CAPITAL\_ENDOWMENT' | 'RESOURCE\_ENDOWMENT' | 'BOND\_OPENING\_POSITION';  
+  type: 'MONEY\_ENDOWMENT' | 'GOOD\_ENDOWMENT' | 'POPULATION\_ENDOWMENT' | 'CAPITAL\_ENDOWMENT' | 'RESOURCE\_ENDOWMENT' | 'BOND\_OPENING\_POSITION' | 'FX\_POOL\_OPENING';  
   owner?: ActorRef;  
   regionId?: RegionId;  
   currencyId?: CurrencyId;  
@@ -588,7 +588,7 @@ interface GenesisRecord {
   sourceSeedKey: string;  
 }
 
-Genesis records explain opening balance-sheet stocks but do not pretend that a historical counterparty transaction occurred before tick 0\. For every currency, sum actor/pool opening balances must exactly equal opening transaction money reported by the monetary diagnostic. For every good, opening inventories \+ capital-converted goods already represented as capital \+ shipments(0) must match genesis goods after documented conversion. Resource deposits are natural endowments and are not market inventory.
+FX\_POOL\_OPENING records one explicit FxPoolSeed cash side: currencyId identifies the side currency, amount is that side's opening cash, and sourceSeedKey identifies the owning FxPoolSeed pair. It has no ActorRef because pool reserves are distinct from State/Clan wallets and must be counted exactly once. Genesis records explain opening balance-sheet stocks but do not pretend that a historical counterparty transaction occurred before tick 0\. For every currency, sum actor/pool opening balances must exactly equal opening transaction money reported by the monetary diagnostic. For every good, opening inventories \+ capital-converted goods already represented as capital \+ shipments(0) must match genesis goods after documented conversion. Resource deposits are natural endowments and are not market inventory.
 
 ## 21\. Validation rules
 
