@@ -98,6 +98,15 @@ class MirrorBranchTests(unittest.TestCase):
         violations = self.check([MIRROR + "SPEC_INDEX.md"], committer="Dreven")
         self.assertEqual(len(violations), 1)
         self.assertIn("only .github/workflows/spec-sync.yml may write", violations[0])
+        self.assertIn("committed by", violations[0])
+
+    def test_an_operator_dispatched_sync_is_permitted(self):
+        # #112 exactly. peter-evans/create-pull-request defaults the commit author to
+        # whoever triggered the run and the committer to the bot, so a sync a person
+        # dispatches by hand — a supported path, which is why spec-sync.yml keeps
+        # workflow_dispatch — is authored by that person and committed by the workflow.
+        # The gate reads the committer, so this passes.
+        self.assertEqual(self.check([MIRROR + "SPEC_CHANGELOG.md"], committer=SYNC_BOT), [])
 
     def test_an_unreadable_allowlist_is_refused_rather_than_skipped(self):
         violations = self.check([MIRROR + "SPEC_INDEX.md"], allowlist=None)

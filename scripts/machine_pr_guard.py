@@ -9,7 +9,9 @@ This guard is that predicate. It decides two things and nothing else:
 
 1. A pull request whose head branch belongs to a machine class must stay inside the
    paths that class owns, must satisfy that class's own allowlist, and its head commit
-   must be authored by the workflow identity that produces it.
+   must be *committed* by the workflow identity that produces it. The author of that
+   commit records who triggered the run and may be a person; the committer records what
+   wrote it, and only that answers the question this guard is asking.
 2. Nobody else may write those paths. An agent branch — or a person — editing
    ``docs/spec/mirror/**`` by hand is refused, because the mirror's whole value is
    that it is a verifiable copy of Drive rather than a place where anything can be
@@ -42,8 +44,11 @@ class MachineClass:
     # Path prefixes this class owns. Nothing else may appear in its diff, and no other
     # branch may touch them.
     roots: tuple[str, ...]
-    # The commit identity the producing workflow writes under. A commit under any
-    # other name on this branch means something other than the workflow wrote it.
+    # The commit identity the producing workflow writes under — the *committer*, which
+    # is what wrote the bytes. Not the author: `peter-evans/create-pull-request`
+    # defaults the author to whoever triggered the run, so an operator dispatching the
+    # sync by hand legitimately appears there. A commit committed under any other name
+    # on this branch means something other than the workflow wrote it.
     committer: str
     # An rclone filter file deciding what may exist under the roots, or None when the
     # roots themselves are the whole rule.
@@ -142,9 +147,9 @@ def check(head_ref: str, paths, allowlist_text, tip_committer):
 
     if tip_committer is not None and tip_committer != cls.committer:
         violations.append(
-            "the head commit of %s was authored by '%s', not by '%s'; only %s may "
-            "write this branch"
-            % (cls.branch, tip_committer, cls.committer, cls.producer)
+            "the head commit of %s was committed by '%s', not by '%s'; only %s may "
+            "write this branch. The commit's author may be whoever triggered the sync; "
+            "its committer may not" % (cls.branch, tip_committer, cls.committer, cls.producer)
         )
 
     return violations
@@ -176,10 +181,16 @@ def changed_paths(base: str):
     return [path for path in out.split("\x00") if path]
 
 
-def commit_author(sha: str):
-    """The author name of one commit, or None when it is not in this clone."""
+def commit_committer(sha: str):
+    """The committer name of one commit, or None when it is not in this clone.
+
+    `%cn`, not `%an`. A sync dispatched by an operator is authored by that operator and
+    committed by the workflow identity; refusing it on the author would break a
+    documented operating path — `spec-sync.yml` keeps `workflow_dispatch` precisely so
+    a person can run it — while proving nothing about who wrote the bytes.
+    """
     try:
-        return _git(["log", "-1", "--format=%an", sha]).strip()
+        return _git(["log", "-1", "--format=%cn", sha]).strip()
     except subprocess.CalledProcessError:
         return None
 
@@ -201,7 +212,7 @@ def main() -> int:
     parser.add_argument(
         "--head-sha",
         default=None,
-        help="head commit; its author is checked against the producing workflow",
+        help="head commit; its committer is checked against the producing workflow",
     )
     args = parser.parse_args()
 
@@ -210,11 +221,11 @@ def main() -> int:
 
     tip = None
     if cls is not None and args.head_sha:
-        tip = commit_author(args.head_sha)
+        tip = commit_committer(args.head_sha)
         if tip is None:
             print(
                 "::error::machine-pr-guard: the head revision %s is not present in "
-                "this clone, so its author is unavailable; refusing rather than "
+                "this clone, so its committer is unavailable; refusing rather than "
                 "assuming it" % args.head_sha
             )
             return 1

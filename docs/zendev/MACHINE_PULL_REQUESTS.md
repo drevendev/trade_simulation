@@ -15,7 +15,10 @@ check on every pull request — not by a reader.
 1. its head branch is exactly a branch named in `MACHINE_CLASSES` in that script;
 2. every changed path is inside the roots that class owns;
 3. every changed path satisfies that class's own allowlist, where it has one;
-4. the head commit is authored by the identity the producing workflow writes under.
+4. the head commit is **committed** by the identity the producing workflow writes
+   under. Its *author* is whoever triggered the sync and may be a person: dispatching
+   `spec-sync.yml` by hand is a supported operating path, and the author field is the
+   record of that. The committer is what wrote the bytes, and that is the question.
 
 The classes today:
 
