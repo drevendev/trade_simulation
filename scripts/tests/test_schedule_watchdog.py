@@ -181,6 +181,48 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(api.call_count, 1)
 
 
+class RepositoryNameTests(unittest.TestCase):
+    """The name is data from the run's context, never a constant the dispatcher enforces.
+
+    On 2026-09-05 a rename in case only — trade_simulation to Trade_Simulation — made the
+    strict comparison that used to live in is_enabled() refuse every tick until the name
+    was put back (#171).
+    """
+
+    def test_actions_takes_the_repository_from_the_environment_whatever_its_spelling(self):
+        for spelling in ("drevendev/trade_simulation", "drevendev/Trade_Simulation", "drevendev/TradeSim"):
+            with self.subTest(spelling=spelling), patch.dict(
+                os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": spelling}, clear=True
+            ):
+                self.assertEqual(watchdog.resolve_repository(None), spelling)
+
+    def test_actions_refuses_to_guess_when_the_environment_is_silent(self):
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}, clear=True), self.assertRaises(ValueError):
+            watchdog.resolve_repository(None)
+
+    def test_actions_refuses_an_argument_for_another_repository_but_not_another_spelling(self):
+        env = {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "drevendev/Trade_Simulation"}
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(watchdog.resolve_repository("drevendev/trade_simulation"), "drevendev/Trade_Simulation")
+            with self.assertRaises(ValueError):
+                watchdog.resolve_repository("someone/elsewhere")
+
+    def test_local_runs_use_the_argument_or_the_documented_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(watchdog.resolve_repository("drevendev/TradeSim"), "drevendev/TradeSim")
+            self.assertEqual(watchdog.resolve_repository(None), watchdog.DEFAULT_REPOSITORY)
+
+    def test_is_enabled_reads_the_switch_under_any_spelling_and_still_insists_on_master(self):
+        env = {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "drevendev/Trade_Simulation",
+               "GITHUB_REF": "refs/heads/master", "ZENDEV_ENABLED": "true"}
+        with patch.dict(os.environ, env, clear=True), patch.object(watchdog, "api") as api:
+            self.assertTrue(watchdog.is_enabled())
+            os.environ["GITHUB_REF"] = "refs/heads/untrusted"
+            with self.assertRaises(ValueError):
+                watchdog.is_enabled()
+            api.assert_not_called()
+
+
 class EnvironmentTests(unittest.TestCase):
     def test_actions_uses_trusted_vars_not_variables_api(self):
         env = {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": watchdog.REPOSITORY,
