@@ -25,6 +25,11 @@ eligible the model is not started at all.
 * the `mergeability` check is failing, so a control has already established that the
   branch cannot be accepted whatever its contents; the next move belongs to the
   author, and the failing check is already on the author's own ladder;
+* nothing has run on its head at all. An unmeasured revision is not a clean one, and
+  the runbook forbids accepting one anyway, so a run spent on it can only rediscover
+  by hand what a check is about to report. This is not the same as a head that has
+  other checks but no `mergeability`: that one is old enough to predate the check and
+  stays reviewable;
 * its current head already carries a verdict, and no correction has been posted since.
 
 Eligibility means a review is *owed and possible*, not merely owed. Withhold one only
@@ -126,6 +131,17 @@ def conflicts_with_base(pull) -> bool:
     return False
 
 
+def is_unmeasured(pull) -> bool:
+    """Whether nothing at all has reported on this head yet.
+
+    A head seconds old has no checks because none have started. A head that conflicts
+    with its base may have none for much longer: GitHub runs pull-request workflows
+    against the merge ref, and a conflicting pull request has no merge ref, so nothing
+    fires. Either way the revision is unmeasured, which is not the same as clean.
+    """
+    return not (pull.get("statusCheckRollup") or [])
+
+
 def eligible(pull, head_committed_at: str, comments):
     """Return (bool, reason). Pure: no network, no clock."""
     if pull.get("isDraft"):
@@ -147,6 +163,9 @@ def eligible(pull, head_committed_at: str, comments):
 
     if conflicts_with_base(pull):
         return False, f"{MERGEABILITY_CHECK} is failing: the author must rebase first"
+
+    if is_unmeasured(pull):
+        return False, "nothing has reported on this head yet: unmeasured is not clean"
 
     head_sha = pull["headRefOid"]
     verdicts = [c for c in comments if judges_head(c, head_sha, head_committed_at)]
