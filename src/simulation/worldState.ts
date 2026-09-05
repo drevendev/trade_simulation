@@ -21,6 +21,7 @@ import type {
   TransportLinkId,
 } from "../domain/id";
 import { buildWorldRegistries } from "../domain/worldRegistries";
+import { createEmptyWorldGenesisLedger, type WorldGenesisLedger } from "../domain/genesisLedger";
 import type {
   ClanSeed,
   CohortSeed,
@@ -48,6 +49,7 @@ export interface WorldState {
   readonly seed: number;
   readonly definitionRegistry: DefinitionRegistry;
   readonly simulationConfig: SimulationConfig;
+  readonly worldGenesisLedger: WorldGenesisLedger;
   readonly regions: ReadonlyMap<RegionId, RegionState>;
   readonly states: ReadonlyMap<StateId, StateState>;
   readonly currencies: ReadonlyMap<CurrencyId, CurrencyState>;
@@ -223,6 +225,9 @@ export function buildInitialWorld(
   const definitionRegistry = buildDefinitionRegistry(definitionPack);
   const frozenConfig = Object.freeze(resolvedConfig);
 
+  // Prepare WorldGenesisLedger for opening-stock recording (REQ-CONFIG-004)
+  let worldGenesisLedger = createEmptyWorldGenesisLedger();
+
   // Step 16: Normalize sparse maps and run initialization invariants
   validateInitializationInvariants(
     regionRegistry,
@@ -245,6 +250,7 @@ export function buildInitialWorld(
     seed,
     definitionRegistry,
     simulationConfig: frozenConfig,
+    worldGenesisLedger,
     regions: regionRegistry,
     states: stateRegistry,
     currencies: currencyRegistry,
