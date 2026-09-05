@@ -51,6 +51,8 @@ jobs:
         run: |
           cp scripts/record_usage.py "${RUNNER_TEMP}/record_usage.py"
           cp scripts/subscription_usage.py "${RUNNER_TEMP}/subscription_usage.py"
+          # The whole control plane too: the rework bound below imports its neighbours.
+          cp -r scripts "${RUNNER_TEMP}/control-plane"
 
       # Section 1 of the runbook is a computation, and running it in the model cost
       # two consecutive runs on one ineligible pull request while three others went
@@ -139,6 +141,22 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: python "${RUNNER_TEMP}/subscription_usage.py" --out "${RUNNER_TEMP}/usage-after.json"
+
+      # The third refusal is the last. Rework on one pull request is bounded (#141):
+      # once the reviewed pull request carries three REQUEST_CHANGES verdicts, the forge
+      # closes it with the record of every verdict, deletes the loop's branch and returns
+      # the Issue to status:ready, so the next AUTHOR starts from master with the history
+      # instead of a fourth round on a branch that has failed review three times. Runs
+      # from the staged copy, for the same reason the recorder does; with the workflow
+      # token, which may close, comment, label and delete a branch, and nothing more.
+      - name: Enforce the rework bound on the reviewed pull request
+        if: always() && steps.select.outputs.target != 'none'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python "${RUNNER_TEMP}/control-plane/rework_limit.py" \
+            --repo "${{ github.repository }}" \
+            --pull "${{ steps.select.outputs.target }}"
 
       # Telemetry only. See the note in zendev-author.yml: this never fails the run.
       - name: Record what this run consumed
