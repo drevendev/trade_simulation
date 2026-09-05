@@ -177,14 +177,31 @@ jobs:
       # A failure here is a warning, never a failed sync. The mirror is already proposed
       # at this point; being unable to arm auto-merge means it waits for a person, which
       # is the previous behaviour and not an emergency.
+      #
+      # Not conditioned on this run having produced a pull request. The action reports
+      # a number only when it creates or updates one, so a run that finds Drive
+      # unchanged would skip arming — and a pull request whose first arming failed
+      # would then never be armed again. Nothing else can recover it: the acceptor no
+      # longer selects a mirror, and no agent may push to this branch, so it would sit
+      # open with nobody responsible for it. That is exactly how #101 came to need an
+      # operator.
       - name: Arm auto-merge on the mirror
-        if: steps.mirror_pr.outputs.pull-request-number != ''
         env:
           GH_TOKEN: ${{ secrets.ZENDEV_PAT || github.token }}
+          REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.mirror_pr.outputs.pull-request-number }}
         run: |
           set -uo pipefail
-          if gh pr merge "${PR_NUMBER}" --auto --squash --delete-branch; then
+          if [ -z "${PR_NUMBER}" ]; then
+            # Restricted to this branch by name, so this can never reach for anything
+            # but the mirror.
+            PR_NUMBER=$(gh pr list --repo "${REPO}" --head spec-mirror --state open               --json number --jq '.[0].number // empty')
+          fi
+          if [ -z "${PR_NUMBER}" ]; then
+            echo "no open mirror pull request; nothing to arm"
+            exit 0
+          fi
+          if gh pr merge "${PR_NUMBER}" --repo "${REPO}" --auto --squash --delete-branch; then
             echo "auto-merge armed on #${PR_NUMBER}"
           else
             echo "::warning::could not arm auto-merge on #${PR_NUMBER}. Check that the"
