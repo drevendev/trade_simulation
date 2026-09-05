@@ -61,6 +61,19 @@ REQUIREMENT = re.compile(r"\bREQ-[A-Z]+-\d{3}\b")
 # fragment, a colour code or a markdown heading.
 REFERENCE = re.compile(r"(?<![\w/#])#(\d{1,6})\b")
 
+# The shapes a run ends on when it delivered: a handoff or a verdict heading, or a pull
+# request it names. Checked first, on the final message only, because a run that opened
+# a pull request has completed whatever else its transcript discussed — the first live
+# record under this classifier called an author run "blocked" for mentioning an Issue
+# that was blocked, while the run itself ended in a handoff for #163.
+COMPLETED = re.compile(
+    r"^\s*#{1,6}\s*(?:AUTHOR\s+handoff|ACCEPTOR\s+verdict|ACCEPT\b|REQUEST_CHANGES\b)"
+    r"|\bpull request\b[^\n]{0,60}#\d+"
+    r"|\bPR:?\s*#\d+"
+    r"|\bopened (?:a )?(?:new )?pull request",
+    re.I | re.M,
+)
+
 # The shapes a run uses when it stops on a gate: the label it sets, the phrase the
 # runbook prescribes, or a heading that names a blocker. Prose that merely mentions the
 # word — "no known blockers" in a claim comment — is not a heading and does not match.
@@ -174,17 +187,46 @@ def transcript(messages) -> str:
     return "\n".join(parts)
 
 
+def final_text(messages) -> str:
+    """What the run said last: the result text, or failing that the last assistant text.
+
+    The outcome is read from this, not from the whole transcript. A run talks about many
+    things on the way — Issues that are blocked, work it decided not to take — and only
+    its last word says how it ended.
+    """
+    last = ""
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        if message.get("type") == "result" and isinstance(message.get("result"), str):
+            return message["result"]
+        content = (message.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        texts = [
+            block["text"]
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
+        ]
+        if texts:
+            last = "\n".join(texts)
+    return last
+
+
 def classify_outcome(conclusion, text):
     """(outcome, source). Pure.
 
     The workflow's own conclusion is trusted where it is specific: `no_work` means the
     model was never started, and anything that is not success or unknown is a failure.
-    Everything else is read from the transcript, and the source says so.
+    Everything else is read from the run's final message, and the source says so. A
+    handoff or a verdict there means completed, whatever else the message mentions.
     """
     if conclusion == "no_work":
         return "no_work", "workflow"
     if conclusion not in (None, "", "unknown", "success"):
         return "failed", "workflow"
+    if COMPLETED.search(text or ""):
+        return "completed", "heuristic"
     if BLOCKED.search(text or ""):
         return "blocked", "heuristic"
     if NO_WORK.search(text or ""):
@@ -301,7 +343,8 @@ def main() -> int:
         if model is None:
             warn("the execution file names no model; recording null")
 
-    outcome, outcome_source = classify_outcome(args.conclusion, text)
+    # The outcome is read from the run's last word; mentions and rework from everything.
+    outcome, outcome_source = classify_outcome(args.conclusion, final_text(messages))
     before = load_reading(args.usage_before)
     after = load_reading(args.usage_after)
     if before is None or after is None:

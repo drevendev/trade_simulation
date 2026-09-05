@@ -150,6 +150,45 @@ class OutcomeTests(unittest.TestCase):
         text = "**AUTHOR claim**\n\nKnown blockers: none. Proceeding."
         self.assertEqual(rec.classify_outcome("success", text), ("completed", "heuristic"))
 
+    def test_a_handoff_is_completed_whatever_else_it_mentions(self):
+        # Run 33986212612 opened #163 and was recorded as blocked, because its text
+        # also discussed Issue #138, which is blocked. The handoff decides.
+        text = (
+            "## AUTHOR handoff\n\nBranch: claude/issue-157-build-initial-world\n"
+            "Pull request: #163\n\n## Blocked elsewhere\n\nIssue #138 remains status:blocked."
+        )
+        self.assertEqual(rec.classify_outcome("success", text), ("completed", "heuristic"))
+
+    def test_a_verdict_is_completed_for_the_acceptor(self):
+        for text in ("## ACCEPTOR verdict: REQUEST_CHANGES\n\nHead abc", "## ACCEPT\n\nAll six hold."):
+            with self.subTest(text=text):
+                self.assertEqual(rec.classify_outcome("success", text), ("completed", "heuristic"))
+
+    def test_a_blocker_heading_without_a_handoff_is_still_blocked(self):
+        text = "## AUTHOR blocker\n\nGate: the registry names no READY row. status:blocked set."
+        self.assertEqual(rec.classify_outcome("success", text), ("blocked", "heuristic"))
+
+
+class FinalTextTests(unittest.TestCase):
+    def test_the_result_text_is_the_final_word(self):
+        messages = [
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Issue #138 is blocked, skipping it"}]}},
+            {"type": "result", "result": "## AUTHOR handoff\n\nPull request: #163"},
+        ]
+        self.assertEqual(rec.final_text(messages), "## AUTHOR handoff\n\nPull request: #163")
+
+    def test_without_a_result_the_last_assistant_text_stands_in(self):
+        messages = [
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "first"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "last"}]}},
+        ]
+        self.assertEqual(rec.final_text(messages), "last")
+
+    def test_nothing_said_is_an_empty_final_text(self):
+        self.assertEqual(rec.final_text([{"type": "system"}, None]), "")
+        self.assertEqual(rec.final_text(None), "")
+
     def test_a_run_that_found_nothing_is_no_work(self):
         text = "Evaluated items 1-5: no eligible item. Nothing to do."
         self.assertEqual(rec.classify_outcome("success", text), ("no_work", "heuristic"))
