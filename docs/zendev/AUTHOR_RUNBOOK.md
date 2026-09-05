@@ -34,7 +34,11 @@ Section 7 says how to write your row.
 Take the first applicable item and stop searching:
 
 1. an open pull request of yours with **changes requested** — address the feedback;
-2. an open pull request of yours with a **failing required check** — fix it;
+2. an open pull request of yours with a **failing required check** — fix it. One
+   exception: a `mergeability` failure that reads *the base has moved* is not yours.
+   The forge merges `master` into loop branches itself on the next push to `master`
+   and the branch is re-measured; a genuine conflict (*conflicts with the base branch*)
+   still is yours;
 3. an Issue labelled `status:blocked` whose blocking condition is now demonstrably
    resolved — unblock it;
 4. an Issue labelled `status:ready`, highest `priority:*` first, respecting

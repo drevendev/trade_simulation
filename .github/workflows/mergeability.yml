@@ -69,3 +69,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python scripts/mergeability.py --repo "${{ github.repository }}" --all-open
+
+      # `behind` is a red required check (#127), and its repair is a merge of the base
+      # into the branch — a computation. Until now that computation cost a model run:
+      # the AUTHOR's ladder picks up its own failing check and does the merge by hand.
+      # The forge does it here instead, for the loop's own branches only; a conflict
+      # (`dirty`) is still the author's.
+      #
+      # From `master` only. On a push to any other branch this workflow's definition
+      # and its scripts come from that branch, unreviewed, and this step carries a
+      # credential that can push. `master` is the reviewed definition — and `master`
+      # moving is exactly when branches fall behind.
+      #
+      # The loop's token, not `github.token`: a push made with the workflow token starts
+      # no workflows, so the updated branch would sit with the stale checks it had
+      # before, measured on a revision that no longer exists.
+      - name: Update loop branches that are merely behind
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ secrets.ZENDEV_PAT }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::warning::ZENDEV_PAT is not available; branches that are behind stay with the author"
+            exit 0
+          fi
+          python scripts/update_branches.py --repo "${{ github.repository }}" --all-open
