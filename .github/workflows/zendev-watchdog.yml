@@ -23,7 +23,11 @@ concurrency:
 
 jobs:
   watchdog:
-    if: github.repository == 'drevendev/trade_simulation' && github.ref == 'refs/heads/master' && vars.ZENDEV_ENABLED == 'true'
+    # No repository name here, on purpose: a rename must not stop the loop, and on
+    # 2026-09-05 a rename in case only did, for as long as the spelling differed (#171).
+    # ZENDEV_ENABLED is the fork guard — a fork receives no repository variables — and
+    # the dispatcher acts on the repository it runs in, whatever it is called today.
+    if: github.ref == 'refs/heads/master' && vars.ZENDEV_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -9,8 +9,9 @@ timeouts and acceptance limits. Their former independent cron entries are remove
 so a delayed native event cannot duplicate a recovery dispatch.
 
 The fixed targets are `spec-sync.yml`, `zendev-author.yml` and
-`zendev-acceptor.yml`, on `drevendev/trade_simulation`, branch `master` only.
-For each target the dispatcher:
+`zendev-acceptor.yml`, in the repository the watchdog runs in, branch `master` only.
+The repository is read from the run, never compared to a name — see
+[Renaming the repository](#renaming-the-repository). For each target the dispatcher:
 
 1. Respects `ZENDEV_ENABLED` and refuses to re-enable a disabled workflow.
 2. Checks all queued, running, pending, requested and waiting runs, including old
@@ -155,3 +156,42 @@ Rollback is a reviewed revert restoring the three former cron entries and removi
 the watchdog together. Do not run both automatic scheduling schemes concurrently.
 An independent external timer is the next option if GitHub-only gaps persist; no
 external service is installed or configured by this change.
+
+## Renaming the repository
+
+The repository's name is not load-bearing anywhere in the loop. Workflows read it from
+`github.repository`; the dispatcher reads `GITHUB_REPOSITORY`; every script takes
+`--repo` from the workflow. A test refuses a workflow condition or a script that compares
+the name to a literal. This is the lesson of 2026-09-05, when a rename in case only —
+`trade_simulation` to `Trade_Simulation` — made a strict comparison in the dispatcher
+refuse every tick for as long as the spelling differed, while GitHub itself routed both
+spellings to the same repository.
+
+A rename therefore does not stop the loop, but it still touches things outside the
+loop's control, and they are listed here so the next rename is a checklist rather than
+a discovery:
+
+- **GitHub Pages moves and does not redirect.** The site lives at
+  `https://<owner>.github.io/<repository>/`; the old address answers 404 the moment the
+  rename lands, even for a change of case. Links in `README.md` and `docs/spec/` that
+  name the site must be edited.
+- **Raw links held by the researcher.** The return channel is read over
+  `raw.githubusercontent.com/<owner>/<repository>/master/docs/spec/...` from the
+  researcher's own manifest. GitHub redirects web, git and API requests for a renamed
+  repository; whether raw requests follow is not something to rely on. Tell the
+  researcher through `FEEDBACK_TO_RESEARCHER.md` before renaming, with the new links.
+- **The external timer.** Its `REPO` constant names this repository, and a
+  `workflow_dispatch` is a POST: an HTTP client that turns a redirected POST into a GET
+  pokes nothing. Update the constant when renaming.
+- **Local clones and worktrees.** Git follows the redirect; updating the remote is
+  hygiene, not repair.
+- **Text.** Mentions in this document's examples, the ADRs and the telemetry
+  repository's README are descriptions, not dependencies.
+
+Unaffected: the three GitHub App installations (bound to the repository's id), secrets,
+variables, branch protection, Issue and pull request numbers, run history, and the
+`run_url` fields in the ledger, which redirect.
+
+Order for a deliberate rename: rename; update the timer's constant; append the new links
+to the researcher's channel; edit the Pages links; watch one watchdog tick and one mirror
+sync. Nothing in this repository has to change first.

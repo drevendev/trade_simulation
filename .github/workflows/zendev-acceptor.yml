@@ -181,7 +181,7 @@ jobs:
             }
           prompt: |
             You are the ACCEPTOR role of an unattended ZenDev run on
-            drevendev/trade_simulation. You have no memory of previous runs.
+            ${{ github.repository }}. You have no memory of previous runs.
 
             Read AGENTS.md and then docs/zendev/ACCEPTOR_RUNBOOK.md, and follow the
             runbook exactly, in order, from section 1 to the end.

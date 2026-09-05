@@ -1,7 +1,8 @@
 """Recover missed ZenDev dispatches; dry-run unless --dispatch is explicit.
 
-Only the fixed repository, master branch and three existing workflows are allowed.
-No model runs here. A successful dispatch is not a successful unit of product work.
+Only the repository this runs in, its master branch and three existing workflows are
+allowed. No model runs here. A successful dispatch is not a successful unit of product
+work.
 """
 
 from __future__ import annotations
@@ -14,7 +15,14 @@ from pathlib import Path
 import subprocess
 from urllib.parse import urlencode
 
-REPOSITORY = "drevendev/trade_simulation"
+# The repository this dispatcher acts on. Inside Actions it is the one the workflow
+# runs in, read from the environment, so renaming the repository changes nothing here.
+# A literal once did the opposite: on 2026-09-05 a rename in case only turned every
+# tick into a refusal for as long as the spelling differed (#171). Outside Actions the
+# caller names it with --repo; the default is a developer convenience for this project,
+# and nothing else depends on it.
+DEFAULT_REPOSITORY = "drevendev/trade_simulation"
+REPOSITORY = os.environ.get("GITHUB_REPOSITORY") or DEFAULT_REPOSITORY
 BRANCH = "master"
 # Model-running targets alternate, at most one dispatched per pass. spec-sync runs no
 # model and stays outside that rotation, dispatched every pass like before.
@@ -178,13 +186,33 @@ def resolve_interval() -> timedelta:
     return candidate
 
 
+def resolve_repository(explicit: str | None) -> str:
+    """The repository to act on: the run's own inside Actions, the caller's outside.
+
+    Inside Actions the environment is authoritative, and an --repo that disagrees with
+    it is refused: a dispatcher must never be pointed at a repository it does not run
+    in. Names compare case-insensitively, because GitHub routes them that way and
+    reports whichever spelling the repository currently carries.
+    """
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        actual = os.environ.get("GITHUB_REPOSITORY", "")
+        if not actual:
+            raise ValueError("GITHUB_REPOSITORY is not set; refusing to guess the repository")
+        if explicit and explicit.lower() != actual.lower():
+            raise ValueError("--repo names a repository other than the one this workflow runs in")
+        return actual
+    return explicit or DEFAULT_REPOSITORY
+
+
 def is_enabled() -> bool:
     if os.environ.get("GITHUB_ACTIONS") == "true":
         # GITHUB_TOKEN does not grant repository Variables API access. The
         # workflow passes the trusted vars context instead; do not add a PAT.
-        if (os.environ.get("GITHUB_REPOSITORY") != REPOSITORY
-                or os.environ.get("GITHUB_REF") != f"refs/heads/{BRANCH}"):
-            raise ValueError("Dispatcher can only execute on the canonical master")
+        #
+        # Only the branch is checked. The repository is compared to nothing: this
+        # dispatcher acts on the repository it runs in, whatever that is called today.
+        if os.environ.get("GITHUB_REF") != f"refs/heads/{BRANCH}":
+            raise ValueError("Dispatcher can only execute on master")
         return os.environ.get("ZENDEV_ENABLED") == "true"
     return api(f"repos/{REPOSITORY}/actions/variables/ZENDEV_ENABLED")["value"] == "true"
 
@@ -234,9 +262,20 @@ def run(*, dispatch: bool = False, now: datetime | None = None,
 
 
 def main() -> int:
+    global REPOSITORY
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dispatch", action="store_true")
+    parser.add_argument(
+        "--repo",
+        default=None,
+        help="owner/name for local diagnostics; inside Actions the run's own repository is used",
+    )
     args = parser.parse_args()
+    try:
+        REPOSITORY = resolve_repository(args.repo)
+    except ValueError as error:
+        print(f"::error::Watchdog failed closed: {error}", flush=True)
+        return 1
     try:
         interval = resolve_interval()
         results = run(dispatch=args.dispatch, interval=interval)
