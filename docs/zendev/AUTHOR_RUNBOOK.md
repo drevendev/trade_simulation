@@ -50,6 +50,15 @@ Take the first applicable item and stop searching:
 Closing work outranks opening work. If another run already holds the item — an open
 pull request, a `status:in-progress` label, or a branch for that Issue — do not take it.
 
+**An Issue labelled `policy` is never yours**, whatever its `status:*` label says. It
+changes the control plane — the workflows, `scripts/`, these runbooks, `AGENTS.md` — and
+the operator session owns that class: your token cannot write a workflow, the ACCEPTOR may
+not merge a policy change that widens automated authority, and a run spent on one cannot
+close it. On 2026-09-05 every AUTHOR run of an afternoon went to two such Issues while
+the only product Issue waited (#139). Skip a `policy` Issue in items 3–5. A control-plane
+defect you discover is filed as a new Issue carrying `policy`, `type:process` and
+`status:needs-triage`, and then left alone.
+
 Evaluating 1–6 and finding nothing to mutate is never a silent success. Item 6 exists
 precisely so this cannot happen: whenever 1–5 yield no eligible item, item 6 always
 produces a durable record (a new ready Issue) before the run stops. A run must not
