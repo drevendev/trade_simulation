@@ -54,6 +54,40 @@ class ExtractionTests(unittest.TestCase):
             self.assertIsNone(tokens[field], f"{field} must be null, not 0")
 
 
+class ModelTests(unittest.TestCase):
+    def test_model_from_the_result_message(self):
+        self.assertEqual(
+            rec.extract_model([{"type": "result", "model": "claude-haiku-4-5"}]),
+            "claude-haiku-4-5",
+        )
+
+    def test_model_from_a_nested_assistant_message(self):
+        self.assertEqual(
+            rec.extract_model(
+                [{"type": "assistant", "message": {"model": "claude-sonnet-5"}}]
+            ),
+            "claude-sonnet-5",
+        )
+
+    def test_the_last_model_wins(self):
+        # Service sub-calls can name a different model; the run's own model is the
+        # one that finished it.
+        self.assertEqual(
+            rec.extract_model(
+                [
+                    {"type": "assistant", "message": {"model": "claude-haiku-4-5"}},
+                    {"type": "result", "model": "claude-sonnet-5"},
+                ]
+            ),
+            "claude-sonnet-5",
+        )
+
+    def test_absent_model_is_null_not_guessed(self):
+        # A guessed model in the ledger is worse than a gap: it would make a silent
+        # default change look like a deliberate choice.
+        self.assertIsNone(rec.extract_model([{"type": "result"}, {"type": "system"}]))
+
+
 class ReadMessagesTests(unittest.TestCase):
     def test_missing_path_is_reported_not_raised(self):
         messages, problem = rec.read_messages("")
