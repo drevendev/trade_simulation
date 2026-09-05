@@ -66,6 +66,25 @@ jobs:
         if: github.event_name == 'pull_request'
         run: python scripts/policy_guard.py --base "origin/${{ github.base_ref }}"
 
+      # Machine-generated pull requests merge without a review run, so their gates live
+      # here, inside a check that is already required on every pull request. Adding them
+      # to this job rather than a new one keeps branch protection unchanged: a required
+      # check that never runs would block every pull request forever.
+      #
+      # The refs arrive through the environment, not through the expression, because a
+      # branch name is attacker-controllable text on a public repository.
+      - name: Guard machine-generated pull requests
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python scripts/machine_pr_guard.py \
+            --base "origin/${BASE_REF}" \
+            --head-ref "${HEAD_REF}" \
+            --head-sha "${HEAD_SHA}"
+
       # Runs on every event, not only on pull requests: the status document can go
       # stale because something else merged, without anyone touching the document.
       - name: Keep the status document honest about what merged
