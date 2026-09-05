@@ -44,7 +44,11 @@ it too: they act as the forge, not as a role.
 Every model-running workflow begins with an `identity` job that mints its role's token
 and the ledger's, and prints who the run is — app slug and installation — and what it
 reaches. With the `smoke` input set, that job is the whole run. This is how a freshly
-bootstrapped project proves its six values before a model is ever started.
+bootstrapped project proves its six values before a model is ever started. The role's
+token is load-bearing there; the ledger's is not: telemetry never stops the loop, so a
+ledger the MACHINE app cannot reach is a warning in that job, not a failed identity.
+The first smoke run proved the point by stopping the whole run over an app not yet
+installed on the ledger.
 
 The client identifiers are repository variables (`ZENDEV_<ROLE>_APP_CLIENT_ID`), the
 private keys repository secrets (`ZENDEV_<ROLE>_APP_PRIVATE_KEY`). A test refuses any

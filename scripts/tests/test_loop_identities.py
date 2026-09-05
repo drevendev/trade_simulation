@@ -117,6 +117,11 @@ class SmokeTests(unittest.TestCase):
                 identity = next(j for j in jobs(name) if j.startswith("  identity:"))
                 self.assertNotIn("claude-code-action", identity)
                 self.assertIn("Say who this run is", identity)
+                # Telemetry never stops the loop: an unreachable ledger is a warning in
+                # the identity job, not a failed identity. The first smoke run stopped
+                # the whole run over exactly that, before the app reached the ledger.
+                ledger = identity.index("id: ledger")
+                self.assertIn("continue-on-error: true", identity[ledger:identity.index("uses:", ledger)])
                 work = next(j for j in jobs(name) if "claude-code-action" in j)
                 self.assertIn("needs: identity", work)
                 self.assertIn("if: ${{ !inputs.smoke }}", work)

@@ -52,8 +52,11 @@ jobs:
           echo "identity: ${APP_SLUG}[bot], installation ${INSTALLATION}"
           gh api "repos/${GITHUB_REPOSITORY}" --jq '"reaches: " + .full_name'
 
+      # Telemetry never stops the loop, so an unreachable ledger is a warning here, not a
+      # failed identity. See the note in zendev-author.yml.
       - name: Act as the MACHINE identity towards the ledger
         id: ledger
+        continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.ZENDEV_MACHINE_APP_CLIENT_ID }}
@@ -61,11 +64,15 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: zen-telemetry
 
-      - name: Say that the ledger is reachable
+      - name: Say whether the ledger is reachable
         env:
           GH_TOKEN: ${{ steps.ledger.outputs.token }}
           APP_SLUG: ${{ steps.ledger.outputs.app-slug }}
         run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::warning::no MACHINE token for the ledger; telemetry records nothing until the app is installed on zen-telemetry"
+            exit 0
+          fi
           echo "ledger identity: ${APP_SLUG}[bot]"
           gh api "repos/${GITHUB_REPOSITORY_OWNER}/zen-telemetry" --jq '"ledger reaches: " + .full_name'
 
