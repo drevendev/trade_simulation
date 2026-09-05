@@ -37,8 +37,20 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Section 1 of the runbook is a computation, and running it in the model cost
+      # two consecutive runs on one ineligible pull request while three others went
+      # unreviewed. It happens here instead, and when nothing is eligible the model
+      # is never started — the run ends having spent nothing, which is the correct
+      # outcome for a loop with no work.
+      - name: Choose the pull request to review
+        id: select
+        env:
+          GH_TOKEN: ${{ secrets.ZENDEV_PAT || github.token }}
+        run: python scripts/select_review_target.py --repo "${{ github.repository }}"
+
       - name: Review one pull request
         id: claude
+        if: steps.select.outputs.target != 'none'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -74,8 +86,17 @@ jobs:
             Read AGENTS.md and then docs/zendev/ACCEPTOR_RUNBOOK.md, and follow the
             runbook exactly, in order, from section 1 to the end.
 
+            Review pull request #${{ steps.select.outputs.target }}. Section 1 of the
+            runbook has already been evaluated mechanically and selected it, so do not
+            re-run selection and do not review any other pull request. Selection is
+            not acceptance: every refusal, verification and merge gate in the runbook
+            still applies to this one in full.
+
             Non-negotiable for this run:
             - Review exactly one pull request, reach one verdict, then stop.
+            - Post the verdict once, as the last thing you do, naming the head
+              revision it judges. If a later check changes your answer, the earlier
+              verdict is already standing and the AUTHOR will read both.
             - You never implement and never push commits to a pull request branch. If
               code must change, request changes and stop.
             - Merge only after you have observed every required check green at the
@@ -95,7 +116,7 @@ jobs:
         run: |
           python scripts/record_usage.py \
             --execution-file "${{ steps.claude.outputs.execution_file }}" \
-            --conclusion "${{ steps.claude.outputs.conclusion }}" \
+            --conclusion "${{ steps.select.outputs.target == 'none' && 'no_work' || steps.claude.outputs.conclusion }}" \
             --role acceptor \
             --ledger-repo drevendev/zen-telemetry \
             --run-id "${{ github.run_id }}" \

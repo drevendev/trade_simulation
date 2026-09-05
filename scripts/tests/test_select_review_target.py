@@ -1,0 +1,136 @@
+"""Negative controls for review selection.
+
+The first test is the one that matters: it is the exact situation that burned two
+consecutive ACCEPTOR runs on #84 and starved three other pull requests of review.
+"""
+
+import pathlib
+import sys
+import unittest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+import select_review_target as select  # noqa: E402
+
+HEAD = "d8e28d3e2df15c93c1df3e41eceb640996024907"
+COMMITTED = "2026-09-05T05:35:00Z"
+
+
+def pull(number=84, created="2026-09-05T05:35:16Z", draft=False, labels=()):
+    return {
+        "number": number,
+        "createdAt": created,
+        "isDraft": draft,
+        "labels": [{"name": name} for name in labels],
+        "headRefOid": HEAD,
+    }
+
+
+def comment(body, created):
+    return {"body": body, "createdAt": created}
+
+
+class EligibilityTests(unittest.TestCase):
+    def test_an_unchanged_rejection_is_not_reviewed_again(self):
+        # #84, exactly: refused at 06:13, nothing pushed, nothing corrected. The
+        # 06:40 run reviewed it again and re-posted the same refusal.
+        comments = [
+            comment("## ACCEPT\n\nAll conditions hold.", "2026-09-05T06:13:05Z"),
+            comment("## REQUEST_CHANGES\n\nMerge conflicts.", "2026-09-05T06:13:23Z"),
+        ]
+        ok, reason = select.eligible(pull(), COMMITTED, comments)
+        self.assertFalse(ok)
+        self.assertIn("no correction since", reason)
+
+    def test_a_fresh_head_is_eligible(self):
+        ok, reason = select.eligible(pull(), COMMITTED, [])
+        self.assertTrue(ok)
+        self.assertIn("no verdict", reason)
+
+    def test_a_verdict_older_than_the_head_does_not_count(self):
+        # The author pushed a fix after the refusal, so the head moved and the old
+        # verdict judged a revision that no longer exists.
+        stale = [comment("## REQUEST_CHANGES\n\nfix it", "2026-09-05T05:00:00Z")]
+        ok, _ = select.eligible(pull(), COMMITTED, stale)
+        self.assertTrue(ok)
+
+    def test_a_correction_after_the_verdict_reopens_the_same_head(self):
+        comments = [
+            comment("## REQUEST_CHANGES\n\nmetadata", "2026-09-05T06:13:23Z"),
+            comment("## AUTHOR handoff\n\nCorrected the labels.", "2026-09-05T06:20:00Z"),
+        ]
+        ok, reason = select.eligible(pull(), COMMITTED, comments)
+        self.assertTrue(ok)
+        self.assertIn("correction", reason)
+
+    def test_a_second_verdict_after_a_correction_closes_it_again(self):
+        comments = [
+            comment("## REQUEST_CHANGES\n\nmetadata", "2026-09-05T06:13:23Z"),
+            comment("## AUTHOR handoff\n\nCorrected.", "2026-09-05T06:20:00Z"),
+            comment("## REQUEST_CHANGES\n\nstill wrong", "2026-09-05T06:40:00Z"),
+        ]
+        ok, _ = select.eligible(pull(), COMMITTED, comments)
+        self.assertFalse(ok)
+
+    def test_a_verdict_naming_the_head_counts_even_if_posted_earlier(self):
+        # Clock skew between the commit date and the comment date must not reopen a
+        # head that a verdict explicitly named.
+        comments = [
+            comment(f"**ACCEPT** at revision {HEAD}", "2026-09-05T05:34:00Z"),
+        ]
+        ok, _ = select.eligible(pull(), COMMITTED, comments)
+        self.assertFalse(ok)
+
+    def test_a_human_owned_pull_request_is_left_alone(self):
+        ok, reason = select.eligible(
+            pull(labels=["status:needs-decision"]), COMMITTED, []
+        )
+        self.assertFalse(ok)
+        self.assertIn("person owns", reason)
+
+    def test_a_draft_is_skipped(self):
+        ok, reason = select.eligible(pull(draft=True), COMMITTED, [])
+        self.assertFalse(ok)
+        self.assertEqual(reason, "draft")
+
+
+class VerdictDetectionTests(unittest.TestCase):
+    def test_the_shapes_the_role_actually_posts_are_recognised(self):
+        for body in (
+            "## ACCEPT",
+            "**ACCEPT** at revision abc1234",
+            "## VERDICT: REQUEST_CHANGES",
+            "REQUEST_CHANGES\n\nreasons follow",
+            "#### Accept",
+        ):
+            with self.subTest(body=body):
+                self.assertTrue(select.is_verdict(body))
+
+    def test_prose_about_a_verdict_is_not_a_verdict(self):
+        # A handoff that mentions the refusal it is answering must stay a correction,
+        # or the same-head exception can never fire.
+        for body in (
+            "The previous REQUEST_CHANGES asked for a label fix; done.",
+            "I would ACCEPT this once the conflict is resolved.",
+            "## AUTHOR handoff\n\nRebased onto master.",
+        ):
+            with self.subTest(body=body):
+                self.assertFalse(select.is_verdict(body))
+
+
+class ChoiceTests(unittest.TestCase):
+    def test_the_oldest_eligible_wins_not_the_oldest(self):
+        candidates = [
+            (84, "2026-09-05T05:35:16Z", False, "already judged"),
+            (85, "2026-09-05T06:00:53Z", True, "no verdict"),
+            (88, "2026-09-05T06:37:46Z", True, "no verdict"),
+        ]
+        self.assertEqual(select.choose(candidates), 85)
+
+    def test_nothing_eligible_selects_nothing_rather_than_the_least_bad(self):
+        candidates = [(84, "2026-09-05T05:35:16Z", False, "already judged")]
+        self.assertIsNone(select.choose(candidates))
+
+
+if __name__ == "__main__":
+    unittest.main()
