@@ -129,6 +129,12 @@ gh pr diff <number>
 
 - Every required check must be green **at the current head revision**. `pending`,
   `skipped`, `neutral`, and `unknown` are not green.
+- The `mergeability` status is one of them. It is written by a workflow that runs both
+  on the pull request and on every push to `master`, so it answers the question the
+  pull request's own checks cannot: whether the branch still merges *now*, after the
+  base moved. Read it before you judge anything else — a conflicting branch cannot be
+  accepted whatever its contents, and discovering that after forming a verdict is how
+  a run comes to post two contradictory verdicts on one head.
 - Check out the head revision and run the verification commands yourself — both
   runtimes, whichever one the diff touched:
 
@@ -150,6 +156,12 @@ Exactly one of the following.
 **REQUEST_CHANGES** — post a review naming each defect, the file and line, why it
 matters, and what would satisfy it. Set the Issue back to `status:in-progress`.
 Vague dissatisfaction is not a verdict.
+
+Exactly one verdict per head revision, and it is the last thing the run does. Do not
+post a verdict and then continue checking; if a later check changes the answer, the
+first verdict is already standing and the AUTHOR — which has no memory and reads
+verdicts as its input — sees both. Name the head revision in the verdict so a reader
+can tell which revision it judged.
 
 **ACCEPT** — allowed only when all of the following hold, and you state each one in
 the merge comment:

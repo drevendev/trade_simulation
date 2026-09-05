@@ -1,0 +1,50 @@
+name: Mergeability
+
+# A pull request stops merging when its base moves, and GitHub does not re-run that
+# pull request's checks when `master` advances. So this runs in two places: on the
+# pull request itself, and on every push to `master` over all open pull requests.
+# The second trigger is the one that matters — it is the moment a conflict is created.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# `statuses: write` is the whole grant. This workflow writes one commit status and
+# reads pull request metadata; it never checks out a branch's code and never merges.
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: mergeability-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mergeability:
+    name: mergeability
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Prove the classifier fires
+        run: python -m unittest discover -s scripts/tests -v
+
+      - name: Status for this pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/mergeability.py --repo "${{ github.repository }}" --pull "${PR_NUMBER}"
+
+      - name: Status for every open pull request, because the base moved
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/mergeability.py --repo "${{ github.repository }}" --all-open
