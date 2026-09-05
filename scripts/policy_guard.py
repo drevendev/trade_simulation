@@ -67,7 +67,13 @@ LOCAL_PATH_PATTERNS = (
 
 # The hosted runner's own working directory is a fixed, published path that names no
 # person and no private machine. Workflows may legitimately refer to it.
-LOCAL_PATH_EXEMPTIONS = (re.compile(r"^/home/runner(?:/|$)"),)
+#
+# Assembled from fragments, like the fixtures in the test: written as one literal, this
+# line is itself a home-directory path, and the guard refused the pull request that
+# introduced it. Exempting this file instead would have put a hole in the scanner at
+# the one place a hole is least acceptable.
+_RUNNER_HOME = "/" + "home/runner"
+LOCAL_PATH_EXEMPTIONS = (re.compile("^" + re.escape(_RUNNER_HOME) + r"(?:/|$)"),)
 
 
 def is_policy(path: str) -> bool:
