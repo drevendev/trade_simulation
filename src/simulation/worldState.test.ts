@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildInitialWorld, type WorldState } from "./worldState";
 import { createIdAllocator } from "../domain/id";
 import type { DefinitionPack } from "../config/definitionPack";
-import type { ScenarioDefinition } from "../config/scenarioDefinition";
+import type { RegionSeed, ScenarioDefinition } from "../config/scenarioDefinition";
 import type { SimulationConfig } from "../config/simulationConfig";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 
@@ -54,6 +54,7 @@ function minimalScenario(): ScenarioDefinition {
         currencyKey: "currency-1",
         memberStateKeys: ["state-1"],
         wallet: { good1: 10000 },
+        fxPools: [],
       },
     ],
     clans: [],
@@ -186,33 +187,103 @@ describe("buildInitialWorld", () => {
   });
 
   it("rejects duplicate region keys", () => {
-    const scenario = minimalScenario();
-    scenario.geography = [
-      scenario.geography[0],
-      { ...scenario.geography[0], key: "region-1", name: "Duplicate" },
-    ];
+    const region: RegionSeed = {
+      key: "r1",
+      name: "Region",
+      controllerStateKey: null,
+      settlementCurrencyKey: "c1",
+      settlementLevel: 1,
+      infrastructure: {},
+      climateHabitabilityInputs: {},
+      deposits: [],
+    };
+    const badScenario: ScenarioDefinition = {
+      id: "test",
+      version: "1.0.0",
+      name: "Test",
+      description: "Test",
+      definitionPackId: "pkg",
+      geography: [region, region],
+      transportLinks: [],
+      states: [],
+      currencies: [],
+      monetaryAuthorities: [],
+      clans: [],
+      cohorts: [],
+      productionUnits: [],
+    };
     const config = minimalConfig();
     const pack = baselineDefinitionPack;
 
-    expect(() => buildInitialWorld(scenario, pack, config, 42)).toThrow("Duplicate key");
+    expect(() => buildInitialWorld(badScenario, pack, config, 42)).toThrow("Duplicate key");
   });
 
   it("rejects region referencing non-existent currency", () => {
-    const scenario = minimalScenario();
-    (scenario.geography[0] as any).settlementCurrencyKey = "nonexistent-currency";
+    const badScenario: ScenarioDefinition = {
+      id: "test",
+      version: "1.0.0",
+      name: "Test",
+      description: "Test",
+      definitionPackId: "pkg",
+      geography: [
+        {
+          key: "r1",
+          name: "Region",
+          controllerStateKey: null,
+          settlementCurrencyKey: "nonexistent",
+          settlementLevel: 1,
+          infrastructure: {},
+          climateHabitabilityInputs: {},
+          deposits: [],
+        },
+      ],
+      transportLinks: [],
+      states: [],
+      currencies: [{ key: "c1", code: "C1", issuerAuthorityKey: null }],
+      monetaryAuthorities: [],
+      clans: [],
+      cohorts: [],
+      productionUnits: [],
+    };
     const config = minimalConfig();
     const pack = baselineDefinitionPack;
 
-    expect(() => buildInitialWorld(scenario, pack, config, 42)).toThrow("missing currency");
+    expect(() => buildInitialWorld(badScenario, pack, config, 42)).toThrow("missing currency");
   });
 
   it("rejects state referencing non-existent currency", () => {
-    const scenario = minimalScenario();
-    (scenario.states[0] as any).effectiveCurrencyRegime.currencyKey = "nonexistent-currency";
+    const badScenario: ScenarioDefinition = {
+      id: "test",
+      version: "1.0.0",
+      name: "Test",
+      description: "Test",
+      definitionPackId: "pkg",
+      geography: [],
+      transportLinks: [],
+      states: [
+        {
+          key: "s1",
+          name: "State",
+          treasury: {},
+          publicInventory: {},
+          policy: {},
+          effectiveCurrencyRegime: {
+            currencyKey: "nonexistent",
+            regimeType: "INDEPENDENT_FLOAT",
+            policyAuthorityKey: null,
+          },
+        },
+      ],
+      currencies: [{ key: "c1", code: "C1", issuerAuthorityKey: null }],
+      monetaryAuthorities: [],
+      clans: [],
+      cohorts: [],
+      productionUnits: [],
+    };
     const config = minimalConfig();
     const pack = baselineDefinitionPack;
 
-    expect(() => buildInitialWorld(scenario, pack, config, 42)).toThrow("missing currency");
+    expect(() => buildInitialWorld(badScenario, pack, config, 42)).toThrow("missing currency");
   });
 
   it("resolves region controller state correctly", () => {
@@ -223,12 +294,17 @@ describe("buildInitialWorld", () => {
     const worldState = buildInitialWorld(scenario, pack, config, 42);
 
     const region = Array.from(worldState.regions.values())[0];
-    expect(region.controllerStateId).toBeDefined();
+    expect(region).toBeDefined();
+    if (region) {
+      expect(region.controllerStateId).toBeDefined();
+    }
   });
 
   it("handles scenario with no transport links", () => {
-    const scenario = minimalScenario();
-    scenario.transportLinks = [];
+    const scenario = {
+      ...minimalScenario(),
+      transportLinks: [],
+    };
     const config = minimalConfig();
     const pack = baselineDefinitionPack;
 
