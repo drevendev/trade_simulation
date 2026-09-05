@@ -199,7 +199,12 @@ regenerates it and fails on the difference.
 
 Push the branch and open a pull request whose body follows
 [the pull request template](../../.github/PULL_REQUEST_TEMPLATE.md) completely, with
-`Closes #<issue>`. Set `status:needs-review` on the Issue, replacing
+`Closes #<issue>`. *Changed artifacts* names **every** path the diff touches, spelled
+exactly as `git diff --name-only origin/master...HEAD` spells it. The `scope-guard` step
+of the required `policy-guard` check refuses a pull request whose diff carries a path
+the body does not mention; when it does, either the body is incomplete — fix it, and
+the edit re-runs the check without a new commit — or the change does not belong to this
+Issue and comes out of the branch. Set `status:needs-review` on the Issue, replacing
 `status:in-progress`. Post a handoff comment naming the branch, the tested revision,
 checks, decisions, and what remains.
 

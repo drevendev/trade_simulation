@@ -2,6 +2,9 @@ name: CI
 
 on:
   pull_request:
+    # `edited` as well: the handoff guard below reads the pull request body, and a
+    # corrected body must be able to turn that check green without an empty commit.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [master]
 
@@ -84,6 +87,25 @@ jobs:
             --base "origin/${BASE_REF}" \
             --head-ref "${HEAD_REF}" \
             --head-sha "${HEAD_SHA}"
+
+      # The handoff must name every path the diff touches. Half of the runbook's
+      # "declared scope" gate is a predicate over the diff and the body, and a review
+      # run was spent on it in #130; this step decides that half, and the reviewer keeps
+      # the other — whether the declared set is what the Issue allows. The body arrives
+      # through the environment, never through an expression: it is attacker-
+      # controllable text on a public repository.
+      - name: Guard the handoff against undeclared changes
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "${PR_BODY}" > "${RUNNER_TEMP}/pull-request-body.md"
+          python scripts/scope_guard.py \
+            --base "origin/${BASE_REF}" \
+            --head-ref "${HEAD_REF}" \
+            --body-file "${RUNNER_TEMP}/pull-request-body.md"
 
       # Offline and unconditional. The rendered table is a function of the ledger and
       # the mirrored registry, so regenerating and comparing catches both a hand-edited
