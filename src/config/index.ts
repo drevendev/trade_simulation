@@ -38,6 +38,7 @@ export {
   type ClanSeed,
   type CohortSeed,
   type CurrencySeed,
+  type FxPoolSeed,
   type InitialEventSeed,
   type MarketSeed,
   type MonetaryAuthoritySeed,
@@ -67,3 +68,5 @@ export {
 export { deriveKeyedRandom, type RngKey } from "./rng";
 
 export { baselineDefinitionPack } from "./fixtures/baselineDefinitionPack";
+
+export { baselineScenario } from "./fixtures/baselineScenario";

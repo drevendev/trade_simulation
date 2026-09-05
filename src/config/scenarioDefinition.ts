@@ -62,7 +62,19 @@ export interface CurrencySeed {
   readonly issuerAuthorityKey: string | null;
 }
 
-export interface FxPoolSeed {}
+export interface FxPoolSeed {
+  readonly key: string;
+  readonly baseCurrencyKey: string;
+  readonly quoteCurrencyKey: string;
+  readonly cash: Readonly<Record<string, number>>;
+  readonly spotRateQuotePerBase: number;
+  readonly targetBaseReserveShare: number;
+  readonly flowPressureEma: number;
+  readonly transactionSpread: number;
+  readonly minOperationalReserveBase: number;
+  readonly minOperationalReserveQuote: number;
+  readonly maxRateMovePerTick: number;
+}
 
 export interface MonetaryAuthoritySeed {
   readonly key: string;
