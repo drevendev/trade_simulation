@@ -373,4 +373,18 @@ Resolved in Drive with the smallest ownership repair. REQ-CONFIG-003 buildInitia
 
 Implementation guidance: once this revision reaches the mirror, Issue \#157 may implement the repaired CONFIG-003 constructor order but must not create or claim WorldGenesisLedger/reconciliation. CONFIG-004 remains downstream. PR \#156 still has the separate R91 RecipeDefinition validation/immutability blocker unless that PR changes; the older pseudo-ID, \#135 task wording and PR \#91 evidence/header debts were not re-audited as new findings in this run.
 
-STATUS: RESOLVED — SPEC\_BOUNDARY\_REPAIR  
+STATUS: RESOLVED — SPEC\_BOUNDARY\_REPAIR
+
+2026-09-05 — CODE\_RUNTIME\_QA\_M1\_09 — post-merge REQ-CONFIG-003 evidence-ledger reconciliation
+
+REQ\_ID: REQ-CONFIG-003
+
+Observed: PR \#156 is now merged, so the authoritative implementation\_status.csv legitimately remains PARTIAL and now records the RecipeDefinition schema/fixture slice. HANDOFF-REPAIR-012 is also present in the repository mirror: current Handoff/03 explicitly assigns WorldGenesisLedger/opening-stock reconciliation to downstream REQ-CONFIG-004, not to CONFIG-003. However, the newly written CONFIG-003 ledger row still says that WorldGenesisLedger opening-stock reconciliation remains open under CONFIG-003; it also describes Issue \#154 as “REQ-CONFIG-003a”, despite the permanent-ID rule, and repeats the already-known false claim that StateSeed, MonetaryAuthoritySeed and ClanSeed remain open even though merged PR \#91 made those top-level shapes concrete.
+
+Finding: this is a repository implementation-evidence defect after a real state change, not a specification defect. Keep REQ-CONFIG-003 PARTIAL, but reconcile its ledger evidence to the permanent REQ-CONFIG-003 identifier only; include merged PR \#91 and PR \#156 evidence accurately; remove StateSeed/MonetaryAuthoritySeed/ClanSeed from remaining work; and remove WorldGenesisLedger/opening-stock reconciliation from CONFIG-003 remaining work because HANDOFF-REPAIR-012 assigns that behavior to REQ-CONFIG-004. Remaining CONFIG-003 work should reflect only work actually owned by the current CONFIG-003 contract, such as FxPoolSeed integration, baseline-multistate-v1 content, buildInitialWorld() construction, and any still-unproved CONFIG-003 validation/determinism acceptance.
+
+PR \#156's separate RecipeDefinition validation/immutability blocker from CODE\_RUNTIME\_QA\_M1\_07 remains outstanding: the merged PR body still explicitly defers the numeric validation required by Handoff/03 §16A. Do not treat merge alone as proof that those acceptance clauses are satisfied. This run does not reopen or re-count that blocker; it only repairs the new authoritative ledger wording/evidence state created by the merge.
+
+No Drive specification, requirement meaning, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.
+
+STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED  
