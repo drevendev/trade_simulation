@@ -122,7 +122,7 @@ Goal: establish causality and reconciliation before implementing economic richne
 Implementation:  
 \- Implement WorldState, TickContext and canonical phase orchestrator with no-op phase handlers.  
 \- Implement PendingTransitions and deterministic phase barriers.  
-\- Implement typed flow/ledger entries required for goods, money and physical losses.  
+\- Implement the Core M2 normalized accounting projection over committed stock mutations: typed MONEY and GOOD signed deltas plus PHYSICAL\_LOSS attribution, with tick/phase, authoritative owner/location, currencyId/goodId, finite delta and stable reason/causal linkage. Equivalent internal representations are allowed; do not invent M3+ transaction mechanics.  
 \- Implement phase-level invariant hooks and fail-fast diagnostic mode.  
 \- Add canonical CLI mode behind an explicit switch or scenario argument; do not silently replace legacy default yet.
 
@@ -132,7 +132,7 @@ Implementation:
 \- phase order is asserted by a trace test.  
 \- a handler cannot mutate a phase-owned future transition early.  
 \- deterministic replay hash is stable for at least 100 ticks.  
-\- zero-flow reconciliation passes for all tracked stock categories using the resolved SimulationConfig.numeric reconciliation policy. Use reconciliationRelativeTolerance where tolerance-based stock reconciliation is required; moneyEpsilon and quantityEpsilon remain domain zero/positivity thresholds only where their owning contracts say so. M2 must not introduce a milestone-local epsilon or tolerance.
+\- zero-flow reconciliation passes for all tracked stock categories using the resolved SimulationConfig.numeric reconciliation policy. Use reconciliationRelativeTolerance where tolerance-based stock reconciliation is required; moneyEpsilon and quantityEpsilon remain domain zero/positivity thresholds only where their owning contracts say so. M2 must not introduce a milestone-local epsilon or tolerance. A test-only unmatched normalized delta must fail deterministically and report the affected stock category/key and residual; this test must not require an undocumented production mutation path.
 
 Milestone 3 — Local markets and transaction settlement  
 Goal: prove the smallest complete goods-for-money loop before trade, FX, production or demography.  

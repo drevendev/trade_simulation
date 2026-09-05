@@ -351,6 +351,17 @@ interface EconomicTransaction {
 
 Runtime may aggregate transactions after reconciliation, but debug/test mode must retain enough atomic records to trace invariant failures.
 
+M2 minimum accounting-ledger contract
+
+M2 does not require a second domain transaction model. EconomicTransaction remains the business/audit envelope, while reconciliation must expose one deterministic normalized accounting projection over committed stock mutations. Equivalent internal data structures are allowed, but the projection used by tests/diagnostics must preserve these observable semantics:  
+\- MONEY delta: tick, phase, currencyId, authoritative owner/location, finite signed delta, stable reason/type and optional causal IDs;  
+\- GOOD delta: tick, phase, goodId, authoritative owner/location including the relevant inventory/location bucket when one exists, finite signed delta, stable reason/type and optional causal IDs;  
+\- PHYSICAL\_LOSS attribution: a typed reason attached to the corresponding negative physical-stock delta. A physical loss has no balancing positive goods delta and never represents a fee or money sink.
+
+A realized transfer therefore normalizes to equal-and-opposite deltas for the same currency or good. Later subsystem contracts may add richer transaction types and endpoint schemas, but they must remain losslessly reconcilable to these core deltas; M2 must not guess future market, FX, fiscal or event mechanics. The canonical M2 no-op scenario may legitimately emit zero accounting deltas.
+
+Reconciliation diagnostics must, at minimum, report the stock category, currencyId/goodId when applicable, residual amount and the relevant phase/reason information available from the normalized entries. The deliberate-mismatch acceptance test must inject an inconsistent synthetic delta into a test-only copy of the normalized ledger (or an exactly equivalent diagnostic fixture), not create an undocumented production mutation path. The reconciler must fail deterministically and identify the mismatched stock category/key. Exact class names, storage layout and indexing remain ordinary engineering choices.
+
 8\. TickContext: ephemeral per-tick state
 
 Do not pollute WorldState with plans that should expire every tick.
@@ -492,7 +503,8 @@ CORE-T12 StateBond holdings reconcile before/after issuance, service and OMO.
 CORE-T13 UI telemetry toggle leaves canonical simulation hash unchanged.  
 CORE-T14 Mixed 600-tick benchmark with trade \+ FX \+ disasters \+ migration \+ expansion \+ state formation satisfies all conservation identities.  
 CORE-T15 Serialization round-trip of canonical state preserves IDs, sparse wallets/inventories and deterministic continuation.  
-CORE-T16 Entity ID allocators never reuse retired IDs; retained references to a closed/merged entity resolve only to that original lifecycle instance or an explicit historical-unavailable state, never to a newer entity.
+CORE-T16 Entity ID allocators never reuse retired IDs; retained references to a closed/merged entity resolve only to that original lifecycle instance or an explicit historical-unavailable state, never to a newer entity.  
+CORE-T17 M2 normalized accounting projection: equal-and-opposite MONEY/GOOD transfer deltas reconcile to zero; a PHYSICAL\_LOSS is represented as an attributed negative physical delta without a balancing goods credit; an injected test-only unmatched delta fails deterministically and reports the affected stock category/key.
 
 14\. Validation and serialization
 
