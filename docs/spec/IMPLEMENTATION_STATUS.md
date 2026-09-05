@@ -25,8 +25,8 @@ claim without a proving merge.
 ## Coverage
 
 The denominator below is the current mirrored `docs/spec/mirror/REQUIREMENTS_REGISTRY.csv`
-data-row count (25 as of `SPEC_CHANGELOG.md` revision `VIS-CADENCE-001`, which added
-`REQ-VISUALIZATION-002..005`). Recompute it from the registry itself whenever either
+data-row count (32 as of `SPEC_CHANGELOG.md` revision `HANDOFF-REPAIR-003`, which is the
+latest revision naming a `REQ_ID`). Recompute it from the registry itself whenever either
 file changes; never carry a historical total forward independently of the registry.
 
 | REQ ID | Status | Issue | Merged in | Proving test |
@@ -39,13 +39,13 @@ file changes; never carry a historical total forward independently of the regist
 | REQ-CORE-001 | `IMPLEMENTED` | #46 | #48, `58a0b49156131ec81fcb23d357f7e15b327bde4d` | `src/domain/id.test.ts` (13-kind prefix table, per-kind sequential allocation, duplicate-creation-key rejection, cross-run replay determinism, stable creation-key-order contract independent of array/Map build order, `CORE-T16` retirement/non-reuse including wrong-kind and double-retire rejection, and the corrected-head regressions verified at `c584d830ce46d68a398c089b06d72b1ced7b33c0` — failure-atomic batch allocation and runtime kind/creation-key validation) plus `src/domain/id.typecheck.test.ts` (`tsc --noEmit` regressions proving distinct ID kinds and bare strings are not mutually assignable). See `docs/adr/0003-canonical-identity-and-allocation.md` for the design. |
 | REQ-CORE-002 | `IMPLEMENTED` | #57 | #58, `002343805d14a4d3b43faf089aef9f7d52da9d4a` | `src/domain/numeric.test.ts` (rejects `NaN`/`+Infinity`/`-Infinity`/non-number input, accepts ordinary finite numbers including `0` and negative values) and `src/domain/ordering.test.ts` (`stableOrderBy`/`sortByPersistentId` produce an identical normalized result from differently-shuffled input — `CORE-T2`-shaped evidence — using `src/domain/id.ts` IDs as the concrete key type; a dedicated non-identity assertion proves the sort actually reorders rather than passing vacuously). |
 | REQ-CONFIG-001 | `IMPLEMENTED` | #64 | #67, `493da16e53e58e78a830ad44f1da627f9196742c` | `src/config/configLayers.typecheck.test.ts` (`tsc --noEmit` regressions proving `RunOptions`, `SimulationConfig`, `ScenarioDefinition` and `DefinitionPack` are structurally distinct, non-interchangeable types) and `src/config/validation.test.ts` (`assertNoBehavioralOverrides` accepts a minimal well-formed scenario and the legitimate array-shaped `markets`/`clans` seed fields; rejects a `SimulationConfig`-owned behavioral key including the `markets`/`clans` name-collision case where the smuggled value is an object rather than an array; rejects an arbitrary unknown key; rejects a non-object candidate). |
-| REQ-CONFIG-002 | `IN_PROGRESS` | #69 | pending — implemented on branch `claude/issue-69-keyed-rng`, not yet merged | `src/config/rng.test.ts` (`deriveKeyedRandom` reproduces the same value across repeated calls with the same key; yields identical per-key results regardless of evaluation order over a fixed key set; changes value when seed, tick, phase or key individually differ; does not collide across a naive delimiter-ambiguous key composition; returns a value in `[0, 1)`; rejects a non-finite seed/tick and an empty phase/key). Not yet mergeable evidence: promote to `IMPLEMENTED` only once a pull request referencing this row actually merges. |
+| REQ-CONFIG-002 | `IMPLEMENTED` | #69 | #70, `005d0a553dbc685b8bf554ff0ae9d802a7ac04fd` | `src/config/rng.test.ts` (`deriveKeyedRandom` reproduces the same value across repeated calls with the same key; yields identical per-key results regardless of evaluation order over a fixed key set; changes value when seed, tick, phase or key individually differ; does not collide across a naive delimiter-ambiguous key composition; returns a value in `[0, 1)`; rejects a non-finite seed/tick and an empty phase/key). |
+| REQ-CORE-003 | `IN_PROGRESS` | #72 | pending — implemented on branch `claude/issue-72-core-registries`, not yet merged | `src/domain/worldRegistries.test.ts` (`buildWorldRegistries` creates exactly the scenario-defined entity counts for Region/State/Currency/Clan/PopulationCohort/ProductionUnit; leaves `transportLinks`/`markets` legitimately empty when the scenario omits or empties those seed lists; every entry is keyed by its own allocated ID with the correct id-kind prefix and no duplicate ID within or across registries; repeated genesis with the same scenario and a fresh allocator is field-equivalent) and `src/domain/definitionRegistry.test.ts` (`buildDefinitionRegistry` carries a `DefinitionPack`'s `goods`/`recipes`/`eventDefinitions`/`metricDefinitions` through unchanged, including the empty case). Not yet mergeable evidence: promote to `IMPLEMENTED` only once a pull request referencing this row actually merges. |
 
-**Summary: 8 of 25 requirements implemented; 1 in progress.** The other 16
-requirement identifiers in `docs/spec/mirror/REQUIREMENTS_REGISTRY.csv` — including
-the remaining `REQ-VISUALIZATION-002, 004, 005` — are not yet mapped to this table;
-that mapping, and their own implementation evidence, is separate follow-up work, not
-evidence that they are unimplemented or implemented.
+**Summary: 9 of 32 requirements implemented; 1 in progress.** The other 22
+requirement identifiers in `docs/spec/mirror/REQUIREMENTS_REGISTRY.csv` are not yet
+mapped to this table; that mapping, and their own implementation evidence, is
+separate follow-up work, not evidence that they are unimplemented or implemented.
 
 ## Pre-existing behavior
 
