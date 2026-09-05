@@ -6,3 +6,17 @@
  * empty of behavior in M0 — see AGENTS.md and ADR 0002.
  */
 export const SIMULATION_MODULE_AREA = "simulation" as const;
+
+export {
+  buildInitialWorld,
+  type ClanState,
+  type CohortState,
+  type CurrencyState,
+  type LocalMarketState,
+  type MonetaryAuthorityState,
+  type ProductionUnitState,
+  type RegionState,
+  type StateState,
+  type TransportLinkState,
+  type WorldState,
+} from "./worldState";
