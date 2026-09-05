@@ -123,5 +123,47 @@ class SecretScanTests(unittest.TestCase):
         self.assertEqual(guard.scan_secrets(clean), [])
 
 
+class LocalPathTests(unittest.TestCase):
+    # Assembled from fragments for the same reason as the credential fixtures above:
+    # a literal home-directory path in a tracked file would make the guard refuse
+    # every pull request that touches this test.
+    def test_home_directory_paths_are_detected(self):
+        samples = [
+            "key = '" + "C:" + "\\Users\\" + "someone\\Downloads\\sa.json'",
+            "path: " + "D:" + "/Users/" + "someone/projects/sim",
+            "cfg = " + "/home/" + "someone/.config/app",
+            "open('" + "/Users/" + "someone/notes.md')",
+        ]
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertTrue(guard.scan_local_paths([sample]), f"missed: {sample}")
+
+    def test_the_hosted_runner_path_is_not_a_local_path(self):
+        # A fixed, published path on the hosted runner. It names no person and no
+        # private machine, and refusing it would make ordinary workflow work
+        # impossible — which is how a guard earns an exception it should not have.
+        exempt = [
+            "workspace: " + "/home/" + "runner/work/trade_simulation",
+            "cwd = " + "/home/" + "runner",
+        ]
+        self.assertEqual(guard.scan_local_paths(exempt), [])
+
+    def test_ordinary_text_is_not_flagged(self):
+        clean = [
+            "See docs/spec/mirror/REQUIREMENTS_REGISTRY.csv for the registry.",
+            "Users of the simulation API must call buildWorldRegistries first.",
+            "const url = 'https://example.com/home/index.html';",
+            "import { home } from './layout/home';",
+        ]
+        self.assertEqual(guard.scan_local_paths(clean), [])
+
+    def test_a_local_path_is_refused_by_the_full_check(self):
+        violations = guard.check(
+            ["src/index.ts"], added_lines=["// see " + "C:" + "\\Users\\" + "someone\\sim"]
+        )
+        self.assertEqual(len(violations), 1)
+        self.assertIn("Windows home directory path", violations[0])
+
+
 if __name__ == "__main__":
     unittest.main()
