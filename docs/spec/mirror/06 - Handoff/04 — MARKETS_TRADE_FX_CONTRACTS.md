@@ -71,6 +71,8 @@ All fields are finite and non-negative; observationCount is an integer. Expectat
 
 ## 5\. Ephemeral MarketIntent contract
 
+M3 registry slice note: REQ-MARKET-001 requires this section together with section 6, Budget commitment rule. The MarketIntent shape/validation and the budget-ledger/planning-envelope rule are one executable M3 unit; section 6 is not optional background.
+
 interface MarketIntent {  
   id: MarketIntentId;  
   actor: ActorRef;  
@@ -182,6 +184,8 @@ If D and S are both approximately zero, price stays unchanged. Missing trades do
 Price updates exactly once per tick in Phase 6\. Phase 7 trade and Phase 8 clearing use the resulting Phase-6 price.
 
 ## 10\. Deterministic local clearing primitive
+
+M3 registry slice note: REQ-MARKET-003 requires sections 7, 10 and 11 together. Section 7 defines the canonical sellable\_i/effectiveDemand\_j inputs, this section defines deterministic proportional allocation/matching, and section 11 defines the MarketAllocation output schema. This is a navigation boundary only; none of the three rules is duplicated or overridden here.
 
 For one region \+ good \+ pass:
 
