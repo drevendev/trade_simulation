@@ -34,8 +34,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  mergeability:
-    name: mergeability
+  # Named apart from the commit status this job writes, deliberately.
+  #
+  # Both used to be called `mergeability`, so both appeared in the checks rollup under
+  # one name and no reader could tell which of them branch protection was satisfied by.
+  # On #126 the job showed `pass` beside the status showing `pending` — the same word
+  # reporting two different things about the same revision.
+  #
+  # `mergeability` is now exactly one thing: the commit status, and the required check.
+  # This job is the machinery that writes it, and its own success says only that the
+  # machinery ran.
+  write-mergeability-status:
+    name: write-mergeability-status
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
