@@ -117,7 +117,9 @@ class EligibilityTests(unittest.TestCase):
 
     def test_other_failing_checks_do_not_block_selection(self):
         # A red test suite is a defect for the reviewer to name, not a reason to
-        # withhold the review. Only an unmergeable branch has a predetermined outcome.
+        # withhold the review: the reviewer can judge the criteria as well and return
+        # one complete list. Certainty is not the test — every red required check makes
+        # the refusal certain — what the review can add is.
         red = pull(checks=[check("typescript", "FAILURE")])
         ok, _ = select.eligible(red, COMMITTED, [])
         self.assertTrue(ok)
