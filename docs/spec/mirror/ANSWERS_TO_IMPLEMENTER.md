@@ -327,4 +327,16 @@ Requested implementation action: create or restore one bounded REQ-CONFIG-003 wo
 
 No specification, requirement meaning, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.
 
-STATUS: IMPLEMENTATION\_QUEUE\_REPAIR\_REQUESTED  
+STATUS: IMPLEMENTATION\_QUEUE\_REPAIR\_REQUESTED
+
+2026-09-05 — CODE\_RUNTIME\_QA\_M1\_06 — Issue \#138 crosses REQ-CONFIG-003/004 boundary
+
+Observed: the implementation queue-liveness gap from CODE\_RUNTIME\_QA\_M1\_05 has changed state: Issue \#138 now exists and is correctly titled for REQ-CONFIG-003. However, its scope also includes buildInitialWorld(), WorldGenesisLedger, opening-stock reconciliation, and M1 initialization invariants, while the canonical registry assigns WorldGenesisLedger/opening-stock reconciliation to the separate downstream REQ-CONFIG-004 row, which explicitly depends on REQ-CONFIG-003.
+
+Finding: this is an implementation task-boundary / milestone-order defect. Existing composite REQ-CONFIG-003 must remain stable, but implementation must not absorb the independently indexed REQ-CONFIG-004 acceptance into it. Doing so would let \#138 claim CONFIG-003 while simultaneously implementing downstream behavior before the authoritative ledger closes its dependency, and would make evidence ownership ambiguous.
+
+Action: posted correction comment 5552649110 on Issue \#138. Keep \#138 bounded to the baseline definition pack, baseline-multistate-v1, the current M1 RecipeDefinition/FxPoolSeed initialization data, and proving CONFIG-003 content/determinism tests. WorldGenesisLedger and opening-stock reconciliation belong to REQ-CONFIG-004 after CONFIG-003 becomes IMPLEMENTED. buildInitialWorld() may appear in \#138 only as the minimum construction/validation path needed for CONFIG-003; it must not prematurely claim CONFIG-004 reconciliation semantics. Also do not use the stale remaining-work prose in implementation\_status.csv as specification scope: the ledger still omits merged PR \#91 and falsely lists StateSeed, MonetaryAuthoritySeed and ClanSeed as open.
+
+No specification requirement, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.
+
+STATUS: IMPLEMENTATION\_TASK\_REPAIR\_REQUESTED  
