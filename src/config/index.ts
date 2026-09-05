@@ -1,8 +1,57 @@
 /**
- * Config module area (REQ-MIGRATION-003 scaffolding).
+ * Config module area (REQ-MIGRATION-003 scaffolding; REQ-CONFIG-001).
  *
- * Owns RunOptions, SimulationConfig, ScenarioDefinition, DefinitionPack and
- * their validators from Milestone 1 onward. Deliberately empty of behavior
- * in M0 — see AGENTS.md and ADR 0002.
+ * Owns the four canonical configuration layers — `RunOptions`,
+ * `SimulationConfig`, `ScenarioDefinition`, `DefinitionPack` — and the
+ * validator that mechanically rejects scenario-specific behavioral overrides.
+ * See `docs/spec/mirror/06 - Handoff/03 — CANONICAL_CONFIG_AND_WORLD_GENERATION.md`
+ * section 2.
  */
 export const CONFIG_MODULE_AREA = "config" as const;
+
+export type { RunOptions } from "./runOptions";
+
+export {
+  SIMULATION_CONFIG_BEHAVIORAL_KEYS,
+  type CadenceConfig,
+  type ClanConfig,
+  type EventConfig,
+  type ExpansionConfig,
+  type FiscalConfig,
+  type LaborConfig,
+  type MarketConfig,
+  type MonetaryConfig,
+  type NumericConfig,
+  type PerformanceConfig,
+  type PopulationConfig,
+  type ProductionConfig,
+  type SimulationConfig,
+  type TradeConfig,
+} from "./simulationConfig";
+
+export {
+  SCENARIO_DEFINITION_KEYS,
+  type BondSeed,
+  type ClanSeed,
+  type CohortSeed,
+  type CurrencySeed,
+  type InitialEventSeed,
+  type MarketSeed,
+  type MonetaryAuthoritySeed,
+  type ProductionUnitSeed,
+  type RegionSeed,
+  type ScenarioDefinition,
+  type ScenarioVariationConfig,
+  type StateSeed,
+  type TransportLinkSeed,
+} from "./scenarioDefinition";
+
+export {
+  type DefinitionPack,
+  type EventDefinition,
+  type GoodDefinition,
+  type MetricDefinition,
+  type RecipeDefinition,
+} from "./definitionPack";
+
+export { assertNoBehavioralOverrides } from "./validation";
