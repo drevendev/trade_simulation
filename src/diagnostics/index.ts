@@ -6,3 +6,5 @@
  * and ADR 0002.
  */
 export const DIAGNOSTICS_MODULE_AREA = "diagnostics" as const;
+
+export { generateM1Preview, type M1Preview } from "./m1Preview";
