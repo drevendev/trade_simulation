@@ -435,18 +435,26 @@ function describeValue(value: unknown): string {
 
 /**
  * Throws unless the DefinitionPack content is valid: all RecipeDefinition bounds
- * are satisfied per section 16A of the canonical config/world-generation spec.
+ * are satisfied per section 16A of the canonical config/world-generation spec,
+ * and all recipe GoodId references resolve to actual goods in the pack.
  * Produces useful diagnostics identifying the field, value and reason for
  * every validation failure.
  */
 export function validateDefinitionPackContent(definitionPack: DefinitionPack): void {
+  const goodsKeySet = new Set(Object.keys(definitionPack.goods));
   for (const [recipeId, recipe] of Object.entries(definitionPack.recipes)) {
-    validateRecipeDefinition(recipe);
+    validateRecipeDefinition(recipe, goodsKeySet);
   }
 }
 
-function validateRecipeDefinition(recipe: RecipeDefinition): void {
+function validateRecipeDefinition(recipe: RecipeDefinition, goodsKeySet: Set<string>): void {
   const recipeId = recipe.id;
+
+  if (!goodsKeySet.has(recipe.outputGoodId)) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": outputGoodId "${recipe.outputGoodId}" references a non-existent Good`,
+    );
+  }
 
   if (!isFiniteCanonicalNumber(recipe.outputPerBatch) || recipe.outputPerBatch <= 0) {
     throw new Error(
@@ -461,9 +469,27 @@ function validateRecipeDefinition(recipe: RecipeDefinition): void {
   }
 
   for (const [goodId, coefficient] of Object.entries(recipe.inputsPerBatch)) {
+    if (!goodsKeySet.has(goodId)) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": inputsPerBatch["${goodId}"] references a non-existent Good`,
+      );
+    }
     if (!isFiniteCanonicalNumber(coefficient) || coefficient <= 0) {
       throw new Error(
         `RecipeDefinition "${recipeId}": inputsPerBatch["${goodId}"] must be strictly positive, got ${describeValue(coefficient)}`,
+      );
+    }
+  }
+
+  for (const [goodId, coefficient] of Object.entries(recipe.investmentGoodsPerCapitalUnit)) {
+    if (!goodsKeySet.has(goodId)) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": investmentGoodsPerCapitalUnit["${goodId}"] references a non-existent Good`,
+      );
+    }
+    if (!isFiniteCanonicalNumber(coefficient) || coefficient < 0) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": investmentGoodsPerCapitalUnit["${goodId}"] must be non-negative, got ${describeValue(coefficient)}`,
       );
     }
   }

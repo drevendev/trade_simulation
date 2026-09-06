@@ -16,7 +16,8 @@ import type {
   StateSeed,
   TransportLinkSeed,
 } from "./scenarioDefinition";
-import { assertNoBehavioralOverrides, validateScenarioContent } from "./validation";
+import { assertNoBehavioralOverrides, validateDefinitionPackContent, validateScenarioContent } from "./validation";
+import type { DefinitionPack, RecipeDefinition } from "./definitionPack";
 
 /** A minimal, well-formed `ScenarioDefinition`-shaped object (required keys only). */
 function minimalScenario(): Record<string, unknown> {
@@ -616,5 +617,115 @@ describe("validateScenarioContent", () => {
       ],
     });
     expect(() => validateScenarioContent(scenario)).toThrow(/wallet\["c-1"\].*Infinity/);
+  });
+});
+
+describe("validateDefinitionPackContent", () => {
+  function minimalGood(id: GoodId = "good:food" as GoodId): GoodDefinition {
+    return {
+      id,
+      name: "Food",
+      unitLabel: "unit",
+      spoilageRatePerTick: 0.02,
+      consumerNeedCategory: "SUBSISTENCE",
+      referencePrice: 2,
+      tradable: true,
+    };
+  }
+
+  function minimalRecipe(id: string = "recipe:1"): RecipeDefinition {
+    return {
+      id,
+      outputGoodId: "good:food" as GoodId,
+      outputPerBatch: 10,
+      inputsPerBatch: { "good:labor": 1 } as Record<GoodId, number>,
+      laborCategory: "GENERAL",
+      laborPerBatch: 2,
+      batchesPerCapitalUnit: 1,
+      investmentGoodsPerCapitalUnit: {} as Record<GoodId, number>,
+      minimumStartupCapital: 100,
+      baseThroughputFactor: 1,
+      depreciationRatePerTick: 0.01,
+    };
+  }
+
+  function minimalDefinitionPack(goods?: Record<GoodId | string, GoodDefinition>, recipes?: Record<string, RecipeDefinition>): DefinitionPack {
+    const defaultGoods = {
+      "good:food": minimalGood("good:food" as GoodId),
+      "good:labor": minimalGood("good:labor" as GoodId),
+    } as Record<GoodId, GoodDefinition>;
+
+    return {
+      id: "pack:1",
+      version: "1.0.0",
+      goods: goods || defaultGoods,
+      recipes: recipes || { "recipe:1": minimalRecipe("recipe:1") },
+      eventDefinitions: {},
+      metricDefinitions: {},
+    };
+  }
+
+  it("accepts a minimal well-formed DefinitionPack", () => {
+    const pack = minimalDefinitionPack();
+    expect(() => validateDefinitionPackContent(pack)).not.toThrow();
+  });
+
+  it("rejects a recipe with invalid outputGoodId", () => {
+    const recipe = minimalRecipe("recipe:1");
+    (recipe as unknown as Record<string, unknown>).outputGoodId = "good:nonexistent";
+    const pack = minimalDefinitionPack(undefined, { "recipe:1": recipe });
+    expect(() => validateDefinitionPackContent(pack)).toThrow(/outputGoodId.*non-existent Good/);
+  });
+
+  it("rejects a recipe with invalid inputsPerBatch key", () => {
+    const recipe = minimalRecipe("recipe:1");
+    (recipe as unknown as Record<string, unknown>).inputsPerBatch = { "good:nonexistent": 1 };
+    const pack = minimalDefinitionPack(undefined, { "recipe:1": recipe });
+    expect(() => validateDefinitionPackContent(pack)).toThrow(/inputsPerBatch\["good:nonexistent"\].*non-existent Good/);
+  });
+
+  it("rejects a recipe with invalid investmentGoodsPerCapitalUnit key", () => {
+    const recipe = minimalRecipe("recipe:1");
+    (recipe as unknown as Record<string, unknown>).investmentGoodsPerCapitalUnit = { "good:nonexistent": 1 };
+    const pack = minimalDefinitionPack(undefined, { "recipe:1": recipe });
+    expect(() => validateDefinitionPackContent(pack)).toThrow(/investmentGoodsPerCapitalUnit\["good:nonexistent"\].*non-existent Good/);
+  });
+
+  it("accepts a recipe with multiple valid inputsPerBatch keys", () => {
+    const recipe = minimalRecipe("recipe:1");
+    (recipe as unknown as Record<string, unknown>).inputsPerBatch = {
+      "good:food": 2,
+      "good:labor": 3,
+    };
+    const pack = minimalDefinitionPack(undefined, { "recipe:1": recipe });
+    expect(() => validateDefinitionPackContent(pack)).not.toThrow();
+  });
+
+  it("accepts a recipe with multiple valid investmentGoodsPerCapitalUnit keys", () => {
+    const recipe = minimalRecipe("recipe:1");
+    (recipe as unknown as Record<string, unknown>).investmentGoodsPerCapitalUnit = {
+      "good:food": 1,
+      "good:labor": 0.5,
+    };
+    const pack = minimalDefinitionPack(undefined, { "recipe:1": recipe });
+    expect(() => validateDefinitionPackContent(pack)).not.toThrow();
+  });
+
+  it("rejects a recipe with one invalid key among multiple inputsPerBatch keys", () => {
+    const recipe = minimalRecipe("recipe:1");
+    (recipe as unknown as Record<string, unknown>).inputsPerBatch = {
+      "good:food": 2,
+      "good:nonexistent": 3,
+    };
+    const pack = minimalDefinitionPack(undefined, { "recipe:1": recipe });
+    expect(() => validateDefinitionPackContent(pack)).toThrow(/inputsPerBatch\["good:nonexistent"\].*non-existent Good/);
+  });
+
+  it("validates all recipes in the pack, failing on the first invalid reference", () => {
+    const recipe1 = minimalRecipe("recipe:1");
+    const recipe2 = minimalRecipe("recipe:2");
+    (recipe2 as unknown as Record<string, unknown>).outputGoodId = "good:nonexistent";
+    const pack = minimalDefinitionPack(undefined, { "recipe:1": recipe1, "recipe:2": recipe2 });
+    expect(() => validateDefinitionPackContent(pack)).toThrow(/recipe:2.*outputGoodId.*non-existent Good/);
   });
 });
