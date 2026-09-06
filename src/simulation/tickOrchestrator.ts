@@ -48,6 +48,11 @@ export interface PendingTransitions {
     readonly nextControllerStateId: StateId | null;
     readonly activateTick: number;
   }>;
+  readonly stateCreations: ReadonlyArray<{
+    readonly stateId: StateId;
+    readonly activateTick: number;
+    readonly payload: unknown;
+  }>;
   readonly policyChanges: ReadonlyArray<{
     readonly stateId: StateId;
     readonly patch: unknown;

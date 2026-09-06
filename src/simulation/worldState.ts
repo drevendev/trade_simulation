@@ -27,6 +27,8 @@ import {
   type WorldGenesisLedger,
   type GenesisRecord,
 } from "../domain/genesisLedger";
+import type { PendingTransitions } from "../domain/pendingTransitions";
+import { createEmptyPendingTransitions } from "../domain/pendingTransitions";
 import { reconcileGenesisStocks } from "./genesisReconciliation";
 import type {
   ClanSeed,
@@ -56,6 +58,7 @@ export interface WorldState {
   readonly definitionRegistry: DefinitionRegistry;
   readonly simulationConfig: SimulationConfig;
   readonly worldGenesisLedger: WorldGenesisLedger;
+  readonly pendingTransitions: PendingTransitions;
   readonly regions: ReadonlyMap<RegionId, RegionState>;
   readonly states: ReadonlyMap<StateId, StateState>;
   readonly currencies: ReadonlyMap<CurrencyId, CurrencyState>;
@@ -480,7 +483,7 @@ export function buildInitialWorld(
   // (No stochastic event is realized during construction)
 
   // Step 14: Initialize empty shipments and PendingTransitions
-  // (Handled implicitly in WorldState definition)
+  const pendingTransitions = createEmptyPendingTransitions();
 
   // Step 15: Build DefinitionRegistry and resolve SimulationConfig
   const definitionRegistry = buildDefinitionRegistry(definitionPack);
@@ -519,6 +522,7 @@ export function buildInitialWorld(
     definitionRegistry,
     simulationConfig: frozenConfig,
     worldGenesisLedger,
+    pendingTransitions,
     regions: regionRegistry,
     states: stateRegistry,
     currencies: currencyRegistry,
