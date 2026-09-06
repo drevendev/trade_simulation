@@ -361,6 +361,35 @@ describe("reconcileGenesisStocks", () => {
         expect(result.details.actual).toBeLessThan(result.details.expected);
       }
     });
+
+    it("bond opening records do not affect money reconciliation", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Get a currency and a clan from the world state
+      const currencyId = Array.from(worldState.currencies.keys())[0];
+      const clanId = Array.from(worldState.clans.keys())[0];
+      expect(currencyId).toBeDefined();
+      expect(clanId).toBeDefined();
+      if (!currencyId || !clanId) return;
+
+      // Create a modified ledger with an additional bond opening record
+      const bondRecord: GenesisRecord = {
+        type: "BOND_OPENING_POSITION",
+        owner: { type: "CLAN", clanId },
+        currencyId,
+        amount: 1000,
+        sourceSeedKey: "test-bond",
+      };
+      const modifiedRecords = [...worldState.worldGenesisLedger.records, bondRecord];
+      const modifiedLedger = { records: modifiedRecords };
+
+      // Reconciliation should succeed because bond opening is separate from money reconciliation
+      const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
+      expect(result.success).toBe(true);
+    });
   });
 
   describe("diagnostic output", () => {

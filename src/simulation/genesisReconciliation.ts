@@ -44,10 +44,14 @@ export function reconcileGenesisStocks(
   ledger.records.forEach((record) => {
     switch (record.type) {
       case "MONEY_ENDOWMENT":
-      case "BOND_OPENING_POSITION":
       case "FX_POOL_OPENING": {
         const current = expectedMoneyByFormula.get(record.currencyId) ?? 0;
         expectedMoneyByFormula.set(record.currencyId, current + record.amount);
+        break;
+      }
+      case "BOND_OPENING_POSITION": {
+        // Bonds are debt claims/securities, not additional currency stocks.
+        // Bond holdings have their own invariant (sum holdings == principal).
         break;
       }
       case "GOOD_ENDOWMENT": {
