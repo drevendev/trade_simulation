@@ -10,6 +10,8 @@
 
 import type { RegionId, StateId, CurrencyId, CohortId, ProductionUnitId, MonetaryAuthorityId } from "../domain/id";
 import type { WorldState } from "./worldState";
+import type { PendingTransitions } from "./pendingTransitions";
+export type { PendingTransitions };
 import { createHash } from "crypto";
 
 /**
@@ -38,27 +40,6 @@ export interface EconomicTransaction {
   readonly reason: string;
 }
 
-/**
- * Pending regime/policy changes queued for phase N+1 and later activation.
- * Deterministic causality: Phase-14 decisions cannot affect Phase N effective jurisdiction.
- */
-export interface PendingTransitions {
-  readonly jurisdictionChanges: ReadonlyArray<{
-    readonly regionId: RegionId;
-    readonly nextControllerStateId: StateId | null;
-    readonly activateTick: number;
-  }>;
-  readonly policyChanges: ReadonlyArray<{
-    readonly stateId: StateId;
-    readonly patch: unknown;
-    readonly activateTick: number;
-  }>;
-  readonly monetaryPolicyChanges: ReadonlyArray<{
-    readonly authorityId: MonetaryAuthorityId;
-    readonly patch: unknown;
-    readonly activateTick: number;
-  }>;
-}
 
 export const PHASE_NAMES = [
   "BeginTick",

@@ -44,6 +44,7 @@ import type { DefinitionPack } from "../config/definitionPack";
 import type { SimulationConfig } from "../config/simulationConfig";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
+import { createEmptyPendingTransitions, type PendingTransitions } from "./pendingTransitions";
 
 /**
  * Canonical world state: all registries and resolved configuration.
@@ -56,6 +57,7 @@ export interface WorldState {
   readonly definitionRegistry: DefinitionRegistry;
   readonly simulationConfig: SimulationConfig;
   readonly worldGenesisLedger: WorldGenesisLedger;
+  readonly pendingTransitions: PendingTransitions;
   readonly regions: ReadonlyMap<RegionId, RegionState>;
   readonly states: ReadonlyMap<StateId, StateState>;
   readonly currencies: ReadonlyMap<CurrencyId, CurrencyState>;
@@ -519,6 +521,7 @@ export function buildInitialWorld(
     definitionRegistry,
     simulationConfig: frozenConfig,
     worldGenesisLedger,
+    pendingTransitions: createEmptyPendingTransitions(),
     regions: regionRegistry,
     states: stateRegistry,
     currencies: currencyRegistry,
