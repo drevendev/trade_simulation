@@ -588,6 +588,8 @@ interface GenesisRecord {
   sourceSeedKey: string;  
 }
 
+For MONEY\_ENDOWMENT, GOOD\_ENDOWMENT and CAPITAL\_ENDOWMENT, \`owner\` identifies the authoritative holder of the recorded stock. ActorRef therefore includes \`ProductionUnit { productionUnitId }\`. A ProductionUnit wallet and its input/output/investment inventories are ProductionUnit-owned stocks even when the unit's equity/public owner is a Clan or State; genesis records must reference the ProductionUnit itself and must never reattribute those balances to its owner. This preserves one-stock/one-owner and prevents double counting.
+
 FX\_POOL\_OPENING records one explicit FxPoolSeed cash side: currencyId identifies the side currency, amount is that side's opening cash, and sourceSeedKey identifies the owning FxPoolSeed pair. It has no ActorRef because pool reserves are distinct from State/Clan wallets and must be counted exactly once. Genesis records explain opening balance-sheet stocks but do not pretend that a historical counterparty transaction occurred before tick 0\. For every currency, sum actor/pool opening balances must exactly equal opening transaction money reported by the monetary diagnostic. For every good, opening inventories \+ capital-converted goods already represented as capital \+ shipments(0) must match genesis goods after documented conversion. Resource deposits are natural endowments and are not market inventory.
 
 ## 21\. Validation rules

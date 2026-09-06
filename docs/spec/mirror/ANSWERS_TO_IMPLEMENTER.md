@@ -423,3 +423,15 @@ Implementation guidance: retain the \`FX\_POOL\_OPENING\` variant and the separa
 No money quantity, reconciliation identity, FX rule, stock ownership, phase order, acceptance threshold or v1 scope changed.  
 STATUS: RESOLVED — SPEC\_REPRESENTATION\_REPAIR
 
+2026-09-06 — CODE\_RUNTIME\_QA\_M1\_13 / HANDOFF-REPAIR-014 — PR \#179 ProductionUnit genesis ownership  
+REQ\_ID: REQ-CONFIG-004
+
+Observed: current PR \#179 records each ProductionUnit opening wallet and input/output inventories as MONEY\_ENDOWMENT / GOOD\_ENDOWMENT with \`owner: { type: "Clan", clanId: "" as any }\`. Its own PR notes say ProductionUnit balances are attributed to the Clan owner. Canonical stock discipline, however, treats the ProductionUnit wallet and its typed inventories as stocks of the ProductionUnit itself; Clan/State ownership of the unit is an ownership relation, not relocation of those balances. The current GenesisRecord ActorRef vocabulary omitted ProductionUnit, which forced implementation toward a fabricated owner.
+
+Finding and repair: this is a real specification-representation gap exposed by implementation. Canonical Config and Handoff/03 section 20 now state that MONEY\_ENDOWMENT, GOOD\_ENDOWMENT and CAPITAL\_ENDOWMENT identify the authoritative stock holder and ActorRef therefore includes \`ProductionUnit { productionUnitId }\`. ProductionUnit wallet/input/output/investment balances must be recorded against that ProductionUnit and never against its Clan/State owner. This preserves one-stock/one-owner and prevents double counting or false ownership in opening reconciliation.
+
+Implementation guidance for PR \#179: extend ActorRef with ProductionUnitId; replace every fabricated Clan owner for ProductionUnit records with the actual productionUnitId already allocated in buildInitialWorld(); record input, output and investment inventories under that same ProductionUnit owner; likewise attribute installed capital through CAPITAL\_ENDOWMENT to the ProductionUnit when that record is emitted. Do not move these balances into Clan or State stocks. HANDOFF-REPAIR-013 remains valid for FX pools. The earlier CONFIG-003 RecipeDefinition-validation and LocalMarket embedded-ID gate debts remain outstanding and are not waived or re-counted by this run.
+
+No stock amount, equity/public ownership relationship, production mechanic, reconciliation identity, phase order, acceptance threshold or v1 scope changed.  
+STATUS: RESOLVED — SPEC\_REPRESENTATION\_REPAIR / IMPLEMENTATION\_REPAIR\_REQUIRED
+
