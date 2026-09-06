@@ -143,6 +143,62 @@ describe("WorldGenesisLedger", () => {
     expect(updated.records[0]).toEqual(record);
   });
 
+  it("accepts money endowment records with ProductionUnit owner", () => {
+    const ledger = createEmptyWorldGenesisLedger();
+    const allocator = createIdAllocator();
+    const productionUnitId = allocator.allocate("ProductionUnit", "test-pu");
+
+    const record: GenesisRecord = {
+      type: "MONEY_ENDOWMENT",
+      owner: { type: "PRODUCTION_UNIT", productionUnitId },
+      currencyId: allocator.allocate("Currency", "test-currency"),
+      amount: 1000,
+      sourceSeedKey: "test-seed",
+    };
+
+    const updated = addGenesisRecord(ledger, record);
+    expect(updated.records).toHaveLength(1);
+    expect(updated.records[0]).toEqual(record);
+  });
+
+  it("accepts good endowment records with ProductionUnit owner", () => {
+    const ledger = createEmptyWorldGenesisLedger();
+    const allocator = createIdAllocator();
+    const productionUnitId = allocator.allocate("ProductionUnit", "test-pu");
+
+    const record: GenesisRecord = {
+      type: "GOOD_ENDOWMENT",
+      owner: { type: "PRODUCTION_UNIT", productionUnitId },
+      regionId: allocator.allocate("Region", "test-region"),
+      goodId: allocator.allocate("Good", "test-good"),
+      amount: 500,
+      sourceSeedKey: "test-seed",
+    };
+
+    const updated = addGenesisRecord(ledger, record);
+    expect(updated.records).toHaveLength(1);
+    expect(updated.records[0]).toEqual(record);
+  });
+
+  it("accepts capital endowment records with ProductionUnit owner", () => {
+    const ledger = createEmptyWorldGenesisLedger();
+    const allocator = createIdAllocator();
+    const productionUnitId = allocator.allocate("ProductionUnit", "test-pu");
+
+    const record: GenesisRecord = {
+      type: "CAPITAL_ENDOWMENT",
+      owner: { type: "PRODUCTION_UNIT", productionUnitId },
+      regionId: allocator.allocate("Region", "test-region"),
+      goodId: allocator.allocate("Good", "test-capital-good"),
+      amount: 50,
+      sourceSeedKey: "test-seed",
+    };
+
+    const updated = addGenesisRecord(ledger, record);
+    expect(updated.records).toHaveLength(1);
+    expect(updated.records[0]).toEqual(record);
+  });
+
   it("maintains immutability: original ledger unchanged after add", () => {
     const ledger = createEmptyWorldGenesisLedger();
     const allocator = createIdAllocator();

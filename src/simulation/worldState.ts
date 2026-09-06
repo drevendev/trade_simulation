@@ -21,7 +21,12 @@ import type {
   TransportLinkId,
 } from "../domain/id";
 import { buildWorldRegistries } from "../domain/worldRegistries";
-import { createEmptyWorldGenesisLedger, type WorldGenesisLedger } from "../domain/genesisLedger";
+import {
+  createEmptyWorldGenesisLedger,
+  addGenesisRecord,
+  type WorldGenesisLedger,
+  type GenesisRecord,
+} from "../domain/genesisLedger";
 import type {
   ClanSeed,
   CohortSeed,
@@ -116,6 +121,7 @@ export interface TransportLinkState {
 /**
  * Builds canonical WorldState by executing the 17-step initialization order.
  * Same scenario/config/seed => byte-equivalent output after normalized serialization.
+ * REQ-CONFIG-004 Part 2/4: Tracks opening stocks through buildInitialWorld() steps.
  */
 export function buildInitialWorld(
   scenarioDefinition: ScenarioDefinition,
@@ -130,6 +136,9 @@ export function buildInitialWorld(
   const allocator = createIdAllocator();
   const idMap = resolveStableIds(scenarioDefinition, allocator);
 
+  // Initialize WorldGenesisLedger for tracking opening stocks (REQ-CONFIG-004)
+  let worldGenesisLedger = createEmptyWorldGenesisLedger();
+
   // Step 3: Instantiate Currency and MonetaryAuthority registries
   const currencyRegistry = new Map(
     (scenarioDefinition.currencies ?? []).map((currencySeed) => [
@@ -137,19 +146,86 @@ export function buildInitialWorld(
       buildCurrencyState(currencySeed, idMap),
     ]),
   );
-  const authorityRegistry = new Map(
-    (scenarioDefinition.monetaryAuthorities ?? []).map((authoritySeed) => [
-      idMap.authorityIds.get(authoritySeed.key)!,
-      buildMonetaryAuthorityState(authoritySeed, idMap),
-    ]),
-  );
+
+  const authorityRegistry = new Map();
+  (scenarioDefinition.monetaryAuthorities ?? []).forEach((authoritySeed) => {
+    const authorityId = idMap.authorityIds.get(authoritySeed.key)!;
+    const authorityState = buildMonetaryAuthorityState(authoritySeed, idMap);
+    authorityRegistry.set(authorityId, authorityState);
+
+    // Track authority wallet opening balances (money endowment)
+    Object.entries(authoritySeed.wallet ?? {}).forEach(([currencyKey, amount]) => {
+      if (typeof amount === "number" && amount > 0) {
+        const currencyId = idMap.currencyIds.get(currencyKey);
+        if (currencyId) {
+          const record: GenesisRecord = {
+            type: "MONEY_ENDOWMENT",
+            owner: { type: "STATE", stateId: authoritySeed.key as any }, // Placeholder; FX pool is tracked separately
+            currencyId,
+            amount,
+            sourceSeedKey: `${authoritySeed.key}.wallet.${currencyKey}`,
+          };
+          worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+        }
+      }
+    });
+
+    // Track FX pool opening balances
+    (authoritySeed.fxPools ?? []).forEach((fxPoolSeed) => {
+      const baseCurrencyId = idMap.currencyIds.get(fxPoolSeed.baseCurrencyKey);
+      const quoteCurrencyId = idMap.currencyIds.get(fxPoolSeed.quoteCurrencyKey);
+
+      if (baseCurrencyId && fxPoolSeed.cash) {
+        const amount = fxPoolSeed.cash[fxPoolSeed.baseCurrencyKey];
+        if (typeof amount === "number" && amount > 0) {
+          const record: GenesisRecord = {
+            type: "FX_POOL_OPENING",
+            currencyId: baseCurrencyId,
+            amount,
+            sourceSeedKey: `${authoritySeed.key}.fxPool.${fxPoolSeed.key}.base`,
+          };
+          worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+        }
+      }
+
+      if (quoteCurrencyId && fxPoolSeed.cash) {
+        const amount = fxPoolSeed.cash[fxPoolSeed.quoteCurrencyKey];
+        if (typeof amount === "number" && amount > 0) {
+          const record: GenesisRecord = {
+            type: "FX_POOL_OPENING",
+            currencyId: quoteCurrencyId,
+            amount,
+            sourceSeedKey: `${authoritySeed.key}.fxPool.${fxPoolSeed.key}.quote`,
+          };
+          worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+        }
+      }
+    });
+  });
 
   // Step 4: Instantiate Regions with deposits/infrastructure/settlement state
   const regionRegistry = new Map(
-    (scenarioDefinition.geography ?? []).map((regionSeed) => [
-      idMap.regionIds.get(regionSeed.key)!,
-      buildRegionState(regionSeed, idMap),
-    ]),
+    (scenarioDefinition.geography ?? []).map((regionSeed) => {
+      const regionId = idMap.regionIds.get(regionSeed.key)!;
+      const regionState = buildRegionState(regionSeed, idMap);
+
+      // Track resource endowments (REQ-CONFIG-004)
+      (regionSeed.deposits ?? []).forEach((deposit) => {
+        if (deposit.initialQuantity > 0) {
+          const goodId = deposit.resourceId as any; // Simplified; would need GoodId lookup
+          const record: GenesisRecord = {
+            type: "RESOURCE_ENDOWMENT",
+            regionId,
+            goodId,
+            amount: deposit.initialQuantity,
+            sourceSeedKey: `${regionSeed.key}.deposit.${deposit.resourceId}`,
+          };
+          worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+        }
+      });
+
+      return [regionId, regionState];
+    }),
   );
 
   // Step 5: Instantiate TransportLinks with deterministic directed expansion
@@ -161,12 +237,46 @@ export function buildInitialWorld(
   );
 
   // Step 6: Instantiate States and apply jurisdiction
-  const stateRegistry = new Map(
-    (scenarioDefinition.states ?? []).map((stateSeed) => [
-      idMap.stateIds.get(stateSeed.key)!,
-      buildStateState(stateSeed, idMap),
-    ]),
-  );
+  const stateRegistry = new Map();
+  (scenarioDefinition.states ?? []).forEach((stateSeed) => {
+    const stateId = idMap.stateIds.get(stateSeed.key)!;
+    const stateState = buildStateState(stateSeed, idMap);
+    stateRegistry.set(stateId, stateState);
+
+    // Track state treasury (money endowment)
+    Object.entries(stateSeed.treasury ?? {}).forEach(([currencyKey, amount]) => {
+      if (typeof amount === "number" && amount > 0) {
+        const currencyId = idMap.currencyIds.get(currencyKey);
+        if (currencyId) {
+          const record: GenesisRecord = {
+            type: "MONEY_ENDOWMENT",
+            owner: { type: "STATE", stateId },
+            currencyId,
+            amount,
+            sourceSeedKey: `${stateSeed.key}.treasury.${currencyKey}`,
+          };
+          worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+        }
+      }
+    });
+
+    // Track state public inventory (good endowment)
+    Object.entries(stateSeed.publicInventory ?? {}).forEach(([goodKey, amount]) => {
+      if (typeof amount === "number" && amount > 0) {
+        const goodId = goodKey as any; // Simplified; would need GoodId lookup
+        const regionId = scenarioDefinition.geography?.find((r) => r.key === stateSeed.key)?.key as any; // Placeholder
+        const record: GenesisRecord = {
+          type: "GOOD_ENDOWMENT",
+          owner: { type: "STATE", stateId },
+          regionId,
+          goodId,
+          amount,
+          sourceSeedKey: `${stateSeed.key}.publicInventory.${goodKey}`,
+        };
+        worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+      }
+    });
+  });
 
   // Update region controller references now that states are allocated
   regionRegistry.forEach((region) => {
@@ -180,20 +290,83 @@ export function buildInitialWorld(
   });
 
   // Step 7: Instantiate Clans and state relations
-  const clanRegistry = new Map(
-    (scenarioDefinition.clans ?? []).map((clanSeed) => [
-      idMap.clanIds.get(clanSeed.key ?? "")!,
-      { clanId: idMap.clanIds.get(clanSeed.key ?? "")!, seed: clanSeed } as ClanState,
-    ]),
-  );
+  const clanRegistry = new Map();
+  (scenarioDefinition.clans ?? []).forEach((clanSeed) => {
+    const clanId = idMap.clanIds.get(clanSeed.key ?? "")!;
+    clanRegistry.set(clanId, { clanId, seed: clanSeed } as ClanState);
+
+    // Track clan treasury (money endowment)
+    Object.entries(clanSeed.treasury ?? {}).forEach(([currencyKey, amount]) => {
+      if (typeof amount === "number" && amount > 0) {
+        const currencyId = idMap.currencyIds.get(currencyKey);
+        if (currencyId) {
+          const record: GenesisRecord = {
+            type: "MONEY_ENDOWMENT",
+            owner: { type: "CLAN", clanId },
+            currencyId,
+            amount,
+            sourceSeedKey: `${clanSeed.key}.treasury.${currencyKey}`,
+          };
+          worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+        }
+      }
+    });
+  });
 
   // Step 8: Instantiate Cohorts with bounded keyed variation
-  const cohortRegistry = new Map(
-    (scenarioDefinition.cohorts ?? []).map((cohortSeed) => [
-      idMap.cohortIds.get(cohortSeed.key ?? "")!,
-      { cohortId: idMap.cohortIds.get(cohortSeed.key ?? "")!, seed: cohortSeed } as CohortState,
-    ]),
-  );
+  const cohortRegistry = new Map();
+  (scenarioDefinition.cohorts ?? []).forEach((cohortSeed) => {
+    const cohortId = idMap.cohortIds.get(cohortSeed.key ?? "")!;
+    const regionId = idMap.regionIds.get(cohortSeed.regionKey)!;
+    const clanId = idMap.clanIds.get(cohortSeed.clanKey ?? "")!;
+
+    cohortRegistry.set(cohortId, { cohortId, seed: cohortSeed } as CohortState);
+
+    // Track cohort population endowment
+    if (cohortSeed.population > 0) {
+      const record: GenesisRecord = {
+        type: "POPULATION_ENDOWMENT",
+        owner: { type: "CLAN", clanId },
+        regionId,
+        amount: cohortSeed.population,
+        sourceSeedKey: `${cohortSeed.key}.population`,
+      };
+      worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+    }
+
+    // Track cohort wallet (money endowment)
+    Object.entries(cohortSeed.wallet ?? {}).forEach(([currencyKey, amount]) => {
+      if (typeof amount === "number" && amount > 0) {
+        const currencyId = idMap.currencyIds.get(currencyKey);
+        if (currencyId) {
+          const record: GenesisRecord = {
+            type: "MONEY_ENDOWMENT",
+            owner: { type: "CLAN", clanId },
+            currencyId,
+            amount,
+            sourceSeedKey: `${cohortSeed.key}.wallet.${currencyKey}`,
+          };
+          worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+        }
+      }
+    });
+
+    // Track cohort household inventory (good endowment)
+    Object.entries(cohortSeed.householdInventory ?? {}).forEach(([goodKey, amount]) => {
+      if (typeof amount === "number" && amount > 0) {
+        const goodId = goodKey as any; // Simplified; would need GoodId lookup
+        const record: GenesisRecord = {
+          type: "GOOD_ENDOWMENT",
+          owner: { type: "CLAN", clanId },
+          regionId,
+          goodId,
+          amount,
+          sourceSeedKey: `${cohortSeed.key}.householdInventory.${goodKey}`,
+        };
+        worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+      }
+    });
+  });
 
   // Step 9: Instantiate LocalMarkets (one per Region)
   const marketRegistry = new Map(
@@ -204,12 +377,99 @@ export function buildInitialWorld(
   );
 
   // Step 10: Instantiate ProductionUnits with capacity derivation
-  const productionUnitRegistry = new Map(
-    (scenarioDefinition.productionUnits ?? []).map((puSeed) => [
-      idMap.productionUnitIds.get(puSeed.key ?? "")!,
-      { productionUnitId: idMap.productionUnitIds.get(puSeed.key ?? "")!, seed: puSeed } as ProductionUnitState,
-    ]),
-  );
+  const productionUnitRegistry = new Map();
+  (scenarioDefinition.productionUnits ?? []).forEach((puSeed) => {
+    const productionUnitId = idMap.productionUnitIds.get(puSeed.key ?? "")!;
+    const regionId = idMap.regionIds.get(puSeed.regionKey)!;
+    productionUnitRegistry.set(
+      productionUnitId,
+      { productionUnitId, seed: puSeed } as ProductionUnitState,
+    );
+
+    // ProductionUnit is its own owner for opening-stock records (REQ-CONFIG-004 Part 2)
+    const puOwner = { type: "PRODUCTION_UNIT" as const, productionUnitId };
+
+    // Track PU wallet (money endowment, owned by PU itself)
+    Object.entries(puSeed.wallet ?? {}).forEach(([currencyKey, amount]) => {
+      if (typeof amount === "number" && amount > 0) {
+        const currencyId = idMap.currencyIds.get(currencyKey);
+        if (currencyId) {
+          const record: GenesisRecord = {
+            type: "MONEY_ENDOWMENT",
+            owner: puOwner,
+            currencyId,
+            amount,
+            sourceSeedKey: `${puSeed.key}.wallet.${currencyKey}`,
+          };
+          worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+        }
+      }
+    });
+
+    // Track PU input inventory (good endowment, owned by PU itself)
+    Object.entries(puSeed.inputInventory ?? {}).forEach(([goodKey, amount]) => {
+      if (typeof amount === "number" && amount > 0) {
+        const goodId = goodKey as any; // Simplified; would need GoodId lookup
+        const record: GenesisRecord = {
+          type: "GOOD_ENDOWMENT",
+          owner: puOwner,
+          regionId,
+          goodId,
+          amount,
+          sourceSeedKey: `${puSeed.key}.inputInventory.${goodKey}`,
+        };
+        worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+      }
+    });
+
+    // Track PU output inventory (good endowment, owned by PU itself)
+    Object.entries(puSeed.outputInventory ?? {}).forEach(([goodKey, amount]) => {
+      if (typeof amount === "number" && amount > 0) {
+        const goodId = goodKey as any; // Simplified; would need GoodId lookup
+        const record: GenesisRecord = {
+          type: "GOOD_ENDOWMENT",
+          owner: puOwner,
+          regionId,
+          goodId,
+          amount,
+          sourceSeedKey: `${puSeed.key}.outputInventory.${goodKey}`,
+        };
+        worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+      }
+    });
+
+    // Track PU investment inventory (good endowment, owned by PU itself)
+    Object.entries(puSeed.investmentInventory ?? {}).forEach(([goodKey, amount]) => {
+      if (typeof amount === "number" && amount > 0) {
+        const goodId = goodKey as any; // Simplified; would need GoodId lookup
+        const record: GenesisRecord = {
+          type: "GOOD_ENDOWMENT",
+          owner: puOwner,
+          regionId,
+          goodId,
+          amount,
+          sourceSeedKey: `${puSeed.key}.investmentInventory.${goodKey}`,
+        };
+        worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+      }
+    });
+
+    // Track PU installed capital (capital endowment, owned by PU itself)
+    // Note: installedCapital represents existing capital goods converted; need GoodId from recipe
+    if (puSeed.installedCapital > 0) {
+      // For now, use a placeholder; will be resolved with recipe
+      const capitalGoodId = "capital" as any;
+      const record: GenesisRecord = {
+        type: "CAPITAL_ENDOWMENT",
+        owner: puOwner,
+        regionId,
+        goodId: capitalGoodId,
+        amount: puSeed.installedCapital,
+        sourceSeedKey: `${puSeed.key}.installedCapital`,
+      };
+      worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+    }
+  });
 
   // Step 11: Instantiate bonds/holdings (if declared)
   // Step 12: Instantiate FX pools and validate reserve accounting
@@ -224,9 +484,6 @@ export function buildInitialWorld(
   // Step 15: Build DefinitionRegistry and resolve SimulationConfig
   const definitionRegistry = buildDefinitionRegistry(definitionPack);
   const frozenConfig = Object.freeze(resolvedConfig);
-
-  // Prepare WorldGenesisLedger for opening-stock recording (REQ-CONFIG-004)
-  let worldGenesisLedger = createEmptyWorldGenesisLedger();
 
   // Step 16: Normalize sparse maps and run initialization invariants
   validateInitializationInvariants(
