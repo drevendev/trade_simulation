@@ -487,7 +487,7 @@ interface RecipeDefinition {
   baseThroughputFactor: number;  
   depreciationRatePerTick: number;  
 }  
-Validation is unchanged from the production contract: positive output and batches-per-capital-unit, non-negative input/labor/startup-capital quantities, \[0,1\] infrastructure factor where present, positive extraction amount when an extraction resource is named, positive baseThroughputFactor, and depreciationRatePerTick in \[0,1). M1 only authors and validates immutable recipe data; it does not implement production, labor allocation, investment, or depreciation behavior.
+Validation is unchanged from the production contract: positive output, declared input coefficients and batches-per-capital-unit; non-negative labor/startup-capital quantities; \[0,1\] infrastructure factor where present; positive extraction amount when an extraction resource is named; positive baseThroughputFactor; and depreciationRatePerTick in \[0,1). An empty inputsPerBatch map is valid, but every declared input coefficient must be strictly positive. M1 only authors and validates immutable recipe data; it does not implement production, labor allocation, investment, or depreciation behavior.
 
 FxPoolSeed is the scenario initialization projection of the canonical FxLiquidityPoolState owned by MARKETS\_TRADE\_FX\_CONTRACTS:  
 interface FxPoolSeed {  
