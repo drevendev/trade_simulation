@@ -42,6 +42,7 @@ import type {
 } from "../config/scenarioDefinition";
 import type { DefinitionPack } from "../config/definitionPack";
 import type { SimulationConfig } from "../config/simulationConfig";
+import { validateDefinitionPack } from "../config/validation";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
 
@@ -371,10 +372,13 @@ export function buildInitialWorld(
 
   // Step 9: Instantiate LocalMarkets (one per Region)
   const marketRegistry = new Map(
-    (scenarioDefinition.markets ?? []).map((marketSeed) => [
-      idMap.marketIds.get(marketSeed.regionKey ?? "")!,
-      buildLocalMarketState(marketSeed, definitionPack),
-    ]),
+    (scenarioDefinition.markets ?? []).map((marketSeed) => {
+      const marketId = idMap.marketIds.get(marketSeed.regionKey ?? "")!;
+      return [
+        marketId,
+        buildLocalMarketState(marketId, marketSeed, definitionPack),
+      ];
+    }),
   );
 
   // Step 10: Instantiate ProductionUnits with capacity derivation
@@ -665,9 +669,9 @@ function buildMonetaryAuthorityState(seed: MonetaryAuthoritySeed, idMap: IdMaps)
   };
 }
 
-function buildLocalMarketState(seed: MarketSeed, definitionPack: DefinitionPack): LocalMarketState {
+function buildLocalMarketState(marketId: MarketId, seed: MarketSeed, definitionPack: DefinitionPack): LocalMarketState {
   return {
-    marketId: undefined as unknown as MarketId,
+    marketId,
     seed,
   };
 }
@@ -704,6 +708,8 @@ function validateWorldGenesis(
   if (!scenario.id || !scenario.version) {
     throw new Error("Scenario must have id and version");
   }
+
+  validateDefinitionPack(definitionPack);
 
   const seenKeys = new Set<string>();
   const checkUniqueness = (list: ReadonlyArray<{ key?: string }> | undefined, entityName: string) => {

@@ -14,6 +14,7 @@
  */
 import { isFiniteCanonicalNumber } from "../domain/numeric";
 import type { CohortSeed, MarketSeed, ProductionUnitSeed, RegionSeed, ScenarioDefinition, TransportLinkSeed } from "./scenarioDefinition";
+import type { DefinitionPack, RecipeDefinition } from "./definitionPack";
 import { SIMULATION_CONFIG_BEHAVIORAL_KEYS } from "./simulationConfig";
 import { SCENARIO_DEFINITION_KEYS } from "./scenarioDefinition";
 
@@ -419,6 +420,110 @@ function validateScenarioVariation(variation: unknown): void {
           `ScenarioVariationConfig.${field} must have min <= max, got [${min}, ${max}]`,
         );
       }
+    }
+  }
+}
+
+/**
+ * Validates DefinitionPack structure and all RecipeDefinition bounds per section 16A.
+ * Throws with diagnostics if any recipe violates the constraints:
+ * - positive output and batches-per-capital-unit
+ * - non-negative input/labor/startup-capital quantities
+ * - [0,1] infrastructure factor where present
+ * - positive extraction amount when extraction resource is named
+ * - positive baseThroughputFactor
+ * - depreciationRatePerTick in [0,1)
+ */
+export function validateDefinitionPack(definitionPack: DefinitionPack): void {
+  if (!definitionPack.id || !definitionPack.version) {
+    throw new Error("DefinitionPack must have id and version");
+  }
+
+  if (typeof definitionPack.recipes !== "object" || definitionPack.recipes === null) {
+    throw new Error("DefinitionPack must have a recipes object");
+  }
+
+  if (typeof definitionPack.goods !== "object" || definitionPack.goods === null) {
+    throw new Error("DefinitionPack must have a goods object");
+  }
+
+  const goodIds = new Set(Object.keys(definitionPack.goods));
+
+  for (const recipeId of Object.keys(definitionPack.recipes)) {
+    const recipe = definitionPack.recipes[recipeId];
+    if (!recipe) continue;
+
+    validateRecipeDefinition(recipe as RecipeDefinition, recipeId, goodIds);
+  }
+}
+
+function validateRecipeDefinition(recipe: RecipeDefinition, recipeId: string, goodIds: Set<string>): void {
+  // Validate positive output
+  if (!isFiniteCanonicalNumber(recipe.outputPerBatch) || recipe.outputPerBatch <= 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": outputPerBatch must be positive, got ${describeValue(recipe.outputPerBatch)}`,
+    );
+  }
+
+  // Validate positive batches-per-capital-unit
+  if (!isFiniteCanonicalNumber(recipe.batchesPerCapitalUnit) || recipe.batchesPerCapitalUnit <= 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": batchesPerCapitalUnit must be positive, got ${describeValue(recipe.batchesPerCapitalUnit)}`,
+    );
+  }
+
+  // Validate positive baseThroughputFactor
+  if (!isFiniteCanonicalNumber(recipe.baseThroughputFactor) || recipe.baseThroughputFactor <= 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": baseThroughputFactor must be positive, got ${describeValue(recipe.baseThroughputFactor)}`,
+    );
+  }
+
+  // Validate depreciationRatePerTick in [0,1)
+  if (!isFiniteCanonicalNumber(recipe.depreciationRatePerTick) || recipe.depreciationRatePerTick < 0 || recipe.depreciationRatePerTick >= 1) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": depreciationRatePerTick must be in [0,1), got ${describeValue(recipe.depreciationRatePerTick)}`,
+    );
+  }
+
+  // Validate non-negative labor
+  if (!isFiniteCanonicalNumber(recipe.laborPerBatch) || recipe.laborPerBatch < 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": laborPerBatch must be non-negative, got ${describeValue(recipe.laborPerBatch)}`,
+    );
+  }
+
+  // Validate non-negative startup capital
+  if (!isFiniteCanonicalNumber(recipe.minimumStartupCapital) || recipe.minimumStartupCapital < 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": minimumStartupCapital must be non-negative, got ${describeValue(recipe.minimumStartupCapital)}`,
+    );
+  }
+
+  // Validate input quantities are non-negative
+  for (const [goodId, quantity] of Object.entries(recipe.inputsPerBatch ?? {})) {
+    if (!isFiniteCanonicalNumber(quantity) || (quantity as number) < 0) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": inputsPerBatch["${goodId}"] must be non-negative, got ${describeValue(quantity)}`,
+      );
+    }
+  }
+
+  // Validate infrastructure factor where present
+  if (recipe.minimumInfrastructureFactor !== undefined) {
+    if (!isFiniteCanonicalNumber(recipe.minimumInfrastructureFactor) || recipe.minimumInfrastructureFactor < 0 || recipe.minimumInfrastructureFactor > 1) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": minimumInfrastructureFactor must be in [0,1] when present, got ${describeValue(recipe.minimumInfrastructureFactor)}`,
+      );
+    }
+  }
+
+  // Validate extraction amount when extraction resource is named
+  if (recipe.extractionResourceId !== undefined) {
+    if (!isFiniteCanonicalNumber(recipe.extractedResourcePerBatch) || (recipe.extractedResourcePerBatch as number) <= 0) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": extractedResourcePerBatch must be positive when extractionResourceId is named, got ${describeValue(recipe.extractedResourcePerBatch)}`,
+      );
     }
   }
 }
