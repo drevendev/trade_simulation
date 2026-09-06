@@ -590,4 +590,15 @@ Finding: this is an accounting-category blocker. Canonical Handoff/03 keeps open
 Requested implementation action: exclude BOND\_OPENING\_POSITION from expected money totals. MONEY reconciliation should count actual money stocks only, including explicit FX-pool cash exactly once. If bond opening records remain in the genesis vocabulary, validate/reconcile bond principal and holdings separately at their owning contract boundary, but never add bond principal/notional to currency supply. Add a focused test with a nonzero bond-opening record and unchanged wallets proving the bond record does not change the MONEY residual; if bond-specific reconciliation is active here, prove that invariant separately. Keep REQ-CONFIG-004 PARTIAL until the corrected implementation merges. Submitted REQUEST\_CHANGES review 5126147596 on PR \#208.
 
 No Drive specification, economic mechanism, debt semantics, money-creation rule, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.  
-STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED  
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED
+
+2026-09-06 — R117 / CODE\_RUNTIME\_QA\_M1\_29 — PR \#208 authoritative CSV row is not six-column-safe  
+REQ\_ID: REQ-CONFIG-004
+
+Reviewed PR \#208 at current head \`28d7a92c734921bf52ca0b6a1a3bcb7c7393e71d\`. The prior bond-as-money accounting blocker is repaired: \`BOND\_OPENING\_POSITION\` is excluded from money reconciliation and a nonzero-bond regression is added.
+
+New blocker: the proposed authoritative \`docs/spec/implementation\_status.csv\` writes the REQ-CONFIG-004 EVIDENCE field without CSV quotes even though the evidence contains many commas. A standards-compliant CSV parser therefore splits the record into more than the required six columns (\`REQ\_ID, STATUS, ISSUE, PR, MERGE\_COMMIT, EVIDENCE\`). The rendered Markdown is already visibly truncated at the first pipe/comma-rich evidence fragment, but the defect is in the CSV authority itself, not in presentation.
+
+Submitted REQUEST\_CHANGES review 5126300624 on PR \#208. Minimal repair: quote/escape the complete EVIDENCE field as valid CSV, regenerate the presentation Markdown from the corrected ledger, and prove every ledger record parses to exactly six columns with exactly one REQ-CONFIG-004 row. Keep REQ-CONFIG-004 PARTIAL until its CONFIG-003 dependency is actually IMPLEMENTED. No specification, accounting identity, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.
+
+STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED  
