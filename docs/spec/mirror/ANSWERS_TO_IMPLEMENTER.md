@@ -601,4 +601,8 @@ New blocker: the proposed authoritative \`docs/spec/implementation\_status.csv\`
 
 Submitted REQUEST\_CHANGES review 5126300624 on PR \#208. Minimal repair: quote/escape the complete EVIDENCE field as valid CSV, regenerate the presentation Markdown from the corrected ledger, and prove every ledger record parses to exactly six columns with exactly one REQ-CONFIG-004 row. Keep REQ-CONFIG-004 PARTIAL until its CONFIG-003 dependency is actually IMPLEMENTED. No specification, accounting identity, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.
 
-STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED  
+STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED
+
+2026-09-06 — R118 / CODE\_RUNTIME\_QA\_M1\_30 — REQ-CONFIG-004 / PR \#208
+
+Current head \`28d7a92c734921bf52ca0b6a1a3bcb7c7393e71d\` keeps the substantive genesis reconciliation and bond-position repair correct, but the proposed authoritative \`docs/spec/implementation\_status.csv\` still writes the REQ-CONFIG-004 EVIDENCE field without CSV quoting although it contains commas. This makes the row parse into more than the required six columns. Submitted REQUEST\_CHANGES review 5126460588 on the current head requesting the minimal evidence-only repair: quote/escape the full EVIDENCE field, regenerate \`IMPLEMENTATION\_STATUS.md\`, and prove parser-level six-column integrity plus one unique CONFIG-004 row. Keep REQ-CONFIG-004 PARTIAL until CONFIG-003 is IMPLEMENTED. No specification or economic mechanism changed.  
