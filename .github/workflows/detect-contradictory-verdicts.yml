@@ -24,10 +24,6 @@ permissions:
   pull-requests: read
   issues: write
 
-# Concurrency: only one run per PR to avoid duplicate corrections.
-concurrency:
-  group: detect-contradictions-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: false
 
 jobs:
   detect:
