@@ -8,9 +8,6 @@
 import type { DefinitionRegistry } from "../domain/definitionRegistry";
 import { buildDefinitionRegistry } from "../domain/definitionRegistry";
 import { createIdAllocator, allocateInCreationKeyOrder } from "../domain/id";
-import type { WorldGenesisLedger } from "../domain/genesisLedger";
-import { createEmptyWorldGenesisLedger, addGenesisRecord } from "../domain/genesisLedger";
-import { reconcileGenesisStocks } from "./genesisReconciliation";
 import type {
   ClanId,
   CohortId,
@@ -30,6 +27,7 @@ import {
   type WorldGenesisLedger,
   type GenesisRecord,
 } from "../domain/genesisLedger";
+import { reconcileGenesisStocks } from "./genesisReconciliation";
 import type {
   ClanSeed,
   CohortSeed,
@@ -502,7 +500,7 @@ export function buildInitialWorld(
   );
 
   // REQ-CONFIG-004: Reconcile opening stocks before returning WorldState
-  const reconciliationResult = reconcileGenesisStocks(genesisLedger, frozenConfig);
+  const reconciliationResult = reconcileGenesisStocks(worldGenesisLedger, frozenConfig);
   if (!reconciliationResult.success) {
     throw new Error(
       `Genesis reconciliation failed: ${reconciliationResult.errorMessage}\n` +
