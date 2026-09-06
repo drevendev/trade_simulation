@@ -31,6 +31,14 @@ export {
   noOpPhaseHandler,
   type TickContext,
   type EconomicTransaction,
-  type PendingTransitions,
   type PhaseHandler,
 } from "./tickOrchestrator";
+
+export {
+  createEmptyPendingTransitions,
+  type JurisdictionChange,
+  type PendingStateCreation,
+  type PolicyChange,
+  type MonetaryPolicyChange,
+  type PendingTransitions,
+} from "./pendingTransitions";

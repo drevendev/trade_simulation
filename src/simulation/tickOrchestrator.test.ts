@@ -15,9 +15,9 @@ import {
   noOpPhaseHandler,
   type PhaseHandler,
   type TickContext,
-  type PendingTransitions,
 } from "./tickOrchestrator";
 import type { WorldState } from "./worldState";
+import { createEmptyPendingTransitions, type PendingTransitions } from "./pendingTransitions";
 import type { RegionId, StateId } from "../domain/id";
 import type { SimulationConfig } from "../config/simulationConfig";
 
@@ -50,6 +50,7 @@ function createTestWorldState(): WorldState {
     configVersion: "1.0",
     scenarioId: "test-scenario",
     seed: 42,
+    tick: 0,
     definitionRegistry: {
       goods: {},
       recipes: {},
@@ -60,6 +61,7 @@ function createTestWorldState(): WorldState {
     worldGenesisLedger: {
       records: [],
     },
+    pendingTransitions: createEmptyPendingTransitions(),
     regions: new Map(),
     states: new Map(),
     currencies: new Map(),
@@ -69,17 +71,6 @@ function createTestWorldState(): WorldState {
     productionUnits: new Map(),
     markets: new Map(),
     transportLinks: new Map(),
-  };
-}
-
-/**
- * Create empty PendingTransitions for tests.
- */
-function createEmptyPendingTransitions(): PendingTransitions {
-  return {
-    jurisdictionChanges: [],
-    policyChanges: [],
-    monetaryPolicyChanges: [],
   };
 }
 
@@ -376,6 +367,7 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
       const world = createTestWorldState();
       const pending: PendingTransitions = {
         jurisdictionChanges: [],
+        stateCreations: [],
         policyChanges: [
           {
             stateId: "STATE_1" as StateId,
@@ -414,6 +406,7 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
 
       const pending: PendingTransitions = {
         jurisdictionChanges: [],
+        stateCreations: [],
         policyChanges: [],
         monetaryPolicyChanges: [],
       };
