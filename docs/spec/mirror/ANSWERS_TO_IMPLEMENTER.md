@@ -578,4 +578,16 @@ Finding: this is a distinct implementation queue/evidence-gate defect. The regis
 
 Action: posted correction comment 5560750275 on Issue \#192. Treat it as blocked/non-selectable until CONFIG-003 repair merges and is evidenced, CONFIG-004 repair merges and is evidenced after that dependency, and the remaining M1 gate requirement REQ-VISUALIZATION-004 is accepted. Preserve already-open M2 work; do not claim M2 executable from the local depends-on row alone. No requirement meaning or economic mechanism changed.
 
-STATUS: IMPLEMENTATION\_DEPENDENCY\_GATE\_REPAIR\_REQUESTED  
+STATUS: IMPLEMENTATION\_DEPENDENCY\_GATE\_REPAIR\_REQUESTED
+
+2026-09-06 — R116 / CODE\_RUNTIME\_QA\_M1\_28 — PR \#208 counts bond principal as money  
+REQ\_ID: REQ-CONFIG-004
+
+Observed: PR \#218 / Issue \#200 is now closed without merge, so this bounded unit followed the queued fallback to open PR \#208 / Issue \#201 at head 3e9898073c586b63e8fe57587881d20ce8d440f2. PR \#208 correctly changes genesis reconciliation from ledger-only non-negativity to ledger-expected versus actual tick-0 stock comparison. However, its expected-money switch groups BOND\_OPENING\_POSITION with MONEY\_ENDOWMENT and FX\_POOL\_OPENING and adds bond amount to expected money by currency.
+
+Finding: this is an accounting-category blocker. Canonical Handoff/03 keeps opening money reconciliation and bond accounting separate: each currency's opening money diagnostic covers opening balances under the money-supply contract, while bond holdings have their own invariant that holdings sum to principal. A bond principal/position is a debt claim, not an additional currency stock. Because baseline M1 bonds are intentionally omitted/empty, the current baseline positive test does not exercise this branch, so the defect is dormant rather than proved safe.
+
+Requested implementation action: exclude BOND\_OPENING\_POSITION from expected money totals. MONEY reconciliation should count actual money stocks only, including explicit FX-pool cash exactly once. If bond opening records remain in the genesis vocabulary, validate/reconcile bond principal and holdings separately at their owning contract boundary, but never add bond principal/notional to currency supply. Add a focused test with a nonzero bond-opening record and unchanged wallets proving the bond record does not change the MONEY residual; if bond-specific reconciliation is active here, prove that invariant separately. Keep REQ-CONFIG-004 PARTIAL until the corrected implementation merges. Submitted REQUEST\_CHANGES review 5126147596 on PR \#208.
+
+No Drive specification, economic mechanism, debt semantics, money-creation rule, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.  
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED  
