@@ -17,8 +17,11 @@ What counts as a refusal is what the selector already counts as a verdict, narro
 the refusing kind: a comment whose first marked line says `REQUEST_CHANGES` in one of
 the shapes the runbook prescribes, or a formal review in the `CHANGES_REQUESTED` state.
 An `ACCEPT`, a correction handoff, prose that mentions an earlier refusal — none of
-those count. Neither does an operator's QA comment: the bound is on the automated loop's
-own rounds.
+those count. Neither does a refusal from any other account, once the run says who it is
+(`--reviewer`): the bound is on the automated loop's own rounds, and a QA review posted
+under the operator's account is evidence for the next review, not a round. On #193 two
+such reviews and two of the role's own made four, and the bound closed a pull request
+the loop itself had refused twice.
 
 Two things it never does. It never deletes a branch that is not the loop's (`claude/**`);
 an operator's branch stays. And it never fails the acceptor run: the outcome for the
@@ -33,6 +36,8 @@ import json
 import re
 import subprocess
 import sys
+
+from select_review_target import normalize_login
 
 LIMIT = 3
 LOOP_PREFIX = "claude/"
@@ -60,9 +65,19 @@ def is_refusal(entry) -> bool:
     return bool(REFUSAL_LINE.search(entry.get("body") or ""))
 
 
-def decide(entries, limit=LIMIT):
-    """(bound reached, the refusals). Pure."""
-    refusals = [entry for entry in entries if is_refusal(entry)]
+def decide(entries, limit=LIMIT, reviewer=None):
+    """(bound reached, the refusals). Pure.
+
+    With `reviewer` named, only that identity's refusals are rounds of the loop; without
+    it every refusal counts, which is the reading a record without identities gets.
+    """
+    wanted = normalize_login(reviewer) if reviewer else None
+    refusals = [
+        entry
+        for entry in entries
+        if is_refusal(entry)
+        and (wanted is None or normalize_login(entry.get("author")) == wanted)
+    ]
     return len(refusals) >= limit, refusals
 
 
@@ -83,6 +98,7 @@ def entries_of(pull):
             "createdAt": comment.get("createdAt") or "",
             "state": None,
             "url": comment.get("url"),
+            "author": (comment.get("author") or {}).get("login") or "",
         }
         for comment in pull.get("comments") or []
     ]
@@ -92,6 +108,7 @@ def entries_of(pull):
             "createdAt": review.get("submittedAt") or "",
             "state": review.get("state"),
             "url": None,
+            "author": (review.get("author") or {}).get("login") or "",
         }
         for review in pull.get("reviews") or []
         if review.get("submittedAt")
@@ -200,6 +217,10 @@ def main() -> int:
     parser.add_argument("--repo", required=True, help="owner/name")
     parser.add_argument("--pull", type=int, required=True, help="the pull request just reviewed")
     parser.add_argument("--limit", type=int, default=LIMIT, help="refusals that end the rework")
+    parser.add_argument(
+        "--reviewer",
+        help="login of this role's own identity; only its refusals are rounds of the loop",
+    )
     parser.add_argument("--dry-run", action="store_true", help="decide, but change nothing")
     args = parser.parse_args()
 
@@ -213,8 +234,9 @@ def main() -> int:
         print(f"rework-limit: #{args.pull} is {pull.get('state')}; nothing to bound")
         return 0
 
-    reached, refusals = decide(entries_of(pull), args.limit)
-    print(f"rework-limit: #{args.pull} has {len(refusals)} refusal(s); bound is {args.limit}")
+    reached, refusals = decide(entries_of(pull), args.limit, args.reviewer)
+    whose = f" by {normalize_login(args.reviewer)}" if args.reviewer else ""
+    print(f"rework-limit: #{args.pull} has {len(refusals)} refusal(s){whose}; bound is {args.limit}")
     if not reached:
         return 0
     if args.dry_run:
