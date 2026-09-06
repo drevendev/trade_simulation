@@ -145,10 +145,29 @@ class OutcomeTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(rec.classify_outcome("success", text), ("blocked", "heuristic"))
 
-    def test_prose_mentioning_blockers_is_not_a_blocked_run(self):
-        # The claim comment every run posts says "Known blockers: none".
+    def test_prose_mentioning_blockers_is_neither_blocked_nor_completed(self):
+        # The claim comment every run posts says "Known blockers: none". It is not a
+        # blocked run — and a run whose last word is a claim delivered nothing either.
         text = "**AUTHOR claim**\n\nKnown blockers: none. Proceeding."
-        self.assertEqual(rec.classify_outcome("success", text), ("completed", "heuristic"))
+        self.assertEqual(rec.classify_outcome("success", text), ("unknown", "heuristic"))
+
+    def test_a_run_that_claims_nothing_is_unknown_not_completed(self):
+        # 2026-09-06 08:10Z: an author run met two pull requests it could not merge,
+        # spent thirteen turns and ended saying nothing. The action was green, so the
+        # ledger filed it beside the runs that had merged requirements.
+        for text in (
+            "",
+            "I reviewed the open pull requests and the queue.",
+            "Both pull requests conflict with master.",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(rec.classify_outcome("success", text), ("unknown", "heuristic"))
+
+    def test_a_green_action_alone_never_makes_a_run_completed(self):
+        # The removed fallback: `success` used to mean completed once every shape had
+        # been tried. A process that exited is not a unit of work.
+        self.assertEqual(rec.classify_outcome("success", "nothing to report"), ("unknown", "heuristic"))
+        self.assertEqual(rec.classify_outcome(None, "nothing to report"), ("unknown", "heuristic"))
 
     def test_a_handoff_is_completed_whatever_else_it_mentions(self):
         # Run 33986212612 opened #163 and was recorded as blocked, because its text
