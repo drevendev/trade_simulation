@@ -213,3 +213,57 @@ content is current — Drive may have moved on, and that is neither visible from
 reason to refuse. If it has, the next synchronization proposes the newer snapshot.
 Merging an older one first is harmless and correct, so a revision briefly appearing
 "behind" is normal rather than a fault to report.
+
+
+---
+
+## 2026-09-06 — how the loop reads your reviews, and where a post-merge finding must go
+
+Your M1 QA was right on every count: CODE_RUNTIME_QA_M1_11, 18 and 19, the reconciliation
+blocker on PR #179, and the gate correction on Issue #188. The authoritative ledger now says
+so: `REQ-CONFIG-003` and `REQ-CONFIG-004` are back at `PARTIAL`, each row naming the defect
+and the repair Issue. The repairs are Issues #200 and #201, `priority:high`, in the M1 queue
+ahead of any new M2 selection. Gate M1 is open until they and `REQ-VISUALIZATION-004`
+(#160) merge; pull requests already open for M2 may still finish.
+
+### Where a finding must go
+
+A comment on a merged pull request or a closed Issue is read by nobody in the loop. The
+AUTHOR reads open Issues carrying `status:ready` and the verdicts on its own open pull
+requests, and nothing else; the ACCEPTOR reads the one pull request it was handed. Your
+findings on #163, #175, #177 and #179 were all posted after the merge, on closed items, and
+became work only when an operator read them hours later and filed #200 and #201 by hand.
+
+So, from now on:
+
+- **A defect in an open pull request:** a formal review on that pull request in the
+  `CHANGES_REQUESTED` state. One review per head revision, naming everything you found:
+  the AUTHOR reads each verdict as its work packet, and two reviews on one head cost two
+  rounds.
+- **A defect on `master`:** a new Issue. One per finding, with the sections the standard
+  requires — Goal, Evidence, Scope, Non-goals, Acceptance criteria, Verification — and the
+  labels `type:bug`, `area:<the area>`, `status:ready`, plus `priority:high` when an
+  accepted requirement is broken. Put the `REQ_ID` in the title. If the finding invalidates
+  a ledger row, say which row and what evidence would restore it; the repair's pull request
+  is what moves the row.
+- **Not:** a comment on a closed Issue or a merged pull request. It will be read late, by a
+  person, or not at all.
+
+If you cannot create Issues from where you run, say so once in `ANSWERS_TO_IMPLEMENTER`
+and keep posting the findings; the operator will convert them, with a delay of hours
+rather than minutes.
+
+### How your reviews count
+
+Since 2026-09-06 (Issue #152):
+
+- A formal review in the `CHANGES_REQUESTED` state is a verdict on that head whatever its
+  words. The AUTHOR must answer it; the ACCEPTOR sees it as standing; the head is not
+  reviewed again until the AUTHOR posts a correction.
+- A review left in the `COMMENTED` state is evidence, not a verdict. It does not reopen a
+  head, and the AUTHOR is not obliged to answer it before the next verdict.
+- Your refusals do not count towards the rework bound. Three `REQUEST_CHANGES` verdicts by
+  the ACCEPTOR close a pull request; before today every refusing review counted, and #190
+  and #193 closed at the bound with two of their refusals yours.
+
+Nothing about the specification, the registry or the channel files changes with this.
