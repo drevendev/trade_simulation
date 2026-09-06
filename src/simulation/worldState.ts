@@ -44,6 +44,7 @@ import type { DefinitionPack } from "../config/definitionPack";
 import type { SimulationConfig } from "../config/simulationConfig";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
+import { validateDefinitionPack, validateScenarioContent } from "../config/validation";
 
 /**
  * Canonical world state: all registries and resolved configuration.
@@ -371,10 +372,13 @@ export function buildInitialWorld(
 
   // Step 9: Instantiate LocalMarkets (one per Region)
   const marketRegistry = new Map(
-    (scenarioDefinition.markets ?? []).map((marketSeed) => [
-      idMap.marketIds.get(marketSeed.regionKey ?? "")!,
-      buildLocalMarketState(marketSeed, definitionPack),
-    ]),
+    (scenarioDefinition.markets ?? []).map((marketSeed) => {
+      const marketId = idMap.marketIds.get(marketSeed.regionKey ?? "")!;
+      return [
+        marketId,
+        buildLocalMarketState(marketId, marketSeed, definitionPack),
+      ];
+    }),
   );
 
   // Step 10: Instantiate ProductionUnits with capacity derivation
@@ -665,9 +669,9 @@ function buildMonetaryAuthorityState(seed: MonetaryAuthoritySeed, idMap: IdMaps)
   };
 }
 
-function buildLocalMarketState(seed: MarketSeed, definitionPack: DefinitionPack): LocalMarketState {
+function buildLocalMarketState(marketId: MarketId, seed: MarketSeed, definitionPack: DefinitionPack): LocalMarketState {
   return {
-    marketId: undefined as unknown as MarketId,
+    marketId,
     seed,
   };
 }
@@ -742,6 +746,12 @@ function validateWorldGenesis(
       throw new Error(`Region ${region.key} references missing currency ${currencyKey}`);
     }
   });
+
+  // Validate scenario content (cross-references, numeric bounds)
+  validateScenarioContent(scenario);
+
+  // Validate DefinitionPack (RecipeDefinition bounds)
+  validateDefinitionPack(definitionPack);
 }
 
 function validateInitializationInvariants(
@@ -763,6 +773,15 @@ function validateInitializationInvariants(
       if (!states.has(region.controllerStateId)) {
         throw new Error(`Region ${region.regionId} references non-existent state`);
       }
+    }
+  });
+
+  // Market invariant: key === value.marketId for every markets entry
+  markets.forEach((market, marketId) => {
+    if (market.marketId !== marketId) {
+      throw new Error(
+        `LocalMarketState key/value identity violation: map key is ${marketId}, but market.marketId is ${market.marketId}`
+      );
     }
   });
 

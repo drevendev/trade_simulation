@@ -60,6 +60,12 @@ function minimalScenario(): ScenarioDefinition {
     clans: [],
     cohorts: [],
     productionUnits: [],
+    markets: [
+      {
+        regionKey: "region-1",
+        initialPriceByGood: {},
+      },
+    ],
   };
 }
 
@@ -384,5 +390,28 @@ describe("buildInitialWorld", () => {
     const ids2 = Array.from(world2.currencies.keys()).sort();
 
     expect(ids1.length).toBe(ids2.length);
+  });
+
+  it("ensures every LocalMarket's key equals its marketId (invariant 5)", () => {
+    const scenario = minimalScenario();
+    const config = minimalConfig();
+    const pack = baselineDefinitionPack;
+
+    const worldState = buildInitialWorld(scenario, pack, config, 42);
+
+    worldState.markets.forEach((market, marketId) => {
+      expect(market.marketId).toBe(marketId);
+    });
+  });
+
+  it("constructs at least one LocalMarket when scenario provides a MarketSeed", () => {
+    const scenario = minimalScenario();
+    const config = minimalConfig();
+    const pack = baselineDefinitionPack;
+
+    const worldState = buildInitialWorld(scenario, pack, config, 42);
+
+    expect(worldState.markets.size).toBeGreaterThan(0);
+    expect(Array.from(worldState.markets.values()).some((m) => m.seed.regionKey === "region-1")).toBe(true);
   });
 });

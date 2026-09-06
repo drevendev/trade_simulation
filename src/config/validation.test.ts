@@ -16,7 +16,8 @@ import type {
   StateSeed,
   TransportLinkSeed,
 } from "./scenarioDefinition";
-import { assertNoBehavioralOverrides, validateScenarioContent } from "./validation";
+import { assertNoBehavioralOverrides, validateScenarioContent, validateDefinitionPack } from "./validation";
+import type { DefinitionPack, RecipeDefinition } from "./definitionPack";
 
 /** A minimal, well-formed `ScenarioDefinition`-shaped object (required keys only). */
 function minimalScenario(): Record<string, unknown> {
@@ -616,5 +617,118 @@ describe("validateScenarioContent", () => {
       ],
     });
     expect(() => validateScenarioContent(scenario)).toThrow(/wallet\["c-1"\].*Infinity/);
+  });
+});
+
+describe("validateDefinitionPack", () => {
+  function minimalRecipe(): RecipeDefinition {
+    return {
+      id: "recipe-1",
+      outputGoodId: "good-1" as GoodId,
+      outputPerBatch: 10,
+      inputsPerBatch: { "good-2": 2 },
+      laborCategory: "GENERAL",
+      laborPerBatch: 5,
+      batchesPerCapitalUnit: 1.5,
+      investmentGoodsPerCapitalUnit: { "good-3": 1 },
+      minimumStartupCapital: 1000,
+      baseThroughputFactor: 1.0,
+      depreciationRatePerTick: 0.01,
+    };
+  }
+
+  function minimalDefinitionPack(): DefinitionPack {
+    return {
+      id: "pack-1",
+      version: "1.0.0",
+      goods: {},
+      recipes: { "recipe-1": minimalRecipe() },
+      eventDefinitions: {},
+      metricDefinitions: {},
+    };
+  }
+
+  it("accepts a well-formed RecipeDefinition", () => {
+    const pack = minimalDefinitionPack();
+    expect(() => validateDefinitionPack(pack)).not.toThrow();
+  });
+
+  it("accepts an empty inputsPerBatch map", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).inputsPerBatch = {};
+    expect(() => validateDefinitionPack(pack)).not.toThrow();
+  });
+
+  it("rejects outputPerBatch that is not positive", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).outputPerBatch = 0;
+    expect(() => validateDefinitionPack(pack)).toThrow(/outputPerBatch.*positive/);
+  });
+
+  it("rejects outputPerBatch that is negative", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).outputPerBatch = -1;
+    expect(() => validateDefinitionPack(pack)).toThrow(/outputPerBatch.*positive/);
+  });
+
+  it("rejects batchesPerCapitalUnit that is not positive", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).batchesPerCapitalUnit = 0;
+    expect(() => validateDefinitionPack(pack)).toThrow(/batchesPerCapitalUnit.*positive/);
+  });
+
+  it("rejects a declared input coefficient that is not positive", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).inputsPerBatch = { "good-2": 0 };
+    expect(() => validateDefinitionPack(pack)).toThrow(/inputsPerBatch\["good-2"\].*positive/);
+  });
+
+  it("rejects a declared input coefficient that is negative", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).inputsPerBatch = { "good-2": -1 };
+    expect(() => validateDefinitionPack(pack)).toThrow(/inputsPerBatch\["good-2"\].*positive/);
+  });
+
+  it("rejects laborPerBatch that is negative", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).laborPerBatch = -1;
+    expect(() => validateDefinitionPack(pack)).toThrow(/laborPerBatch.*non-negative/);
+  });
+
+  it("rejects minimumStartupCapital that is negative", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).minimumStartupCapital = -1;
+    expect(() => validateDefinitionPack(pack)).toThrow(/minimumStartupCapital.*non-negative/);
+  });
+
+  it("rejects minimumInfrastructureFactor outside [0,1]", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).minimumInfrastructureFactor = 1.5;
+    expect(() => validateDefinitionPack(pack)).toThrow(/minimumInfrastructureFactor.*\[0,1\]/);
+  });
+
+  it("rejects extractedResourcePerBatch that is not positive when extractionResourceId is present", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).extractionResourceId = "iron-ore";
+    (pack.recipes["recipe-1"] as any).extractedResourcePerBatch = 0;
+    expect(() => validateDefinitionPack(pack)).toThrow(/extractedResourcePerBatch.*positive/);
+  });
+
+  it("rejects baseThroughputFactor that is not positive", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).baseThroughputFactor = 0;
+    expect(() => validateDefinitionPack(pack)).toThrow(/baseThroughputFactor.*positive/);
+  });
+
+  it("rejects depreciationRatePerTick outside [0,1)", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).depreciationRatePerTick = 1.0;
+    expect(() => validateDefinitionPack(pack)).toThrow(/depreciationRatePerTick.*\[0,1\)/);
+  });
+
+  it("rejects depreciationRatePerTick that is negative", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).depreciationRatePerTick = -0.1;
+    expect(() => validateDefinitionPack(pack)).toThrow(/depreciationRatePerTick.*\[0,1\)/);
   });
 });

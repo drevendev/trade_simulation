@@ -16,6 +16,7 @@ import { isFiniteCanonicalNumber } from "../domain/numeric";
 import type { CohortSeed, MarketSeed, ProductionUnitSeed, RegionSeed, ScenarioDefinition, TransportLinkSeed } from "./scenarioDefinition";
 import { SIMULATION_CONFIG_BEHAVIORAL_KEYS } from "./simulationConfig";
 import { SCENARIO_DEFINITION_KEYS } from "./scenarioDefinition";
+import type { DefinitionPack, RecipeDefinition } from "./definitionPack";
 
 const BEHAVIORAL_KEY_SET: ReadonlySet<string> = new Set(SIMULATION_CONFIG_BEHAVIORAL_KEYS);
 const SCENARIO_KEY_SET: ReadonlySet<string> = new Set(SCENARIO_DEFINITION_KEYS);
@@ -430,4 +431,94 @@ function describeValue(value: unknown): string {
   if (typeof value === "number" && !Number.isFinite(value)) return value > 0 ? "Infinity" : "-Infinity";
   if (typeof value === "object") return "an object";
   return typeof value === "string" ? JSON.stringify(value) : String(value);
+}
+
+/**
+ * Validates RecipeDefinition bounds according to section 16A of
+ * docs/spec/mirror/06 - Handoff/03 — CANONICAL_CONFIG_AND_WORLD_GENERATION.md
+ */
+export function validateDefinitionPack(definitionPack: DefinitionPack): void {
+  Object.entries(definitionPack.recipes).forEach(([recipeKey, recipe]) => {
+    validateRecipeDefinition(recipe, recipeKey);
+  });
+}
+
+function validateRecipeDefinition(recipe: RecipeDefinition, recipeKey: string): void {
+  // Positive output
+  if (!isFiniteCanonicalNumber(recipe.outputPerBatch) || recipe.outputPerBatch <= 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeKey}": outputPerBatch must be a positive finite number, got ${describeValue(recipe.outputPerBatch)}`
+    );
+  }
+
+  // Positive batchesPerCapitalUnit
+  if (!isFiniteCanonicalNumber(recipe.batchesPerCapitalUnit) || recipe.batchesPerCapitalUnit <= 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeKey}": batchesPerCapitalUnit must be a positive finite number, got ${describeValue(recipe.batchesPerCapitalUnit)}`
+    );
+  }
+
+  // Every declared input coefficient must be strictly positive (empty map is valid)
+  Object.entries(recipe.inputsPerBatch).forEach(([goodKey, coefficient]) => {
+    if (!isFiniteCanonicalNumber(coefficient) || coefficient <= 0) {
+      throw new Error(
+        `RecipeDefinition "${recipeKey}": inputsPerBatch["${goodKey}"] must be a positive finite number, got ${describeValue(coefficient)}`
+      );
+    }
+  });
+
+  // Non-negative labor quantity
+  if (!isFiniteCanonicalNumber(recipe.laborPerBatch) || recipe.laborPerBatch < 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeKey}": laborPerBatch must be a non-negative finite number, got ${describeValue(recipe.laborPerBatch)}`
+    );
+  }
+
+  // Non-negative startup capital
+  if (!isFiniteCanonicalNumber(recipe.minimumStartupCapital) || recipe.minimumStartupCapital < 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeKey}": minimumStartupCapital must be a non-negative finite number, got ${describeValue(recipe.minimumStartupCapital)}`
+    );
+  }
+
+  // Investment goods must be non-negative
+  Object.entries(recipe.investmentGoodsPerCapitalUnit).forEach(([goodKey, quantity]) => {
+    if (!isFiniteCanonicalNumber(quantity) || quantity < 0) {
+      throw new Error(
+        `RecipeDefinition "${recipeKey}": investmentGoodsPerCapitalUnit["${goodKey}"] must be a non-negative finite number, got ${describeValue(quantity)}`
+      );
+    }
+  });
+
+  // Infrastructure factor where present must be in [0,1]
+  if (recipe.minimumInfrastructureFactor !== undefined) {
+    if (!isFiniteCanonicalNumber(recipe.minimumInfrastructureFactor) || recipe.minimumInfrastructureFactor < 0 || recipe.minimumInfrastructureFactor > 1) {
+      throw new Error(
+        `RecipeDefinition "${recipeKey}": minimumInfrastructureFactor must be in [0,1], got ${describeValue(recipe.minimumInfrastructureFactor)}`
+      );
+    }
+  }
+
+  // Positive extraction amount when resource is named
+  if (recipe.extractionResourceId !== undefined) {
+    if (!isFiniteCanonicalNumber(recipe.extractedResourcePerBatch) || recipe.extractedResourcePerBatch! <= 0) {
+      throw new Error(
+        `RecipeDefinition "${recipeKey}": extractedResourcePerBatch must be a positive finite number when extractionResourceId is present, got ${describeValue(recipe.extractedResourcePerBatch)}`
+      );
+    }
+  }
+
+  // Positive baseThroughputFactor
+  if (!isFiniteCanonicalNumber(recipe.baseThroughputFactor) || recipe.baseThroughputFactor <= 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeKey}": baseThroughputFactor must be a positive finite number, got ${describeValue(recipe.baseThroughputFactor)}`
+    );
+  }
+
+  // depreciationRatePerTick in [0,1)
+  if (!isFiniteCanonicalNumber(recipe.depreciationRatePerTick) || recipe.depreciationRatePerTick < 0 || recipe.depreciationRatePerTick >= 1) {
+    throw new Error(
+      `RecipeDefinition "${recipeKey}": depreciationRatePerTick must be in [0,1), got ${describeValue(recipe.depreciationRatePerTick)}`
+    );
+  }
 }
