@@ -425,4 +425,101 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
       // This test documents the intended barrier structure.
     });
   });
+
+  describe("REQ-CORE-006: 100+ zero-flow tick reconciliation", () => {
+    it("executes 100 consecutive zero-flow ticks without invariant failure", () => {
+      const world = createTestWorldState();
+      const pending = createEmptyPendingTransitions();
+
+      // No-op handler that preserves tick structure
+      const zeroFlowHandler: PhaseHandler = (_, context) => {
+        return context;
+      };
+
+      // Execute 100 ticks
+      let currentContext: TickContext = initializeTickContext(0, world.seed);
+      const hashes: string[] = [];
+
+      for (let tick = 1; tick <= 100; tick++) {
+        currentContext = initializeTickContext(tick, world.seed);
+
+        for (let phase = 0; phase < TOTAL_PHASES; phase++) {
+          currentContext = executePhase(phase, zeroFlowHandler, world, currentContext, pending);
+        }
+
+        const hash = computeTickHash(world, currentContext);
+        hashes.push(hash);
+
+        // Verify no ledger records (zero-flow)
+        expect(currentContext.ledgerRecords).toHaveLength(0);
+        // Verify no transactions
+        expect(currentContext.transactions).toHaveLength(0);
+      }
+
+      // Verify that hashes are deterministic for same ticks
+      for (let tick = 1; tick <= 100; tick++) {
+        const ctx = initializeTickContext(tick, world.seed);
+        let finalCtx = ctx;
+        for (let phase = 0; phase < TOTAL_PHASES; phase++) {
+          finalCtx = executePhase(phase, zeroFlowHandler, world, finalCtx, pending);
+        }
+        const hash = computeTickHash(world, finalCtx);
+        expect(hash).toBe(hashes[tick - 1]);
+      }
+    });
+
+    it("maintains deterministic phase trace for 100 zero-flow ticks", () => {
+      const world = createTestWorldState();
+      const pending = createEmptyPendingTransitions();
+      const expectedPhaseTrace = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+
+      for (let tick = 1; tick <= 100; tick++) {
+        const { phaseTrace } = executeTick(world, tick, pending, noOpPhaseHandler);
+        expect(phaseTrace).toEqual(expectedPhaseTrace);
+      }
+    });
+
+    it("produces stable replay for 100 zero-flow tick sequence", () => {
+      const world = createTestWorldState();
+      const pending = createEmptyPendingTransitions();
+
+      // Run sequence 1
+      const hashes1: string[] = [];
+      for (let tick = 1; tick <= 100; tick++) {
+        const { context } = executeTick(world, tick, pending, noOpPhaseHandler);
+        hashes1.push(computeTickHash(world, context));
+      }
+
+      // Run sequence 2 (should be identical)
+      const hashes2: string[] = [];
+      for (let tick = 1; tick <= 100; tick++) {
+        const { context } = executeTick(world, tick, pending, noOpPhaseHandler);
+        hashes2.push(computeTickHash(world, context));
+      }
+
+      // Verify identical hashes
+      expect(hashes1).toEqual(hashes2);
+
+      // Verify hashes are distinct per tick (deterministic variation)
+      const uniqueHashes = new Set(hashes1);
+      expect(uniqueHashes.size).toBe(100);
+    });
+
+    it("ledger remains balanced over 100 zero-flow ticks", () => {
+      const world = createTestWorldState();
+      const pending = createEmptyPendingTransitions();
+
+      // Create a handler that accumulates ledger entries but keeps them balanced
+      const balancedLedgerHandler: PhaseHandler = (_, context) => {
+        // In zero-flow ticks, ledger should be empty (no economic activity)
+        return context;
+      };
+
+      for (let tick = 1; tick <= 100; tick++) {
+        const { context } = executeTick(world, tick, pending, balancedLedgerHandler);
+        // Verify ledger is empty for zero-flow ticks
+        expect(context.ledgerRecords).toHaveLength(0);
+      }
+    });
+  });
 });

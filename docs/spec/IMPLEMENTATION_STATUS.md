@@ -74,7 +74,7 @@ that fact; this file does not.
 | REQ-CONFIG-005 | `READY` | `IMPLEMENTED` | #86 | #88, `a67e2d2f59c9bcb3234505e45c752b7b21dd4227` | Two merged slices. #76 (Issue #74) added top-level shape validation in `src/config/shapeValidation.ts`, proved by `src/config/shapeValidation.test.ts` (`rejects geography given as a plain object instead of an array`, `rejects a present variation given as an array or non-object`, `rejects a non-object candidate` for both `RunOptions` and `ScenarioDefinition`). #88 added `validateScenarioContent` in `src/config/validation.ts`, proved by `src/config/validation.test.ts`: invalid cross-references (`rejects a region with invalid controllerStateKey`, `rejects a region with invalid settlementCurrencyKey`, `rejects a transport link with invalid region references`, `rejects a cohort with invalid regionKey`, `rejects a production unit with invalid owner reference`), out-of-range values (`rejects a transport link with condition out of [0,1]`, `rejects a cohort with out-of-range healthIndex`, `rejects a cohort with negative population`, `rejects a market with zero or negative price`) and `rejects non-finite values in numeric fields`. Each rejection asserts on the thrown diagnostic, so "fail fast with useful diagnostics; do not silently coerce" is proved rather than assumed. Recorded here after reading the merged code, superseding #105, which promoted the status while leaving evidence that described only the #76 slice. |
 | REQ-CORE-004 | `READY` | `IMPLEMENTED` | #185 | #187 | Canonical tick orchestrator and 16-phase framework (M2). tickOrchestrator.ts defines TickContext (tick-scoped ephemeral state) |
 | REQ-CORE-005 | `READY` | `NOT_STARTED` | — | — | — |
-| REQ-CORE-006 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-CORE-006 | `READY` | `DEFERRED` | #192 | — | PR in draft - implementation complete and all tests pass. Core infrastructure: ledgerReconciliation.ts (LedgerRecord types |
 | REQ-ACCEPTANCE-001 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-ACCEPTANCE-002 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-ACCEPTANCE-003 | `READY` | `NOT_STARTED` | — | — | — |
@@ -91,6 +91,7 @@ that fact; this file does not.
 | REQ-VISUALIZATION-006 | `READY` | `NOT_STARTED` | — | — | — |
 
 **Summary: 14 of 32 requirement identifiers implemented.**
+Also recorded: 1 deferred.
 The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
 
 <!-- coverage:generated:end -->

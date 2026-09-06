@@ -10,6 +10,7 @@
 
 import type { RegionId, StateId, CurrencyId, CohortId, ProductionUnitId, MonetaryAuthorityId } from "../domain/id";
 import type { WorldState } from "./worldState";
+import type { LedgerRecord } from "./ledgerReconciliation";
 import { createHash } from "crypto";
 
 /**
@@ -22,6 +23,7 @@ export interface TickContext {
   readonly effectiveJurisdictionByRegion: ReadonlyMap<RegionId, StateId | null>;
   readonly rngSeed: number;
   readonly transactions: ReadonlyArray<EconomicTransaction>;
+  readonly ledgerRecords: ReadonlyArray<LedgerRecord>;
 }
 
 /**
@@ -103,6 +105,7 @@ export function initializeTickContext(tick: number, seed: number): TickContext {
     effectiveJurisdictionByRegion: new Map(),
     rngSeed: seed ^ tick, // Deterministic per-tick seed
     transactions: [],
+    ledgerRecords: [],
   };
 }
 

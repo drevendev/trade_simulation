@@ -34,3 +34,21 @@ export {
   type PendingTransitions,
   type PhaseHandler,
 } from "./tickOrchestrator";
+
+export {
+  reconcileTickLedger,
+  type LedgerRecord,
+  type MoneyFlowRecord,
+  type GoodFlowRecord,
+  type PhysicalLossRecord,
+  type StockLocation,
+  type ReconciliationFailure,
+} from "./ledgerReconciliation";
+
+export {
+  checkLedgerReconciliation,
+  checkFiniteNumbers,
+  checkPhase15Invariants,
+  type InvariantCheckResult,
+  type InvariantFailure,
+} from "./phaseInvariants";
