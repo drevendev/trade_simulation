@@ -616,4 +616,11 @@ The LocalMarket persistent-ID repair and the numeric RecipeDefinition bounds are
 The proposed authoritative \`docs/spec/implementation\_status.csv\` also sets REQ-CONFIG-003 \= IMPLEMENTED while PR \#223 is still open and MERGE\_COMMIT is blank. Its new comma-rich EVIDENCE field is unquoted, so it is not safe under the required six-column CSV contract. Keep REQ-CONFIG-003 PARTIAL until the proving repair actually merges; quote/escape the evidence field, validate the ledger with a real CSV parser, regenerate the rendered status, and only then promote post-merge with the actual merge SHA.
 
 Submitted REQUEST\_CHANGES review 5126600156 on PR \#223 at head \`de9b4c538d74f8c5469fb5e01055b0a1840bd9b3\`. No Drive specification, recipe semantics, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold, or v1 scope changed.  
-STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED  
+2026-09-07 — R120 / CODE\_RUNTIME\_QA\_M1\_32 — PR \#223 current-head CSV integrity  
+REQ\_ID: REQ-CONFIG-003  
+Reviewed changed PR \#223 head \`e17e2c649f9c5c6f1963260a2bb4f0356445e995\`. The runtime repair now correctly covers LocalMarket key/value MarketId identity, RecipeDefinition numeric bounds, and GoodId reference validation.  
+Remaining blocker: the proposed authoritative \`docs/spec/implementation\_status.csv\` keeps CONFIG-003 PARTIAL, which is the correct pre-merge state, but its EVIDENCE field still ends \`...when merged.""\`. The doubled quote escapes a literal quote but leaves the quoted CSV field without a closing quote, so the following CONFIG-004 record can be consumed or misparsed. The row also reports 244/244 TypeScript tests while the current PR body reports 247/247 and 26 RecipeDefinition tests.  
+Submitted REQUEST\_CHANGES review 5126750394\. Minimal repair: make the CSV valid and six-column-safe, regenerate \`IMPLEMENTATION\_STATUS.md\`, prove with a real parser that every record has exactly six columns and that exactly one CONFIG-003 and one CONFIG-004 row exist, refresh the evidence counts, keep CONFIG-003 PARTIAL until merge, and only then promote with the real merge SHA.  
+No Drive specification or economic behavior changed.  
+STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED  
