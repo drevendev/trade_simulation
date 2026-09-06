@@ -20,3 +20,17 @@ export {
   type TransportLinkState,
   type WorldState,
 } from "./worldState";
+
+export {
+  TOTAL_PHASES,
+  PHASE_NAMES,
+  initializeTickContext,
+  executePhase,
+  executeTick,
+  computeTickHash,
+  noOpPhaseHandler,
+  type TickContext,
+  type EconomicTransaction,
+  type PendingTransitions,
+  type PhaseHandler,
+} from "./tickOrchestrator";
