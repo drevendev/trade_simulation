@@ -500,11 +500,11 @@ function validateRecipeDefinition(recipe: RecipeDefinition, recipeId: string, go
     );
   }
 
-  // Validate input quantities are non-negative
+  // Validate input quantities are positive (empty inputsPerBatch map is valid for recipes with no material input)
   for (const [goodId, quantity] of Object.entries(recipe.inputsPerBatch ?? {})) {
-    if (!isFiniteCanonicalNumber(quantity) || (quantity as number) < 0) {
+    if (!isFiniteCanonicalNumber(quantity) || (quantity as number) <= 0) {
       throw new Error(
-        `RecipeDefinition "${recipeId}": inputsPerBatch["${goodId}"] must be non-negative, got ${describeValue(quantity)}`,
+        `RecipeDefinition "${recipeId}": inputsPerBatch["${goodId}"] must be positive, got ${describeValue(quantity)}`,
       );
     }
   }

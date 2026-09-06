@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { GoodDefinition } from "./definitionPack";
+import type { GoodDefinition, DefinitionPack, RecipeDefinition } from "./definitionPack";
 import type { GoodId } from "../domain/id";
 import type {
   ClanSeed,
@@ -16,7 +16,7 @@ import type {
   StateSeed,
   TransportLinkSeed,
 } from "./scenarioDefinition";
-import { assertNoBehavioralOverrides, validateScenarioContent } from "./validation";
+import { assertNoBehavioralOverrides, validateScenarioContent, validateDefinitionPack } from "./validation";
 
 /** A minimal, well-formed `ScenarioDefinition`-shaped object (required keys only). */
 function minimalScenario(): Record<string, unknown> {
@@ -616,5 +616,131 @@ describe("validateScenarioContent", () => {
       ],
     });
     expect(() => validateScenarioContent(scenario)).toThrow(/wallet\["c-1"\].*Infinity/);
+  });
+});
+
+describe("validateDefinitionPack", () => {
+  function createDefinitionPack(recipes: Record<string, RecipeDefinition>): DefinitionPack {
+    return {
+      id: "test-pack",
+      version: "1.0.0",
+      recipes,
+      goods: {
+        "good:food": {
+          id: "good:food" as GoodId,
+          name: "Food",
+          unitLabel: "unit",
+          spoilageRatePerTick: 0.02,
+          consumerNeedCategory: "SUBSISTENCE",
+          necessityWeight: 1,
+          substitutionGroup: "staple-food",
+          referencePrice: 2,
+          tradable: true,
+        },
+        "good:grain": {
+          id: "good:grain" as GoodId,
+          name: "Grain",
+          unitLabel: "unit",
+          spoilageRatePerTick: 0.01,
+          consumerNeedCategory: "SUBSISTENCE",
+          necessityWeight: 1,
+          substitutionGroup: "staple-food",
+          referencePrice: 1,
+          tradable: true,
+        },
+      } as Record<GoodId, GoodDefinition>,
+      eventDefinitions: {},
+      metricDefinitions: {},
+    };
+  }
+
+  it("accepts a recipe with positive input quantities", () => {
+    const pack = createDefinitionPack({
+      "recipe:test": {
+        id: "recipe:test",
+        outputGoodId: "good:food" as GoodId,
+        outputPerBatch: 100,
+        batchesPerCapitalUnit: 2,
+        baseThroughputFactor: 1.0,
+        depreciationRatePerTick: 0.01,
+        laborPerBatch: 10,
+        minimumStartupCapital: 100,
+        inputsPerBatch: {
+          "good:grain": 50,
+        },
+        investmentGoodsPerCapitalUnit: {},
+        laborCategory: "GENERAL",
+        occupationCategory: "PRODUCER",
+      } as unknown as RecipeDefinition,
+    });
+    expect(() => validateDefinitionPack(pack)).not.toThrow();
+  });
+
+  it("accepts a recipe with empty inputsPerBatch (no material inputs)", () => {
+    const pack = createDefinitionPack({
+      "recipe:test": {
+        id: "recipe:test",
+        outputGoodId: "good:food" as GoodId,
+        outputPerBatch: 100,
+        batchesPerCapitalUnit: 2,
+        baseThroughputFactor: 1.0,
+        depreciationRatePerTick: 0.01,
+        laborPerBatch: 10,
+        minimumStartupCapital: 100,
+        inputsPerBatch: {},
+        investmentGoodsPerCapitalUnit: {},
+        laborCategory: "GENERAL",
+        occupationCategory: "PRODUCER",
+      } as unknown as RecipeDefinition,
+    });
+    expect(() => validateDefinitionPack(pack)).not.toThrow();
+  });
+
+  it("rejects a recipe with zero input quantity", () => {
+    const pack = createDefinitionPack({
+      "recipe:test": {
+        id: "recipe:test",
+        outputGoodId: "good:food" as GoodId,
+        outputPerBatch: 100,
+        batchesPerCapitalUnit: 2,
+        baseThroughputFactor: 1.0,
+        depreciationRatePerTick: 0.01,
+        laborPerBatch: 10,
+        minimumStartupCapital: 100,
+        inputsPerBatch: {
+          "good:grain": 0,
+        },
+        investmentGoodsPerCapitalUnit: {},
+        laborCategory: "GENERAL",
+        occupationCategory: "PRODUCER",
+      } as unknown as RecipeDefinition,
+    });
+    expect(() => validateDefinitionPack(pack)).toThrow(
+      /inputsPerBatch\["good:grain"\].*positive/,
+    );
+  });
+
+  it("rejects a recipe with negative input quantity", () => {
+    const pack = createDefinitionPack({
+      "recipe:test": {
+        id: "recipe:test",
+        outputGoodId: "good:food" as GoodId,
+        outputPerBatch: 100,
+        batchesPerCapitalUnit: 2,
+        baseThroughputFactor: 1.0,
+        depreciationRatePerTick: 0.01,
+        laborPerBatch: 10,
+        minimumStartupCapital: 100,
+        inputsPerBatch: {
+          "good:grain": -50,
+        },
+        investmentGoodsPerCapitalUnit: {},
+        laborCategory: "GENERAL",
+        occupationCategory: "PRODUCER",
+      } as unknown as RecipeDefinition,
+    });
+    expect(() => validateDefinitionPack(pack)).toThrow(
+      /inputsPerBatch\["good:grain"\].*positive/,
+    );
   });
 });
