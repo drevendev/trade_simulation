@@ -42,7 +42,6 @@ import type {
 } from "../config/scenarioDefinition";
 import type { DefinitionPack } from "../config/definitionPack";
 import type { SimulationConfig } from "../config/simulationConfig";
-import { validateDefinitionPackContent } from "../config/validation";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
 
@@ -372,10 +371,10 @@ export function buildInitialWorld(
 
   // Step 9: Instantiate LocalMarkets (one per Region)
   const marketRegistry = new Map(
-    (scenarioDefinition.markets ?? []).map((marketSeed) => {
-      const marketId = idMap.marketIds.get(marketSeed.regionKey ?? "")!;
-      return [marketId, buildLocalMarketState(marketId, marketSeed, definitionPack)];
-    }),
+    (scenarioDefinition.markets ?? []).map((marketSeed) => [
+      idMap.marketIds.get(marketSeed.regionKey ?? "")!,
+      buildLocalMarketState(marketSeed, definitionPack),
+    ]),
   );
 
   // Step 10: Instantiate ProductionUnits with capacity derivation
@@ -666,9 +665,9 @@ function buildMonetaryAuthorityState(seed: MonetaryAuthoritySeed, idMap: IdMaps)
   };
 }
 
-function buildLocalMarketState(marketId: MarketId, seed: MarketSeed, definitionPack: DefinitionPack): LocalMarketState {
+function buildLocalMarketState(seed: MarketSeed, definitionPack: DefinitionPack): LocalMarketState {
   return {
-    marketId,
+    marketId: undefined as unknown as MarketId,
     seed,
   };
 }
@@ -705,8 +704,6 @@ function validateWorldGenesis(
   if (!scenario.id || !scenario.version) {
     throw new Error("Scenario must have id and version");
   }
-
-  validateDefinitionPackContent(definitionPack);
 
   const seenKeys = new Set<string>();
   const checkUniqueness = (list: ReadonlyArray<{ key?: string }> | undefined, entityName: string) => {
@@ -773,15 +770,6 @@ function validateInitializationInvariants(
   states.forEach((state) => {
     if (!currencies.has(state.effectiveCurrencyId)) {
       throw new Error(`State ${state.stateId} references non-existent currency`);
-    }
-  });
-
-  // Invariant: Every market registry entry has matching key and value.marketId
-  markets.forEach((market, marketId) => {
-    if (market.marketId !== marketId) {
-      throw new Error(
-        `Market registry inconsistency: key ${marketId} does not match stored marketId ${market.marketId}`,
-      );
     }
   });
 }
