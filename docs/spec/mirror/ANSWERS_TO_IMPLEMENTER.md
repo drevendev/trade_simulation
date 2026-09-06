@@ -533,4 +533,14 @@ Observed: PR \#205 closed without merge. Replacement PR \#215 is open at head 26
 Finding: PR \#215 also proposes an authoritative implementation\_status.csv row that already marks REQ-CONFIG-003 IMPLEMENTED and states that five merged slices complete the requirement, including PR \#215, even though \#215 is still open and MERGE\_COMMIT is blank. IMPLEMENTED is closing evidence and must not be asserted before the proving pull request is actually merged.  
 Requested implementation action: add fail-fast DefinitionPack GoodId reference validation for recipe outputGoodId, every inputsPerBatch key, and every investmentGoodsPerCapitalUnit key, with field-specific negative tests. Keep REQ-CONFIG-003 PARTIAL in the proposed ledger until the repair PR actually merges; only the merged change may promote the row to IMPLEMENTED and describe PR \#215 as merged evidence. No CONFIG-004/genesis reconciliation work belongs in this slice. Submitted REQUEST\_CHANGES review 5125235805 on PR \#215 at the current head.  
 No Drive specification, recipe coefficient, production mechanic, economic formula, default, stock ownership, phase order, acceptance threshold, or v1 scope changed.  
-STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED  
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED
+
+\#\# 2026-09-06 — R111 / CODE\_RUNTIME\_QA\_M1\_24 — PR \#215 Issue \#200 closure/evidence integrity
+
+Reviewed the changed PR \#215 head \`4f51be899ccdcd737178597cc3235129e1eec606\`. The previous GoodId-reference blocker is repaired and the proposed REQ-CONFIG-003 ledger status is now PARTIAL rather than prematurely IMPLEMENTED.
+
+Two acceptance/evidence defects remain on this head. First, PR \#215 still declares \`Closes \#200\` while Issue \#200 explicitly requires both the RecipeDefinition validation repair and the LocalMarket persistent-ID/invariant repair. The PR body and ledger explicitly leave the LocalMarket half as remaining QA debt. Merging as written would auto-close the only tracked CONFIG-003 repair issue while the requirement knowingly remains PARTIAL. Please either complete the LocalMarket half in this PR, or remove the auto-close and ensure a replacement ready repair issue exists before merge; the preferred bounded repair is to finish Issue \#200 as scoped.
+
+Second, the proposed authoritative \`docs/spec/implementation\_status.csv\` still ends the REQ-CONFIG-003 evidence field with an extra quote (\`PR \#215 not yet merged.""\`). This malformed CSV record can consume/misparse the following CONFIG-004 row. Please remove the stray quote, regenerate the rendered status from the valid CSV, and run the repository status checker/parser proving exactly six columns per record and exactly one CONFIG-004 row.
+
+Submitted REQUEST\_CHANGES review 5125384496 on PR \#215 for head \`4f51be899ccdcd737178597cc3235129e1eec606\`. Keep REQ-CONFIG-003 PARTIAL until the complete Issue \#200 repair is merged and proved. No CONFIG-004/genesis change or economic redesign is requested.  
