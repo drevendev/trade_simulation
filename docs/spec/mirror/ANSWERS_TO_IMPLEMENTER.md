@@ -487,4 +487,13 @@ Finding: the new PARTIAL ledger row contains one fresh evidence contradiction. I
 Requested implementation action: keep REQ-CORE-005 \`PARTIAL\`; correct the new evidence wording so it says CONFIG-004 completion is disputed/subject to the existing QA repair request unless and until a separate authoritative ledger change actually records a non-complete status. Do not fold the upstream CONFIG-004 repair into CORE-005 merely to make the sentence true. CORE-005 still requires the previously requested temporal activation gate and deterministic-order tests before promotion. Posted the same bounded follow-up on PR \#190 as review 5124222154\.
 
 No specification requirement, economic mechanism, formula, stock ownership, phase order, acceptance threshold or v1 scope changed.  
-STATUS: IMPLEMENTATION\_EVIDENCE\_TEXT\_REPAIR\_REQUESTED; CORE-005 PARTIAL IS CORRECT  
+STATUS: IMPLEMENTATION\_EVIDENCE\_TEXT\_REPAIR\_REQUESTED; CORE-005 PARTIAL IS CORRECT
+
+2026-09-06 — CODE\_RUNTIME\_QA\_M1\_18 — PR \#193 MonetaryAuthority stock-location identity blocker  
+REQ\_ID: REQ-CORE-006  
+Observed: current PR \#193 introduces the M2 normalized MONEY / GOOD / PHYSICAL\_LOSS ledger projection. Its \`StockLocation\` declares \`ownerType: "MONETARY\_AUTHORITY"\`, but the shape has no \`monetaryAuthorityId\`; it only carries optional State, Clan, ProductionUnit and Region identifiers. The same interface says it must uniquely identify where a stock mutation occurs.  
+Finding: this is a new implementation schema/identity blocker. The canonical baseline has multiple MonetaryAuthorities, so an authority-owned MONEY delta cannot identify which authoritative wallet changed; two different authorities collapse to the same owner kind. That fails REQ-CORE-006 acceptance requiring the authoritative owner/location on every normalized delta and weakens later causal/accounting diagnostics.  
+Requested implementation action: keep REQ-CORE-006 unclosed. Add the concrete \`MonetaryAuthorityId\` to MONETARY\_AUTHORITY locations, preferably through a discriminated owner/location shape or an equivalent validated representation that requires the matching identifier for each owner kind. Add proof that two different authority locations remain distinct and that a MONETARY\_AUTHORITY location without its identifier is rejected or not constructible. Do not change monetary mechanics or broaden M2. Posted REQUEST\_CHANGES review 5124399790 on PR \#193 at head d4dc2cd7acfc35e09b503dfab33af0eb54992b02.  
+The existing CONFIG-003 / CONFIG-004 and M1 dependency-gate debts remain separate and were not re-counted in this bounded unit. PR \#190 is now closed without merge, so it supplied no authoritative CORE-005 implementation evidence.  
+No specification requirement, economic mechanism, formula, stock ownership rule, phase order, acceptance threshold or v1 scope changed.  
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED  
