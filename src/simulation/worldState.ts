@@ -27,6 +27,7 @@ import {
   type WorldGenesisLedger,
   type GenesisRecord,
 } from "../domain/genesisLedger";
+import { reconcileGenesisStocks } from "./genesisReconciliation";
 import type {
   ClanSeed,
   CohortSeed,
@@ -497,6 +498,16 @@ export function buildInitialWorld(
     marketRegistry,
     transportLinkRegistry,
   );
+
+  // REQ-CONFIG-004: Reconcile opening stocks before returning WorldState
+  const reconciliationResult = reconcileGenesisStocks(worldGenesisLedger, frozenConfig);
+  if (!reconciliationResult.success) {
+    throw new Error(
+      `Genesis reconciliation failed: ${reconciliationResult.errorMessage}\n` +
+      `Category: ${reconciliationResult.details?.category}, Key: ${reconciliationResult.details?.key}, ` +
+      `Total: ${reconciliationResult.details?.total}, Residual: ${reconciliationResult.details?.residual}`,
+    );
+  }
 
   // Step 17: Compute first diagnostic snapshot without mutating stocks
   // (Diagnostic snapshot is deferred to REQ-CORE-004)
