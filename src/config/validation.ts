@@ -438,12 +438,38 @@ function describeValue(value: unknown): string {
  * docs/spec/mirror/06 - Handoff/03 — CANONICAL_CONFIG_AND_WORLD_GENERATION.md
  */
 export function validateDefinitionPack(definitionPack: DefinitionPack): void {
+  const goodsKeySet = new Set(Object.keys(definitionPack.goods));
   Object.entries(definitionPack.recipes).forEach(([recipeKey, recipe]) => {
-    validateRecipeDefinition(recipe, recipeKey);
+    validateRecipeDefinition(recipe, recipeKey, goodsKeySet);
   });
 }
 
-function validateRecipeDefinition(recipe: RecipeDefinition, recipeKey: string): void {
+function validateRecipeDefinition(recipe: RecipeDefinition, recipeKey: string, goodsKeySet: Set<string>): void {
+  // Validate outputGoodId exists
+  if (!goodsKeySet.has(recipe.outputGoodId)) {
+    throw new Error(
+      `RecipeDefinition "${recipeKey}": outputGoodId "${recipe.outputGoodId}" references a non-existent Good`
+    );
+  }
+
+  // Validate all inputsPerBatch keys exist
+  Object.entries(recipe.inputsPerBatch).forEach(([goodKey]) => {
+    if (!goodsKeySet.has(goodKey)) {
+      throw new Error(
+        `RecipeDefinition "${recipeKey}": inputsPerBatch["${goodKey}"] references a non-existent Good`
+      );
+    }
+  });
+
+  // Validate all investmentGoodsPerCapitalUnit keys exist
+  Object.entries(recipe.investmentGoodsPerCapitalUnit).forEach(([goodKey]) => {
+    if (!goodsKeySet.has(goodKey)) {
+      throw new Error(
+        `RecipeDefinition "${recipeKey}": investmentGoodsPerCapitalUnit["${goodKey}"] references a non-existent Good`
+      );
+    }
+  });
+
   // Positive output
   if (!isFiniteCanonicalNumber(recipe.outputPerBatch) || recipe.outputPerBatch <= 0) {
     throw new Error(

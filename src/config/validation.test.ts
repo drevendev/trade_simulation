@@ -641,7 +641,11 @@ describe("validateDefinitionPack", () => {
     return {
       id: "pack-1",
       version: "1.0.0",
-      goods: {},
+      goods: {
+        "good-1": { id: "good-1" as GoodId, name: "Good 1" },
+        "good-2": { id: "good-2" as GoodId, name: "Good 2" },
+        "good-3": { id: "good-3" as GoodId, name: "Good 3" },
+      } as DefinitionPack["goods"],
       recipes: { "recipe-1": minimalRecipe() },
       eventDefinitions: {},
       metricDefinitions: {},
@@ -730,5 +734,23 @@ describe("validateDefinitionPack", () => {
     const pack = minimalDefinitionPack();
     (pack.recipes["recipe-1"] as any).depreciationRatePerTick = -0.1;
     expect(() => validateDefinitionPack(pack)).toThrow(/depreciationRatePerTick.*\[0,1\)/);
+  });
+
+  it("rejects outputGoodId that references a non-existent Good", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).outputGoodId = "nonexistent-good" as GoodId;
+    expect(() => validateDefinitionPack(pack)).toThrow(/outputGoodId.*references a non-existent Good/);
+  });
+
+  it("rejects inputsPerBatch keys that reference non-existent Goods", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).inputsPerBatch = { "nonexistent-good": 2 } as Readonly<Record<GoodId, number>>;
+    expect(() => validateDefinitionPack(pack)).toThrow(/inputsPerBatch\["nonexistent-good"\].*references a non-existent Good/);
+  });
+
+  it("rejects investmentGoodsPerCapitalUnit keys that reference non-existent Goods", () => {
+    const pack = minimalDefinitionPack();
+    (pack.recipes["recipe-1"] as any).investmentGoodsPerCapitalUnit = { "nonexistent-good": 1 } as Readonly<Record<GoodId, number>>;
+    expect(() => validateDefinitionPack(pack)).toThrow(/investmentGoodsPerCapitalUnit\["nonexistent-good"\].*references a non-existent Good/);
   });
 });
