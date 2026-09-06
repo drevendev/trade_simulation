@@ -639,10 +639,30 @@ describe("validateDefinitionPackRecipes (REQ-CONFIG-003)", () => {
   }
 
   function packWithRecipe(recipe: RecipeDefinition): DefinitionPack {
+    const goods: Record<string, GoodDefinition> = {
+      "good-1": {
+        id: "good-1" as GoodId,
+        name: "Good 1",
+        unitLabel: "unit",
+        spoilageRatePerTick: 0,
+        consumerNeedCategory: null,
+        referencePrice: 1.0,
+        tradable: true,
+      },
+      "good-2": {
+        id: "good-2" as GoodId,
+        name: "Good 2",
+        unitLabel: "unit",
+        spoilageRatePerTick: 0,
+        consumerNeedCategory: null,
+        referencePrice: 1.0,
+        tradable: true,
+      },
+    };
     return {
       id: "pack-1",
       version: "1.0.0",
-      goods: {},
+      goods,
       recipes: { [recipe.id]: recipe },
       eventDefinitions: {},
       metricDefinitions: {},
@@ -807,5 +827,31 @@ describe("validateDefinitionPackRecipes (REQ-CONFIG-003)", () => {
       depreciationRatePerTick: 0.999999,
     });
     expect(() => validateDefinitionPackRecipes(pack)).not.toThrow();
+  });
+
+  it("rejects outputGoodId when referencing a non-existent Good", () => {
+    const pack = packWithRecipe({
+      ...minimalRecipe(),
+      outputGoodId: "nonexistent-good" as GoodId,
+    });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/outputGoodId.*non-existent Good/);
+  });
+
+  it("rejects inputsPerBatch when referencing a non-existent Good", () => {
+    const recipe = {
+      ...minimalRecipe(),
+      inputsPerBatch: { "nonexistent-good": 2 } as Record<string, number>,
+    };
+    const pack = packWithRecipe(recipe);
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/inputsPerBatch.*non-existent Good/);
+  });
+
+  it("rejects investmentGoodsPerCapitalUnit when referencing a non-existent Good", () => {
+    const recipe = {
+      ...minimalRecipe(),
+      investmentGoodsPerCapitalUnit: { "nonexistent-good": 5 } as Record<string, number>,
+    };
+    const pack = packWithRecipe(recipe);
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/investmentGoodsPerCapitalUnit.*non-existent Good/);
   });
 });

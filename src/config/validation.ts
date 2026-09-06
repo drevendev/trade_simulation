@@ -435,12 +435,37 @@ function describeValue(value: unknown): string {
 }
 
 export function validateDefinitionPackRecipes(definitionPack: DefinitionPack): void {
+  const goodIdSet = new Set(Object.keys(definitionPack.goods));
   for (const [recipeId, recipe] of Object.entries(definitionPack.recipes)) {
-    validateRecipeDefinition(recipe, recipeId);
+    validateRecipeDefinition(recipe, recipeId, goodIdSet);
   }
 }
 
-function validateRecipeDefinition(recipe: RecipeDefinition, recipeId: string): void {
+function validateRecipeDefinition(recipe: RecipeDefinition, recipeId: string, goodIdSet: Set<string>): void {
+  // outputGoodId: must exist in goods
+  if (!goodIdSet.has(recipe.outputGoodId)) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": outputGoodId "${recipe.outputGoodId}" references a non-existent Good`,
+    );
+  }
+
+  // inputsPerBatch: all keys must exist in goods
+  for (const goodId of Object.keys(recipe.inputsPerBatch)) {
+    if (!goodIdSet.has(goodId)) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": inputsPerBatch["${goodId}"] references a non-existent Good`,
+      );
+    }
+  }
+
+  // investmentGoodsPerCapitalUnit: all keys must exist in goods
+  for (const goodId of Object.keys(recipe.investmentGoodsPerCapitalUnit)) {
+    if (!goodIdSet.has(goodId)) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": investmentGoodsPerCapitalUnit["${goodId}"] references a non-existent Good`,
+      );
+    }
+  }
   // outputPerBatch: strictly positive
   if (!isFiniteCanonicalNumber(recipe.outputPerBatch) || recipe.outputPerBatch <= 0) {
     throw new Error(
