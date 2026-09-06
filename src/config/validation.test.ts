@@ -743,4 +743,74 @@ describe("validateDefinitionPack", () => {
       /inputsPerBatch\["good:grain"\].*positive/,
     );
   });
+
+  it("rejects a recipe with unknown outputGoodId", () => {
+    const pack = createDefinitionPack({
+      "recipe:test": {
+        id: "recipe:test",
+        outputGoodId: "good:unknown" as GoodId,
+        outputPerBatch: 100,
+        batchesPerCapitalUnit: 2,
+        baseThroughputFactor: 1.0,
+        depreciationRatePerTick: 0.01,
+        laborPerBatch: 10,
+        minimumStartupCapital: 100,
+        inputsPerBatch: {},
+        investmentGoodsPerCapitalUnit: {},
+        laborCategory: "GENERAL",
+        occupationCategory: "PRODUCER",
+      } as unknown as RecipeDefinition,
+    });
+    expect(() => validateDefinitionPack(pack)).toThrow(
+      /outputGoodId "good:unknown" references a non-existent Good/,
+    );
+  });
+
+  it("rejects a recipe with unknown GoodId in inputsPerBatch", () => {
+    const pack = createDefinitionPack({
+      "recipe:test": {
+        id: "recipe:test",
+        outputGoodId: "good:food" as GoodId,
+        outputPerBatch: 100,
+        batchesPerCapitalUnit: 2,
+        baseThroughputFactor: 1.0,
+        depreciationRatePerTick: 0.01,
+        laborPerBatch: 10,
+        minimumStartupCapital: 100,
+        inputsPerBatch: {
+          "good:unknown": 50,
+        },
+        investmentGoodsPerCapitalUnit: {},
+        laborCategory: "GENERAL",
+        occupationCategory: "PRODUCER",
+      } as unknown as RecipeDefinition,
+    });
+    expect(() => validateDefinitionPack(pack)).toThrow(
+      /inputsPerBatch\["good:unknown"\] references a non-existent Good/,
+    );
+  });
+
+  it("rejects a recipe with unknown GoodId in investmentGoodsPerCapitalUnit", () => {
+    const pack = createDefinitionPack({
+      "recipe:test": {
+        id: "recipe:test",
+        outputGoodId: "good:food" as GoodId,
+        outputPerBatch: 100,
+        batchesPerCapitalUnit: 2,
+        baseThroughputFactor: 1.0,
+        depreciationRatePerTick: 0.01,
+        laborPerBatch: 10,
+        minimumStartupCapital: 100,
+        inputsPerBatch: {},
+        investmentGoodsPerCapitalUnit: {
+          "good:unknown": 25,
+        },
+        laborCategory: "GENERAL",
+        occupationCategory: "PRODUCER",
+      } as unknown as RecipeDefinition,
+    });
+    expect(() => validateDefinitionPack(pack)).toThrow(
+      /investmentGoodsPerCapitalUnit\["good:unknown"\] references a non-existent Good/,
+    );
+  });
 });

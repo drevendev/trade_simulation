@@ -458,6 +458,13 @@ export function validateDefinitionPack(definitionPack: DefinitionPack): void {
 }
 
 function validateRecipeDefinition(recipe: RecipeDefinition, recipeId: string, goodIds: Set<string>): void {
+  // Validate outputGoodId exists in definition pack
+  if (!goodIds.has(recipe.outputGoodId as string)) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": outputGoodId "${recipe.outputGoodId}" references a non-existent Good`,
+    );
+  }
+
   // Validate positive output
   if (!isFiniteCanonicalNumber(recipe.outputPerBatch) || recipe.outputPerBatch <= 0) {
     throw new Error(
@@ -500,11 +507,32 @@ function validateRecipeDefinition(recipe: RecipeDefinition, recipeId: string, go
     );
   }
 
-  // Validate input quantities are positive (empty inputsPerBatch map is valid for recipes with no material input)
+  // Validate input GoodId references and quantities (empty inputsPerBatch map is valid for recipes with no material input)
   for (const [goodId, quantity] of Object.entries(recipe.inputsPerBatch ?? {})) {
+    if (!goodIds.has(goodId)) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": inputsPerBatch["${goodId}"] references a non-existent Good`,
+      );
+    }
+
     if (!isFiniteCanonicalNumber(quantity) || (quantity as number) <= 0) {
       throw new Error(
         `RecipeDefinition "${recipeId}": inputsPerBatch["${goodId}"] must be positive, got ${describeValue(quantity)}`,
+      );
+    }
+  }
+
+  // Validate investment good GoodId references
+  for (const [goodId, quantity] of Object.entries(recipe.investmentGoodsPerCapitalUnit ?? {})) {
+    if (!goodIds.has(goodId)) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": investmentGoodsPerCapitalUnit["${goodId}"] references a non-existent Good`,
+      );
+    }
+
+    if (!isFiniteCanonicalNumber(quantity) || (quantity as number) <= 0) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": investmentGoodsPerCapitalUnit["${goodId}"] must be positive, got ${describeValue(quantity)}`,
       );
     }
   }
