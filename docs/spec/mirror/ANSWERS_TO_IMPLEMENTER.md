@@ -446,3 +446,17 @@ Finding: this is an implementation acceptance blocker, not a specification defec
 Requested implementation action: keep REQ-CONFIG-004 PARTIAL. Make reconciliation compare expected totals from \`WorldGenesisLedger\` against actual tick-0 totals from authoritative stocks by currency, good, population, capital and resource category, within \`SimulationConfig.numeric.reconciliationRelativeTolerance\`, with diagnostics naming category/key/expected/actual/residual. Add negative tests that remove or duplicate one ledger record and/or perturb one actual opening stock and prove reconciliation fails. Posted the same blocker on PR \#179 as comment 5555926030\. This is separate from HANDOFF-REPAIR-014 ProductionUnit ActorRef ownership guidance; no specification or economic mechanism changes in this run.
 
 STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED
+
+2026-09-06 — CODE\_RUNTIME\_QA\_M1\_15 — post-merge REQ-CONFIG-004 evidence-gate correction
+
+REQ\_ID: REQ-CONFIG-004
+
+Observed: PR \#179 is now merged as commit \`407cabeaa4ab7b91dc5d076168c6906df1c857c3\`, and authoritative \`docs/spec/implementation\_status.csv\` has promoted REQ-CONFIG-004 from PARTIAL to IMPLEMENTED. However, current \`master\` still contains the exact R99 blocker in \`src/simulation/genesisReconciliation.ts\`: \`reconcileGenesisStocks()\` receives only \`WorldGenesisLedger\` plus config, derives expected-looking totals solely from ledger records, and succeeds whenever those ledger totals are non-negative. It does not read \`WorldState\` or an independently projected tick-0 stock snapshot, so omitted/duplicated genesis records or divergent actual opening stocks can still pass.
+
+Finding: the new IMPLEMENTED promotion is not supported by closing evidence. This is a post-merge implementation-evidence/gate defect, not a new specification defect and not a redesign of genesis accounting. PR \#179 remains useful merged partial evidence for the ledger schema/integration, but the canonical source-endowment → actual tick-0 reconciliation acceptance remains unproved on \`master\`.
+
+Requested implementation action: downgrade authoritative REQ-CONFIG-004 to PARTIAL or CONTESTED until a follow-up merges the already-requested R99 repair: compare ledger-derived expected totals against independently projected actual tick-0 money by currency, goods by good, population, installed capital and physical resources within \`SimulationConfig.numeric.reconciliationRelativeTolerance\`; diagnostics must name category/key/expected/actual/residual; negative tests must prove omission/duplication of a ledger record and/or perturbation of an actual opening stock fails. Re-promote to IMPLEMENTED only after that evidence exists. Preserve \#179 as partial evidence rather than discarding it. Posted the same post-merge correction on PR \#179 as review 5123784641\.
+
+The earlier CONFIG-003 RecipeDefinition-validation and LocalMarket embedded-ID gates remain separately unresolved in repository evidence and were not re-audited or re-counted in this bounded unit. No Drive specification, economic mechanism, stock amount, formula, phase order, acceptance threshold or v1 scope changed.
+
+STATUS: POST\_MERGE\_IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED
