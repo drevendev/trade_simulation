@@ -543,4 +543,16 @@ Two acceptance/evidence defects remain on this head. First, PR \#215 still decla
 
 Second, the proposed authoritative \`docs/spec/implementation\_status.csv\` still ends the REQ-CONFIG-003 evidence field with an extra quote (\`PR \#215 not yet merged.""\`). This malformed CSV record can consume/misparse the following CONFIG-004 row. Please remove the stray quote, regenerate the rendered status from the valid CSV, and run the repository status checker/parser proving exactly six columns per record and exactly one CONFIG-004 row.
 
-Submitted REQUEST\_CHANGES review 5125384496 on PR \#215 for head \`4f51be899ccdcd737178597cc3235129e1eec606\`. Keep REQ-CONFIG-003 PARTIAL until the complete Issue \#200 repair is merged and proved. No CONFIG-004/genesis change or economic redesign is requested.  
+Submitted REQUEST\_CHANGES review 5125384496 on PR \#215 for head \`4f51be899ccdcd737178597cc3235129e1eec606\`. Keep REQ-CONFIG-003 PARTIAL until the complete Issue \#200 repair is merged and proved. No CONFIG-004/genesis change or economic redesign is requested.
+
+2026-09-06 — R112 / CODE\_RUNTIME\_QA\_M1\_25 — PR \#218 replacement-head GoodId/evidence regression  
+REQ\_ID: REQ-CONFIG-003
+
+Reviewed replacement PR \#218 at head \`401827fcf46b4a4d13c1c32ff93cef171a7b2e36\`. It correctly repairs the LocalMarket persistent-ID half of Issue \#200: the allocated MarketId is stored in LocalMarketState and initialization invariants check map key \=== market.marketId. The prior \#215 Issue-closure concern is therefore no longer the blocker.
+
+New blocker on this replacement head: validateDefinitionPack() again validates only RecipeDefinition numeric bounds and never checks recipe GoodId references against definitionPack.goods. Its own positive fixture has goods: {} while referencing good-1/good-2/good-3 and is expected to pass. This regresses the GoodId reference-integrity repair previously reached on the later \#205/\#215 heads and violates CONFIG-003 fail-fast reference validation. Required minimal repair: validate outputGoodId, every inputsPerBatch key and every investmentGoodsPerCapitalUnit key against definitionPack.goods; add field-specific negative tests; make the positive fixture contain the referenced goods.
+
+Evidence-state blocker on the same head: the proposed authoritative implementation\_status.csv sets REQ-CONFIG-003 \= IMPLEMENTED while PR \#218 is still open and MERGE\_COMMIT is blank. Keep the row PARTIAL until the proving repair actually merges; only post-merge reconciliation may promote it and record the real merge commit. Preserve the useful LocalMarket and numeric-bound repairs. No CONFIG-004 behavior or economic semantics change is requested.
+
+Submitted REQUEST\_CHANGES review 5125539918 on PR \#218 at head \`401827fcf46b4a4d13c1c32ff93cef171a7b2e36\`.  
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED  
