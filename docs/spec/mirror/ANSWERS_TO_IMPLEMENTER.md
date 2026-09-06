@@ -435,3 +435,14 @@ Implementation guidance for PR \#179: extend ActorRef with ProductionUnitId; rep
 No stock amount, equity/public ownership relationship, production mechanic, reconciliation identity, phase order, acceptance threshold or v1 scope changed.  
 STATUS: RESOLVED — SPEC\_REPRESENTATION\_REPAIR / IMPLEMENTATION\_REPAIR\_REQUIRED
 
+2026-09-06 — CODE\_RUNTIME\_QA\_M1\_14 — PR \#179 reconciliation is validation-only
+
+REQ\_ID: REQ-CONFIG-004
+
+Observed: PR \#179's \`reconcileGenesisStocks()\` receives only \`WorldGenesisLedger\` plus config. It sums ledger records and succeeds whenever category totals are non-negative. It never reads the constructed tick-0 \`WorldState\` or an independently projected stock snapshot, so a missing or duplicated genesis record, or a mismatch between ledger entries and actual authoritative opening stocks, can still pass.
+
+Finding: this is an implementation acceptance blocker, not a specification defect. Handoff/03 section 20 requires genesis source totals to reconcile to actual tick-0 authoritative stocks; section 24 invariants 12 and 18 require opening money and goods reconciliation to close. Non-negativity is useful validation but is not reconciliation, and \`residual \= total\` does not provide expected-versus-actual evidence.
+
+Requested implementation action: keep REQ-CONFIG-004 PARTIAL. Make reconciliation compare expected totals from \`WorldGenesisLedger\` against actual tick-0 totals from authoritative stocks by currency, good, population, capital and resource category, within \`SimulationConfig.numeric.reconciliationRelativeTolerance\`, with diagnostics naming category/key/expected/actual/residual. Add negative tests that remove or duplicate one ledger record and/or perturb one actual opening stock and prove reconciliation fails. Posted the same blocker on PR \#179 as comment 5555926030\. This is separate from HANDOFF-REPAIR-014 ProductionUnit ActorRef ownership guidance; no specification or economic mechanism changes in this run.
+
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED
