@@ -1,6 +1,6 @@
 /**
  * Configuration validation (REQ-CONFIG-001 behavioral-override rejection;
- * REQ-CONFIG-005 content validation).
+ * REQ-CONFIG-005 content validation; REQ-CONFIG-003 RecipeDefinition bounds).
  *
  * See `docs/spec/mirror/06 - Handoff/03 — CANONICAL_CONFIG_AND_WORLD_GENERATION.md`
  * section 2: "Scenario-specific behavioral overrides are forbidden in core v1."
@@ -14,6 +14,8 @@
  */
 import { isFiniteCanonicalNumber } from "../domain/numeric";
 import type { CohortSeed, MarketSeed, ProductionUnitSeed, RegionSeed, ScenarioDefinition, TransportLinkSeed } from "./scenarioDefinition";
+import type { DefinitionPack } from "./definitionPack";
+import type { RecipeDefinition } from "./definitionPack";
 import { SIMULATION_CONFIG_BEHAVIORAL_KEYS } from "./simulationConfig";
 import { SCENARIO_DEFINITION_KEYS } from "./scenarioDefinition";
 
@@ -430,4 +432,81 @@ function describeValue(value: unknown): string {
   if (typeof value === "number" && !Number.isFinite(value)) return value > 0 ? "Infinity" : "-Infinity";
   if (typeof value === "object") return "an object";
   return typeof value === "string" ? JSON.stringify(value) : String(value);
+}
+
+export function validateDefinitionPackRecipes(definitionPack: DefinitionPack): void {
+  for (const [recipeId, recipe] of Object.entries(definitionPack.recipes)) {
+    validateRecipeDefinition(recipe, recipeId);
+  }
+}
+
+function validateRecipeDefinition(recipe: RecipeDefinition, recipeId: string): void {
+  // outputPerBatch: strictly positive
+  if (!isFiniteCanonicalNumber(recipe.outputPerBatch) || recipe.outputPerBatch <= 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": outputPerBatch must be a positive finite number, got ${describeValue(recipe.outputPerBatch)}`,
+    );
+  }
+
+  // inputsPerBatch coefficients: strictly positive when declared
+  for (const [goodId, coefficient] of Object.entries(recipe.inputsPerBatch)) {
+    if (!isFiniteCanonicalNumber(coefficient) || coefficient <= 0) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": inputsPerBatch["${goodId}"] must be a positive finite number, got ${describeValue(coefficient)}`,
+      );
+    }
+  }
+
+  // batchesPerCapitalUnit: strictly positive
+  if (!isFiniteCanonicalNumber(recipe.batchesPerCapitalUnit) || recipe.batchesPerCapitalUnit <= 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": batchesPerCapitalUnit must be a positive finite number, got ${describeValue(recipe.batchesPerCapitalUnit)}`,
+    );
+  }
+
+  // laborPerBatch: non-negative
+  if (!isFiniteCanonicalNumber(recipe.laborPerBatch) || recipe.laborPerBatch < 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": laborPerBatch must be a non-negative finite number, got ${describeValue(recipe.laborPerBatch)}`,
+    );
+  }
+
+  // minimumStartupCapital: non-negative
+  if (!isFiniteCanonicalNumber(recipe.minimumStartupCapital) || recipe.minimumStartupCapital < 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": minimumStartupCapital must be a non-negative finite number, got ${describeValue(recipe.minimumStartupCapital)}`,
+    );
+  }
+
+  // minimumInfrastructureFactor: [0,1] when present
+  if (recipe.minimumInfrastructureFactor !== undefined) {
+    if (!isFiniteCanonicalNumber(recipe.minimumInfrastructureFactor) || recipe.minimumInfrastructureFactor < 0 || recipe.minimumInfrastructureFactor > 1) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": minimumInfrastructureFactor must be a finite number in [0,1] when present, got ${describeValue(recipe.minimumInfrastructureFactor)}`,
+      );
+    }
+  }
+
+  // extractedResourcePerBatch: strictly positive when extractionResourceId is present
+  if (recipe.extractionResourceId !== undefined) {
+    if (!isFiniteCanonicalNumber(recipe.extractedResourcePerBatch) || recipe.extractedResourcePerBatch <= 0) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": extractedResourcePerBatch must be a positive finite number when extractionResourceId is present, got ${describeValue(recipe.extractedResourcePerBatch)}`,
+      );
+    }
+  }
+
+  // baseThroughputFactor: strictly positive
+  if (!isFiniteCanonicalNumber(recipe.baseThroughputFactor) || recipe.baseThroughputFactor <= 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": baseThroughputFactor must be a positive finite number, got ${describeValue(recipe.baseThroughputFactor)}`,
+    );
+  }
+
+  // depreciationRatePerTick: [0,1)
+  if (!isFiniteCanonicalNumber(recipe.depreciationRatePerTick) || recipe.depreciationRatePerTick < 0 || recipe.depreciationRatePerTick >= 1) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": depreciationRatePerTick must be a finite number in [0,1), got ${describeValue(recipe.depreciationRatePerTick)}`,
+    );
+  }
 }

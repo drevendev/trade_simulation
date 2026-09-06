@@ -385,4 +385,25 @@ describe("buildInitialWorld", () => {
 
     expect(ids1.length).toBe(ids2.length);
   });
+
+  it("stores correct marketId in every market entry (REQ-CONFIG-003)", () => {
+    const scenario = {
+      ...minimalScenario(),
+      markets: [
+        {
+          regionKey: "r-1",
+          initialPriceByGood: { "good-1": 100 },
+        },
+      ] as any,
+    };
+    const config = minimalConfig();
+    const pack = baselineDefinitionPack;
+
+    const world = buildInitialWorld(scenario, pack, config, 42);
+
+    expect(world.markets.size).toBeGreaterThan(0);
+    world.markets.forEach((market, mapKey) => {
+      expect(market.marketId).toBe(mapKey);
+    });
+  });
 });

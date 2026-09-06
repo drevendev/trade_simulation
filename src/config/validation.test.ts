@@ -16,7 +16,9 @@ import type {
   StateSeed,
   TransportLinkSeed,
 } from "./scenarioDefinition";
-import { assertNoBehavioralOverrides, validateScenarioContent } from "./validation";
+import { assertNoBehavioralOverrides, validateScenarioContent, validateDefinitionPackRecipes } from "./validation";
+import type { RecipeDefinition } from "./definitionPack";
+import type { DefinitionPack } from "./definitionPack";
 
 /** A minimal, well-formed `ScenarioDefinition`-shaped object (required keys only). */
 function minimalScenario(): Record<string, unknown> {
@@ -616,5 +618,194 @@ describe("validateScenarioContent", () => {
       ],
     });
     expect(() => validateScenarioContent(scenario)).toThrow(/wallet\["c-1"\].*Infinity/);
+  });
+});
+
+describe("validateDefinitionPackRecipes (REQ-CONFIG-003)", () => {
+  function minimalRecipe(): RecipeDefinition {
+    return {
+      id: "recipe-1",
+      outputGoodId: "good-1" as GoodId,
+      outputPerBatch: 10,
+      inputsPerBatch: {},
+      laborCategory: "GENERAL",
+      laborPerBatch: 5,
+      batchesPerCapitalUnit: 2,
+      investmentGoodsPerCapitalUnit: {},
+      minimumStartupCapital: 100,
+      baseThroughputFactor: 1.0,
+      depreciationRatePerTick: 0.01,
+    };
+  }
+
+  function packWithRecipe(recipe: RecipeDefinition): DefinitionPack {
+    return {
+      id: "pack-1",
+      version: "1.0.0",
+      goods: {},
+      recipes: { [recipe.id]: recipe },
+      eventDefinitions: {},
+      metricDefinitions: {},
+    };
+  }
+
+  it("accepts a minimal well-formed recipe", () => {
+    const pack = packWithRecipe(minimalRecipe());
+    expect(() => validateDefinitionPackRecipes(pack)).not.toThrow();
+  });
+
+  it("rejects outputPerBatch when zero", () => {
+    const pack = packWithRecipe({ ...minimalRecipe(), outputPerBatch: 0 });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/outputPerBatch.*positive/);
+  });
+
+  it("rejects outputPerBatch when negative", () => {
+    const pack = packWithRecipe({ ...minimalRecipe(), outputPerBatch: -5 });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/outputPerBatch.*positive/);
+  });
+
+  it("rejects outputPerBatch when non-finite", () => {
+    const pack = packWithRecipe({ ...minimalRecipe(), outputPerBatch: Number.POSITIVE_INFINITY });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/outputPerBatch/);
+  });
+
+  it("rejects inputsPerBatch coefficient when zero", () => {
+    const recipe = {
+      ...minimalRecipe(),
+      inputsPerBatch: { "good-2": 0 } as Record<string, number>,
+    };
+    const pack = packWithRecipe(recipe);
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/inputsPerBatch.*positive/);
+  });
+
+  it("rejects inputsPerBatch coefficient when negative", () => {
+    const recipe = {
+      ...minimalRecipe(),
+      inputsPerBatch: { "good-2": -2 } as Record<string, number>,
+    };
+    const pack = packWithRecipe(recipe);
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/inputsPerBatch.*positive/);
+  });
+
+  it("rejects batchesPerCapitalUnit when zero", () => {
+    const pack = packWithRecipe({ ...minimalRecipe(), batchesPerCapitalUnit: 0 });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/batchesPerCapitalUnit.*positive/);
+  });
+
+  it("rejects batchesPerCapitalUnit when negative", () => {
+    const pack = packWithRecipe({ ...minimalRecipe(), batchesPerCapitalUnit: -1 });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/batchesPerCapitalUnit.*positive/);
+  });
+
+  it("rejects laborPerBatch when negative", () => {
+    const pack = packWithRecipe({ ...minimalRecipe(), laborPerBatch: -1 });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/laborPerBatch.*non-negative/);
+  });
+
+  it("accepts laborPerBatch when zero", () => {
+    const pack = packWithRecipe({ ...minimalRecipe(), laborPerBatch: 0 });
+    expect(() => validateDefinitionPackRecipes(pack)).not.toThrow();
+  });
+
+  it("rejects minimumStartupCapital when negative", () => {
+    const pack = packWithRecipe({ ...minimalRecipe(), minimumStartupCapital: -50 });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/minimumStartupCapital.*non-negative/);
+  });
+
+  it("accepts minimumStartupCapital when zero", () => {
+    const pack = packWithRecipe({ ...minimalRecipe(), minimumStartupCapital: 0 });
+    expect(() => validateDefinitionPackRecipes(pack)).not.toThrow();
+  });
+
+  it("rejects minimumInfrastructureFactor when below 0", () => {
+    const pack = packWithRecipe({
+      ...minimalRecipe(),
+      minimumInfrastructureFactor: -0.1,
+    });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/minimumInfrastructureFactor.*\[0,1\]/);
+  });
+
+  it("rejects minimumInfrastructureFactor when above 1", () => {
+    const pack = packWithRecipe({
+      ...minimalRecipe(),
+      minimumInfrastructureFactor: 1.1,
+    });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/minimumInfrastructureFactor.*\[0,1\]/);
+  });
+
+  it("accepts minimumInfrastructureFactor at boundary 0", () => {
+    const pack = packWithRecipe({
+      ...minimalRecipe(),
+      minimumInfrastructureFactor: 0,
+    });
+    expect(() => validateDefinitionPackRecipes(pack)).not.toThrow();
+  });
+
+  it("accepts minimumInfrastructureFactor at boundary 1", () => {
+    const pack = packWithRecipe({
+      ...minimalRecipe(),
+      minimumInfrastructureFactor: 1,
+    });
+    expect(() => validateDefinitionPackRecipes(pack)).not.toThrow();
+  });
+
+  it("rejects extractedResourcePerBatch when zero and extractionResourceId is present", () => {
+    const pack = packWithRecipe({
+      ...minimalRecipe(),
+      extractionResourceId: "resource-1",
+      extractedResourcePerBatch: 0,
+    });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/extractedResourcePerBatch.*positive/);
+  });
+
+  it("rejects extractedResourcePerBatch when negative and extractionResourceId is present", () => {
+    const pack = packWithRecipe({
+      ...minimalRecipe(),
+      extractionResourceId: "resource-1",
+      extractedResourcePerBatch: -5,
+    });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/extractedResourcePerBatch.*positive/);
+  });
+
+  it("rejects baseThroughputFactor when zero", () => {
+    const pack = packWithRecipe({ ...minimalRecipe(), baseThroughputFactor: 0 });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/baseThroughputFactor.*positive/);
+  });
+
+  it("rejects baseThroughputFactor when negative", () => {
+    const pack = packWithRecipe({ ...minimalRecipe(), baseThroughputFactor: -0.5 });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/baseThroughputFactor.*positive/);
+  });
+
+  it("rejects depreciationRatePerTick when below 0", () => {
+    const pack = packWithRecipe({
+      ...minimalRecipe(),
+      depreciationRatePerTick: -0.01,
+    });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/depreciationRatePerTick.*\[0,1\)/);
+  });
+
+  it("rejects depreciationRatePerTick when at or above 1", () => {
+    const pack = packWithRecipe({
+      ...minimalRecipe(),
+      depreciationRatePerTick: 1.0,
+    });
+    expect(() => validateDefinitionPackRecipes(pack)).toThrow(/depreciationRatePerTick.*\[0,1\)/);
+  });
+
+  it("accepts depreciationRatePerTick at boundary 0", () => {
+    const pack = packWithRecipe({
+      ...minimalRecipe(),
+      depreciationRatePerTick: 0,
+    });
+    expect(() => validateDefinitionPackRecipes(pack)).not.toThrow();
+  });
+
+  it("accepts depreciationRatePerTick just below 1", () => {
+    const pack = packWithRecipe({
+      ...minimalRecipe(),
+      depreciationRatePerTick: 0.999999,
+    });
+    expect(() => validateDefinitionPackRecipes(pack)).not.toThrow();
   });
 });

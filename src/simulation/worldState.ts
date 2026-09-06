@@ -28,6 +28,7 @@ import {
   type GenesisRecord,
 } from "../domain/genesisLedger";
 import { reconcileGenesisStocks } from "./genesisReconciliation";
+import { validateDefinitionPackRecipes } from "../config/validation";
 import type {
   ClanSeed,
   CohortSeed,
@@ -371,10 +372,10 @@ export function buildInitialWorld(
 
   // Step 9: Instantiate LocalMarkets (one per Region)
   const marketRegistry = new Map(
-    (scenarioDefinition.markets ?? []).map((marketSeed) => [
-      idMap.marketIds.get(marketSeed.regionKey ?? "")!,
-      buildLocalMarketState(marketSeed, definitionPack),
-    ]),
+    (scenarioDefinition.markets ?? []).map((marketSeed) => {
+      const marketId = idMap.marketIds.get(marketSeed.regionKey ?? "")!;
+      return [marketId, buildLocalMarketState(marketId, marketSeed, definitionPack)];
+    }),
   );
 
   // Step 10: Instantiate ProductionUnits with capacity derivation
@@ -665,9 +666,9 @@ function buildMonetaryAuthorityState(seed: MonetaryAuthoritySeed, idMap: IdMaps)
   };
 }
 
-function buildLocalMarketState(seed: MarketSeed, definitionPack: DefinitionPack): LocalMarketState {
+function buildLocalMarketState(marketId: MarketId, seed: MarketSeed, definitionPack: DefinitionPack): LocalMarketState {
   return {
-    marketId: undefined as unknown as MarketId,
+    marketId,
     seed,
   };
 }
@@ -742,6 +743,8 @@ function validateWorldGenesis(
       throw new Error(`Region ${region.key} references missing currency ${currencyKey}`);
     }
   });
+
+  validateDefinitionPackRecipes(definitionPack);
 }
 
 function validateInitializationInvariants(
@@ -770,6 +773,15 @@ function validateInitializationInvariants(
   states.forEach((state) => {
     if (!currencies.has(state.effectiveCurrencyId)) {
       throw new Error(`State ${state.stateId} references non-existent currency`);
+    }
+  });
+
+  // Invariant REQ-CONFIG-003: Every market entry satisfies key === value.marketId
+  markets.forEach((market, mapKey) => {
+    if (market.marketId !== mapKey) {
+      throw new Error(
+        `Market key mismatch: map key ${mapKey} does not match market.marketId ${market.marketId}`,
+      );
     }
   });
 }
