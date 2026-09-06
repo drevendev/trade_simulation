@@ -28,7 +28,11 @@ A pull request labelled `status:needs-decision` is never eligible: that label me
 the decision was handed to a person, and a review run cannot take it back.
 A head revision without a prior verdict is eligible as before. Inspect both formal
 reviews and verdict comments: a verdict posted as a comment because GitHub refuses
-a same-account review counts equally.
+a same-account review counts equally. A formal review in the `APPROVED` or
+`CHANGES_REQUESTED` state is a verdict whatever its words, from whichever account; a
+review left in the `COMMENTED` state is prose. Only a comment by the pull request's
+author counts as a correction handoff — a QA note from another account posted after a
+verdict is evidence for the next review, and does not reopen the head.
 
 **Machine-generated pull requests are never eligible.** A pull request whose head
 branch is `spec-mirror` is produced by a workflow, gated mechanically and merged by
@@ -224,7 +228,9 @@ matters, and what would satisfy it. Set the Issue back to `status:in-progress`.
 Vague dissatisfaction is not a verdict.
 
 The third refusal on one pull request is the last. After your run, the forge counts the
-`REQUEST_CHANGES` verdicts on the pull request (`scripts/rework_limit.py`); at three it
+`REQUEST_CHANGES` verdicts posted under your own identity on the pull request
+(`scripts/rework_limit.py`) — a QA review from another account is evidence for you, not
+a round of the loop; at three it
 closes the pull request with the record of every verdict, deletes the loop's branch, and
 returns the Issue to `status:ready` with the same record. You do nothing differently —
 post the verdict as always — but know that a third refusal ends this branch, so it must

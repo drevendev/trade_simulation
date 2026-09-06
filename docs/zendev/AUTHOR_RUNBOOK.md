@@ -107,7 +107,9 @@ actually fixed.
 
 ### The rework bound (items 1 and 2)
 
-Rework on one pull request is bounded at three `REQUEST_CHANGES` verdicts. At the third,
+Rework on one pull request is bounded at three `REQUEST_CHANGES` verdicts posted by the
+ACCEPTOR's own identity. A refusing review from another account is a defect to address,
+and it may keep the branch unmergeable, but it is not a round of the bound. At the third,
 the forge closes the pull request with the record of every verdict, deletes its branch,
 and returns the Issue to `status:ready` with the same record (`scripts/rework_limit.py`).
 A pull request closed this way is not yours to reopen, and its branch is gone: take the

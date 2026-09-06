@@ -228,7 +228,8 @@ jobs:
         run: |
           python "${RUNNER_TEMP}/control-plane/rework_limit.py" \
             --repo "${{ github.repository }}" \
-            --pull "${{ steps.select.outputs.target }}"
+            --pull "${{ steps.select.outputs.target }}" \
+            --reviewer "${{ steps.identity.outputs.app-slug }}"
 
       # The ledger lives in a private repository and is written by the MACHINE identity.
       # Its token is minted here, at the end, scoped to that repository alone: the model

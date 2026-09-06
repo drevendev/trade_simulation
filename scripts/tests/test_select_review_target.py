@@ -238,5 +238,116 @@ class MachineGeneratedTests(unittest.TestCase):
         self.assertEqual(select.choose(candidates), 105)
 
 
+
+def entry(body, created, state=None, author=None):
+    e = {"body": body, "createdAt": created, "state": state}
+    if author is not None:
+        e["author"] = author
+    return e
+
+
+def authored(login="app/zendev-author", **kw):
+    p = pull(**kw)
+    p["author"] = {"login": login}
+    return p
+
+
+class TwoReviewerTests(unittest.TestCase):
+    """The loop's own identity and another account both post on the same head."""
+
+    def test_the_runbooks_prescribed_heading_is_a_verdict(self):
+        # #152 exactly: the role wrote the heading the runbook prescribes, the selector
+        # did not read it as a verdict, and the next run reviewed the head again.
+        for body in (
+            "## ACCEPTOR Verdict: ACCEPT",
+            "## ACCEPTOR verdict: REQUEST_CHANGES",
+            "## ACCEPTOR VERDICT: REQUEST_CHANGES\n\n**Head revision**: 0bcc816",
+            "## ACCEPTOR Verdict: ACCEPT \u2713",
+            "**ACCEPTOR verdict: ACCEPT** at revision abc1234",
+        ):
+            with self.subTest(body=body):
+                self.assertTrue(select.is_verdict(body))
+
+    def test_a_role_heading_without_a_verdict_word_is_not_one(self):
+        for body in (
+            "## ACCEPTOR Run Assessment \u2014 BLOCKED",
+            "## Merged by ACCEPTOR",
+            "## ACCEPTOR claim\n\nreviewing #84",
+        ):
+            with self.subTest(body=body):
+                self.assertFalse(select.is_verdict(body))
+
+    def test_a_formal_review_state_is_a_verdict_whatever_its_words(self):
+        prose = "CODE_RUNTIME_QA_M1_18 \u2014 one new schema/conformance blocker."
+        self.assertTrue(select.is_verdict_entry(entry(prose, "t", state="CHANGES_REQUESTED")))
+        self.assertTrue(select.is_verdict_entry(entry(prose, "t", state="APPROVED")))
+        self.assertFalse(select.is_verdict_entry(entry(prose, "t", state="COMMENTED")))
+        self.assertFalse(select.is_verdict_entry(entry(prose, "t")))
+
+    def test_another_accounts_refusing_review_judges_the_head(self):
+        # The QA reviewer's review carried its verdict in its state and none in its
+        # words; read by words alone the head looked unjudged.
+        comments = [
+            entry("CODE_RUNTIME_QA_M1_18: one new blocker.", "2026-09-06T05:57:55Z",
+                  state="CHANGES_REQUESTED", author="drevendev"),
+        ]
+        ok, reason = select.eligible(authored(), COMMITTED, comments)
+        self.assertFalse(ok)
+        self.assertIn("no correction since", reason)
+
+    def test_a_qa_note_from_another_account_is_not_a_correction(self):
+        # #190 exactly: accepted at 04:33, a QA reviewer commented at 05:01, the 05:30
+        # run reopened the head as "corrected" and refused it: the third refusal.
+        comments = [
+            entry("## ACCEPT\n\nAll conditions hold.", "2026-09-06T04:33:23Z",
+                  author="zendev-acceptor"),
+            entry("R103 follow-up on the evidence-state repair: one contradiction remains.",
+                  "2026-09-06T05:01:48Z", state="COMMENTED", author="drevendev"),
+        ]
+        ok, reason = select.eligible(authored(), COMMITTED, comments)
+        self.assertFalse(ok)
+        self.assertIn("no correction since", reason)
+
+    def test_the_authors_own_handoff_is_still_a_correction(self):
+        comments = [
+            entry("## REQUEST_CHANGES\n\nmetadata", "2026-09-06T04:33:23Z",
+                  author="zendev-acceptor"),
+            entry("## AUTHOR handoff\n\nCorrected the body.", "2026-09-06T05:01:48Z",
+                  author="zendev-author"),
+        ]
+        ok, reason = select.eligible(authored(), COMMITTED, comments)
+        self.assertTrue(ok)
+        self.assertIn("correction", reason)
+
+    def test_the_apps_two_spellings_are_one_identity(self):
+        # `gh` prints the author as `app/zendev-author` on the pull request and as
+        # `zendev-author` on its comments; the web shows `zendev-author[bot]`.
+        for spelling in ("zendev-author", "app/zendev-author", "zendev-author[bot]"):
+            self.assertEqual(select.normalize_login(spelling), "zendev-author")
+
+    def test_a_record_without_identities_keeps_the_wider_reading(self):
+        # No author on the pull request, none on the comments: the older behaviour.
+        comments = [
+            comment("## REQUEST_CHANGES\n\nmetadata", "2026-09-05T06:13:23Z"),
+            comment("## AUTHOR handoff\n\nCorrected.", "2026-09-05T06:20:00Z"),
+        ]
+        ok, _ = select.eligible(pull(), COMMITTED, comments)
+        self.assertTrue(ok)
+
+    def test_the_selector_and_the_bound_read_one_refusal_shape(self):
+        # Two regular expressions, one meaning: a refusal the bound counts must be a
+        # verdict the selector sees, or the same head is reviewed again after it.
+        import rework_limit as rl
+        for body in (
+            "## ACCEPTOR Verdict: REQUEST_CHANGES",
+            "## VERDICT: REQUEST_CHANGES",
+            "**REQUEST_CHANGES**\n\nfix it",
+            "REQUEST_CHANGES at revision 9e14cdb",
+        ):
+            with self.subTest(body=body):
+                self.assertTrue(select.is_verdict(body))
+                self.assertTrue(rl.is_refusal({"body": body, "state": None}))
+
+
 if __name__ == "__main__":
     unittest.main()

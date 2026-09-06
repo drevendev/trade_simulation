@@ -147,5 +147,55 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("python scripts/rework_limit.py", self.text())
 
 
+
+def by(author, entry):
+    return {**entry, "author": author}
+
+
+# #193 exactly: two refusing reviews from the QA reviewer's account, one refusal and
+# one revised refusal from the role itself, on one head, in ninety minutes.
+TIMELINE_ON_193 = [
+    by("drevendev", review("CHANGES_REQUESTED", "2026-09-06T05:57:55Z", "CODE_RUNTIME_QA_M1_18: one new blocker.")),
+    by("zendev-acceptor", review("CHANGES_REQUESTED", "2026-09-06T06:34:19Z", "## ACCEPTOR Verdict: REQUEST_CHANGES")),
+    by("drevendev", review("CHANGES_REQUESTED", "2026-09-06T06:56:33Z", "CODE_RUNTIME_QA_M1_19: one more.")),
+    by("zendev-acceptor", comment("## ACCEPTOR Verdict: REQUEST_CHANGES (Revised)", "2026-09-06T07:04:35Z")),
+]
+
+
+class WhoseRoundsTests(unittest.TestCase):
+    def test_only_the_named_reviewers_refusals_are_rounds(self):
+        reached, refusals = rl.decide(TIMELINE_ON_193, reviewer="zendev-acceptor")
+        self.assertFalse(reached)
+        self.assertEqual(len(refusals), 2)
+
+    def test_without_a_name_every_refusal_counts(self):
+        # The reading that closed #193 at four; kept for a record without identities.
+        reached, refusals = rl.decide(TIMELINE_ON_193)
+        self.assertTrue(reached)
+        self.assertEqual(len(refusals), 4)
+
+    def test_the_apps_spellings_do_not_hide_the_reviewer(self):
+        for spelling in ("app/zendev-acceptor", "zendev-acceptor[bot]", "Zendev-Acceptor"):
+            with self.subTest(spelling=spelling):
+                entries = [by(spelling, e) for e in REFUSALS_ON_130]
+                reached, refusals = rl.decide(entries, reviewer="zendev-acceptor")
+                self.assertTrue(reached)
+                self.assertEqual(len(refusals), 3)
+
+    def test_entries_carry_who_posted_them(self):
+        pull = {
+            "comments": [{"body": "## REQUEST_CHANGES", "createdAt": "2026-09-06T06:34:19Z", "author": {"login": "zendev-acceptor"}}],
+            "reviews": [{"body": "", "submittedAt": "2026-09-06T05:57:55Z", "state": "CHANGES_REQUESTED", "author": {"login": "drevendev"}}],
+        }
+        entries = rl.entries_of(pull)
+        self.assertEqual([e["author"] for e in entries], ["drevendev", "zendev-acceptor"])
+
+    def test_the_workflow_tells_the_bound_who_the_role_is(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        bound = text.index("control-plane/rework_limit.py")
+        step = text[bound : text.find("- name:", bound)]
+        self.assertIn('--reviewer "${{ steps.identity.outputs.app-slug }}"', step)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -43,6 +43,16 @@ since none of them may be red at acceptance — so that reading would withhold m
 the reviews worth having. A red test suite still selects, because the reviewer can
 judge the criteria too and return one complete list instead of two partial ones.
 
+## What is a verdict
+
+A comment in one of the shapes the runbooks prescribe — a heading or bold marker,
+optionally the role and the word "verdict", then `ACCEPT` or `REQUEST_CHANGES` — or a
+formal review whose state is `APPROVED` or `CHANGES_REQUESTED`, whatever its words. A
+review left in the `COMMENTED` state is prose. On #193 the role's own
+`## ACCEPTOR Verdict: ACCEPT` was not a verdict to an earlier reading of this, so the
+next run reviewed the same head again and refused it: two verdicts on one revision,
+which is what this exists to prevent (#152).
+
 ## How a verdict is tied to a head
 
 Two independent signals, either of which counts:
@@ -56,8 +66,11 @@ latency, while a repeated one costs a run *and* leaves contradictory comments on
 pull request — the asymmetry says which way to lean.
 
 A verdict is not final if a correction followed it. A non-verdict comment newer than
-the newest verdict is read as the AUTHOR's correction handoff, which is what section
-1's same-head exception turns on.
+the newest verdict, posted by the pull request's author, is read as the AUTHOR's
+correction handoff, which is what section 1's same-head exception turns on. A note
+from any other account after the verdict — an operator's, a QA reviewer's — is
+evidence for the next review, not a correction: on #190 such a note reopened an
+accepted head, the run that followed refused it, and the bound closed the pull request.
 
 ## What this does not do
 
@@ -89,11 +102,15 @@ import machine_pr_guard
 # exists to stop. A bare word with no marker must be the shouted form the runbook
 # specifies; anything less would swallow ordinary sentences that open with "Accept".
 MARKED_VERDICT = re.compile(
-    r"^\s*(?:#{1,4}\s*|\*\*)\s*(?:VERDICT\s*[:\-—]\s*)?"
+    r"^\s*(?:#{1,4}\s*|\*\*)\s*(?:ACCEPTOR\s+)?(?:VERDICT\s*[:\-—]\s*)?"
     r"(?:ACCEPT|REQUEST_CHANGES)\b",
     re.MULTILINE | re.IGNORECASE,
 )
 BARE_VERDICT = re.compile(r"^\s*(?:ACCEPT|REQUEST_CHANGES)\b", re.MULTILINE)
+
+# A formal review carries its verdict in its state, whatever its words. A review left in
+# the `COMMENTED` state is prose, however strongly it is worded.
+REVIEW_VERDICT_STATES = ("APPROVED", "CHANGES_REQUESTED")
 
 HUMAN_OWNED_LABEL = "status:needs-decision"
 MERGEABILITY_CHECK = "mergeability"
@@ -104,9 +121,42 @@ def is_verdict(body: str) -> bool:
     return bool(MARKED_VERDICT.search(body) or BARE_VERDICT.search(body))
 
 
+def is_verdict_entry(entry) -> bool:
+    """A comment in a verdict shape, or a formal review in a verdict state."""
+    if (entry.get("state") or "").upper() in REVIEW_VERDICT_STATES:
+        return True
+    return is_verdict(entry.get("body") or "")
+
+
+def normalize_login(login) -> str:
+    """One spelling for one identity.
+
+    `gh` prints a GitHub App as `app/name` on the pull request it authored and as `name`
+    on the comments it posted; the web shows it as `name[bot]`. Comparing any two of
+    those verbatim says "different", which is how a role fails to recognise itself.
+    """
+    login = (login or "").strip()
+    if login.startswith("app/"):
+        login = login[len("app/"):]
+    if login.endswith("[bot]"):
+        login = login[: -len("[bot]")]
+    return login.lower()
+
+
+def is_the_authors(entry, author: str) -> bool:
+    """Whether an entry was posted by the pull request's author.
+
+    Unknown on either side reads as yes: a record that carries no identities keeps the
+    older, wider reading rather than silently never reopening anything.
+    """
+    if not author or "author" not in entry:
+        return True
+    return normalize_login(entry.get("author")) == author
+
+
 def judges_head(comment, head_sha: str, head_committed_at: str) -> bool:
-    """Whether this comment is a verdict on the current head revision."""
-    if not is_verdict(comment["body"]):
+    """Whether this entry is a verdict on the current head revision."""
+    if not is_verdict_entry(comment):
         return False
     if head_sha[:7] and head_sha[:7] in (comment["body"] or ""):
         return True
@@ -173,10 +223,13 @@ def eligible(pull, head_committed_at: str, comments):
         return True, "no verdict on the current head"
 
     newest_verdict = max(c["createdAt"] for c in verdicts)
+    author = normalize_login((pull.get("author") or {}).get("login"))
     corrections = [
         c
         for c in comments
-        if not is_verdict(c["body"]) and c["createdAt"] > newest_verdict
+        if not is_verdict_entry(c)
+        and c["createdAt"] > newest_verdict
+        and is_the_authors(c, author)
     ]
     if corrections:
         return True, "a correction was posted after the last verdict on this head"
@@ -215,7 +268,7 @@ def load_pulls(repo: str):
             "--limit",
             "100",
             "--json",
-            "number,createdAt,isDraft,labels,headRefName,headRefOid,statusCheckRollup",
+            "number,createdAt,isDraft,labels,headRefName,headRefOid,statusCheckRollup,author",
         ]
     )
     return json.loads(raw)
@@ -227,13 +280,25 @@ def load_comments(repo: str, number: int):
     )
     data = json.loads(raw)
     comments = [
-        {"body": c.get("body", ""), "createdAt": c.get("createdAt", "")}
+        {
+            "body": c.get("body", ""),
+            "createdAt": c.get("createdAt", ""),
+            "state": None,
+            "author": (c.get("author") or {}).get("login", ""),
+        }
         for c in data.get("comments", [])
     ]
-    # A formal review counts equally; the role posts comments only because GitHub
-    # refuses a same-account review, which is an accident of identity, not of meaning.
+    # A formal review counts equally, and its state is read as well as its words: the
+    # role posts comments only because GitHub refuses a same-account review, which is an
+    # accident of identity, not of meaning, while another account's review carries its
+    # verdict in the state and rarely in a heading.
     comments += [
-        {"body": r.get("body", ""), "createdAt": r.get("submittedAt", "")}
+        {
+            "body": r.get("body", ""),
+            "createdAt": r.get("submittedAt", ""),
+            "state": r.get("state"),
+            "author": (r.get("author") or {}).get("login", ""),
+        }
         for r in data.get("reviews", [])
         if r.get("submittedAt")
     ]
