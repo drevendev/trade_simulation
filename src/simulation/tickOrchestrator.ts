@@ -10,11 +10,13 @@
 
 import type { RegionId, StateId, CurrencyId, CohortId, ProductionUnitId, MonetaryAuthorityId } from "../domain/id";
 import type { WorldState } from "./worldState";
+import type { RuntimeLedger } from "./ledgerFlow";
+import { createEmptyRuntimeLedger } from "./ledgerFlow";
 import { createHash } from "crypto";
 
 /**
  * Ephemeral per-tick state, reset every phase-0 tick start.
- * Plans are immutable intent created in Phase 2; transaction records accumulate.
+ * Plans are immutable intent created in Phase 2; transaction records and flows accumulate.
  */
 export interface TickContext {
   readonly tick: number;
@@ -22,6 +24,7 @@ export interface TickContext {
   readonly effectiveJurisdictionByRegion: ReadonlyMap<RegionId, StateId | null>;
   readonly rngSeed: number;
   readonly transactions: ReadonlyArray<EconomicTransaction>;
+  readonly ledger: RuntimeLedger;
 }
 
 /**
@@ -103,6 +106,7 @@ export function initializeTickContext(tick: number, seed: number): TickContext {
     effectiveJurisdictionByRegion: new Map(),
     rngSeed: seed ^ tick, // Deterministic per-tick seed
     transactions: [],
+    ledger: createEmptyRuntimeLedger(),
   };
 }
 

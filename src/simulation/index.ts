@@ -34,3 +34,39 @@ export {
   type PendingTransitions,
   type PhaseHandler,
 } from "./tickOrchestrator";
+
+export {
+  createEmptyRuntimeLedger,
+  addMoneyFlow,
+  addGoodFlow,
+  addPhysicalLoss,
+  createMoneyFlow,
+  createGoodFlow,
+  createPhysicalLoss,
+  validateLedgerFlow,
+  type LedgerFlow,
+  type MoneyFlow,
+  type GoodFlow,
+  type PhysicalLoss,
+  type RuntimeLedger,
+  type StockOwner,
+} from "./ledgerFlow";
+
+export {
+  reconcileTickFlows,
+  buildDiagnosticProjection,
+  type ReconciliationResult,
+  type UnmatchedDelta,
+  type ReconciliationDiagnostics,
+} from "./reconciliation";
+
+export {
+  createEmptyInvariantRegistry,
+  registerPhaseInvariant,
+  executePhaseInvariants,
+  createConservationInvariant,
+  createFiniteValueInvariant,
+  createDefaultInvariantRegistry,
+  type InvariantRegistry,
+  type InvariantHook,
+} from "./invariantHooks";
