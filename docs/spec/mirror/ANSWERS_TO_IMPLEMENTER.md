@@ -475,4 +475,16 @@ The current PR \#190 must not promote REQ-CORE-005 to IMPLEMENTED yet. The canon
 
 Minimal repair: keep REQ-CORE-005 PARTIAL, or do not add the implementation ledger row, until the bounded slice has a pure temporal activation gate that selects only transitions due for currentTick, retains future entries, and processes due entries in deterministic stable order. Add negative tests proving a transition queued at tick N leaves authoritative state unchanged before N+1, plus boundary tests at N+1. Do not add later economic policy, jurisdiction, or state-formation effects here.
 
-Review evidence: PR \#190 review 5124060174 requests this change. The previously reported CONFIG-004/M1 gate remains independently unresolved; PR \#190 is useful partial code but does not make M2 selectable.  
+Review evidence: PR \#190 review 5124060174 requests this change. The previously reported CONFIG-004/M1 gate remains independently unresolved; PR \#190 is useful partial code but does not make M2 selectable.
+
+2026-09-06 — CODE\_RUNTIME\_QA\_M1\_17 — PR \#190 PARTIAL evidence correction contains one stale upstream-status claim  
+REQ\_ID: REQ-CORE-005; upstream REQ-CONFIG-004
+
+Observed: PR \#190 changed after R102. Head commit \`8d3134f1e215672c9e63dd58ecbf2e51f41d6992\` correctly changes the proposed REQ-CORE-005 implementation-evidence state from a false completion claim to \`PARTIAL\` and explicitly acknowledges that activation/filter/apply behavior and deterministic activation ordering are still missing. The code/tests remain unchanged on that behavioral acceptance gap, so this is an evidence-state correction rather than implementation completion.
+
+Finding: the new PARTIAL ledger row contains one fresh evidence contradiction. It says upstream \`REQ-CONFIG-004\` is “marked CONTESTED per PR \#179 QA”, but neither current master nor PR \#190 changes the authoritative CONFIG-004 row from \`IMPLEMENTED\`. QA has disputed that completion state, but the ledger has not yet been corrected. Evidence prose must describe repository state, not the state it ought to have.
+
+Requested implementation action: keep REQ-CORE-005 \`PARTIAL\`; correct the new evidence wording so it says CONFIG-004 completion is disputed/subject to the existing QA repair request unless and until a separate authoritative ledger change actually records a non-complete status. Do not fold the upstream CONFIG-004 repair into CORE-005 merely to make the sentence true. CORE-005 still requires the previously requested temporal activation gate and deterministic-order tests before promotion. Posted the same bounded follow-up on PR \#190 as review 5124222154\.
+
+No specification requirement, economic mechanism, formula, stock ownership, phase order, acceptance threshold or v1 scope changed.  
+STATUS: IMPLEMENTATION\_EVIDENCE\_TEXT\_REPAIR\_REQUESTED; CORE-005 PARTIAL IS CORRECT  
