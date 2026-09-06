@@ -158,11 +158,20 @@ jobs:
           # bill. The model is part of what governs a run, so it is declared here and
           # recorded in the telemetry ledger for every run.
           #
-          # Circuit breaker, not a budget: expected author spend on this model is
-          # well under a dollar, so this only fires on a genuine runaway. A hard stop
-          # here is ungraceful — the run cannot report its own blocker — which is why
-          # the ceiling is generous rather than tight.
-          claude_args: --model claude-haiku-4-5 --max-budget-usd 3.00
+          # Circuit breaker, not a budget. A hard stop here is ungraceful — the run is
+          # cut mid-work and cannot report its own blocker, and what it leaves behind
+          # is an open branch nobody explains — so the ceiling is deliberately generous
+          # and only ever fires on a runaway.
+          #
+          # Measured over 108 recorded author runs to 2026-09-06: mean $0.67, 95th
+          # percentile $1.70, highest $2.79. That highest one reached 93% of the
+          # former $3.00 ceiling and still finished; a margin that thin is a stop
+          # waiting to happen, on a run doing nothing wrong. Raised to $5.00 by the
+          # owner on that evidence. It is not a licence to spend: the binding resource
+          # is the subscription window, where the whole loop occupies about three
+          # points of a five-hour block, and a run approaching this figure is a defect
+          # to read in the ledger rather than a budget being used up.
+          claude_args: --model claude-haiku-4-5 --max-budget-usd 5.00
           settings: |
             {
               "permissions": {
