@@ -468,3 +468,11 @@ Requested implementation action: preserve PR \#187 and its tests as useful merge
 No specification requirement, economic mechanism, formula, stock ownership, phase order, acceptance threshold or v1 scope changed.  
 STATUS: IMPLEMENTATION\_DEPENDENCY\_GATE\_REPAIR\_REQUESTED  
 D
+
+R102 — REQ-CORE-005 / PR \#190 — activation-boundary evidence is not yet sufficient
+
+The current PR \#190 must not promote REQ-CORE-005 to IMPLEMENTED yet. The canonical acceptance is behavioral: tests must prove that an N+1 transition cannot take effect before its defined activation boundary. The current tests only construct transition values and assert arithmetic such as activateTick \> currentTick; no activation/filter/apply primitive is exercised. The deterministic-ordering test also does not order or activate transitions.
+
+Minimal repair: keep REQ-CORE-005 PARTIAL, or do not add the implementation ledger row, until the bounded slice has a pure temporal activation gate that selects only transitions due for currentTick, retains future entries, and processes due entries in deterministic stable order. Add negative tests proving a transition queued at tick N leaves authoritative state unchanged before N+1, plus boundary tests at N+1. Do not add later economic policy, jurisdiction, or state-formation effects here.
+
+Review evidence: PR \#190 review 5124060174 requests this change. The previously reported CONFIG-004/M1 gate remains independently unresolved; PR \#190 is useful partial code but does not make M2 selectable.  
