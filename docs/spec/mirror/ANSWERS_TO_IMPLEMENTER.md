@@ -555,4 +555,15 @@ New blocker on this replacement head: validateDefinitionPack() again validates o
 Evidence-state blocker on the same head: the proposed authoritative implementation\_status.csv sets REQ-CONFIG-003 \= IMPLEMENTED while PR \#218 is still open and MERGE\_COMMIT is blank. Keep the row PARTIAL until the proving repair actually merges; only post-merge reconciliation may promote it and record the real merge commit. Preserve the useful LocalMarket and numeric-bound repairs. No CONFIG-004 behavior or economic semantics change is requested.
 
 Submitted REQUEST\_CHANGES review 5125539918 on PR \#218 at head \`401827fcf46b4a4d13c1c32ff93cef171a7b2e36\`.  
-STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED  
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED
+
+2026-09-06 — R114 / CODE\_RUNTIME\_QA\_M1\_27 — PR \#218 current-head evidence-state integrity  
+REQ\_ID: REQ-CONFIG-003
+
+Reviewed PR \#218 at current head \`7a283b5922c243c201654f957ea3302d512f0f78\`. The previous GoodId-reference regression is fixed: RecipeDefinition validation now checks outputGoodId, inputsPerBatch keys, and investmentGoodsPerCapitalUnit keys against DefinitionPack.goods, while the LocalMarket key/value persistent-ID repair remains present.
+
+The remaining blocker is authoritative implementation evidence. The proposed \`docs/spec/implementation\_status.csv\` still sets REQ-CONFIG-003 to \`IMPLEMENTED\` while PR \#218 is open and MERGE\_COMMIT is blank. Under the evidence protocol, IMPLEMENTED is closing evidence and cannot be asserted before merge. The row's evidence text is also stale relative to this head: it describes 11 RecipeDefinition tests / 235 TypeScript tests and does not name the three GoodId-reference tests, while the current PR reports 238 TypeScript tests.
+
+Submitted REQUEST\_CHANGES review 5125872065 on the current head. Minimal repair: keep REQ-CONFIG-003 PARTIAL before merge, update the evidence text to name the current proving reference-validation tests and verified counts, then promote only after merge with the actual merge commit SHA. No specification, recipe semantics, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.
+
+STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED  
