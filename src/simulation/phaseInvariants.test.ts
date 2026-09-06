@@ -268,7 +268,7 @@ describe("REQ-CORE-006: Phase-level Invariant Hooks", () => {
 
       const finiteFailures = checkFiniteNumbers(badContext);
       expect(finiteFailures).toHaveLength(1);
-      expect(finiteFailures[0].invariantId).toBe("FINITE_LEDGER_DELTAS");
+      expect(finiteFailures[0]!.invariantId).toBe("FINITE_LEDGER_DELTAS");
     });
 
     it("empty ledger passes all invariants", () => {
