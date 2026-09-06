@@ -16,6 +16,7 @@ import { isFiniteCanonicalNumber } from "../domain/numeric";
 import type { CohortSeed, MarketSeed, ProductionUnitSeed, RegionSeed, ScenarioDefinition, TransportLinkSeed } from "./scenarioDefinition";
 import { SIMULATION_CONFIG_BEHAVIORAL_KEYS } from "./simulationConfig";
 import { SCENARIO_DEFINITION_KEYS } from "./scenarioDefinition";
+import type { DefinitionPack, RecipeDefinition } from "./definitionPack";
 
 const BEHAVIORAL_KEY_SET: ReadonlySet<string> = new Set(SIMULATION_CONFIG_BEHAVIORAL_KEYS);
 const SCENARIO_KEY_SET: ReadonlySet<string> = new Set(SCENARIO_DEFINITION_KEYS);
@@ -430,4 +431,85 @@ function describeValue(value: unknown): string {
   if (typeof value === "number" && !Number.isFinite(value)) return value > 0 ? "Infinity" : "-Infinity";
   if (typeof value === "object") return "an object";
   return typeof value === "string" ? JSON.stringify(value) : String(value);
+}
+
+/**
+ * Throws unless the DefinitionPack content is valid: all RecipeDefinition bounds
+ * are satisfied per section 16A of the canonical config/world-generation spec.
+ * Produces useful diagnostics identifying the field, value and reason for
+ * every validation failure.
+ */
+export function validateDefinitionPackContent(definitionPack: DefinitionPack): void {
+  for (const [recipeId, recipe] of Object.entries(definitionPack.recipes)) {
+    validateRecipeDefinition(recipe);
+  }
+}
+
+function validateRecipeDefinition(recipe: RecipeDefinition): void {
+  const recipeId = recipe.id;
+
+  if (!isFiniteCanonicalNumber(recipe.outputPerBatch) || recipe.outputPerBatch <= 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": outputPerBatch must be positive, got ${describeValue(recipe.outputPerBatch)}`,
+    );
+  }
+
+  if (!isFiniteCanonicalNumber(recipe.batchesPerCapitalUnit) || recipe.batchesPerCapitalUnit <= 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": batchesPerCapitalUnit must be positive, got ${describeValue(recipe.batchesPerCapitalUnit)}`,
+    );
+  }
+
+  for (const [goodId, coefficient] of Object.entries(recipe.inputsPerBatch)) {
+    if (!isFiniteCanonicalNumber(coefficient) || coefficient <= 0) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": inputsPerBatch["${goodId}"] must be strictly positive, got ${describeValue(coefficient)}`,
+      );
+    }
+  }
+
+  if (!isFiniteCanonicalNumber(recipe.laborPerBatch) || recipe.laborPerBatch < 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": laborPerBatch must be non-negative, got ${describeValue(recipe.laborPerBatch)}`,
+    );
+  }
+
+  if (!isFiniteCanonicalNumber(recipe.minimumStartupCapital) || recipe.minimumStartupCapital < 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": minimumStartupCapital must be non-negative, got ${describeValue(recipe.minimumStartupCapital)}`,
+    );
+  }
+
+  if (recipe.infrastructureCategory !== undefined && recipe.minimumInfrastructureFactor !== undefined) {
+    if (!isFiniteCanonicalNumber(recipe.minimumInfrastructureFactor) || recipe.minimumInfrastructureFactor <= 0 || recipe.minimumInfrastructureFactor > 1) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": minimumInfrastructureFactor must be in (0,1], got ${describeValue(recipe.minimumInfrastructureFactor)}`,
+      );
+    }
+  }
+
+  if (recipe.extractionResourceId !== undefined) {
+    if (recipe.extractedResourcePerBatch === undefined) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": extractedResourcePerBatch is required when extractionResourceId is present`,
+      );
+    }
+    if (!isFiniteCanonicalNumber(recipe.extractedResourcePerBatch) || recipe.extractedResourcePerBatch <= 0) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": extractedResourcePerBatch must be positive when extractionResourceId is present, got ${describeValue(recipe.extractedResourcePerBatch)}`,
+      );
+    }
+  }
+
+  if (!isFiniteCanonicalNumber(recipe.baseThroughputFactor) || recipe.baseThroughputFactor <= 0) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": baseThroughputFactor must be positive, got ${describeValue(recipe.baseThroughputFactor)}`,
+    );
+  }
+
+  if (!isFiniteCanonicalNumber(recipe.depreciationRatePerTick) || recipe.depreciationRatePerTick < 0 || recipe.depreciationRatePerTick >= 1) {
+    throw new Error(
+      `RecipeDefinition "${recipeId}": depreciationRatePerTick must be in [0,1), got ${describeValue(recipe.depreciationRatePerTick)}`,
+    );
+  }
 }
