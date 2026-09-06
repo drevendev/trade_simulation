@@ -566,4 +566,16 @@ The remaining blocker is authoritative implementation evidence. The proposed \`d
 
 Submitted REQUEST\_CHANGES review 5125872065 on the current head. Minimal repair: keep REQ-CONFIG-003 PARTIAL before merge, update the evidence text to name the current proving reference-validation tests and verified counts, then promote only after merge with the actual merge commit SHA. No specification, recipe semantics, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.
 
-STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED  
+STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED
+
+2026-09-06 — R115 / CONSISTENCY\_SIMPLICITY\_REVIEW\_M2\_02 — REQ-CORE-006 Issue \#192 remains selectable through open M1 gate
+
+REQ\_ID: REQ-CORE-006; upstream REQ-CONFIG-003 / REQ-CONFIG-004 / REQ-VISUALIZATION-004
+
+Observed: authoritative implementation\_status.csv correctly has REQ-CONFIG-003 \= PARTIAL and REQ-CONFIG-004 \= PARTIAL while repair PR \#218 / Issue \#200 and PR \#208 / Issue \#201 remain open. Issue \#188 / REQ-CORE-005 is now status:blocked, but Issue \#192 / REQ-CORE-006 is still status:ready and says its dependencies are satisfied from REQ-CORE-004 \+ REQ-CONFIG-001 alone.
+
+Finding: this is a distinct implementation queue/evidence-gate defect. The registry makes REQ-CORE-004 depend on CONFIG-004 and the handoff says a failed milestone gate blocks later promotion. PR \#187 / CORE-004 is useful merged evidence, but it cannot make M2 selectable while M1 remains open. This is not a new accounting/runtime defect and does not invalidate useful M2 code already produced.
+
+Action: posted correction comment 5560750275 on Issue \#192. Treat it as blocked/non-selectable until CONFIG-003 repair merges and is evidenced, CONFIG-004 repair merges and is evidenced after that dependency, and the remaining M1 gate requirement REQ-VISUALIZATION-004 is accepted. Preserve already-open M2 work; do not claim M2 executable from the local depends-on row alone. No requirement meaning or economic mechanism changed.
+
+STATUS: IMPLEMENTATION\_DEPENDENCY\_GATE\_REPAIR\_REQUESTED  
