@@ -22,8 +22,11 @@ on:
   push:
   workflow_dispatch:
 
-# `statuses: write` is the whole grant. This workflow writes one commit status and
-# reads pull request metadata; it never checks out a branch's code and never merges.
+# `statuses: write` is the whole grant `github.token` needs: this workflow writes one
+# commit status and reads pull request metadata. The two repair steps at the end act as
+# the MACHINE app instead, whose own installation permits the push — a workflow token
+# with `contents: write` would push without starting any workflow, which is the one
+# thing a repaired branch must do.
 permissions:
   contents: read
   pull-requests: read
@@ -49,7 +52,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Full history: the ledger resolver below merges `master` into a branch, and a
+      # shallow clone has no merge base to do it from.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -108,3 +115,21 @@ jobs:
             exit 0
           fi
           python scripts/update_branches.py --repo "${{ github.repository }}" --all-open
+
+      # `dirty` is a conflict, and a conflict is the author's — except in the two files
+      # the forge generates for every pull request, where it is the forge's own doing.
+      # See scripts/resolve_ledger_conflicts.py; it refuses everything else, and every
+      # refusal aborts its merge. Same guards as the sweep above: `master` only, the
+      # reviewed definition, the MACHINE identity's token so the push is measured.
+      - name: Resolve conflicts the forge itself created in the ledger
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ steps.identity.outputs.token }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::warning::no MACHINE identity token; ledger conflicts stay with the author"
+            exit 0
+          fi
+          git config user.name "zendev-machine[bot]"
+          git config user.email "zendev-machine[bot]@users.noreply.github.com"
+          python scripts/resolve_ledger_conflicts.py --repo "${{ github.repository }}" --all-open

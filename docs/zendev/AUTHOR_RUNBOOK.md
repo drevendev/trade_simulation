@@ -34,11 +34,17 @@ Section 7 says how to write your row.
 Take the first applicable item and stop searching:
 
 1. an open pull request of yours with **changes requested** — address the feedback;
-2. an open pull request of yours with a **failing required check** — fix it. One
-   exception: a `mergeability` failure that reads *the base has moved* is not yours.
-   The forge merges `master` into loop branches itself on the next push to `master`
-   and the branch is re-measured; a genuine conflict (*conflicts with the base branch*)
-   still is yours;
+2. an open pull request of yours with a **failing required check** — fix it. Two
+   exceptions, both the forge's own work on the next push to `master`, after which the
+   branch is re-measured: a `mergeability` failure that reads *the base has moved*, and
+   a conflict confined to `docs/spec/implementation_status.csv` and the document
+   generated from it, which every pull request rewrites and which
+   `scripts/resolve_ledger_conflicts.py` merges by requirement identifier. A conflict
+   touching any other file is yours. If you cannot resolve one — the two sides record
+   different evidence for the same requirement, or the conflict is in code whose correct
+   resolution you cannot establish — say so on the pull request, naming the conflicting
+   paths and what you could not decide, and stop. A run that ends without saying that is
+   recorded as `unknown`, and the next run repeats it;
 3. an Issue labelled `status:blocked` whose blocking condition is now demonstrably
    resolved — unblock it;
 4. an Issue labelled `status:ready`, highest `priority:*` first, respecting

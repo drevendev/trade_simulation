@@ -42,9 +42,23 @@ import pathlib
 import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-REGISTRY = REPO_ROOT / "docs" / "spec" / "mirror" / "REQUIREMENTS_REGISTRY.csv"
-LEDGER = REPO_ROOT / "docs" / "spec" / "implementation_status.csv"
-RENDERED = REPO_ROOT / "docs" / "spec" / "IMPLEMENTATION_STATUS.md"
+
+# Relative to a checkout, so the generator can run over a tree other than its own. It
+# has to: `resolve_ledger_conflicts.py` regenerates the document inside a merge, and a
+# generator that could only ever write beside itself would have to be copied to do it.
+REGISTRY_PATH = pathlib.PurePosixPath("docs/spec/mirror/REQUIREMENTS_REGISTRY.csv")
+LEDGER_PATH = pathlib.PurePosixPath("docs/spec/implementation_status.csv")
+RENDERED_PATH = pathlib.PurePosixPath("docs/spec/IMPLEMENTATION_STATUS.md")
+
+REGISTRY = REPO_ROOT / REGISTRY_PATH
+LEDGER = REPO_ROOT / LEDGER_PATH
+RENDERED = REPO_ROOT / RENDERED_PATH
+
+
+def paths_for(root=None):
+    """(registry, ledger, rendered) under `root`, or under this repository. Pure."""
+    base = REPO_ROOT if root is None else pathlib.Path(root)
+    return base / REGISTRY_PATH, base / LEDGER_PATH, base / RENDERED_PATH
 
 BEGIN = "<!-- coverage:generated:begin -->"
 END = "<!-- coverage:generated:end -->"
@@ -185,17 +199,22 @@ def splice(document: str, block: str) -> str:
     return document[:start] + block + document[end:]
 
 
-def main() -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--check",
         action="store_true",
         help="fail if the rendered file does not match the sources; write nothing",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--root",
+        help="the checkout to read and write in; defaults to this repository",
+    )
+    args = parser.parse_args(argv)
 
-    registry = read_registry()
-    ledger = read_ledger()
+    registry_path, ledger_path, rendered = paths_for(args.root)
+    registry = read_registry(registry_path)
+    ledger = read_ledger(ledger_path)
 
     problems = validate(registry, ledger)
     if problems:
@@ -203,11 +222,11 @@ def main() -> int:
             print("::error::implementation-status: %s" % problem)
         return 1
 
-    document = RENDERED.read_text(encoding="utf-8")
+    document = rendered.read_text(encoding="utf-8")
     if BEGIN not in document or END not in document:
         print(
             "::error::implementation-status: %s has no generated block; expected the "
-            "markers %s and %s" % (RENDERED.name, BEGIN, END)
+            "markers %s and %s" % (rendered.name, BEGIN, END)
         )
         return 1
 
@@ -218,16 +237,16 @@ def main() -> int:
             print(
                 "::error::implementation-status: %s is stale. Regenerate it with "
                 "`python scripts/implementation_status.py` and commit the result."
-                % RENDERED.name
+                % rendered.name
             )
             return 1
         print(
             "implementation-status: %s matches %d ledger row(s) over %d registry row(s)"
-            % (RENDERED.name, len(ledger), len(registry))
+            % (rendered.name, len(ledger), len(registry))
         )
         return 0
 
-    RENDERED.write_text(updated, encoding="utf-8")
+    rendered.write_text(updated, encoding="utf-8")
     print(
         "implementation-status: rendered %d ledger row(s) over %d registry row(s)"
         % (len(ledger), len(registry))

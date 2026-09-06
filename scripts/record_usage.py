@@ -23,7 +23,9 @@ could not answer the questions that matter for the budget:
 - **What kind of run it was.** ``completed``, ``no_work``, ``blocked``, ``failed`` or
   ``unknown``. The workflow decides ``no_work`` and ``failed``; the rest is read from
   what the model wrote and is marked as a heuristic, because a transcript that discusses
-  a blocker it does not have looks blocked to a string search.
+  a blocker it does not have looks blocked to a string search. A run that ends claiming
+  nothing is ``unknown``, never ``completed``: a green action says the process exited,
+  not that a unit of work exists.
 - **Which work it touched.** Issue and pull request numbers and requirement identifiers
   mentioned in the transcript, and whether an author run was reworking a refusal. These
   are what let cost be read per merged requirement instead of per run.
@@ -231,8 +233,12 @@ def classify_outcome(conclusion, text):
         return "blocked", "heuristic"
     if NO_WORK.search(text or ""):
         return "no_work", "heuristic"
-    if conclusion == "success":
-        return "completed", "heuristic"
+    # A green action and a final message that claims nothing is not a completed run.
+    # It used to be recorded as one: on 2026-09-06 an author run met two pull requests
+    # it could not merge, spent thirteen turns, said nothing, and was filed as
+    # `completed` beside the runs that had merged requirements. The ledger's own
+    # question — what did this cost per unit of work — cannot survive that. `unknown`
+    # is what is actually known here; the run left no evidence either way.
     return "unknown", "heuristic"
 
 
