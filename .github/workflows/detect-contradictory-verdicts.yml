@@ -1,0 +1,107 @@
+name: Detect Contradictory Verdicts
+
+# Detect when a PR receives multiple verdicts (ACCEPT and REQUEST_CHANGES) at the same
+# head revision. Per AUTHOR_RUNBOOK section 2 item 1, the AUTHOR's work selection
+# depends on finding exactly one verdict at the current head; contradictory verdicts
+# must be surfaced so a human can decide which applies.
+#
+# Triggers on:
+# - pull_request: newly opened or synchronized PRs
+# - pull_request_review: a formal GitHub review is submitted
+# - issue_comment: a comment is posted on a PR (filtered by 'types: created')
+#
+# This covers both inline verdict comments and formal review verdicts.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  pull_request_review:
+  issue_comment:
+    types: [created]
+
+# Minimal permissions: read PR metadata, read comments/reviews, post comments.
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+# Concurrency: only one run per PR to avoid duplicate corrections.
+concurrency:
+  group: detect-contradictions-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Detect contradictory verdicts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only run on pull requests, not on other issue events
+    if: |
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'pull_request_review') ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Get PR number
+        id: pr
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          else
+            # For comment/review events, extract from issue
+            echo "number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Detect contradictory verdicts
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          output=$(python scripts/detect_contradictory_verdicts.py \
+            --repo "${{ github.repository }}" \
+            --pr "${{ steps.pr.outputs.number }}")
+          echo "result=$output" >> $GITHUB_OUTPUT
+
+      - name: Check for existing correction
+        id: check
+        if: steps.detect.outputs.result != 'contradictory_verdicts='
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Search for existing correction comment by looking for the marker
+          existing=$(gh pr view "${{ steps.pr.outputs.number }}" \
+            --repo "${{ github.repository }}" \
+            --json comments \
+            -q '.comments[] | select(.body | contains("Contradictory verdicts detected")) | .body' \
+            | head -1)
+
+          if [ -z "$existing" ]; then
+            echo "has_correction=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_correction=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post correction
+        if: |
+          steps.detect.outputs.result != 'contradictory_verdicts=' &&
+          steps.check.outputs.has_correction == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Extract the contradiction report from the detect script output
+          # Format: "contradictory_verdicts=Contradictory verdicts at <sha>: <links>"
+          report="${{ steps.detect.outputs.result }}"
+          report="${report#contradictory_verdicts=}"
+
+          gh pr comment "${{ steps.pr.outputs.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "## Contradictory verdicts detected
+
+This pull request has contradictory verdicts (ACCEPT and REQUEST_CHANGES) at the same head revision.
+
+**Report**: $report
+
+Both verdicts are preserved in the history. A human reviewer must decide which applies. See AUTHOR_RUNBOOK.md section 2 item 1 for the selection logic that depends on this."
