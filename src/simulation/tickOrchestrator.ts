@@ -12,12 +12,15 @@ import type { RegionId, StateId, CurrencyId, CohortId, ProductionUnitId, Monetar
 import type { WorldState } from "./worldState";
 import type { TickLedger } from "./ledger";
 import { createEmptyTickLedger, validateZeroFlowReconciliation } from "./ledger";
+import type { BudgetCommitmentLedger } from "./marketIntent";
+import { createEmptyBudgetCommitmentLedger } from "./marketIntent";
 import { createHash } from "crypto";
 
 /**
  * Ephemeral per-tick state, reset every phase-0 tick start.
  * Plans are immutable intent created in Phase 2; transaction records accumulate.
  * M2: currentLedger accumulates typed MONEY/GOOD/PHYSICAL_LOSS flow records across phases.
+ * M3+: budgetLedger tracks actor+currency+envelope commitments for market planning.
  */
 export interface TickContext {
   readonly tick: number;
@@ -26,6 +29,7 @@ export interface TickContext {
   readonly rngSeed: number;
   readonly transactions: ReadonlyArray<EconomicTransaction>;
   readonly currentLedger: TickLedger;
+  readonly budgetLedger: BudgetCommitmentLedger;
 }
 
 /**
@@ -100,6 +104,7 @@ export type PhaseHandler = (
  * Initialize TickContext for tick N.
  * Phase-0 resets flow telemetry and derives deterministic RNG substreams.
  * M2: currentLedger is initialized empty and accumulates records across phases.
+ * M3+: budgetLedger is initialized empty for market planning phase handlers.
  */
 export function initializeTickContext(tick: number, seed: number): TickContext {
   return {
@@ -109,6 +114,7 @@ export function initializeTickContext(tick: number, seed: number): TickContext {
     rngSeed: seed ^ tick, // Deterministic per-tick seed
     transactions: [],
     currentLedger: createEmptyTickLedger(tick),
+    budgetLedger: createEmptyBudgetCommitmentLedger(),
   };
 }
 
