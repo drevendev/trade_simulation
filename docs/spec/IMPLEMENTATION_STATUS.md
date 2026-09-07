@@ -75,7 +75,7 @@ that fact; this file does not.
 | REQ-CORE-004 | `READY` | `IMPLEMENTED` | #185 | #187 | Canonical tick orchestrator and 16-phase framework (M2). tickOrchestrator.ts defines TickContext (tick-scoped ephemeral state) |
 | REQ-CORE-005 | `READY` | `IMPLEMENTED` | #188 | #247 | PendingTransitions contract ensuring Phase-14 decisions cannot mutate current-tick state. Interface defines jurisdictionChanges |
 | REQ-CORE-006 | `READY` | `PARTIAL` | #192 | #226 | M2 typed ledger/flow records foundation (PR #226). Implements: (1) Typed records for MONEY, GOOD, PHYSICAL_LOSS flows with tick/phase, owner/location attribution, delta and reason; (2) TickLedger container for immutable record accumulation; (3) computeNetFlow() for per-category flow computation; (4) validateZeroFlowReconciliation() validating conservation law (category totals = 0 within tolerance 1e-9). Test coverage: 9 new tests covering record creation, accumulation, flow computation, balanced transfers, unmatched flows, tolerance handling. Remaining work: phase-level invariant hooks, M2 diagnostic projection, TickContext integration, WorldState reconciliation. TypeScript: 228 tests passed (9 new), typecheck clean, build succeeded. C# .NET: 45 tests passed, build clean (REQ-MIGRATION-003 maintained). Foundation ready for M2 gate follow-up work. |
-| REQ-ACCEPTANCE-001 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-001 | `READY` | `IMPLEMENTED` | #232 | #263 | Automated test suite (src/simulation/acceptance-001-stock-preservation.test.ts) with 9 comprehensive tests: baseline scenario construction and frozen WorldState property (2) |
 | REQ-ACCEPTANCE-002 | `READY` | `IMPLEMENTED` | #228 | #229 | Deterministic replay hash for 100+ ticks at M2. New integration test suite (src/simulation/acceptance-002-replay-determinism.test.ts) proves: (1) Baseline scenario builds without error and produces frozen WorldState; (2) 100+ consecutive no-op ticks execute without error preserving stocks exactly (zero transactions); (3) Repeated same-seed 100-tick runs produce identical normalized SHA-256 hashes across multiple independent runs; (4) Different seeds produce different hashes; (5) Phase order remains consistent (phases 0-15) across all ticks; (6) Genesis reconciliation passes before tick execution; (7) Each hash is valid hex and tick-dependent; (8) At least 120 ticks (exceeding 100-tick gate) maintain determinism. Test coverage: 22 comprehensive tests in acceptance-002-replay-determinism.test.ts covering construction |
 | REQ-ACCEPTANCE-003 | `READY` | `IMPLEMENTED` | #253 | #254 | Automated test suite (src/simulation/acceptance-003-zero-flow-reconciliation.test.ts) with 12 comprehensive tests: baseline construction |
 | REQ-VISUALIZATION-002 | `FROZEN` | `NOT_STARTED` | — | — | — |
@@ -90,7 +90,7 @@ that fact; this file does not.
 | REQ-ACCEPTANCE-004 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-VISUALIZATION-006 | `READY` | `NOT_STARTED` | — | — | — |
 
-**Summary: 18 of 32 requirement identifiers implemented.**
+**Summary: 19 of 32 requirement identifiers implemented.**
 Also recorded: 3 partial.
 The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
 
