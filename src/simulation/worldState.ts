@@ -20,6 +20,7 @@ import type {
   StateId,
   TransportLinkId,
 } from "../domain/id";
+import { createEmptyPendingTransitions } from "./pendingTransitions";
 import { buildWorldRegistries } from "../domain/worldRegistries";
 import {
   createEmptyWorldGenesisLedger,
@@ -49,6 +50,30 @@ import { stableOrderBy } from "../domain/ordering";
  * Canonical world state: all registries and resolved configuration.
  * Must be byte-equivalent for the same scenario/config/seed after normalized serialization.
  */
+export interface PendingTransitions {
+  readonly jurisdictionChanges: ReadonlyArray<{
+    readonly regionId: RegionId;
+    readonly nextControllerStateId: StateId | null;
+    readonly activateTick: number;
+  }>;
+  readonly stateCreations: ReadonlyArray<{
+    readonly stateId: StateId;
+    readonly regionKey: string;
+    readonly seed: unknown;
+    readonly activateTick: number;
+  }>;
+  readonly policyChanges: ReadonlyArray<{
+    readonly stateId: StateId;
+    readonly patch: unknown;
+    readonly activateTick: number;
+  }>;
+  readonly monetaryPolicyChanges: ReadonlyArray<{
+    readonly authorityId: MonetaryAuthorityId;
+    readonly patch: unknown;
+    readonly activateTick: number;
+  }>;
+}
+
 export interface WorldState {
   readonly configVersion: string;
   readonly scenarioId: string;
@@ -65,6 +90,7 @@ export interface WorldState {
   readonly productionUnits: ReadonlyMap<ProductionUnitId, ProductionUnitState>;
   readonly markets: ReadonlyMap<MarketId, LocalMarketState>;
   readonly transportLinks: ReadonlyMap<TransportLinkId, TransportLinkState>;
+  readonly pendingTransitions: PendingTransitions;
 }
 
 export interface RegionState {
@@ -109,9 +135,21 @@ export interface ProductionUnitState {
   readonly seed: ProductionUnitSeed;
 }
 
+export interface MarketExpectationState {
+  readonly observationCount: number;
+  readonly expectedUseEma: number;
+  readonly shortageEma: number;
+  readonly surplusEma: number;
+  readonly lastEffectiveDemand: number;
+  readonly lastOfferedQuantity: number;
+  readonly lastClearedQuantity: number;
+}
+
 export interface LocalMarketState {
   readonly marketId: MarketId;
   readonly seed: MarketSeed;
+  readonly priceByGood: ReadonlyMap<string, number>;
+  readonly expectationsByGood: ReadonlyMap<string, MarketExpectationState>;
 }
 
 export interface TransportLinkState {
@@ -500,12 +538,35 @@ export function buildInitialWorld(
   );
 
   // REQ-CONFIG-004: Reconcile opening stocks before returning WorldState
-  const reconciliationResult = reconcileGenesisStocks(worldGenesisLedger, frozenConfig);
+  // Build a temporary WorldState for reconciliation (without freeze)
+  const tempWorldState: WorldState = {
+    configVersion: resolvedConfig.configVersion,
+    scenarioId: scenarioDefinition.id,
+    seed,
+    definitionRegistry,
+    simulationConfig: frozenConfig,
+    // Empty, like the WorldState this reconciliation precedes: genesis queues no
+    // transition, and reconciliation reads stocks, never the queue.
+    pendingTransitions: createEmptyPendingTransitions(),
+    worldGenesisLedger,
+    regions: regionRegistry,
+    states: stateRegistry,
+    currencies: currencyRegistry,
+    monetaryAuthorities: authorityRegistry,
+    clans: clanRegistry,
+    cohorts: cohortRegistry,
+    productionUnits: productionUnitRegistry,
+    markets: marketRegistry,
+    transportLinks: transportLinkRegistry,
+  };
+
+  const reconciliationResult = reconcileGenesisStocks(tempWorldState, worldGenesisLedger, frozenConfig);
   if (!reconciliationResult.success) {
     throw new Error(
       `Genesis reconciliation failed: ${reconciliationResult.errorMessage}\n` +
       `Category: ${reconciliationResult.details?.category}, Key: ${reconciliationResult.details?.key}, ` +
-      `Total: ${reconciliationResult.details?.total}, Residual: ${reconciliationResult.details?.residual}`,
+      `Expected: ${reconciliationResult.details?.expected}, Actual: ${reconciliationResult.details?.actual}, ` +
+      `Residual: ${reconciliationResult.details?.residual}`,
     );
   }
 
@@ -528,6 +589,7 @@ export function buildInitialWorld(
     productionUnits: productionUnitRegistry,
     markets: marketRegistry,
     transportLinks: transportLinkRegistry,
+    pendingTransitions: createEmptyPendingTransitions(),
   };
 
   return Object.freeze(worldState);
@@ -666,9 +728,28 @@ function buildMonetaryAuthorityState(seed: MonetaryAuthoritySeed, idMap: IdMaps)
 }
 
 function buildLocalMarketState(seed: MarketSeed, definitionPack: DefinitionPack): LocalMarketState {
+  const priceByGood = new Map<string, number>();
+  const expectationsByGood = new Map<string, MarketExpectationState>();
+
+  (seed.initialPriceByGood ?? {});
+  Object.entries(seed.initialPriceByGood ?? {}).forEach(([goodKey, price]) => {
+    priceByGood.set(goodKey, price);
+    expectationsByGood.set(goodKey, {
+      observationCount: 0,
+      expectedUseEma: 0,
+      shortageEma: 0,
+      surplusEma: 0,
+      lastEffectiveDemand: 0,
+      lastOfferedQuantity: 0,
+      lastClearedQuantity: 0,
+    });
+  });
+
   return {
     marketId: undefined as unknown as MarketId,
     seed,
+    priceByGood,
+    expectationsByGood,
   };
 }
 

@@ -120,6 +120,10 @@ jobs:
         run: |
           cp scripts/record_usage.py "${RUNNER_TEMP}/record_usage.py"
           cp scripts/subscription_usage.py "${RUNNER_TEMP}/subscription_usage.py"
+          # The scheme the record will name must travel with the recorder: read from
+          # the working tree it would be whatever the branch under review claims.
+          cp scripts/schemes.py "${RUNNER_TEMP}/schemes.py"
+          cp docs/zendev/schemes.json "${RUNNER_TEMP}/schemes.json"
           # The whole control plane too: the rework bound below imports its neighbours.
           cp -r scripts "${RUNNER_TEMP}/control-plane"
 
@@ -132,7 +136,8 @@ jobs:
         id: select
         env:
           GH_TOKEN: ${{ steps.identity.outputs.token }}
-        run: python scripts/select_review_target.py --repo "${{ github.repository }}"
+        run: |
+          python scripts/select_review_target.py             --repo "${{ github.repository }}"             --acceptor "${{ steps.identity.outputs.app-slug }}"
 
       # The subscription is metered in rolling windows, not dollars. One reading before
       # the model and one after; the recorder writes the difference to the private
@@ -216,6 +221,18 @@ jobs:
               status:needs-decision and stop; a human accepts that class of change.
             - If you cannot decide, name the exact gate in a comment and leave the
               pull request open. Never merge to clear a queue.
+            - Your own earlier refusal still stands on this pull request:
+              "${{ steps.select.outputs.self_refusal }}". If that is true and you
+              accept, post a formal approving review rather than a comment —
+              `gh pr review <n> --approve --body "<verdict>"` — because GitHub reads
+              the latest review per reviewer and only that supersedes your refusal.
+              A comment does not, and the merge will be refused.
+            - Standing refusals from other accounts: "${{ steps.select.outputs.blocked_by }}".
+              When that list is not empty, branch protection will refuse the merge and
+              you do not own that gate. Do not post ACCEPT you cannot carry out: say in
+              a comment which account holds the merge and what it asked for, label the
+              pull request status:needs-decision, and stop. Judging the change is still
+              yours — if it also needs rework, request changes as usual.
 
       - name: Read the subscription windows after the model ran
         if: always() && steps.select.outputs.target != 'none'
@@ -239,6 +256,23 @@ jobs:
             --repo "${{ github.repository }}" \
             --pull "${{ steps.select.outputs.target }}" \
             --reviewer "${{ steps.identity.outputs.app-slug }}"
+
+      # The other way a branch stops. The bound above ends the loud failure — three
+      # refusals — and this ends the quiet one: a pull request nothing has advanced for
+      # a day that no review run can select either. Over 2026-09-06/07 four of those
+      # accumulated and every one had to be found by a person and closed by hand.
+      #
+      # Runs on every acceptor tick, including the ones with no review target: a queue
+      # with nothing selectable is exactly when this has work to do. It closes nothing
+      # a run could still pick up, nothing a person has claimed with
+      # status:needs-decision, no draft and no machine branch.
+      - name: End pull requests no run can reach any more
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZENDEV_STALE_PR_HOURS: ${{ vars.ZENDEV_STALE_PR_HOURS }}
+        run: |
+          python "${RUNNER_TEMP}/control-plane/stale_pull_requests.py"             --repo "${{ github.repository }}"             --acceptor "${{ steps.identity.outputs.app-slug }}"
 
       # The ledger lives in a private repository and is written by the MACHINE identity.
       # Its token is minted here, at the end, scoped to that repository alone: the model

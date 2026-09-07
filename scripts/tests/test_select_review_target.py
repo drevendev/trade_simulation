@@ -239,6 +239,14 @@ class MachineGeneratedTests(unittest.TestCase):
 
 
 
+ACCEPTOR = "zendev-acceptor"
+
+
+def review(state, created, author, body=""):
+    return {"body": body, "createdAt": created, "state": state,
+            "kind": "review", "author": author}
+
+
 def entry(body, created, state=None, author=None):
     e = {"body": body, "createdAt": created, "state": state}
     if author is not None:
@@ -284,9 +292,10 @@ class TwoReviewerTests(unittest.TestCase):
         self.assertFalse(select.is_verdict_entry(entry(prose, "t", state="COMMENTED")))
         self.assertFalse(select.is_verdict_entry(entry(prose, "t")))
 
-    def test_another_accounts_refusing_review_judges_the_head(self):
-        # The QA reviewer's review carried its verdict in its state and none in its
-        # words; read by words alone the head looked unjudged.
+    def test_another_accounts_refusing_review_judges_the_head_without_an_acceptor(self):
+        # With no ACCEPTOR named the wider reading stands: any verdict-shaped entry
+        # judges the head. This is what the loop did before verdict ownership, and it
+        # is the safe direction for a caller that has not been taught the identity.
         comments = [
             entry("CODE_RUNTIME_QA_M1_18: one new blocker.", "2026-09-06T05:57:55Z",
                   state="CHANGES_REQUESTED", author="drevendev"),
@@ -347,6 +356,140 @@ class TwoReviewerTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertTrue(select.is_verdict(body))
                 self.assertTrue(rl.is_refusal({"body": body, "state": None}))
+
+
+class VerdictOwnershipTests(unittest.TestCase):
+    """Only the ACCEPTOR's verdict is a verdict. Each test is a pull request that died.
+
+    Reviews from `drevendev` are the researcher's. They may still hold the merge —
+    branch protection decides that — but they must not decide whether the loop looks
+    at the pull request again.
+    """
+
+    def test_238_another_accounts_approval_no_longer_judges_the_head(self):
+        # #238: CLEAN, an APPROVED from drevendev the only verdict on the head, never
+        # re-selected and so never merged. Eleven hours idle.
+        comments = [
+            review("APPROVED", "2026-09-07T05:56:17Z", "drevendev"),
+        ]
+        ok, reason = select.eligible(authored(), COMMITTED, comments, ACCEPTOR)
+        self.assertTrue(ok, reason)
+        self.assertIn("no verdict", reason)
+
+    def test_223_another_accounts_approval_does_not_settle_a_refused_head(self):
+        # #223: the ACCEPTOR refused, then an APPROVED from drevendev arrived newer.
+        # The head then moved, which is what makes it reviewable again — the foreign
+        # approval must neither settle it nor stand in for the ACCEPTOR's own.
+        comments = [
+            review("CHANGES_REQUESTED", "2026-09-06T22:34:12Z", ACCEPTOR),
+            review("APPROVED", "2026-09-07T01:01:03Z", "drevendev"),
+        ]
+        moved = "2026-09-07T01:30:00Z"
+        ok, reason = select.eligible(authored(), moved, comments, ACCEPTOR)
+        self.assertTrue(ok, reason)
+
+    def test_208_the_roles_own_verdict_still_judges_the_head(self):
+        # The other half of the same rule. #208 carries the ACCEPTOR's own ACCEPT, so
+        # it stays out of the queue: re-reviewing a head this role already judged is
+        # #152, and verdict ownership must not reopen it.
+        comments = [
+            review("CHANGES_REQUESTED", "2026-09-06T17:59:18Z", "drevendev"),
+            entry("## ACCEPTOR Verdict: ACCEPT", "2026-09-07T01:05:00Z", author=ACCEPTOR),
+        ]
+        ok, reason = select.eligible(authored(), COMMITTED, comments, ACCEPTOR)
+        self.assertFalse(ok)
+        self.assertIn("already judged", reason)
+
+    def test_a_foreign_verdict_shaped_comment_is_not_a_verdict_either(self):
+        # Not only formal reviews: the QA voice writes comments, and one that happens
+        # to open with the runbook's word must not take the head out of the queue.
+        comments = [
+            entry("## REQUEST_CHANGES\n\nthis looks wrong", "2026-09-07T05:00:00Z",
+                  author="AndyDev"),
+        ]
+        ok, reason = select.eligible(authored(), COMMITTED, comments, ACCEPTOR)
+        self.assertTrue(ok, reason)
+
+    def test_an_entry_without_an_author_stays_a_verdict(self):
+        # Silence about identity is not evidence of a foreign one. Dropping the verdict
+        # would re-review a judged head, which costs a run and leaves two verdicts on
+        # one revision (#152) — the failure this module exists to prevent.
+        comments = [comment("## ACCEPT\n\nAll conditions hold.", "2026-09-05T06:13:05Z")]
+        ok, reason = select.eligible(pull(), COMMITTED, comments, ACCEPTOR)
+        self.assertFalse(ok)
+        self.assertIn("already judged", reason)
+
+    def test_the_two_spellings_of_the_acceptor_are_one_identity(self):
+        # The workflow passes the app slug; `gh` prints comments as `name[bot]`.
+        comments = [
+            entry("## ACCEPT", "2026-09-07T01:05:00Z", author="zendev-acceptor[bot]"),
+        ]
+        ok, _ = select.eligible(authored(), COMMITTED, comments, "zendev-acceptor")
+        self.assertFalse(ok)
+
+
+class StandingBlockerTests(unittest.TestCase):
+    """Naming the gate this role does not own (#211)."""
+
+    def test_a_foreign_refusal_still_standing_is_named(self):
+        comments = [review("CHANGES_REQUESTED", "2026-09-06T17:59:18Z", "drevendev")]
+        self.assertEqual(select.standing_blockers(comments, ACCEPTOR), ["drevendev"])
+
+    def test_the_acceptors_own_refusal_is_reported_too(self):
+        # #223: the run said "standing refusals: empty" while its own refusal from the
+        # previous day was the only thing holding the merge. GitHub blocks on a
+        # standing refusal whoever left it, and an ACCEPT posted as a comment does not
+        # supersede a formal review.
+        comments = [review("CHANGES_REQUESTED", "2026-09-06T22:34:12Z", ACCEPTOR)]
+        self.assertEqual(select.standing_blockers(comments, ACCEPTOR), [ACCEPTOR])
+
+    def test_split_tells_ones_own_refusal_from_another_accounts(self):
+        blockers = [ACCEPTOR, "drevendev"]
+        mine, others = select.split_blockers(blockers, ACCEPTOR)
+        self.assertTrue(mine)
+        self.assertEqual(others, ["drevendev"])
+
+    def test_split_with_no_identity_calls_nothing_its_own(self):
+        # Without --acceptor the run cannot claim a refusal is its own, and guessing
+        # would make it try to clear one it does not own.
+        mine, others = select.split_blockers([ACCEPTOR, "drevendev"], "")
+        self.assertFalse(mine)
+        self.assertEqual(others, [ACCEPTOR, "drevendev"])
+
+    def test_split_recognises_the_bot_spelling_of_its_own_login(self):
+        mine, others = select.split_blockers(["zendev-acceptor"], "zendev-acceptor[bot]")
+        self.assertTrue(mine)
+        self.assertEqual(others, [])
+
+    def test_223_exactly(self):
+        # The ACCEPTOR refused on 09-06, the researcher approved on 09-07, the ACCEPTOR
+        # then accepted by comment and could not merge. Only its own refusal stands.
+        comments = [
+            review("CHANGES_REQUESTED", "2026-09-06T22:34:12Z", ACCEPTOR),
+            review("APPROVED", "2026-09-07T01:01:03Z", "drevendev"),
+            entry("## ACCEPTOR Verdict on 455cacd2\n\n**Verdict: ACCEPT**",
+                  "2026-09-07T18:34:06Z", author=ACCEPTOR),
+        ]
+        mine, others = select.split_blockers(
+            select.standing_blockers(comments, ACCEPTOR), ACCEPTOR
+        )
+        self.assertTrue(mine, "its own standing refusal is what held #223")
+        self.assertEqual(others, [])
+
+    def test_only_the_latest_review_per_account_counts(self):
+        # GitHub blocks on the latest review per reviewer; an approval after a refusal
+        # clears it, and reading the refusal alone would report a gate that is open.
+        comments = [
+            review("CHANGES_REQUESTED", "2026-09-06T17:59:18Z", "drevendev"),
+            review("APPROVED", "2026-09-07T01:01:03Z", "drevendev"),
+        ]
+        self.assertEqual(select.standing_blockers(comments, ACCEPTOR), [])
+
+    def test_a_comment_never_blocks_a_merge(self):
+        comments = [
+            entry("## REQUEST_CHANGES\n\nno", "2026-09-07T01:00:00Z", author="AndyDev"),
+        ]
+        self.assertEqual(select.standing_blockers(comments, ACCEPTOR), [])
 
 
 if __name__ == "__main__":

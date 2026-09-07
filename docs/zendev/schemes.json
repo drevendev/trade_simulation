@@ -1,0 +1,90 @@
+{
+  "_comment": [
+    "A scheme is the setup the loop runs under: which roles exist, which identity owns",
+    "the formal verdict, which model each role uses, which gates are mandatory, what",
+    "bounds a run, and who else has a voice. Change any of it and the numbers from",
+    "before are numbers about a different system.",
+    "",
+    "The rule for cutting a new scheme is mechanical on purpose: any field below",
+    "changes, the scheme number goes up. Arguing case by case about whether a change",
+    "is 'significant' is how a comparison quietly stops being one.",
+    "",
+    "Each scheme is tagged `scheme/N` on the commit where it took effect, with this",
+    "descriptor in the tag message, and every telemetry record carries {id, digest} so",
+    "a measurement window can be sliced by scheme without knowing any dates."
+  ],
+  "active": "scheme/3",
+  "schemes": [
+    {
+      "id": "scheme/1",
+      "in_force_from": "2026-09-05T18:40:00Z",
+      "commit": "",
+      "summary": "Three GitHub Apps live; author and acceptor on Haiku; the formal verdict is read from any account.",
+      "roles": {
+        "author": {"identity": "zendev-author[bot]", "model": "claude-haiku-4-5", "max_budget_usd": 3.0},
+        "acceptor": {"identity": "zendev-acceptor[bot]", "model": "claude-haiku-4-5", "max_budget_usd": 2.0},
+        "machine": {"identity": "zendev-machine[bot]", "model": null}
+      },
+      "verdict_owner": "any account",
+      "voices": ["EndlessZen as drevendev, formal reviews on code"],
+      "required_checks": ["build-and-test", "typescript", "policy-guard", "mergeability"],
+      "rework_limit": 3,
+      "cadence_minutes": 25,
+      "note": "Retired by the budget change in #213."
+    },
+    {
+      "id": "scheme/2",
+      "in_force_from": "2026-09-06T11:43:00Z",
+      "commit": "5c9f9ec",
+      "summary": "As scheme/1 with the per-run ceilings raised. The measured day of 2026-09-06/07 lies entirely inside this scheme.",
+      "roles": {
+        "author": {"identity": "zendev-author[bot]", "model": "claude-haiku-4-5", "max_budget_usd": 5.0},
+        "acceptor": {"identity": "zendev-acceptor[bot]", "model": "claude-haiku-4-5", "max_budget_usd": 3.0},
+        "machine": {"identity": "zendev-machine[bot]", "model": null}
+      },
+      "verdict_owner": "any account",
+      "voices": ["EndlessZen as drevendev, formal reviews on code"],
+      "required_checks": ["build-and-test", "typescript", "policy-guard", "mergeability"],
+      "rework_limit": 3,
+      "cadence_minutes": 25,
+      "note": "Measured: 125 runs, $41.15, 8 requirements landed, and 65% of spend in pull requests that could no longer be accepted. Retired for that reason."
+    },
+    {
+      "id": "scheme/3",
+      "in_force_from": "2026-09-07T18:04:02Z",
+      "commit": "39cca61d",
+      "summary": "The ACCEPTOR identity alone owns the formal verdict; every other account's review is evidence.",
+      "roles": {
+        "author": {"identity": "zendev-author[bot]", "model": "claude-haiku-4-5", "max_budget_usd": 5.0},
+        "acceptor": {"identity": "zendev-acceptor[bot]", "model": "claude-haiku-4-5", "max_budget_usd": 3.0},
+        "machine": {"identity": "zendev-machine[bot]", "model": null}
+      },
+      "verdict_owner": "zendev-acceptor",
+      "voices": ["EndlessZen as drevendev, formal reviews on code (read as evidence)"],
+      "required_checks": ["build-and-test", "typescript", "policy-guard", "mergeability"],
+      "rework_limit": 3,
+      "cadence_minutes": 25,
+      "note": "In force from the merge of #257. Neither `in_force_from` nor `commit` is a descriptive key, so filling them in here does not change the digest and does not retroactively move the records already written under this scheme."
+    },
+    {
+      "id": "scheme/4",
+      "in_force_from": "",
+      "commit": "",
+      "summary": "SLOPSTER joins as an external QA voice with read access only; its findings reach the loop through the intake job.",
+      "roles": {
+        "author": {"identity": "zendev-author[bot]", "model": "claude-haiku-4-5", "max_budget_usd": 5.0},
+        "acceptor": {"identity": "zendev-acceptor[bot]", "model": "claude-haiku-4-5", "max_budget_usd": 3.0},
+        "machine": {"identity": "zendev-machine[bot]", "model": null}
+      },
+      "verdict_owner": "zendev-acceptor",
+      "voices": [
+        "EndlessZen as drevendev, owns the specification",
+        "SLOPSTER as AndyDev, read-only: comments and Issues, never a formal review"
+      ],
+      "required_checks": ["build-and-test", "typescript", "policy-guard", "mergeability"],
+      "rework_limit": 3,
+      "cadence_minutes": 25,
+      "note": "Not in force. Activated when the QA voice's hourly cadence starts."
+    }
+  ]
+}

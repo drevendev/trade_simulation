@@ -1,0 +1,64 @@
+name: Release tag
+
+# Cuts v0.<milestone>.<patch> when every requirement of a milestone reads IMPLEMENTED
+# in docs/spec/implementation_status.csv. No model runs: the ledger already records
+# the Issue, pull request and merge commit behind each requirement, so nothing is left
+# to judge. See scripts/release_tag.py.
+#
+# Idempotent by construction. Each tag's message carries a coverage-digest of the
+# (requirement, merge commit) pairs behind it, and a milestone whose newest tag
+# carries the same digest is not re-cut. A push that changed no coverage does nothing.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'docs/spec/implementation_status.csv'
+      - 'docs/zendev/milestones.json'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # Two pushes landing together must not both decide the same patch number.
+  group: release-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Tags are the state this job reads, so it needs all of them, and it needs
+      # history to push one.
+      # persist-credentials: false is load-bearing. checkout leaves an
+      # http.extraheader carrying GITHUB_TOKEN, which this workflow deliberately
+      # grants no permissions at all, and that header wins over a token in the remote
+      # URL. The first run cut v0.0.0 locally and died on the push with exit 128.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Act as the MACHINE identity
+        id: identity
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ZENDEV_MACHINE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZENDEV_MACHINE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Cut the tag if a milestone is newly complete
+        env:
+          GH_TOKEN: ${{ steps.identity.outputs.token }}
+        run: |
+          git config user.name "zendev-machine[bot]"
+          git config user.email "${{ steps.identity.outputs.app-slug }}[bot]@users.noreply.github.com"
+          git remote set-url origin \
+            "https://x-access-token:${{ steps.identity.outputs.token }}@github.com/${{ github.repository }}.git"
+          python scripts/release_tag.py

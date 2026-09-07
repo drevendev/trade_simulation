@@ -27,8 +27,8 @@ tests prove coverage.
 
 ## Roles
 
-Exactly two automated roles run against this repository. They never run in the same
-job, and a run performs exactly one of them.
+Exactly two automated roles run *in this repository's workflows*. They never run in the
+same job, and a run performs exactly one of them.
 
 - **AUTHOR** (`.github/workflows/zendev-author.yml`) — selects one unit of work,
   implements it, verifies it, opens a pull request. Runbook:
@@ -38,6 +38,25 @@ job, and a run performs exactly one of them.
   [docs/zendev/ACCEPTOR_RUNBOOK.md](docs/zendev/ACCEPTOR_RUNBOOK.md).
 
 An AUTHOR run must never merge. An ACCEPTOR run must never implement.
+
+### Voices that are not roles
+
+Other accounts post here. None of them is a role, none has authority over the merge,
+and a run that mistakes one for a role deadlocks the queue — which is what happened
+on #208, #223 and #238.
+
+- **SLOPSTER** (`AndyDev`) — an external QA voice with read access only. It comments
+  on open pull requests under the heading `## SLOPSTER QA: FINDING` and opens Issues
+  for post-merge findings. It never posts a formal review, never labels, never merges.
+- **The researcher** (`drevendev`, also the operator's account) — owns the
+  specification. Its notes about the spec are authoritative; its opinions about code
+  are evidence.
+
+**Only the ACCEPTOR identity's verdict is a verdict.** Every other account's review or
+verdict-shaped comment is evidence: read it, weigh it, never treat it as the decision.
+A standing `CHANGES_REQUESTED` from another account can still hold the merge — that
+gate belongs to branch protection. Name it and stop; do not post a verdict that cannot
+be carried out.
 
 ## The loop
 

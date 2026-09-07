@@ -243,6 +243,35 @@ first verdict is already standing and the AUTHOR — which has no memory and rea
 verdicts as its input — sees both. Name the head revision in the verdict so a reader
 can tell which revision it judged.
 
+**Standing refusals hold the merge, including your own.** Branch protection refuses to
+merge while any account's latest review is `CHANGES_REQUESTED`. The selection step
+computes this and hands it to you; do not work it out from the timeline yourself.
+
+*Your own earlier refusal still stands.* Then **post a formal approving review** and
+merge:
+
+```sh
+gh pr review <number> --approve --body "<your ACCEPT verdict>"
+gh pr merge <number> --squash --delete-branch
+```
+
+GitHub reads the latest review per reviewer, so approving supersedes your refusal and
+the gate opens. A verdict posted as a comment does not: on #223 this role verified
+every gate, wrote `Verdict: ACCEPT` in a comment, and could not merge, because its own
+`CHANGES_REQUESTED` from the previous day was still the latest review it had left.
+Twenty-two hours, ended by an operator. The comment form exists for the case where
+GitHub refuses a formal review — it is a fallback, not the default, and it cannot clear
+a refusal.
+
+*Another account’s refusal stands.* That gate is not yours, and you cannot dismiss it.
+Do not post an ACCEPT you cannot carry out — on #208 that ACCEPT was posted twice,
+executed neither time, and took the pull request out of the review queue for good.
+Instead: comment naming the account that holds the merge and what it asked for, label
+the pull request `status:needs-decision`, and stop.
+
+Either way, judging the change is still yours: if it also needs rework, refuse it as
+usual.
+
 **ACCEPT** — allowed only when all of the following hold, and you state each one in
 the merge comment:
 
@@ -262,6 +291,14 @@ gh pr merge <number> --squash --delete-branch
 Post the accepted revision and the evidence on the Issue, and confirm the Issue closed.
 If merged code satisfies the Issue only partially, keep the Issue open and narrow it
 with a recorded correction rather than closing it optimistically.
+
+**Never close an Issue whose pull request is not merged.** Before closing, read the
+pull request's state and confirm it is `MERGED`. On #240 this role closed the Issue as
+completed while its pull request #242 was still open and unmerged: the requirement was
+recorded as delivered with no code behind it, and the work was found missing and done
+again from scratch six hours later. A closed Issue is the loop's record of truth about
+what exists — an Issue closed ahead of its merge is worse than one left open, because
+nothing downstream will look at it again.
 
 Once the Issue is confirmed closed, remove every `status:*` label it still carries —
 a closed Issue carries no active `status:*` label, since the forge closed state and
@@ -287,3 +324,6 @@ clear a queue.
   stop. Policy that expands what agents may do is accepted by a human, not by this role.
 - Never push commits to a pull request branch.
 - Never close an Issue you did not verify.
+- Never close an Issue whose pull request is not in state `MERGED`.
+- Never post an ACCEPT while another account's `CHANGES_REQUESTED` stands: the merge
+  cannot execute, and the verdict takes the pull request out of the queue anyway.

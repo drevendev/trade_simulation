@@ -13,12 +13,14 @@ export {
   type CohortState,
   type CurrencyState,
   type LocalMarketState,
+  type MarketExpectationState,
   type MonetaryAuthorityState,
   type ProductionUnitState,
   type RegionState,
   type StateState,
   type TransportLinkState,
   type WorldState,
+  type PendingTransitions,
 } from "./worldState";
 
 export {
@@ -31,7 +33,6 @@ export {
   noOpPhaseHandler,
   type TickContext,
   type EconomicTransaction,
-  type PendingTransitions,
   type PhaseHandler,
 } from "./tickOrchestrator";
 
@@ -78,3 +79,11 @@ export {
   type BuyerInput,
   type ClearingConfig,
 } from "./marketClearing";
+
+export {
+  calculateMarketPressure,
+  calculateLogPriceChange,
+  applyLogPriceChange,
+  repriceGoodInPhase6,
+  updateMarketExpectations,
+} from "./marketPricing";
