@@ -28,6 +28,7 @@ import { createDefaultSimulationConfig } from "../config/simulationConfig";
 function createEmptyPendingTransitions(): PendingTransitions {
   return {
     jurisdictionChanges: [],
+    stateCreations: [],
     policyChanges: [],
     monetaryPolicyChanges: [],
   };

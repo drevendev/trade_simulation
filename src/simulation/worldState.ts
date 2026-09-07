@@ -20,6 +20,7 @@ import type {
   StateId,
   TransportLinkId,
 } from "../domain/id";
+import type { PendingTransitions } from "./tickOrchestrator";
 import { buildWorldRegistries } from "../domain/worldRegistries";
 import {
   createEmptyWorldGenesisLedger,
@@ -48,6 +49,7 @@ import { stableOrderBy } from "../domain/ordering";
 /**
  * Canonical world state: all registries and resolved configuration.
  * Must be byte-equivalent for the same scenario/config/seed after normalized serialization.
+ * REQ-CORE-005: pendingTransitions queues regime changes for N+1+ activation.
  */
 export interface WorldState {
   readonly configVersion: string;
@@ -56,6 +58,7 @@ export interface WorldState {
   readonly definitionRegistry: DefinitionRegistry;
   readonly simulationConfig: SimulationConfig;
   readonly worldGenesisLedger: WorldGenesisLedger;
+  readonly pendingTransitions: PendingTransitions;
   readonly regions: ReadonlyMap<RegionId, RegionState>;
   readonly states: ReadonlyMap<StateId, StateState>;
   readonly currencies: ReadonlyMap<CurrencyId, CurrencyState>;
@@ -479,8 +482,8 @@ export function buildInitialWorld(
   // Step 13: Instantiate explicitly scheduled starting events only
   // (No stochastic event is realized during construction)
 
-  // Step 14: Initialize empty shipments and PendingTransitions
-  // (Handled implicitly in WorldState definition)
+  // Step 14: Initialize empty shipments and PendingTransitions (REQ-CORE-005)
+  // PendingTransitions queues regime/policy changes for N+1+ activation
 
   // Step 15: Build DefinitionRegistry and resolve SimulationConfig
   const definitionRegistry = buildDefinitionRegistry(definitionPack);
@@ -519,6 +522,12 @@ export function buildInitialWorld(
     definitionRegistry,
     simulationConfig: frozenConfig,
     worldGenesisLedger,
+    pendingTransitions: {
+      jurisdictionChanges: [],
+      stateCreations: [],
+      policyChanges: [],
+      monetaryPolicyChanges: [],
+    },
     regions: regionRegistry,
     states: stateRegistry,
     currencies: currencyRegistry,

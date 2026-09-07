@@ -43,8 +43,18 @@ export interface EconomicTransaction {
 }
 
 /**
+ * Payload for a pending state creation queued in Phase 14, activated at Phase 1 of activateTick.
+ * REQ-CORE-005: State formation activation cannot mutate current-tick effective jurisdiction.
+ */
+export interface PendingStateCreation {
+  readonly activateTick: number;
+  readonly payload: unknown;
+}
+
+/**
  * Pending regime/policy changes queued for phase N+1 and later activation.
  * Deterministic causality: Phase-14 decisions cannot affect Phase N effective jurisdiction.
+ * REQ-CORE-005: All transitions are queued with activateTick > current tick.
  */
 export interface PendingTransitions {
   readonly jurisdictionChanges: ReadonlyArray<{
@@ -52,6 +62,7 @@ export interface PendingTransitions {
     readonly nextControllerStateId: StateId | null;
     readonly activateTick: number;
   }>;
+  readonly stateCreations: ReadonlyArray<PendingStateCreation>;
   readonly policyChanges: ReadonlyArray<{
     readonly stateId: StateId;
     readonly patch: unknown;

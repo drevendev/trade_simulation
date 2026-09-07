@@ -60,6 +60,12 @@ function createTestWorldState(): WorldState {
     worldGenesisLedger: {
       records: [],
     },
+    pendingTransitions: {
+      jurisdictionChanges: [],
+      stateCreations: [],
+      policyChanges: [],
+      monetaryPolicyChanges: [],
+    },
     regions: new Map(),
     states: new Map(),
     currencies: new Map(),
@@ -78,6 +84,7 @@ function createTestWorldState(): WorldState {
 function createEmptyPendingTransitions(): PendingTransitions {
   return {
     jurisdictionChanges: [],
+    stateCreations: [],
     policyChanges: [],
     monetaryPolicyChanges: [],
   };
@@ -382,6 +389,7 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
       const world = createTestWorldState();
       const pending: PendingTransitions = {
         jurisdictionChanges: [],
+        stateCreations: [],
         policyChanges: [
           {
             stateId: "STATE_1" as StateId,
@@ -420,6 +428,7 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
 
       const pending: PendingTransitions = {
         jurisdictionChanges: [],
+        stateCreations: [],
         policyChanges: [],
         monetaryPolicyChanges: [],
       };
