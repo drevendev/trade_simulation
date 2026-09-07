@@ -538,12 +538,32 @@ export function buildInitialWorld(
   );
 
   // REQ-CONFIG-004: Reconcile opening stocks before returning WorldState
-  const reconciliationResult = reconcileGenesisStocks(worldGenesisLedger, frozenConfig);
+  // Build a temporary WorldState for reconciliation (without freeze)
+  const tempWorldState: WorldState = {
+    configVersion: resolvedConfig.configVersion,
+    scenarioId: scenarioDefinition.id,
+    seed,
+    definitionRegistry,
+    simulationConfig: frozenConfig,
+    worldGenesisLedger,
+    regions: regionRegistry,
+    states: stateRegistry,
+    currencies: currencyRegistry,
+    monetaryAuthorities: authorityRegistry,
+    clans: clanRegistry,
+    cohorts: cohortRegistry,
+    productionUnits: productionUnitRegistry,
+    markets: marketRegistry,
+    transportLinks: transportLinkRegistry,
+  };
+
+  const reconciliationResult = reconcileGenesisStocks(tempWorldState, worldGenesisLedger, frozenConfig);
   if (!reconciliationResult.success) {
     throw new Error(
       `Genesis reconciliation failed: ${reconciliationResult.errorMessage}\n` +
       `Category: ${reconciliationResult.details?.category}, Key: ${reconciliationResult.details?.key}, ` +
-      `Total: ${reconciliationResult.details?.total}, Residual: ${reconciliationResult.details?.residual}`,
+      `Expected: ${reconciliationResult.details?.expected}, Actual: ${reconciliationResult.details?.actual}, ` +
+      `Residual: ${reconciliationResult.details?.residual}`,
     );
   }
 
