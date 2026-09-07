@@ -191,12 +191,27 @@ def issue_status_labels(repo: str, issue: int):
     return [label["name"] for label in json.loads(raw).get("labels", []) if label["name"].startswith("status:")]
 
 
-def close_out(repo: str, pull, refusals, limit: int) -> None:
+def retire(repo: str, pull, pull_comment: str, issue_comment) -> None:
+    """End a pull request and return its Issue to the queue.
+
+    The mechanics of a pull request dying: say why on the pull request, close it,
+    delete the loop's branch, move the Issue back to `status:ready` carrying exactly
+    one status label, and say why there too.
+
+    The words are the caller's, because there is more than one reason a branch should
+    stop — the rework bound below, and a branch no run can reach any more
+    (`stale_pull_requests.py`) — but there must be only one way it happens. Two
+    closers would drift, and the second one to drift would be the one that forgets to
+    return the Issue, which is how work disappears.
+
+    `issue_comment` is a callable taking the Issue number, since what to say about an
+    Issue usually names it.
+    """
     number = pull["number"]
     head_ref = pull.get("headRefName") or ""
     issue = linked_issue(pull.get("body"), head_ref)
 
-    _gh(["pr", "comment", str(number), "--repo", repo, "--body", summary(pull, refusals, limit, issue)])
+    _gh(["pr", "comment", str(number), "--repo", repo, "--body", pull_comment])
     close = ["pr", "close", str(number), "--repo", repo]
     if head_ref.startswith(LOOP_PREFIX):
         close.append("--delete-branch")
@@ -204,12 +219,24 @@ def close_out(repo: str, pull, refusals, limit: int) -> None:
 
     if issue is None:
         return
+    # Exactly one status label survives. An Issue carrying two is #214, which happened
+    # three times in two days and needed an operator every time.
     args = ["issue", "edit", str(issue), "--repo", repo, "--add-label", STATUS_READY]
     for label in issue_status_labels(repo, issue):
         if label != STATUS_READY:
             args += ["--remove-label", label]
     _gh(args)
-    _gh(["issue", "comment", str(issue), "--repo", repo, "--body", issue_note(pull, refusals, limit)])
+    _gh(["issue", "comment", str(issue), "--repo", repo, "--body", issue_comment(issue)])
+
+
+def close_out(repo: str, pull, refusals, limit: int) -> None:
+    issue = linked_issue(pull.get("body"), pull.get("headRefName") or "")
+    retire(
+        repo,
+        pull,
+        summary(pull, refusals, limit, issue),
+        lambda _issue: issue_note(pull, refusals, limit),
+    )
 
 
 def main() -> int:
