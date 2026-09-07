@@ -252,6 +252,23 @@ jobs:
             --pull "${{ steps.select.outputs.target }}" \
             --reviewer "${{ steps.identity.outputs.app-slug }}"
 
+      # The other way a branch stops. The bound above ends the loud failure — three
+      # refusals — and this ends the quiet one: a pull request nothing has advanced for
+      # a day that no review run can select either. Over 2026-09-06/07 four of those
+      # accumulated and every one had to be found by a person and closed by hand.
+      #
+      # Runs on every acceptor tick, including the ones with no review target: a queue
+      # with nothing selectable is exactly when this has work to do. It closes nothing
+      # a run could still pick up, nothing a person has claimed with
+      # status:needs-decision, no draft and no machine branch.
+      - name: End pull requests no run can reach any more
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZENDEV_STALE_PR_HOURS: ${{ vars.ZENDEV_STALE_PR_HOURS }}
+        run: |
+          python "${RUNNER_TEMP}/control-plane/stale_pull_requests.py"             --repo "${{ github.repository }}"             --acceptor "${{ steps.identity.outputs.app-slug }}"
+
       # The ledger lives in a private repository and is written by the MACHINE identity.
       # Its token is minted here, at the end, scoped to that repository alone: the model
       # never holds it. A failed mint is a gap in the bookkeeping, not a failed run.
