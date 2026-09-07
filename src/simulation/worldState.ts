@@ -545,6 +545,9 @@ export function buildInitialWorld(
     seed,
     definitionRegistry,
     simulationConfig: frozenConfig,
+    // Empty, like the WorldState this reconciliation precedes: genesis queues no
+    // transition, and reconciliation reads stocks, never the queue.
+    pendingTransitions: createEmptyPendingTransitions(),
     worldGenesisLedger,
     regions: regionRegistry,
     states: stateRegistry,
