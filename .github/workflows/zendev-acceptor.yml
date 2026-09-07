@@ -120,6 +120,10 @@ jobs:
         run: |
           cp scripts/record_usage.py "${RUNNER_TEMP}/record_usage.py"
           cp scripts/subscription_usage.py "${RUNNER_TEMP}/subscription_usage.py"
+          # The scheme the record will name must travel with the recorder: read from
+          # the working tree it would be whatever the branch under review claims.
+          cp scripts/schemes.py "${RUNNER_TEMP}/schemes.py"
+          cp docs/zendev/schemes.json "${RUNNER_TEMP}/schemes.json"
           # The whole control plane too: the rework bound below imports its neighbours.
           cp -r scripts "${RUNNER_TEMP}/control-plane"
 
@@ -132,7 +136,8 @@ jobs:
         id: select
         env:
           GH_TOKEN: ${{ steps.identity.outputs.token }}
-        run: python scripts/select_review_target.py --repo "${{ github.repository }}"
+        run: |
+          python scripts/select_review_target.py             --repo "${{ github.repository }}"             --acceptor "${{ steps.identity.outputs.app-slug }}"
 
       # The subscription is metered in rolling windows, not dollars. One reading before
       # the model and one after; the recorder writes the difference to the private
@@ -216,6 +221,13 @@ jobs:
               status:needs-decision and stop; a human accepts that class of change.
             - If you cannot decide, name the exact gate in a comment and leave the
               pull request open. Never merge to clear a queue.
+            - Standing refusals from accounts other than yours on this pull request:
+              "${{ steps.select.outputs.blocked_by }}". When that list is not empty,
+              branch protection will refuse the merge and you do not own that gate.
+              Do not post ACCEPT you cannot carry out: say in a comment which account
+              holds the merge and what it asked for, label the pull request
+              status:needs-decision, and stop. Judging the change is still yours —
+              if it also needs rework, request changes as usual.
 
       - name: Read the subscription windows after the model ran
         if: always() && steps.select.outputs.target != 'none'

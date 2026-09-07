@@ -9,7 +9,7 @@
  */
 
 import type { RegionId, StateId, CurrencyId, CohortId, ProductionUnitId, MonetaryAuthorityId } from "../domain/id";
-import type { WorldState } from "./worldState";
+import type { WorldState, PendingTransitions } from "./worldState";
 import type { TickLedger } from "./ledger";
 import { createEmptyTickLedger, validateZeroFlowReconciliation } from "./ledger";
 import type { BudgetCommitmentLedger } from "./marketIntent";
@@ -44,28 +44,6 @@ export interface EconomicTransaction {
   readonly goodId?: string;
   readonly amount: number;
   readonly reason: string;
-}
-
-/**
- * Pending regime/policy changes queued for phase N+1 and later activation.
- * Deterministic causality: Phase-14 decisions cannot affect Phase N effective jurisdiction.
- */
-export interface PendingTransitions {
-  readonly jurisdictionChanges: ReadonlyArray<{
-    readonly regionId: RegionId;
-    readonly nextControllerStateId: StateId | null;
-    readonly activateTick: number;
-  }>;
-  readonly policyChanges: ReadonlyArray<{
-    readonly stateId: StateId;
-    readonly patch: unknown;
-    readonly activateTick: number;
-  }>;
-  readonly monetaryPolicyChanges: ReadonlyArray<{
-    readonly authorityId: MonetaryAuthorityId;
-    readonly patch: unknown;
-    readonly activateTick: number;
-  }>;
 }
 
 export const PHASE_NAMES = [

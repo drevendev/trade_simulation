@@ -125,6 +125,10 @@ jobs:
         run: |
           cp scripts/record_usage.py "${RUNNER_TEMP}/record_usage.py"
           cp scripts/subscription_usage.py "${RUNNER_TEMP}/subscription_usage.py"
+          # The scheme the record will name must travel with the recorder: read from
+          # the working tree it would be whatever the branch under review claims.
+          cp scripts/schemes.py "${RUNNER_TEMP}/schemes.py"
+          cp docs/zendev/schemes.json "${RUNNER_TEMP}/schemes.json"
 
       # The subscription is metered in rolling windows, not dollars. One reading before
       # the model and one after; the recorder writes the difference to the private

@@ -15,9 +15,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { buildInitialWorld } from "./worldState";
+import { buildInitialWorld, type PendingTransitions } from "./worldState";
 import { executeTick, computeTickHash, noOpPhaseHandler, initializeTickContext } from "./tickOrchestrator";
-import type { PendingTransitions } from "./tickOrchestrator";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
@@ -28,6 +27,7 @@ import { createDefaultSimulationConfig } from "../config/simulationConfig";
 function createEmptyPendingTransitions(): PendingTransitions {
   return {
     jurisdictionChanges: [],
+    stateCreations: [],
     policyChanges: [],
     monetaryPolicyChanges: [],
   };

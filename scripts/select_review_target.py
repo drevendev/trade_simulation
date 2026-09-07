@@ -43,6 +43,29 @@ since none of them may be red at acceptance — so that reading would withhold m
 the reviews worth having. A red test suite still selects, because the reviewer can
 judge the criteria too and return one complete list instead of two partial ones.
 
+## Whose verdict counts
+
+The ACCEPTOR's, and only the ACCEPTOR's. A verdict is not a description of a pull
+request, it is an instruction to merge or to rework, and only one identity can carry
+it out — so reading every account's review as one cost a full day of throughput:
+
+* on #208 the ACCEPTOR posted ACCEPT twice, while a `CHANGES_REQUESTED` left by the
+  researcher's account held `mergeStateStatus` at `BLOCKED`. The ACCEPT could not
+  execute, the head counted as judged, and the pull request left the queue for good.
+* on #223 an `APPROVED` from that same account, newer than the ACCEPTOR's refusal,
+  told the AUTHOR the pull request was settled while GitHub kept it blocked.
+* on #238 an `APPROVED` from that account was the *only* verdict on a clean head:
+  never re-selected, never merged, eleven hours idle.
+
+So another account's review is evidence, exactly like the prose comments below it.
+It may still block the merge — that gate belongs to branch protection, not here —
+and `standing_blockers` names whoever holds it so the run can say so instead of
+issuing an ACCEPT that cannot be carried out.
+
+Without `--acceptor` every account's verdict counts, as before. That is the wider
+reading, and it is the safe direction to fail in: a missed verdict re-reviews a head
+that was already judged, which is the defect this module exists to prevent (#152).
+
 ## What is a verdict
 
 A comment in one of the shapes the runbooks prescribe — a heading or bold marker,
@@ -121,8 +144,15 @@ def is_verdict(body: str) -> bool:
     return bool(MARKED_VERDICT.search(body) or BARE_VERDICT.search(body))
 
 
-def is_verdict_entry(entry) -> bool:
-    """A comment in a verdict shape, or a formal review in a verdict state."""
+def is_verdict_entry(entry, acceptor: str = "") -> bool:
+    """A comment in a verdict shape, or a formal review in a verdict state.
+
+    With `acceptor` named, only that identity's entries can be verdicts. An entry that
+    records no author keeps the wider reading and stays a verdict: unknown identity is
+    not evidence of a foreign one, and dropping a verdict costs a duplicate review.
+    """
+    if acceptor and not is_from(entry, acceptor):
+        return False
     if (entry.get("state") or "").upper() in REVIEW_VERDICT_STATES:
         return True
     return is_verdict(entry.get("body") or "")
@@ -143,6 +173,17 @@ def normalize_login(login) -> str:
     return login.lower()
 
 
+def is_from(entry, login: str) -> bool:
+    """Whether this entry was posted by `login`.
+
+    An entry with no author recorded reads as yes, for the reason given in
+    `is_verdict_entry`: silence about identity must not delete a verdict.
+    """
+    if not login or "author" not in entry:
+        return True
+    return normalize_login(entry.get("author")) == normalize_login(login)
+
+
 def is_the_authors(entry, author: str) -> bool:
     """Whether an entry was posted by the pull request's author.
 
@@ -154,13 +195,36 @@ def is_the_authors(entry, author: str) -> bool:
     return normalize_login(entry.get("author")) == author
 
 
-def judges_head(comment, head_sha: str, head_committed_at: str) -> bool:
+def judges_head(comment, head_sha: str, head_committed_at: str, acceptor: str = "") -> bool:
     """Whether this entry is a verdict on the current head revision."""
-    if not is_verdict_entry(comment):
+    if not is_verdict_entry(comment, acceptor):
         return False
     if head_sha[:7] and head_sha[:7] in (comment["body"] or ""):
         return True
     return comment["createdAt"] >= head_committed_at
+
+
+def standing_blockers(comments, acceptor: str = ""):
+    """Accounts other than the ACCEPTOR whose latest formal review still refuses.
+
+    GitHub blocks the merge on the *latest* review per reviewer, so an older refusal
+    followed by that same account's approval is not standing. Only formal reviews are
+    read: a comment, whatever it says, has never blocked a merge.
+
+    This decides nothing about eligibility. It exists so a run can name the gate it
+    does not own rather than issue a verdict that cannot execute (#211).
+    """
+    latest = {}
+    for entry in comments:
+        if entry.get("kind") != "review":
+            continue
+        login = normalize_login(entry.get("author"))
+        if not login or (acceptor and login == normalize_login(acceptor)):
+            continue
+        seen = latest.get(login)
+        if seen is None or entry.get("createdAt", "") >= seen[0]:
+            latest[login] = (entry.get("createdAt", ""), (entry.get("state") or "").upper())
+    return sorted(login for login, (_, state) in latest.items() if state == "CHANGES_REQUESTED")
 
 
 def conflicts_with_base(pull) -> bool:
@@ -192,7 +256,7 @@ def is_unmeasured(pull) -> bool:
     return not (pull.get("statusCheckRollup") or [])
 
 
-def eligible(pull, head_committed_at: str, comments):
+def eligible(pull, head_committed_at: str, comments, acceptor: str = ""):
     """Return (bool, reason). Pure: no network, no clock."""
     if pull.get("isDraft"):
         return False, "draft"
@@ -218,7 +282,9 @@ def eligible(pull, head_committed_at: str, comments):
         return False, "nothing has reported on this head yet: unmeasured is not clean"
 
     head_sha = pull["headRefOid"]
-    verdicts = [c for c in comments if judges_head(c, head_sha, head_committed_at)]
+    verdicts = [
+        c for c in comments if judges_head(c, head_sha, head_committed_at, acceptor)
+    ]
     if not verdicts:
         return True, "no verdict on the current head"
 
@@ -227,7 +293,7 @@ def eligible(pull, head_committed_at: str, comments):
     corrections = [
         c
         for c in comments
-        if not is_verdict_entry(c)
+        if not is_verdict_entry(c, acceptor)
         and c["createdAt"] > newest_verdict
         and is_the_authors(c, author)
     ]
@@ -284,6 +350,7 @@ def load_comments(repo: str, number: int):
             "body": c.get("body", ""),
             "createdAt": c.get("createdAt", ""),
             "state": None,
+            "kind": "comment",
             "author": (c.get("author") or {}).get("login", ""),
         }
         for c in data.get("comments", [])
@@ -297,6 +364,7 @@ def load_comments(repo: str, number: int):
             "body": r.get("body", ""),
             "createdAt": r.get("submittedAt", ""),
             "state": r.get("state"),
+            "kind": "review",
             "author": (r.get("author") or {}).get("login", ""),
         }
         for r in data.get("reviews", [])
@@ -313,14 +381,24 @@ def head_commit_date(repo: str, sha: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, help="owner/name")
+    parser.add_argument(
+        "--acceptor",
+        default="",
+        help="login of the ACCEPTOR identity; only its verdicts are verdicts",
+    )
     args = parser.parse_args()
 
     candidates = []
+    blockers = {}
     for pull in load_pulls(args.repo):
         number = pull["number"]
         committed_at = head_commit_date(args.repo, pull["headRefOid"])
-        ok, reason = eligible(pull, committed_at, load_comments(args.repo, number))
+        comments = load_comments(args.repo, number)
+        ok, reason = eligible(pull, committed_at, comments, args.acceptor)
         candidates.append((number, pull["createdAt"], ok, reason))
+        held_by = standing_blockers(comments, args.acceptor)
+        if held_by:
+            blockers[number] = held_by
 
     # Every pull request and why, always. When this picks nothing, the reason it
     # picked nothing is the only evidence that the loop is idle by decision rather
@@ -328,14 +406,25 @@ def main() -> int:
     for number, created_at, ok, reason in sorted(candidates, key=lambda c: c[1]):
         print(f"  #{number} ({created_at}) {'eligible' if ok else 'skipped'}: {reason}")
 
+    # A merge this role cannot perform is worth saying out loud even on pull requests
+    # this run will not touch: it is the only place the deadlock of #211 is visible
+    # before someone goes looking for it.
+    for number, held_by in sorted(blockers.items()):
+        print(f"  #{number} merge held by {', '.join(held_by)} (not this role)")
+
     target = choose(candidates)
     value = str(target) if target else "none"
     print(f"target={value}")
+
+    held = ",".join(blockers.get(target, [])) if target else ""
+    if held:
+        print(f"blocked_by={held}")
 
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a", encoding="utf-8") as handle:
             handle.write(f"target={value}\n")
+            handle.write(f"blocked_by={held}\n")
     return 0
 
 

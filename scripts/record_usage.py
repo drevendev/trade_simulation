@@ -44,6 +44,10 @@ import sys
 import urllib.error
 import urllib.request
 
+# Staged next to this module by the workflow, for the reason given in its own header.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import schemes  # noqa: E402
+
 TOKEN_FIELDS = (
     "input_tokens",
     "output_tokens",
@@ -356,6 +360,20 @@ def main() -> int:
     if before is None or after is None:
         warn("a subscription reading is missing; the subscription block carries nulls")
 
+    # Which setup produced this run. Without it a window of records cannot be sliced
+    # by scheme, and comparing two days means trusting that nothing changed between
+    # them — which, over the three days this loop has run, was never true.
+    scheme_stamp = schemes.stamp()
+    if scheme_stamp is None:
+        warn("no active scheme could be read; the record carries no scheme block")
+    else:
+        drift = schemes.check_observed(schemes.active(schemes.load()), args.role, model)
+        if drift:
+            # Loud, and not fatal. The record is still worth writing — it is the
+            # evidence of the drift.
+            warn(f"scheme drift: {drift}")
+            scheme_stamp = dict(scheme_stamp, matches_observed=False)
+
     now = dt.datetime.now(dt.timezone.utc)
     record = {
         "recorded_at": now.isoformat(timespec="seconds"),
@@ -372,6 +390,7 @@ def main() -> int:
         "duration_ms": extra.get("duration_ms"),
         "num_turns": extra.get("num_turns"),
         "session_id": extra.get("session_id"),
+        "scheme": scheme_stamp,
         "subscription": subscription_block(before, after),
         "run_id": args.run_id,
         "run_url": args.run_url,

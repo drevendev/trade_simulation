@@ -60,6 +60,7 @@ export function generateM2Preview(worldState: WorldState, ticks: number = 100): 
   let currentWorld = worldState;
   const emptyPendingTransitions = {
     jurisdictionChanges: [],
+    stateCreations: [],
     policyChanges: [],
     monetaryPolicyChanges: [],
   };

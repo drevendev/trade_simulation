@@ -20,6 +20,7 @@ import type {
   StateId,
   TransportLinkId,
 } from "../domain/id";
+import { createEmptyPendingTransitions } from "./pendingTransitions";
 import { buildWorldRegistries } from "../domain/worldRegistries";
 import {
   createEmptyWorldGenesisLedger,
@@ -49,6 +50,30 @@ import { stableOrderBy } from "../domain/ordering";
  * Canonical world state: all registries and resolved configuration.
  * Must be byte-equivalent for the same scenario/config/seed after normalized serialization.
  */
+export interface PendingTransitions {
+  readonly jurisdictionChanges: ReadonlyArray<{
+    readonly regionId: RegionId;
+    readonly nextControllerStateId: StateId | null;
+    readonly activateTick: number;
+  }>;
+  readonly stateCreations: ReadonlyArray<{
+    readonly stateId: StateId;
+    readonly regionKey: string;
+    readonly seed: unknown;
+    readonly activateTick: number;
+  }>;
+  readonly policyChanges: ReadonlyArray<{
+    readonly stateId: StateId;
+    readonly patch: unknown;
+    readonly activateTick: number;
+  }>;
+  readonly monetaryPolicyChanges: ReadonlyArray<{
+    readonly authorityId: MonetaryAuthorityId;
+    readonly patch: unknown;
+    readonly activateTick: number;
+  }>;
+}
+
 export interface WorldState {
   readonly configVersion: string;
   readonly scenarioId: string;
@@ -65,6 +90,7 @@ export interface WorldState {
   readonly productionUnits: ReadonlyMap<ProductionUnitId, ProductionUnitState>;
   readonly markets: ReadonlyMap<MarketId, LocalMarketState>;
   readonly transportLinks: ReadonlyMap<TransportLinkId, TransportLinkState>;
+  readonly pendingTransitions: PendingTransitions;
 }
 
 export interface RegionState {
@@ -540,6 +566,7 @@ export function buildInitialWorld(
     productionUnits: productionUnitRegistry,
     markets: marketRegistry,
     transportLinks: transportLinkRegistry,
+    pendingTransitions: createEmptyPendingTransitions(),
   };
 
   return Object.freeze(worldState);

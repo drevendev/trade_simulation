@@ -84,17 +84,24 @@ ACCEPTOR's verdict on a pull request you authored is sometimes a formal review
 headed exactly `## ACCEPTOR verdict: REQUEST_CHANGES` (or `## ACCEPTOR verdict:
 ACCEPT`) and naming the reviewed revision as `` Head `<sha>` `` in its first
 paragraph — see `ACCEPTOR_RUNBOOK.md` section 1. Both forms count equally as a
-verdict. A human operator QA comment carrying an equivalent explicit marker (for
-example `## Operator QA: REQUEST_CHANGES`) counts the same way as supporting
-evidence, but only an ACCEPTOR or formal-review verdict decides whether item 1
-applies.
+verdict.
+
+**Only the ACCEPTOR's verdict is a verdict.** Other accounts post on your pull
+requests too: an operator QA comment, a researcher's formal review, the external QA
+voice. All of them are evidence — read them, they are often right — and none of them
+decides whether item 1 applies. This is not a matter of courtesy: on #223 an
+`APPROVED` from another account, newer than the ACCEPTOR's refusal, told a run the
+pull request was settled while GitHub kept it `BLOCKED`, and the pull request stood
+for seven hours with nobody working on it.
 
 To decide whether item 1 applies to one of your open pull requests:
 
 1. Collect every formal review on the pull request, and every comment on the pull
    request and its linked Issue.
-2. Keep only the entries that carry an explicit verdict: a formal review's `state`,
-   or a comment beginning with an `ACCEPTOR verdict:` marker.
+2. Keep only the entries **posted by the ACCEPTOR identity** that carry an explicit
+   verdict: a formal review's `state`, or a comment beginning with an
+   `ACCEPTOR verdict:` marker. Discard verdict-shaped entries from every other
+   account; they are evidence, and step 6 says what to do with them.
 3. Order the kept entries by timestamp and take the latest one.
 4. Item 1 applies only when that latest verdict is a change request
    (`CHANGES_REQUESTED` / `REQUEST_CHANGES`) **and** the revision it names — the
@@ -102,8 +109,20 @@ To decide whether item 1 applies to one of your open pull requests:
    pull request's current `headRefOid`. A verdict naming an older head was already
    superseded by whatever was pushed since; do not re-address it, and do not let it
    block or repeat against the new head.
-5. A later `ACCEPT`/`APPROVED` verdict at the current head means item 1 does not
-   apply; move on to item 2.
+5. A later `ACCEPT`/`APPROVED` verdict **from the ACCEPTOR** at the current head
+   means item 1 does not apply; move on to item 2. Another account's approval never
+   has this effect.
+6. A standing `CHANGES_REQUESTED` from any account holds the merge, whoever posted
+   it — that gate belongs to branch protection, not to the loop. It does not change
+   whether item 1 applies, and it is not yours to dismiss. When item 1 applies,
+   address the ACCEPTOR's refusal; when the pull request is otherwise finished and
+   only a foreign refusal holds it, say so in a comment naming the account and stop.
+   A pull request nobody can merge is a defect to surface, not a reason to open
+   another one on the same requirement.
+7. When item 1 applies to more than one of your pull requests, take **the oldest**.
+   Fresh rework otherwise overtakes old rework indefinitely, and the oldest pull
+   request — the one carrying the most work already paid for — is the one that
+   never lands.
 
 This is the same-account fallback `ACCEPTOR_RUNBOOK.md` section 1 already
 requires the ACCEPTOR to honor when posting a verdict. AUTHOR must recognize the

@@ -20,6 +20,7 @@ export {
   type StateState,
   type TransportLinkState,
   type WorldState,
+  type PendingTransitions,
 } from "./worldState";
 
 export {
@@ -32,7 +33,6 @@ export {
   noOpPhaseHandler,
   type TickContext,
   type EconomicTransaction,
-  type PendingTransitions,
   type PhaseHandler,
 } from "./tickOrchestrator";
 
