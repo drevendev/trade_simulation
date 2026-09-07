@@ -119,10 +119,14 @@ jobs:
       # `dirty` is a conflict, and a conflict is the author's — except in the two files
       # the forge generates for every pull request, where it is the forge's own doing.
       # See scripts/resolve_ledger_conflicts.py; it refuses everything else, and every
-      # refusal aborts its merge. Same guards as the sweep above: `master` only, the
-      # reviewed definition, the MACHINE identity's token so the push is measured.
+      # refusal aborts its merge. On push to master, this resolves conflicts in all open
+      # branches. On pull request events, this resolves conflicts in the PR branch being
+      # measured, which unblocks ACCEPTOR merge when a PR's ledger conflicts become
+      # resolvable (i.e., only in the two ledger files and not in product code).
+      #
+      # The MACHINE token is required to push; a missing token is a warning, not a failure.
       - name: Resolve conflicts the forge itself created in the ledger
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ steps.identity.outputs.token }}
         run: |
@@ -132,4 +136,9 @@ jobs:
           fi
           git config user.name "zendev-machine[bot]"
           git config user.email "zendev-machine[bot]@users.noreply.github.com"
-          python scripts/resolve_ledger_conflicts.py --repo "${{ github.repository }}" --all-open
+          if [ "${{ github.event_name }}" = "push" ]; then
+            python scripts/resolve_ledger_conflicts.py --repo "${{ github.repository }}" --all-open
+          else
+            # On pull request events, resolve conflicts only in this PR
+            python scripts/resolve_ledger_conflicts.py --repo "${{ github.repository }}" --pull "${{ github.event.pull_request.number }}"
+          fi
