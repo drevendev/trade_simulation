@@ -243,15 +243,34 @@ first verdict is already standing and the AUTHOR — which has no memory and rea
 verdicts as its input — sees both. Name the head revision in the verdict so a reader
 can tell which revision it judged.
 
-**A merge gate you do not own.** Before ACCEPT, check whether any account other than
-yours has a standing `CHANGES_REQUESTED` on this pull request. The run tells you: the
-selection step prints `#<n> merge held by <account>` and passes the list into your
-prompt. Branch protection will refuse the merge while such a review stands, and you
-cannot dismiss it. Do not post an ACCEPT you cannot carry out — on #208 that ACCEPT
-was posted twice, executed neither time, and took the pull request out of the review
-queue for good. Instead: comment naming the account that holds the merge and what it
-asked for, label the pull request `status:needs-decision`, and stop. Judging the
-change is still yours; if it also needs rework, refuse it as usual.
+**Standing refusals hold the merge, including your own.** Branch protection refuses to
+merge while any account's latest review is `CHANGES_REQUESTED`. The selection step
+computes this and hands it to you; do not work it out from the timeline yourself.
+
+*Your own earlier refusal still stands.* Then **post a formal approving review** and
+merge:
+
+```sh
+gh pr review <number> --approve --body "<your ACCEPT verdict>"
+gh pr merge <number> --squash --delete-branch
+```
+
+GitHub reads the latest review per reviewer, so approving supersedes your refusal and
+the gate opens. A verdict posted as a comment does not: on #223 this role verified
+every gate, wrote `Verdict: ACCEPT` in a comment, and could not merge, because its own
+`CHANGES_REQUESTED` from the previous day was still the latest review it had left.
+Twenty-two hours, ended by an operator. The comment form exists for the case where
+GitHub refuses a formal review — it is a fallback, not the default, and it cannot clear
+a refusal.
+
+*Another account’s refusal stands.* That gate is not yours, and you cannot dismiss it.
+Do not post an ACCEPT you cannot carry out — on #208 that ACCEPT was posted twice,
+executed neither time, and took the pull request out of the review queue for good.
+Instead: comment naming the account that holds the merge and what it asked for, label
+the pull request `status:needs-decision`, and stop.
+
+Either way, judging the change is still yours: if it also needs rework, refuse it as
+usual.
 
 **ACCEPT** — allowed only when all of the following hold, and you state each one in
 the merge comment:
