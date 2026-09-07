@@ -76,6 +76,27 @@ def complete(rows, required_ids):
     )
 
 
+def missing_provenance(rows, required_ids):
+    """Required requirements whose row records no merge commit.
+
+    A blank here is not a small gap. The coverage digest is a hash of
+    `(REQ_ID, MERGE_COMMIT)` pairs, so blanks make a milestone repaired at new commits
+    hash identically to the one released before, and the patch tag that exists for
+    exactly that case is never cut. The release notes would render the blanks as an
+    em dash and call it provenance.
+
+    Eleven of twenty-three rows were blank when this was written, because nothing was
+    responsible for filling a field the AUTHOR cannot know from inside its own pull
+    request. `backfill_merge_commits.py` is now that something; this refuses to release
+    if it has not run or could not answer.
+    """
+    by_id = {row["REQ_ID"]: row for row in rows}
+    return sorted(
+        req_id for req_id in required_ids
+        if not ((by_id.get(req_id) or {}).get("MERGE_COMMIT") or "").strip()
+    )
+
+
 def next_patch(existing):
     """The patch to cut given the milestone's existing (patch, digest) pairs."""
     return max(patch for patch, _ in existing) + 1 if existing else 0
@@ -91,6 +112,16 @@ def plan(rows, milestones, existing):
     for name in sorted(milestones, key=milestone_number):
         required = milestones[name]
         if not complete(rows, required):
+            continue
+        blank = missing_provenance(rows, required)
+        if blank:
+            # Loud, and not a tag. Releasing this would mint a digest that cannot
+            # distinguish these commits from any later repair of the same milestone.
+            print(
+                "::warning::release-tag: %s is complete but %s record no merge commit; "
+                "not releasing until backfill_merge_commits.py fills them"
+                % (name, ", ".join(blank))
+            )
             continue
         backing = [row for row in rows if row["REQ_ID"] in set(required)]
         digest = coverage_digest(backing)
