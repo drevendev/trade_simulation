@@ -48,3 +48,13 @@ export {
   type TickLedger,
   type StockReconciliation,
 } from "./ledger";
+
+export {
+  projectM2DiagnosticTick,
+  aggregateM2DiagnosticRun,
+  type FlowSummary,
+  type M2DiagnosticTickProjection,
+  type M2DiagnosticRunProjection,
+} from "./m2DiagnosticProjection";
+
+export { validateTickInvariants } from "./tickOrchestrator";
