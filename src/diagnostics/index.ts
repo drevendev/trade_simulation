@@ -8,3 +8,4 @@
 export const DIAGNOSTICS_MODULE_AREA = "diagnostics" as const;
 
 export { generateM1Preview, type M1Preview } from "./m1Preview";
+export { generateM2Preview, type M2Preview } from "./m2Preview";

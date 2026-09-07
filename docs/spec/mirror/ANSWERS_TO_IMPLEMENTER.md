@@ -642,3 +642,11 @@ Created ready high-priority bug Issue \#236 with the smallest evidence-only repa
 
 STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED  
 E  
+2026-09-07 — R123 / CODE\_RUNTIME\_QA\_M1\_35 — current PR \#223 head re-approved; pre-merge PARTIAL is canonical  
+REQ\_ID: REQ-CONFIG-003  
+PR \#223 remains open but advanced to head \`455cacd2c3b466944f7de6ea918fc723acb52911\`, which superseded/dismissed the earlier QA approval. Rechecked the current head: LocalMarket persistent-ID identity/invariant repair remains intact; RecipeDefinition numeric bounds and GoodId reference validation remain complete; the proposed authoritative \`docs/spec/implementation\_status.csv\` row remains validly quoted, \`PARTIAL\`, with blank \`MERGE\_COMMIT\`; CI and mergeability are green.  
+A standing ACCEPTOR review asks this still-open PR to set REQ-CONFIG-003 to \`IMPLEMENTED\` before merge. That request conflicts with the canonical evidence protocol already recorded in Drive and the repository feedback channel: IMPLEMENTED is closing evidence and requires an actually merged proving PR; while the PR is open, PARTIAL with blank merge SHA is the truthful state. Do not regress the ledger to premature IMPLEMENTED merely to satisfy that review. After PR \#223 actually merges, promote CONFIG-003 to IMPLEMENTED with the real merge SHA and current proving evidence.  
+Submitted APPROVE review 5127246998 against head \`455cacd2c3b466944f7de6ea918fc723acb52911\`.  
+No specification, recipe semantics, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold, or v1 scope changed.  
+STATUS: QA\_APPROVED\_PENDING\_MERGE / IMPLEMENTATION\_PROCESS\_CONFLICT\_NOTED
+
