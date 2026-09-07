@@ -144,9 +144,21 @@ def read_rows(path):
 
 
 def _git(args):
-    return subprocess.run(
-        ["git", *args], check=True, capture_output=True, text=True, encoding="utf-8"
-    ).stdout
+    """Run git, and on failure say what git said.
+
+    The first live run died on `git push origin v0.0.0` with exit 128 and printed
+    nothing but the exit code: `check=True` raises CalledProcessError, whose str() does
+    not include stderr. The cause was one line of git output that never reached the log.
+    """
+    done = subprocess.run(
+        ["git", *args], capture_output=True, text=True, encoding="utf-8"
+    )
+    if done.returncode != 0:
+        raise RuntimeError(
+            "git %s failed (%d): %s"
+            % (" ".join(args), done.returncode, (done.stderr or done.stdout).strip())
+        )
+    return done.stdout
 
 
 def parse_tag_listing(listing, milestones):
