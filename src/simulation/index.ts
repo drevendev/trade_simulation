@@ -58,3 +58,23 @@ export {
 } from "./m2DiagnosticProjection";
 
 export { validateTickInvariants } from "./tickOrchestrator";
+
+export {
+  createMarketIntentId,
+  validateMarketIntent,
+  createEmptyBudgetCommitmentLedger,
+  commitBudget,
+  type MarketIntentId,
+  type MarketIntent,
+  type BudgetCommitmentLedger,
+} from "./marketIntent";
+
+export {
+  allocateLocal,
+  createMarketAllocationId,
+  type MarketAllocationId,
+  type MarketAllocation,
+  type SellerInput,
+  type BuyerInput,
+  type ClearingConfig,
+} from "./marketClearing";
