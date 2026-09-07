@@ -205,26 +205,49 @@ def judges_head(comment, head_sha: str, head_committed_at: str, acceptor: str = 
 
 
 def standing_blockers(comments, acceptor: str = ""):
-    """Accounts other than the ACCEPTOR whose latest formal review still refuses.
+    """Every account whose latest formal review still refuses. Including this role's.
 
     GitHub blocks the merge on the *latest* review per reviewer, so an older refusal
     followed by that same account's approval is not standing. Only formal reviews are
-    read: a comment, whatever it says, has never blocked a merge.
+    read: a comment, whatever it says, has never blocked a merge — which is exactly why
+    the ACCEPTOR's own refusals belong here.
 
-    This decides nothing about eligibility. It exists so a run can name the gate it
-    does not own rather than issue a verdict that cannot execute (#211).
+    The first version of this excluded them, reasoning that it named "a gate this role
+    does not own". That was wrong twice over. The role does not own that gate either:
+    GitHub blocks on a standing refusal whoever left it, and an ACCEPT posted as a
+    comment does not supersede a formal review. And the omission cost the very
+    diagnosis this exists to give — on #223 the run reported "standing refusals: empty"
+    while its own refusal from the previous day was the only thing holding the merge.
+
+    The two cases need different answers, not the same silence, so `split` below tells
+    them apart: a refusal of this role's own is cleared by approving formally, while
+    another account's is not this role's to clear at all.
     """
     latest = {}
     for entry in comments:
         if entry.get("kind") != "review":
             continue
         login = normalize_login(entry.get("author"))
-        if not login or (acceptor and login == normalize_login(acceptor)):
+        if not login:
             continue
         seen = latest.get(login)
         if seen is None or entry.get("createdAt", "") >= seen[0]:
             latest[login] = (entry.get("createdAt", ""), (entry.get("state") or "").upper())
     return sorted(login for login, (_, state) in latest.items() if state == "CHANGES_REQUESTED")
+
+
+def split_blockers(blockers, acceptor: str = ""):
+    """(this role's own refusal stands, other accounts still refusing).
+
+    Kept separate from the reading above so that what the run *says* is decided here
+    rather than by the model comparing logins in a prompt. The role has mistaken its
+    own identity before (#152), and a run that cannot tell whose refusal it is looking
+    at will either sit on a merge it could clear in one call, or try to clear one it
+    cannot.
+    """
+    own = normalize_login(acceptor)
+    others = [login for login in blockers if not own or login != own]
+    return (bool(own) and own in blockers), others
 
 
 def conflicts_with_base(pull) -> bool:
@@ -406,25 +429,36 @@ def main() -> int:
     for number, created_at, ok, reason in sorted(candidates, key=lambda c: c[1]):
         print(f"  #{number} ({created_at}) {'eligible' if ok else 'skipped'}: {reason}")
 
-    # A merge this role cannot perform is worth saying out loud even on pull requests
-    # this run will not touch: it is the only place the deadlock of #211 is visible
-    # before someone goes looking for it.
+    # A merge that cannot execute is worth saying out loud even on pull requests this
+    # run will not touch: it is the only place the deadlock of #211 is visible before
+    # someone goes looking for it. Whose refusal it is decides what can be done, so the
+    # line says which.
     for number, held_by in sorted(blockers.items()):
-        print(f"  #{number} merge held by {', '.join(held_by)} (not this role)")
+        mine, others = split_blockers(held_by, args.acceptor)
+        parts = []
+        if mine:
+            parts.append("your own earlier refusal (clear it by approving formally)")
+        if others:
+            parts.append(f"{', '.join(others)} (not this role's to clear)")
+        print(f"  #{number} merge held by {'; '.join(parts)}")
 
     target = choose(candidates)
     value = str(target) if target else "none"
     print(f"target={value}")
 
-    held = ",".join(blockers.get(target, [])) if target else ""
+    mine, others = split_blockers(blockers.get(target, []) if target else [], args.acceptor)
+    held = ",".join(others)
     if held:
         print(f"blocked_by={held}")
+    if mine:
+        print("self_refusal=true")
 
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a", encoding="utf-8") as handle:
             handle.write(f"target={value}\n")
             handle.write(f"blocked_by={held}\n")
+            handle.write(f"self_refusal={'true' if mine else 'false'}\n")
     return 0
 
 

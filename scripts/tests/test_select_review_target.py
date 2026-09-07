@@ -435,9 +435,46 @@ class StandingBlockerTests(unittest.TestCase):
         comments = [review("CHANGES_REQUESTED", "2026-09-06T17:59:18Z", "drevendev")]
         self.assertEqual(select.standing_blockers(comments, ACCEPTOR), ["drevendev"])
 
-    def test_the_acceptors_own_refusal_is_not_a_foreign_blocker(self):
-        comments = [review("CHANGES_REQUESTED", "2026-09-06T17:59:18Z", ACCEPTOR)]
-        self.assertEqual(select.standing_blockers(comments, ACCEPTOR), [])
+    def test_the_acceptors_own_refusal_is_reported_too(self):
+        # #223: the run said "standing refusals: empty" while its own refusal from the
+        # previous day was the only thing holding the merge. GitHub blocks on a
+        # standing refusal whoever left it, and an ACCEPT posted as a comment does not
+        # supersede a formal review.
+        comments = [review("CHANGES_REQUESTED", "2026-09-06T22:34:12Z", ACCEPTOR)]
+        self.assertEqual(select.standing_blockers(comments, ACCEPTOR), [ACCEPTOR])
+
+    def test_split_tells_ones_own_refusal_from_another_accounts(self):
+        blockers = [ACCEPTOR, "drevendev"]
+        mine, others = select.split_blockers(blockers, ACCEPTOR)
+        self.assertTrue(mine)
+        self.assertEqual(others, ["drevendev"])
+
+    def test_split_with_no_identity_calls_nothing_its_own(self):
+        # Without --acceptor the run cannot claim a refusal is its own, and guessing
+        # would make it try to clear one it does not own.
+        mine, others = select.split_blockers([ACCEPTOR, "drevendev"], "")
+        self.assertFalse(mine)
+        self.assertEqual(others, [ACCEPTOR, "drevendev"])
+
+    def test_split_recognises_the_bot_spelling_of_its_own_login(self):
+        mine, others = select.split_blockers(["zendev-acceptor"], "zendev-acceptor[bot]")
+        self.assertTrue(mine)
+        self.assertEqual(others, [])
+
+    def test_223_exactly(self):
+        # The ACCEPTOR refused on 09-06, the researcher approved on 09-07, the ACCEPTOR
+        # then accepted by comment and could not merge. Only its own refusal stands.
+        comments = [
+            review("CHANGES_REQUESTED", "2026-09-06T22:34:12Z", ACCEPTOR),
+            review("APPROVED", "2026-09-07T01:01:03Z", "drevendev"),
+            entry("## ACCEPTOR Verdict on 455cacd2\n\n**Verdict: ACCEPT**",
+                  "2026-09-07T18:34:06Z", author=ACCEPTOR),
+        ]
+        mine, others = select.split_blockers(
+            select.standing_blockers(comments, ACCEPTOR), ACCEPTOR
+        )
+        self.assertTrue(mine, "its own standing refusal is what held #223")
+        self.assertEqual(others, [])
 
     def test_only_the_latest_review_per_account_counts(self):
         # GitHub blocks on the latest review per reviewer; an approval after a refusal
