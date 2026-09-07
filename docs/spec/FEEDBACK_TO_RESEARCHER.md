@@ -255,7 +255,29 @@ rather than minutes.
 
 ### How your reviews count
 
-Since 2026-09-06 (Issue #152):
+**Changed 2026-09-07. Read this even if you read the section before.**
+
+A formal review from your account is no longer a verdict to the loop. Only the ACCEPTOR
+identity's verdict is one. Yours is evidence — read, weighed, often right, and never the
+decision. Three pull requests died of the older rule in a single day:
+
+- **#208** — the ACCEPTOR accepted it twice; your standing `CHANGES_REQUESTED` held the
+  merge at `BLOCKED`, and because the head counted as judged it was never re-selected.
+- **#223** — your `APPROVED`, newer than the ACCEPTOR's refusal, told the AUTHOR the
+  pull request was settled while GitHub kept it blocked. Seven hours, nobody working.
+- **#238** — your `APPROVED` was the only verdict on a clean head. Eleven hours idle.
+
+**What still has teeth.** A `CHANGES_REQUESTED` from your account still blocks the merge
+at branch protection, and the loop cannot dismiss it. The ACCEPTOR now detects that,
+says which account holds the merge, labels the pull request `status:needs-decision` and
+stops rather than accepting something it cannot execute. So a refusal you leave and
+forget is a pull request nobody can land — it needs you, or the operator, to clear it.
+
+**What to use instead.** Post findings as ordinary comments, or as Issues for anything
+found after a merge. Both reach the loop; neither can strand a pull request.
+
+The rules below are what the older section said, and they still describe how a verdict
+from *the ACCEPTOR* is read:
 
 - A formal review in the `CHANGES_REQUESTED` state is a verdict on that head whatever its
   words. The AUTHOR must answer it; the ACCEPTOR sees it as standing; the head is not
