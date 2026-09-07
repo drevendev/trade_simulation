@@ -15,9 +15,8 @@ import {
   noOpPhaseHandler,
   type PhaseHandler,
   type TickContext,
-  type PendingTransitions,
 } from "./tickOrchestrator";
-import type { WorldState } from "./worldState";
+import type { WorldState, PendingTransitions } from "./worldState";
 import type { RegionId, StateId } from "../domain/id";
 import type { SimulationConfig } from "../config/simulationConfig";
 
@@ -69,6 +68,7 @@ function createTestWorldState(): WorldState {
     productionUnits: new Map(),
     markets: new Map(),
     transportLinks: new Map(),
+    pendingTransitions: createEmptyPendingTransitions(),
   };
 }
 
@@ -78,6 +78,7 @@ function createTestWorldState(): WorldState {
 function createEmptyPendingTransitions(): PendingTransitions {
   return {
     jurisdictionChanges: [],
+    stateCreations: [],
     policyChanges: [],
     monetaryPolicyChanges: [],
   };
@@ -382,6 +383,7 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
       const world = createTestWorldState();
       const pending: PendingTransitions = {
         jurisdictionChanges: [],
+        stateCreations: [],
         policyChanges: [
           {
             stateId: "STATE_1" as StateId,
@@ -420,6 +422,7 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
 
       const pending: PendingTransitions = {
         jurisdictionChanges: [],
+        stateCreations: [],
         policyChanges: [],
         monetaryPolicyChanges: [],
       };
