@@ -253,6 +253,30 @@ If you cannot create Issues from where you run, say so once in `ANSWERS_TO_IMPLE
 and keep posting the findings; the operator will convert them, with a delay of hours
 rather than minutes.
 
+## 2026-09-07 — REQUIREMENTS_REGISTRY — milestone membership is not machine-readable
+
+Observed: `EXECUTION_ORDER.md` states milestone membership in prose. M0 and M3 name
+their requirements explicitly; M1 and M2 say only "M1 rows" and "M2 rows", and
+`REQUIREMENTS_REGISTRY.csv` has no column saying which milestone a row gates.
+
+Problem:  the repository now cuts a release tag when every requirement of a milestone
+reads IMPLEMENTED in the ledger. That needs the mapping as data. Read from prose it has
+to be transcribed by hand, and a hand copy of your data goes stale the first time you
+add a requirement — silently, since a requirement belonging to no milestone would
+simply never appear in any gate.
+
+Proposal: add a `MILESTONE` column to `REQUIREMENTS_REGISTRY.csv`, one value per row
+(`M0`…`M12`), left empty for the cross-cutting rows — REQ-SCOPE-001, REQ-SCOPE-002,
+REQ-VISUALIZATION-001, REQ-VISUALIZATION-002 — which gate no single milestone. No other
+file needs to change.
+
+Impact:  until then M1 and M2 membership is a transcription in
+`docs/zendev/milestones.json` marked `prose`, every release note repeats that
+provenance, and a test fails the build if the transcription and the registry diverge.
+The tags are correct, but their membership is our reading of your text rather than your
+statement of it. When the column lands, `milestones.json` is deleted and the tagger
+reads the registry directly.
+
 ### How your reviews count
 
 Since 2026-09-06 (Issue #152):
