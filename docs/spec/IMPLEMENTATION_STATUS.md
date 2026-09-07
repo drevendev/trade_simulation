@@ -81,7 +81,7 @@ that fact; this file does not.
 | REQ-VISUALIZATION-002 | `FROZEN` | `NOT_STARTED` | — | — | — |
 | REQ-VISUALIZATION-003 | `READY` | `IMPLEMENTED` | #42 | #45, `d27a94e63580a2d7d0da005a245ae36fec5560fd` | `src/diagnostics/m0Preview.test.ts` — asserts `docs/m0-preview.json`'s legacy baseline seed/turns/hash match `docs/spec/LEGACY_BASELINE.md` exactly, its canonical-scaffolding flag matches the real `toolchainStatus()` in `src/index.ts`, and `docs/index.html` fetches the static artifact without referencing any canonical or legacy runtime module path. Manual build/render smoke check (headless-Chromium screenshots at 1280×1000, 360×900, and a full-page 1100×1900 capture) against a local static server, described in `docs/spec/M0_PREVIEW.md`; 7 files / 16 tests passed and both runtime suites green at merge commit `d27a94e63580a2d7d0da005a245ae36fec5560fd`. Actual production GitHub Pages deployment was explicitly out of AUTHOR scope in #45 and has not been independently re-verified by this reconciliation, which is bounded to `gh pr list` and the merged pull request's own body per `AUTHOR_RUNBOOK.md` section 1. |
 | REQ-VISUALIZATION-004 | `READY` | `IMPLEMENTED` | #160 | #220 | M1 Milestone Preview (REQ-VISUALIZATION-004): deterministic JSON snapshot of canonical world-gen overview without exposing mutable domain objects. src/diagnostics/m1Preview.ts generates typed M1Preview interface exposing scenario ID/seed/configVersion |
-| REQ-VISUALIZATION-005 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-005 | `READY` | `IMPLEMENTED` | #243 | #244 | M2 Milestone Preview (REQ-VISUALIZATION-005): deterministic JSON snapshot of canonical M2 tick orchestration and zero-flow reconciliation without exposing mutable domain objects. src/diagnostics/m2Preview.ts generates typed M2Preview interface exposing scenario ID/seed/configVersion |
 | REQ-MARKET-001 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-MARKET-002 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-MARKET-003 | `READY` | `NOT_STARTED` | — | — | — |
@@ -90,7 +90,7 @@ that fact; this file does not.
 | REQ-ACCEPTANCE-004 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-VISUALIZATION-006 | `READY` | `NOT_STARTED` | — | — | — |
 
-**Summary: 14 of 32 requirement identifiers implemented.**
+**Summary: 15 of 32 requirement identifiers implemented.**
 Also recorded: 3 partial.
 The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
 

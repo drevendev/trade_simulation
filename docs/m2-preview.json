@@ -1,0 +1,55 @@
+{
+  "milestone": "M2",
+  "requirement": "REQ-VISUALIZATION-005",
+  "scenario": {
+    "scenarioId": "baseline-multistate-v1",
+    "seed": 42,
+    "configVersion": "1.0.0"
+  },
+  "worldTopology": {
+    "stateCount": 4,
+    "regionCount": 24,
+    "currencyCount": 4,
+    "monetaryAuthorityCount": 4,
+    "clanCount": 8,
+    "cohortCount": 216,
+    "productionUnitCount": 172,
+    "marketCount": 24,
+    "transportLinkCount": 48
+  },
+  "phaseTrace": {
+    "phasesPerTick": 16,
+    "phaseSequence": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "totalPhasesExecuted": 1616
+  },
+  "tickExecution": {
+    "ticksExecuted": 101,
+    "tickRange": {
+      "firstTick": 1,
+      "lastTick": 101
+    }
+  },
+  "reconciliationHealth": {
+    "passedTicks": 101,
+    "failedTicks": 0,
+    "failureDetails": [],
+    "tolerance": 1e-9
+  }
+}
