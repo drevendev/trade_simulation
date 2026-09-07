@@ -1,0 +1,252 @@
+{
+  "milestone": "M1",
+  "requirement": "REQ-VISUALIZATION-004",
+  "scenario": {
+    "scenarioId": "baseline-multistate-v1",
+    "seed": 42,
+    "configVersion": "1.0.0"
+  },
+  "worldTopology": {
+    "stateCount": 4,
+    "regionCount": 24,
+    "currencyCount": 4,
+    "monetaryAuthorityCount": 4,
+    "clanCount": 8,
+    "cohortCount": 216,
+    "productionUnitCount": 172,
+    "marketCount": 24,
+    "transportLinkCount": 48
+  },
+  "states": [
+    {
+      "stateId": "s:1",
+      "name": "State Alpha",
+      "currencyId": "cur:1",
+      "memberAuthorityId": "ma:1",
+      "regionCount": 6
+    },
+    {
+      "stateId": "s:2",
+      "name": "State Beta",
+      "currencyId": "cur:2",
+      "memberAuthorityId": "ma:2",
+      "regionCount": 6
+    },
+    {
+      "stateId": "s:4",
+      "name": "State Gamma",
+      "currencyId": "cur:4",
+      "memberAuthorityId": "ma:4",
+      "regionCount": 6
+    },
+    {
+      "stateId": "s:3",
+      "name": "State Delta",
+      "currencyId": "cur:3",
+      "memberAuthorityId": "ma:3",
+      "regionCount": 6
+    }
+  ],
+  "currencies": [
+    {
+      "currencyId": "cur:1",
+      "code": "ALP",
+      "issuerAuthorityId": "ma:1"
+    },
+    {
+      "currencyId": "cur:2",
+      "code": "BET",
+      "issuerAuthorityId": "ma:2"
+    },
+    {
+      "currencyId": "cur:4",
+      "code": "GAM",
+      "issuerAuthorityId": "ma:4"
+    },
+    {
+      "currencyId": "cur:3",
+      "code": "DEL",
+      "issuerAuthorityId": "ma:3"
+    }
+  ],
+  "regions": [
+    {
+      "regionId": "r:1",
+      "name": "State A Capital",
+      "controllerStateId": "s:1",
+      "settlementCurrencyId": "cur:1"
+    },
+    {
+      "regionId": "r:2",
+      "name": "Alpha Farmland",
+      "controllerStateId": "s:1",
+      "settlementCurrencyId": "cur:1"
+    },
+    {
+      "regionId": "r:3",
+      "name": "Alpha Forest",
+      "controllerStateId": "s:1",
+      "settlementCurrencyId": "cur:1"
+    },
+    {
+      "regionId": "r:4",
+      "name": "Alpha Border Trade Post",
+      "controllerStateId": "s:1",
+      "settlementCurrencyId": "cur:1"
+    },
+    {
+      "regionId": "r:5",
+      "name": "Alpha Copper Region",
+      "controllerStateId": "s:1",
+      "settlementCurrencyId": "cur:1"
+    },
+    {
+      "regionId": "r:6",
+      "name": "Alpha Remote Frontier",
+      "controllerStateId": "s:1",
+      "settlementCurrencyId": "cur:1"
+    },
+    {
+      "regionId": "r:7",
+      "name": "State B Capital",
+      "controllerStateId": "s:2",
+      "settlementCurrencyId": "cur:2"
+    },
+    {
+      "regionId": "r:8",
+      "name": "Beta Urban Hub",
+      "controllerStateId": "s:2",
+      "settlementCurrencyId": "cur:2"
+    },
+    {
+      "regionId": "r:9",
+      "name": "Beta Fishing Port",
+      "controllerStateId": "s:2",
+      "settlementCurrencyId": "cur:2"
+    },
+    {
+      "regionId": "r:10",
+      "name": "Beta Trade Chokepoint",
+      "controllerStateId": "s:2",
+      "settlementCurrencyId": "cur:2"
+    },
+    {
+      "regionId": "r:11",
+      "name": "Beta Pastoral Land",
+      "controllerStateId": "s:2",
+      "settlementCurrencyId": "cur:2"
+    },
+    {
+      "regionId": "r:12",
+      "name": "Beta Mineral Rich",
+      "controllerStateId": "s:2",
+      "settlementCurrencyId": "cur:2"
+    },
+    {
+      "regionId": "r:13",
+      "name": "State C Capital",
+      "controllerStateId": "s:4",
+      "settlementCurrencyId": "cur:4"
+    },
+    {
+      "regionId": "r:14",
+      "name": "Gamma Craft Center",
+      "controllerStateId": "s:4",
+      "settlementCurrencyId": "cur:4"
+    },
+    {
+      "regionId": "r:15",
+      "name": "Gamma Farmland",
+      "controllerStateId": "s:4",
+      "settlementCurrencyId": "cur:4"
+    },
+    {
+      "regionId": "r:16",
+      "name": "Gamma Trade Center",
+      "controllerStateId": "s:4",
+      "settlementCurrencyId": "cur:4"
+    },
+    {
+      "regionId": "r:17",
+      "name": "Gamma Forest",
+      "controllerStateId": "s:4",
+      "settlementCurrencyId": "cur:4"
+    },
+    {
+      "regionId": "r:18",
+      "name": "Gamma Mine Region",
+      "controllerStateId": "s:4",
+      "settlementCurrencyId": "cur:4"
+    },
+    {
+      "regionId": "r:19",
+      "name": "State D Capital",
+      "controllerStateId": "s:3",
+      "settlementCurrencyId": "cur:3"
+    },
+    {
+      "regionId": "r:20",
+      "name": "Delta Valley",
+      "controllerStateId": "s:3",
+      "settlementCurrencyId": "cur:3"
+    },
+    {
+      "regionId": "r:21",
+      "name": "Delta Mountain",
+      "controllerStateId": "s:3",
+      "settlementCurrencyId": "cur:3"
+    },
+    {
+      "regionId": "r:22",
+      "name": "Delta Coast",
+      "controllerStateId": "s:3",
+      "settlementCurrencyId": "cur:3"
+    },
+    {
+      "regionId": "r:23",
+      "name": "Delta Industrial",
+      "controllerStateId": "s:3",
+      "settlementCurrencyId": "cur:3"
+    },
+    {
+      "regionId": "r:24",
+      "name": "Delta Plains",
+      "controllerStateId": "s:3",
+      "settlementCurrencyId": "cur:3"
+    }
+  ],
+  "clans": [
+    {
+      "clanId": "c:8",
+      "name": "Wolf Clan"
+    },
+    {
+      "clanId": "c:2",
+      "name": "Eagle Clan"
+    },
+    {
+      "clanId": "c:1",
+      "name": "Bear Clan"
+    },
+    {
+      "clanId": "c:3",
+      "name": "Fox Clan"
+    },
+    {
+      "clanId": "c:4",
+      "name": "Lion Clan"
+    },
+    {
+      "clanId": "c:7",
+      "name": "Stag Clan"
+    },
+    {
+      "clanId": "c:6",
+      "name": "Serpent Clan"
+    },
+    {
+      "clanId": "c:5",
+      "name": "Raven Clan"
+    }
+  ]
+}

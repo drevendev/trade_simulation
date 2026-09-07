@@ -94,3 +94,29 @@ export interface SimulationConfig {
   readonly events: EventConfig;
   readonly performance: PerformanceConfig;
 }
+
+export function createDefaultSimulationConfig(): SimulationConfig {
+  return {
+    configVersion: "1.0.0",
+    numeric: {
+      moneyEpsilon: 1e-9,
+      quantityEpsilon: 1e-9,
+      populationEpsilon: 1e-6,
+      rateEpsilon: 1e-12,
+      reconciliationRelativeTolerance: 1e-9,
+      maxFiniteMagnitude: 1e15,
+    },
+    cadence: {},
+    markets: {},
+    trade: {},
+    production: {},
+    labor: {},
+    population: {},
+    clans: {},
+    fiscal: {},
+    monetary: {},
+    expansion: {},
+    events: {},
+    performance: {},
+  };
+}
