@@ -1,0 +1,44 @@
+{
+  "_comment": [
+    "Which requirements each milestone gate covers, so a release tag can be cut from",
+    "the ledger without a person deciding what 'M1 is done' means.",
+    "",
+    "PROVISIONAL for M1 and M2. The mapping is the researcher's data and belongs in",
+    "REQUIREMENTS_REGISTRY.csv as a MILESTONE column; there is none, and",
+    "EXECUTION_ORDER.md carries the mapping only in prose. M0 and M3 are quoted there",
+    "explicitly and are marked `explicit` below; M1 and M2 are read off the milestone",
+    "descriptions and the named Milestone Preview, and are marked `prose`.",
+    "",
+    "The request to the researcher is in FEEDBACK_TO_RESEARCHER.md. When the column",
+    "arrives, this file is deleted and the tagger reads the registry instead.",
+    "",
+    "test_release_tag.py asserts every executable requirement in the registry appears",
+    "in exactly one milestone here, so a requirement arriving from the researcher",
+    "fails the build until it is mapped rather than silently escaping every gate.",
+    "",
+    "`unassigned` holds rows that gate no single milestone: scope statements and the",
+    "cross-cutting visibility rule."
+  ],
+  "source": {"M0": "explicit", "M1": "prose", "M2": "prose", "M3": "explicit"},
+  "milestones": {
+    "M0": [
+      "REQ-MIGRATION-001", "REQ-MIGRATION-002", "REQ-MIGRATION-003",
+      "REQ-MIGRATION-004", "REQ-VISUALIZATION-003"
+    ],
+    "M1": [
+      "REQ-CORE-001", "REQ-CORE-002", "REQ-CORE-003",
+      "REQ-CONFIG-001", "REQ-CONFIG-002", "REQ-CONFIG-003", "REQ-CONFIG-004",
+      "REQ-CONFIG-005", "REQ-VISUALIZATION-004"
+    ],
+    "M2": [
+      "REQ-CORE-004", "REQ-CORE-005", "REQ-CORE-006",
+      "REQ-ACCEPTANCE-001", "REQ-ACCEPTANCE-002", "REQ-ACCEPTANCE-003",
+      "REQ-VISUALIZATION-005"
+    ],
+    "M3": [
+      "REQ-MARKET-001", "REQ-MARKET-002", "REQ-MARKET-003", "REQ-MARKET-004",
+      "REQ-MARKET-005", "REQ-ACCEPTANCE-004", "REQ-VISUALIZATION-006"
+    ]
+  },
+  "unassigned": ["REQ-SCOPE-001", "REQ-SCOPE-002", "REQ-VISUALIZATION-001", "REQ-VISUALIZATION-002"]
+}
