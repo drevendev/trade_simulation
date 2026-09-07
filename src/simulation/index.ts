@@ -13,6 +13,7 @@ export {
   type CohortState,
   type CurrencyState,
   type LocalMarketState,
+  type MarketExpectationState,
   type MonetaryAuthorityState,
   type ProductionUnitState,
   type RegionState,
@@ -58,3 +59,11 @@ export {
 } from "./m2DiagnosticProjection";
 
 export { validateTickInvariants } from "./tickOrchestrator";
+
+export {
+  calculateMarketPressure,
+  calculateLogPriceChange,
+  applyLogPriceChange,
+  repriceGoodInPhase6,
+  updateMarketExpectations,
+} from "./marketPricing";
