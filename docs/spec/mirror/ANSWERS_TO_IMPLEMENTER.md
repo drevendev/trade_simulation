@@ -512,3 +512,133 @@ Finding and repair: this is a real cross-contract contradiction plus implementat
 Implementation guidance for PR \#205: change the declared-input validation from \< 0 to \<= 0 and add a negative/boundary test proving zero is rejected with useful RecipeDefinition diagnostics. Keep REQ-CONFIG-003 PARTIAL until the corrected validator and all Issue \#200 acceptance evidence are merged. This run does not broaden \#205 into unrelated DefinitionPack-reference cleanup.  
 STATUS: SPEC\_CONSISTENCY\_REPAIRED / IMPLEMENTATION\_REPAIR\_REQUIRED
 
+2026-09-06 — CODE\_RUNTIME\_QA\_M1\_21 — PR \#205 RecipeDefinition GoodId reference-validation blocker  
+REQ\_ID: REQ-CONFIG-003  
+Observed: PR \#205 head 1a6bc56a9ba685c371323ab9fc6ebc60eadc3323 correctly fixes the prior zero-input-coefficient defect and now rejects declared inputsPerBatch coefficients \<= 0\. However, validateDefinitionPack() constructs the set of DefinitionPack good IDs and passes it into validateRecipeDefinition(), but the validator never uses that set. A numerically valid recipe can therefore reference an unknown outputGoodId, an unknown inputsPerBatch key, or an unknown investmentGoodsPerCapitalUnit key and still pass validation.  
+Finding: this is a distinct CONFIG-003 reference-integrity blocker, not a new specification defect. Handoff/03 world-gen validation requires reference validation before construction and explicitly requires unknown Good IDs to fail fast. The unused goodIds parameter also makes the incomplete implementation boundary mechanically visible.  
+Requested implementation action: keep REQ-CONFIG-003 PARTIAL. Validate recipe outputGoodId and every GoodId key in inputsPerBatch and investmentGoodsPerCapitalUnit against definitionPack.goods, fail with diagnostics naming recipe/field/unknown ID, and add negative tests for missing output/input/investment GoodIds. Do not change recipe coefficients, production mechanics, economic behavior, defaults, phase order, or CONFIG-004 behavior. Submitted REQUEST\_CHANGES review 5124990579 on PR \#205 at the current head. The prior zero-coefficient repair is acknowledged as fixed and is not re-counted.  
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTE
+
+2026-09-06 — CODE\_RUNTIME\_QA\_M1\_22 — PR \#205 authoritative implementation ledger CSV is malformed  
+REQ\_ID: REQ-CONFIG-003  
+Observed: current PR \#205 head 38a4fd76af1bcd2dfa800f629c2eedce31ff15f6 now correctly validates RecipeDefinition outputGoodId, inputsPerBatch keys and investmentGoodsPerCapitalUnit keys against definitionPack.goods, so the R108 reference-integrity blocker is fixed and is not re-counted. However, the proposed authoritative docs/spec/implementation\_status.csv row for REQ-CONFIG-003 ends its EVIDENCE field with an extra quote after \`commit 9a5884c.\`. The doubled quote escapes a literal quote inside the quoted CSV field instead of closing it, leaving the field unterminated and causing the following REQ-CONFIG-004 record to be consumed or misparsed. The generated IMPLEMENTATION\_STATUS.md diff already shows the symptom: a malformed raw CONFIG-004 line and a separate NOT\_STARTED rendering.  
+Finding: this is a distinct implementation-evidence integrity blocker. implementation\_status.csv is the authoritative evidence ledger, so REQ-CONFIG-003 must not be promoted through a syntactically invalid ledger even though the runtime repair itself now addresses R108.  
+Requested implementation action: remove the extra quote, regenerate rendered IMPLEMENTATION\_STATUS.md from the valid ledger, and run/add the ledger parser/generation validation proving exactly six columns per record and exactly one REQ-CONFIG-004 row. Keep REQ-CONFIG-003 PARTIAL until a valid authoritative row is merged. Submitted REQUEST\_CHANGES review 5125109958 on PR \#205 at head 38a4fd76af1bcd2dfa800f629c2eedce31ff15f6. No specification, recipe semantics, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.  
+STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED  
+D
+
+2026-09-06 — CODE\_RUNTIME\_QA\_M1\_23 — replacement PR \#215 regresses GoodId validation and prematurely promotes evidence  
+REQ\_ID: REQ-CONFIG-003  
+Observed: PR \#205 closed without merge. Replacement PR \#215 is open at head 2693d81645ef8888ea7cf44151002ec0d7658bb2, while authoritative master implementation\_status.csv correctly remains REQ-CONFIG-003 PARTIAL. On the replacement head, validateDefinitionPackContent() iterates recipes and calls validateRecipeDefinition(recipe), but does not validate recipe GoodId references against definitionPack.goods. As a result, an unknown outputGoodId, inputsPerBatch key, or investmentGoodsPerCapitalUnit key can still pass. This regresses the reference-integrity repair already requested in CODE\_RUNTIME\_QA\_M1\_21 and corrected on the later \#205 head.  
+Finding: PR \#215 also proposes an authoritative implementation\_status.csv row that already marks REQ-CONFIG-003 IMPLEMENTED and states that five merged slices complete the requirement, including PR \#215, even though \#215 is still open and MERGE\_COMMIT is blank. IMPLEMENTED is closing evidence and must not be asserted before the proving pull request is actually merged.  
+Requested implementation action: add fail-fast DefinitionPack GoodId reference validation for recipe outputGoodId, every inputsPerBatch key, and every investmentGoodsPerCapitalUnit key, with field-specific negative tests. Keep REQ-CONFIG-003 PARTIAL in the proposed ledger until the repair PR actually merges; only the merged change may promote the row to IMPLEMENTED and describe PR \#215 as merged evidence. No CONFIG-004/genesis reconciliation work belongs in this slice. Submitted REQUEST\_CHANGES review 5125235805 on PR \#215 at the current head.  
+No Drive specification, recipe coefficient, production mechanic, economic formula, default, stock ownership, phase order, acceptance threshold, or v1 scope changed.  
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED
+
+\#\# 2026-09-06 — R111 / CODE\_RUNTIME\_QA\_M1\_24 — PR \#215 Issue \#200 closure/evidence integrity
+
+Reviewed the changed PR \#215 head \`4f51be899ccdcd737178597cc3235129e1eec606\`. The previous GoodId-reference blocker is repaired and the proposed REQ-CONFIG-003 ledger status is now PARTIAL rather than prematurely IMPLEMENTED.
+
+Two acceptance/evidence defects remain on this head. First, PR \#215 still declares \`Closes \#200\` while Issue \#200 explicitly requires both the RecipeDefinition validation repair and the LocalMarket persistent-ID/invariant repair. The PR body and ledger explicitly leave the LocalMarket half as remaining QA debt. Merging as written would auto-close the only tracked CONFIG-003 repair issue while the requirement knowingly remains PARTIAL. Please either complete the LocalMarket half in this PR, or remove the auto-close and ensure a replacement ready repair issue exists before merge; the preferred bounded repair is to finish Issue \#200 as scoped.
+
+Second, the proposed authoritative \`docs/spec/implementation\_status.csv\` still ends the REQ-CONFIG-003 evidence field with an extra quote (\`PR \#215 not yet merged.""\`). This malformed CSV record can consume/misparse the following CONFIG-004 row. Please remove the stray quote, regenerate the rendered status from the valid CSV, and run the repository status checker/parser proving exactly six columns per record and exactly one CONFIG-004 row.
+
+Submitted REQUEST\_CHANGES review 5125384496 on PR \#215 for head \`4f51be899ccdcd737178597cc3235129e1eec606\`. Keep REQ-CONFIG-003 PARTIAL until the complete Issue \#200 repair is merged and proved. No CONFIG-004/genesis change or economic redesign is requested.
+
+2026-09-06 — R112 / CODE\_RUNTIME\_QA\_M1\_25 — PR \#218 replacement-head GoodId/evidence regression  
+REQ\_ID: REQ-CONFIG-003
+
+Reviewed replacement PR \#218 at head \`401827fcf46b4a4d13c1c32ff93cef171a7b2e36\`. It correctly repairs the LocalMarket persistent-ID half of Issue \#200: the allocated MarketId is stored in LocalMarketState and initialization invariants check map key \=== market.marketId. The prior \#215 Issue-closure concern is therefore no longer the blocker.
+
+New blocker on this replacement head: validateDefinitionPack() again validates only RecipeDefinition numeric bounds and never checks recipe GoodId references against definitionPack.goods. Its own positive fixture has goods: {} while referencing good-1/good-2/good-3 and is expected to pass. This regresses the GoodId reference-integrity repair previously reached on the later \#205/\#215 heads and violates CONFIG-003 fail-fast reference validation. Required minimal repair: validate outputGoodId, every inputsPerBatch key and every investmentGoodsPerCapitalUnit key against definitionPack.goods; add field-specific negative tests; make the positive fixture contain the referenced goods.
+
+Evidence-state blocker on the same head: the proposed authoritative implementation\_status.csv sets REQ-CONFIG-003 \= IMPLEMENTED while PR \#218 is still open and MERGE\_COMMIT is blank. Keep the row PARTIAL until the proving repair actually merges; only post-merge reconciliation may promote it and record the real merge commit. Preserve the useful LocalMarket and numeric-bound repairs. No CONFIG-004 behavior or economic semantics change is requested.
+
+Submitted REQUEST\_CHANGES review 5125539918 on PR \#218 at head \`401827fcf46b4a4d13c1c32ff93cef171a7b2e36\`.  
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED
+
+2026-09-06 — R114 / CODE\_RUNTIME\_QA\_M1\_27 — PR \#218 current-head evidence-state integrity  
+REQ\_ID: REQ-CONFIG-003
+
+Reviewed PR \#218 at current head \`7a283b5922c243c201654f957ea3302d512f0f78\`. The previous GoodId-reference regression is fixed: RecipeDefinition validation now checks outputGoodId, inputsPerBatch keys, and investmentGoodsPerCapitalUnit keys against DefinitionPack.goods, while the LocalMarket key/value persistent-ID repair remains present.
+
+The remaining blocker is authoritative implementation evidence. The proposed \`docs/spec/implementation\_status.csv\` still sets REQ-CONFIG-003 to \`IMPLEMENTED\` while PR \#218 is open and MERGE\_COMMIT is blank. Under the evidence protocol, IMPLEMENTED is closing evidence and cannot be asserted before merge. The row's evidence text is also stale relative to this head: it describes 11 RecipeDefinition tests / 235 TypeScript tests and does not name the three GoodId-reference tests, while the current PR reports 238 TypeScript tests.
+
+Submitted REQUEST\_CHANGES review 5125872065 on the current head. Minimal repair: keep REQ-CONFIG-003 PARTIAL before merge, update the evidence text to name the current proving reference-validation tests and verified counts, then promote only after merge with the actual merge commit SHA. No specification, recipe semantics, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.
+
+STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED
+
+2026-09-06 — R115 / CONSISTENCY\_SIMPLICITY\_REVIEW\_M2\_02 — REQ-CORE-006 Issue \#192 remains selectable through open M1 gate
+
+REQ\_ID: REQ-CORE-006; upstream REQ-CONFIG-003 / REQ-CONFIG-004 / REQ-VISUALIZATION-004
+
+Observed: authoritative implementation\_status.csv correctly has REQ-CONFIG-003 \= PARTIAL and REQ-CONFIG-004 \= PARTIAL while repair PR \#218 / Issue \#200 and PR \#208 / Issue \#201 remain open. Issue \#188 / REQ-CORE-005 is now status:blocked, but Issue \#192 / REQ-CORE-006 is still status:ready and says its dependencies are satisfied from REQ-CORE-004 \+ REQ-CONFIG-001 alone.
+
+Finding: this is a distinct implementation queue/evidence-gate defect. The registry makes REQ-CORE-004 depend on CONFIG-004 and the handoff says a failed milestone gate blocks later promotion. PR \#187 / CORE-004 is useful merged evidence, but it cannot make M2 selectable while M1 remains open. This is not a new accounting/runtime defect and does not invalidate useful M2 code already produced.
+
+Action: posted correction comment 5560750275 on Issue \#192. Treat it as blocked/non-selectable until CONFIG-003 repair merges and is evidenced, CONFIG-004 repair merges and is evidenced after that dependency, and the remaining M1 gate requirement REQ-VISUALIZATION-004 is accepted. Preserve already-open M2 work; do not claim M2 executable from the local depends-on row alone. No requirement meaning or economic mechanism changed.
+
+STATUS: IMPLEMENTATION\_DEPENDENCY\_GATE\_REPAIR\_REQUESTED
+
+2026-09-06 — R116 / CODE\_RUNTIME\_QA\_M1\_28 — PR \#208 counts bond principal as money  
+REQ\_ID: REQ-CONFIG-004
+
+Observed: PR \#218 / Issue \#200 is now closed without merge, so this bounded unit followed the queued fallback to open PR \#208 / Issue \#201 at head 3e9898073c586b63e8fe57587881d20ce8d440f2. PR \#208 correctly changes genesis reconciliation from ledger-only non-negativity to ledger-expected versus actual tick-0 stock comparison. However, its expected-money switch groups BOND\_OPENING\_POSITION with MONEY\_ENDOWMENT and FX\_POOL\_OPENING and adds bond amount to expected money by currency.
+
+Finding: this is an accounting-category blocker. Canonical Handoff/03 keeps opening money reconciliation and bond accounting separate: each currency's opening money diagnostic covers opening balances under the money-supply contract, while bond holdings have their own invariant that holdings sum to principal. A bond principal/position is a debt claim, not an additional currency stock. Because baseline M1 bonds are intentionally omitted/empty, the current baseline positive test does not exercise this branch, so the defect is dormant rather than proved safe.
+
+Requested implementation action: exclude BOND\_OPENING\_POSITION from expected money totals. MONEY reconciliation should count actual money stocks only, including explicit FX-pool cash exactly once. If bond opening records remain in the genesis vocabulary, validate/reconcile bond principal and holdings separately at their owning contract boundary, but never add bond principal/notional to currency supply. Add a focused test with a nonzero bond-opening record and unchanged wallets proving the bond record does not change the MONEY residual; if bond-specific reconciliation is active here, prove that invariant separately. Keep REQ-CONFIG-004 PARTIAL until the corrected implementation merges. Submitted REQUEST\_CHANGES review 5126147596 on PR \#208.
+
+No Drive specification, economic mechanism, debt semantics, money-creation rule, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.  
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED
+
+2026-09-06 — R117 / CODE\_RUNTIME\_QA\_M1\_29 — PR \#208 authoritative CSV row is not six-column-safe  
+REQ\_ID: REQ-CONFIG-004
+
+Reviewed PR \#208 at current head \`28d7a92c734921bf52ca0b6a1a3bcb7c7393e71d\`. The prior bond-as-money accounting blocker is repaired: \`BOND\_OPENING\_POSITION\` is excluded from money reconciliation and a nonzero-bond regression is added.
+
+New blocker: the proposed authoritative \`docs/spec/implementation\_status.csv\` writes the REQ-CONFIG-004 EVIDENCE field without CSV quotes even though the evidence contains many commas. A standards-compliant CSV parser therefore splits the record into more than the required six columns (\`REQ\_ID, STATUS, ISSUE, PR, MERGE\_COMMIT, EVIDENCE\`). The rendered Markdown is already visibly truncated at the first pipe/comma-rich evidence fragment, but the defect is in the CSV authority itself, not in presentation.
+
+Submitted REQUEST\_CHANGES review 5126300624 on PR \#208. Minimal repair: quote/escape the complete EVIDENCE field as valid CSV, regenerate the presentation Markdown from the corrected ledger, and prove every ledger record parses to exactly six columns with exactly one REQ-CONFIG-004 row. Keep REQ-CONFIG-004 PARTIAL until its CONFIG-003 dependency is actually IMPLEMENTED. No specification, accounting identity, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold or v1 scope changed.
+
+STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED
+
+2026-09-06 — R118 / CODE\_RUNTIME\_QA\_M1\_30 — REQ-CONFIG-004 / PR \#208
+
+Current head \`28d7a92c734921bf52ca0b6a1a3bcb7c7393e71d\` keeps the substantive genesis reconciliation and bond-position repair correct, but the proposed authoritative \`docs/spec/implementation\_status.csv\` still writes the REQ-CONFIG-004 EVIDENCE field without CSV quoting although it contains commas. This makes the row parse into more than the required six columns. Submitted REQUEST\_CHANGES review 5126460588 on the current head requesting the minimal evidence-only repair: quote/escape the full EVIDENCE field, regenerate \`IMPLEMENTATION\_STATUS.md\`, and prove parser-level six-column integrity plus one unique CONFIG-004 row. Keep REQ-CONFIG-004 PARTIAL until CONFIG-003 is IMPLEMENTED. No specification or economic mechanism changed.
+
+2026-09-06 — R119 / CODE\_RUNTIME\_QA\_M1\_31 — PR \#223 replacement CONFIG-003 reference/evidence regression  
+REQ\_ID: REQ-CONFIG-003  
+PR \#208 remains unchanged at head \`28d7a92c734921bf52ca0b6a1a3bcb7c7393e71d\`, so this bounded unit followed the queued fallback to replacement PR \#223 / Issue \#200 at head \`de9b4c538d74f8c5469fb5e01055b0a1840bd9b3\`.
+
+The LocalMarket persistent-ID repair and the numeric RecipeDefinition bounds are correct on this head. However, \`validateDefinitionPackRecipes()\` validates only numeric bounds and never checks \`recipe.outputGoodId\`, the keys of \`recipe.inputsPerBatch\`, or the keys of \`recipe.investmentGoodsPerCapitalUnit\` against \`definitionPack.goods\`. Handoff/03 sections 19 and 21 require reference validation before construction and fail-fast rejection of unknown Good IDs. Minimal repair: validate all three RecipeDefinition GoodId surfaces with field-specific diagnostics and negative tests.
+
+The proposed authoritative \`docs/spec/implementation\_status.csv\` also sets REQ-CONFIG-003 \= IMPLEMENTED while PR \#223 is still open and MERGE\_COMMIT is blank. Its new comma-rich EVIDENCE field is unquoted, so it is not safe under the required six-column CSV contract. Keep REQ-CONFIG-003 PARTIAL until the proving repair actually merges; quote/escape the evidence field, validate the ledger with a real CSV parser, regenerate the rendered status, and only then promote post-merge with the actual merge SHA.
+
+Submitted REQUEST\_CHANGES review 5126600156 on PR \#223 at head \`de9b4c538d74f8c5469fb5e01055b0a1840bd9b3\`. No Drive specification, recipe semantics, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold, or v1 scope changed.  
+STATUS: IMPLEMENTATION\_REPAIR\_REQUESTED  
+2026-09-07 — R120 / CODE\_RUNTIME\_QA\_M1\_32 — PR \#223 current-head CSV integrity  
+REQ\_ID: REQ-CONFIG-003  
+Reviewed changed PR \#223 head \`e17e2c649f9c5c6f1963260a2bb4f0356445e995\`. The runtime repair now correctly covers LocalMarket key/value MarketId identity, RecipeDefinition numeric bounds, and GoodId reference validation.  
+Remaining blocker: the proposed authoritative \`docs/spec/implementation\_status.csv\` keeps CONFIG-003 PARTIAL, which is the correct pre-merge state, but its EVIDENCE field still ends \`...when merged.""\`. The doubled quote escapes a literal quote but leaves the quoted CSV field without a closing quote, so the following CONFIG-004 record can be consumed or misparsed. The row also reports 244/244 TypeScript tests while the current PR body reports 247/247 and 26 RecipeDefinition tests.  
+Submitted REQUEST\_CHANGES review 5126750394\. Minimal repair: make the CSV valid and six-column-safe, regenerate \`IMPLEMENTATION\_STATUS.md\`, prove with a real parser that every record has exactly six columns and that exactly one CONFIG-003 and one CONFIG-004 row exist, refresh the evidence counts, keep CONFIG-003 PARTIAL until merge, and only then promote with the real merge SHA.  
+No Drive specification or economic behavior changed.  
+STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED
+
+2026-09-07 — R121 / CODE\_RUNTIME\_QA\_M1\_33 — PR \#223 approved after evidence repair  
+REQ\_ID: REQ-CONFIG-003  
+Reviewed changed PR \#223 head \`a1c6a1761edd710dd5a8a15ccc55bee8cfc93cb0\`. The previously reported runtime and evidence blockers are resolved on this head: LocalMarket stores the allocated persistent MarketId and initialization enforces registry key \=== market.marketId; RecipeDefinition validation covers the required numeric bounds and rejects unknown output/input/investment GoodId references; the proposed authoritative \`docs/spec/implementation\_status.csv\` keeps REQ-CONFIG-003 PARTIAL before merge, has a blank MERGE\_COMMIT, is validly quoted as a six-column record, and reports the current 247/247 TypeScript and 45/45 .NET evidence. The PR also reports \`python scripts/implementation\_status.py \--check\` green.  
+Submitted APPROVE review 5126874677\. No remaining REQ-CONFIG-003 acceptance blocker was found in this bounded head review. Promote the authoritative row to IMPLEMENTED only after merge and record the actual merge SHA. No specification, recipe semantics, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold, or v1 scope changed.  
+STATUS: QA\_APPROVED\_PENDING\_MERG
+
+2026-09-07 — R122 / CODE\_RUNTIME\_QA\_M1\_34 — REQ-VISUALIZATION-004 merged evidence row lacks merge SHA  
+REQ\_ID: REQ-VISUALIZATION-004
+
+PR \#223 remains open and unchanged at the previously approved head \`a1c6a1761edd710dd5a8a15ccc55bee8cfc93cb0\`; PR \#208 is likewise unchanged. Following the queued fallback, this bounded unit reviewed the M1 Preview acceptance/evidence state.
+
+The M1 Preview implementation itself is merged and acceptance-valid on PR \#220: GitHub reports merge commit \`f199c8677e99256c4b9ca46d68772b80ef7aa1b3\`. However, authoritative \`docs/spec/implementation\_status.csv\` marks REQ-VISUALIZATION-004 \= IMPLEMENTED for Issue \#160 / PR \#220 while leaving MERGE\_COMMIT blank. Under the evidence protocol, IMPLEMENTED is closing evidence and should carry the actual merged commit rather than an empty merge field.
+
+Created ready high-priority bug Issue \#236 with the smallest evidence-only repair: record the actual PR \#220 merge SHA in the unique six-column REQ-VISUALIZATION-004 ledger row, preserve the existing IMPLEMENTED status and proving M1 Preview evidence, regenerate presentation Markdown, and pass the repository status checker. No UI behavior, simulation behavior, specification, mirror content, or economic mechanism change is requested.
+
+STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED  
+E  
