@@ -51,8 +51,8 @@
     },
     {
       "id": "scheme/3",
-      "in_force_from": "",
-      "commit": "",
+      "in_force_from": "2026-09-07T18:04:02Z",
+      "commit": "39cca61d",
       "summary": "The ACCEPTOR identity alone owns the formal verdict; every other account's review is evidence.",
       "roles": {
         "author": {"identity": "zendev-author[bot]", "model": "claude-haiku-4-5", "max_budget_usd": 5.0},
@@ -64,7 +64,7 @@
       "required_checks": ["build-and-test", "typescript", "policy-guard", "mergeability"],
       "rework_limit": 3,
       "cadence_minutes": 25,
-      "note": "In force from the merge of the verdict-ownership pull request. `in_force_from` and `commit` are filled by the operator at that merge."
+      "note": "In force from the merge of #257. Neither `in_force_from` nor `commit` is a descriptive key, so filling them in here does not change the digest and does not retroactively move the records already written under this scheme."
     },
     {
       "id": "scheme/4",
