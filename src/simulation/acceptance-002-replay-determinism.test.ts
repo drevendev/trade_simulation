@@ -89,10 +89,12 @@ describe("REQ-ACCEPTANCE-002: Canonical replay hash determinism (100+ ticks)", (
 
       let lastTick = -1;
       for (let tick = 0; tick < 100; tick++) {
-        const { context } = executeTick(world, tick, pending, noOpPhaseHandler);
+        const { context, reconciliationErrors } = executeTick(world, tick, pending, noOpPhaseHandler);
         lastTick = context.tick;
         // No-op handler means no transactions
         expect(context.transactions).toHaveLength(0);
+        // No ledger records in no-op, reconciliation should pass (null)
+        expect(reconciliationErrors).toBeNull();
       }
 
       expect(lastTick).toBe(99);
@@ -104,8 +106,10 @@ describe("REQ-ACCEPTANCE-002: Canonical replay hash determinism (100+ ticks)", (
 
       let tickCount = 0;
       for (let tick = 0; tick < 120; tick++) {
-        executeTick(world, tick, pending, noOpPhaseHandler);
+        const { reconciliationErrors } = executeTick(world, tick, pending, noOpPhaseHandler);
         tickCount++;
+        // No-op: reconciliation should always pass
+        expect(reconciliationErrors).toBeNull();
       }
 
       expect(tickCount).toBe(120);
@@ -113,11 +117,25 @@ describe("REQ-ACCEPTANCE-002: Canonical replay hash determinism (100+ ticks)", (
   });
 
   describe("Deterministic replay hash: same seed produces identical hashes", () => {
-    it("produces identical hashes across two identical 100-tick runs", () => {
-      const run1 = runSimulationAndCollectHashes(42, 100);
-      const run2 = runSimulationAndCollectHashes(42, 100);
+    it("produces identical hashes across two identical 100-tick runs with reconciliation passing", () => {
+      const world1 = buildInitialWorld(baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 42);
+      const world2 = buildInitialWorld(baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 42);
+      const pending1 = createEmptyPendingTransitions();
+      const pending2 = createEmptyPendingTransitions();
 
-      expect(run1.hashes).toEqual(run2.hashes);
+      const hashes1: string[] = [];
+      const hashes2: string[] = [];
+
+      for (let tick = 0; tick < 100; tick++) {
+        const { context: ctx1, reconciliationErrors: err1 } = executeTick(world1, tick, pending1, noOpPhaseHandler);
+        const { context: ctx2, reconciliationErrors: err2 } = executeTick(world2, tick, pending2, noOpPhaseHandler);
+        hashes1.push(computeTickHash(world1, ctx1));
+        hashes2.push(computeTickHash(world2, ctx2));
+        expect(err1).toBeNull();
+        expect(err2).toBeNull();
+      }
+
+      expect(hashes1).toEqual(hashes2);
     });
 
     it("produces identical hashes for first 50 ticks across three runs with same seed", () => {
@@ -205,13 +223,17 @@ describe("REQ-ACCEPTANCE-002: Canonical replay hash determinism (100+ ticks)", (
   });
 
   describe("Zero-flow reconciliation for M2 gate", () => {
-    it("no-op ticks produce zero transaction flow", () => {
+    it("no-op ticks produce zero transaction flow and pass reconciliation", () => {
       const world = buildInitialWorld(baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 42);
       const pending = createEmptyPendingTransitions();
 
       for (let tick = 0; tick < 100; tick++) {
-        const { context } = executeTick(world, tick, pending, noOpPhaseHandler);
+        const { context, reconciliationErrors } = executeTick(world, tick, pending, noOpPhaseHandler);
         expect(context.transactions).toHaveLength(0);
+        // No ledger records in no-op scenario
+        expect(context.currentLedger.records).toHaveLength(0);
+        // Empty ledger passes reconciliation (null = no errors)
+        expect(reconciliationErrors).toBeNull();
       }
     });
 
@@ -224,38 +246,58 @@ describe("REQ-ACCEPTANCE-002: Canonical replay hash determinism (100+ ticks)", (
   });
 
   describe("Phase trace consistency", () => {
-    it("each tick executes exactly 16 phases in order", () => {
+    it("each tick executes exactly 16 phases in order and passes reconciliation", () => {
       const world = buildInitialWorld(baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 42);
       const pending = createEmptyPendingTransitions();
 
       for (let tick = 0; tick < 50; tick++) {
-        const { phaseTrace } = executeTick(world, tick, pending, noOpPhaseHandler);
+        const { phaseTrace, reconciliationErrors } = executeTick(world, tick, pending, noOpPhaseHandler);
         expect(phaseTrace).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        expect(reconciliationErrors).toBeNull(); // No-op: reconciliation passes
       }
     });
 
-    it("phase order is preserved across 100+ ticks", () => {
+    it("phase order is preserved across 100+ ticks with zero-flow reconciliation passing", () => {
       const world = buildInitialWorld(baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 42);
       const pending = createEmptyPendingTransitions();
 
       const expectedPhaseTrace = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
       for (let tick = 0; tick < 100; tick++) {
-        const { phaseTrace } = executeTick(world, tick, pending, noOpPhaseHandler);
+        const { phaseTrace, reconciliationErrors } = executeTick(world, tick, pending, noOpPhaseHandler);
         expect(phaseTrace).toEqual(expectedPhaseTrace);
+        expect(reconciliationErrors).toBeNull(); // No-op: reconciliation passes
       }
     });
   });
 
-  describe("Comprehensive 100+ tick determinism proof", () => {
-    it("proves determinism: three independent 100-tick runs with same seed produce identical hashes", () => {
-      const run1 = runSimulationAndCollectHashes(7, 100);
-      const run2 = runSimulationAndCollectHashes(7, 100);
-      const run3 = runSimulationAndCollectHashes(7, 100);
+  describe("Comprehensive 100+ tick determinism proof with reconciliation", () => {
+    it("proves determinism: three independent 100-tick runs with same seed produce identical hashes and pass reconciliation", () => {
+      const world1 = buildInitialWorld(baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 7);
+      const world2 = buildInitialWorld(baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 7);
+      const world3 = buildInitialWorld(baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 7);
+      const pending1 = createEmptyPendingTransitions();
+      const pending2 = createEmptyPendingTransitions();
+      const pending3 = createEmptyPendingTransitions();
 
-      expect(run1.hashes).toEqual(run2.hashes);
-      expect(run2.hashes).toEqual(run3.hashes);
-      expect(run1.tickCount).toBe(100);
+      const hashes1: string[] = [];
+      const hashes2: string[] = [];
+      const hashes3: string[] = [];
+
+      for (let tick = 0; tick < 100; tick++) {
+        const { context: ctx1, reconciliationErrors: err1 } = executeTick(world1, tick, pending1, noOpPhaseHandler);
+        const { context: ctx2, reconciliationErrors: err2 } = executeTick(world2, tick, pending2, noOpPhaseHandler);
+        const { context: ctx3, reconciliationErrors: err3 } = executeTick(world3, tick, pending3, noOpPhaseHandler);
+        hashes1.push(computeTickHash(world1, ctx1));
+        hashes2.push(computeTickHash(world2, ctx2));
+        hashes3.push(computeTickHash(world3, ctx3));
+        expect(err1).toBeNull();
+        expect(err2).toBeNull();
+        expect(err3).toBeNull();
+      }
+
+      expect(hashes1).toEqual(hashes2);
+      expect(hashes2).toEqual(hashes3);
     });
 
     it("proves different seeds: three runs with different seeds produce different hashes", () => {
@@ -268,12 +310,25 @@ describe("REQ-ACCEPTANCE-002: Canonical replay hash determinism (100+ ticks)", (
       expect(run1.hashes).not.toEqual(run3.hashes);
     });
 
-    it("maintains determinism even for 120 ticks (beyond M2 100-tick gate)", () => {
-      const run1 = runSimulationAndCollectHashes(42, 120);
-      const run2 = runSimulationAndCollectHashes(42, 120);
+    it("maintains determinism even for 120 ticks (beyond M2 100-tick gate) with reconciliation passing", () => {
+      const world1 = buildInitialWorld(baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 42);
+      const world2 = buildInitialWorld(baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 42);
+      const pending1 = createEmptyPendingTransitions();
+      const pending2 = createEmptyPendingTransitions();
 
-      expect(run1.hashes).toEqual(run2.hashes);
-      expect(run1.tickCount).toBe(120);
+      const hashes1: string[] = [];
+      const hashes2: string[] = [];
+
+      for (let tick = 0; tick < 120; tick++) {
+        const { context: ctx1, reconciliationErrors: err1 } = executeTick(world1, tick, pending1, noOpPhaseHandler);
+        const { context: ctx2, reconciliationErrors: err2 } = executeTick(world2, tick, pending2, noOpPhaseHandler);
+        hashes1.push(computeTickHash(world1, ctx1));
+        hashes2.push(computeTickHash(world2, ctx2));
+        expect(err1).toBeNull();
+        expect(err2).toBeNull();
+      }
+
+      expect(hashes1).toEqual(hashes2);
     });
   });
 });

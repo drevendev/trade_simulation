@@ -187,10 +187,12 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
         return context;
       };
 
-      const { phaseTrace } = executeTick(world, 1, pending, tracingHandler);
+      const { phaseTrace, reconciliationErrors } = executeTick(world, 1, pending, tracingHandler);
 
       expect(phaseTrace).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
       expect(phaseOrder).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+      // No-op tick should have no ledger records, so reconciliation should pass (null)
+      expect(reconciliationErrors).toBeNull();
     });
 
     it("does not execute phase 16", () => {
@@ -203,10 +205,11 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
         return context;
       };
 
-      executeTick(world, 1, pending, tracingHandler);
+      const { reconciliationErrors } = executeTick(world, 1, pending, tracingHandler);
 
       expect(executedPhases).not.toContain(16);
       expect(executedPhases).toHaveLength(16);
+      expect(reconciliationErrors).toBeNull(); // No-op: no mutations
     });
 
     it("preserves tick number across all phases", () => {
@@ -220,9 +223,10 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
         return context;
       };
 
-      executeTick(world, tickNumber, pending, tracingHandler);
+      const { reconciliationErrors } = executeTick(world, tickNumber, pending, tracingHandler);
 
       tickNumbers.forEach((t) => expect(t).toBe(tickNumber));
+      expect(reconciliationErrors).toBeNull(); // No-op: no mutations
     });
   });
 
@@ -338,8 +342,10 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
       const hashes: string[] = [];
 
       for (let tick = 0; tick < 100; tick++) {
-        const { context } = executeTick(world, tick, pending, noOpPhaseHandler);
+        const { context, reconciliationErrors } = executeTick(world, tick, pending, noOpPhaseHandler);
         hashes.push(computeTickHash(world, context));
+        // No-op: no ledger records, so reconciliation should pass
+        expect(reconciliationErrors).toBeNull();
       }
 
       // In no-op scenario, hashes should be deterministic and reproducible

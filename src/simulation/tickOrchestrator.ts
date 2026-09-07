@@ -10,11 +10,14 @@
 
 import type { RegionId, StateId, CurrencyId, CohortId, ProductionUnitId, MonetaryAuthorityId } from "../domain/id";
 import type { WorldState } from "./worldState";
+import type { TickLedger } from "./ledger";
+import { createEmptyTickLedger, validateZeroFlowReconciliation } from "./ledger";
 import { createHash } from "crypto";
 
 /**
  * Ephemeral per-tick state, reset every phase-0 tick start.
  * Plans are immutable intent created in Phase 2; transaction records accumulate.
+ * M2: currentLedger accumulates typed MONEY/GOOD/PHYSICAL_LOSS flow records across phases.
  */
 export interface TickContext {
   readonly tick: number;
@@ -22,6 +25,7 @@ export interface TickContext {
   readonly effectiveJurisdictionByRegion: ReadonlyMap<RegionId, StateId | null>;
   readonly rngSeed: number;
   readonly transactions: ReadonlyArray<EconomicTransaction>;
+  readonly currentLedger: TickLedger;
 }
 
 /**
@@ -100,6 +104,7 @@ export type PhaseHandler = (
 /**
  * Initialize TickContext for tick N.
  * Phase-0 resets flow telemetry and derives deterministic RNG substreams.
+ * M2: currentLedger is initialized empty and accumulates records across phases.
  */
 export function initializeTickContext(tick: number, seed: number): TickContext {
   return {
@@ -108,6 +113,7 @@ export function initializeTickContext(tick: number, seed: number): TickContext {
     effectiveJurisdictionByRegion: new Map(),
     rngSeed: seed ^ tick, // Deterministic per-tick seed
     transactions: [],
+    currentLedger: createEmptyTickLedger(tick),
   };
 }
 
@@ -138,16 +144,29 @@ export function executePhase(
 }
 
 /**
+ * Validate phase-level invariants after tick completion.
+ * M2: Checks zero-flow reconciliation for the accumulated ledger.
+ * Returns validation result: null if passes, array of unmatched flows if fails.
+ */
+export function validateTickInvariants(
+  context: TickContext,
+  tolerance: number = 1e-9,
+): { category: string; residual: number }[] | null {
+  return validateZeroFlowReconciliation(context.currentLedger, tolerance);
+}
+
+/**
  * Execute one complete tick (phases 0–15) with no-op handlers.
  * Returns trace of phase execution for determinism proof.
  * WorldState remains immutable; TickContext carries tick-scoped mutations.
+ * M2: Validates zero-flow reconciliation after tick completion.
  */
 export function executeTick(
   world: WorldState,
   tickNumber: number,
   pendingTransitions: PendingTransitions,
   noOpHandler: PhaseHandler,
-): { context: TickContext; phaseTrace: number[] } {
+): { context: TickContext; phaseTrace: number[]; reconciliationErrors: { category: string; residual: number }[] | null } {
   let context = initializeTickContext(tickNumber, world.seed);
   const phaseTrace: number[] = [];
 
@@ -156,7 +175,10 @@ export function executeTick(
     phaseTrace.push(phase);
   }
 
-  return { context, phaseTrace };
+  // Validate tick invariants after all phases complete
+  const reconciliationErrors = validateTickInvariants(context, world.simulationConfig.numeric.reconciliationRelativeTolerance);
+
+  return { context, phaseTrace, reconciliationErrors };
 }
 
 /**
