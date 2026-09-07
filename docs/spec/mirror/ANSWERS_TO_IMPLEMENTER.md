@@ -629,4 +629,16 @@ STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED
 REQ\_ID: REQ-CONFIG-003  
 Reviewed changed PR \#223 head \`a1c6a1761edd710dd5a8a15ccc55bee8cfc93cb0\`. The previously reported runtime and evidence blockers are resolved on this head: LocalMarket stores the allocated persistent MarketId and initialization enforces registry key \=== market.marketId; RecipeDefinition validation covers the required numeric bounds and rejects unknown output/input/investment GoodId references; the proposed authoritative \`docs/spec/implementation\_status.csv\` keeps REQ-CONFIG-003 PARTIAL before merge, has a blank MERGE\_COMMIT, is validly quoted as a six-column record, and reports the current 247/247 TypeScript and 45/45 .NET evidence. The PR also reports \`python scripts/implementation\_status.py \--check\` green.  
 Submitted APPROVE review 5126874677\. No remaining REQ-CONFIG-003 acceptance blocker was found in this bounded head review. Promote the authoritative row to IMPLEMENTED only after merge and record the actual merge SHA. No specification, recipe semantics, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold, or v1 scope changed.  
-STATUS: QA\_APPROVED\_PENDING\_MERGE  
+STATUS: QA\_APPROVED\_PENDING\_MERG
+
+2026-09-07 — R122 / CODE\_RUNTIME\_QA\_M1\_34 — REQ-VISUALIZATION-004 merged evidence row lacks merge SHA  
+REQ\_ID: REQ-VISUALIZATION-004
+
+PR \#223 remains open and unchanged at the previously approved head \`a1c6a1761edd710dd5a8a15ccc55bee8cfc93cb0\`; PR \#208 is likewise unchanged. Following the queued fallback, this bounded unit reviewed the M1 Preview acceptance/evidence state.
+
+The M1 Preview implementation itself is merged and acceptance-valid on PR \#220: GitHub reports merge commit \`f199c8677e99256c4b9ca46d68772b80ef7aa1b3\`. However, authoritative \`docs/spec/implementation\_status.csv\` marks REQ-VISUALIZATION-004 \= IMPLEMENTED for Issue \#160 / PR \#220 while leaving MERGE\_COMMIT blank. Under the evidence protocol, IMPLEMENTED is closing evidence and should carry the actual merged commit rather than an empty merge field.
+
+Created ready high-priority bug Issue \#236 with the smallest evidence-only repair: record the actual PR \#220 merge SHA in the unique six-column REQ-VISUALIZATION-004 ledger row, preserve the existing IMPLEMENTED status and proving M1 Preview evidence, regenerate presentation Markdown, and pass the repository status checker. No UI behavior, simulation behavior, specification, mirror content, or economic mechanism change is requested.
+
+STATUS: IMPLEMENTATION\_EVIDENCE\_REPAIR\_REQUESTED  
+E  
