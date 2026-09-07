@@ -1,0 +1,58 @@
+name: QA intake
+
+# Labels an Issue opened by the external QA voice (SLOPSTER, acting as the account in
+# vars.ZENDEV_QA_LOGIN), which has read access only and therefore cannot label its own
+# findings. Without this, a finding is unreachable: every work-selection item in the
+# AUTHOR runbook is expressed over labels.
+#
+# This workflow never runs a model. It reads three declaration lines and applies
+# labels that already exist in the repository — never status:ready, so a finding
+# becomes visible without becoming work. See scripts/qa_intake.py.
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions: {}
+
+concurrency:
+  # Per Issue: `opened` and a fast `reopened` must not race on the same label set.
+  group: qa-intake-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  label:
+    # The author check is repeated inside the script, which is what actually enforces
+    # it. Here it is a cost gate: no runner starts for the many Issues this never
+    # touches. An unset ZENDEV_QA_LOGIN disables the job rather than matching nobody
+    # noisily on every Issue in the repository.
+    if: vars.ZENDEV_QA_LOGIN != '' && github.event.issue.user.login == vars.ZENDEV_QA_LOGIN
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # The MACHINE identity, as for every other change this repository makes without
+      # a model. It needs Issues: read and write; Contents and Pull requests, which it
+      # already holds, are not enough to label.
+      - name: Act as the MACHINE identity
+        id: identity
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ZENDEV_MACHINE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZENDEV_MACHINE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Label the finding
+        env:
+          GH_TOKEN: ${{ steps.identity.outputs.token }}
+        run: |
+          python scripts/qa_intake.py \
+            --repo "${{ github.repository }}" \
+            --issue "${{ github.event.issue.number }}" \
+            --qa-author "${{ vars.ZENDEV_QA_LOGIN }}"
