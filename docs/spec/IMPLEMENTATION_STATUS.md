@@ -84,13 +84,13 @@ that fact; this file does not.
 | REQ-VISUALIZATION-005 | `READY` | `IMPLEMENTED` | #243 | #244 | M2 Milestone Preview (REQ-VISUALIZATION-005): deterministic JSON snapshot of canonical M2 tick orchestration and zero-flow reconciliation without exposing mutable domain objects. src/diagnostics/m2Preview.ts generates typed M2Preview interface exposing scenario ID/seed/configVersion |
 | REQ-MARKET-001 | `READY` | `IMPLEMENTED` | #246 | #248 | Ephemeral MarketIntent contract and budget commitment ledger for M3 local market procurement (sections 5-6 of MARKETS_TRADE_FX_CONTRACTS.md). src/simulation/marketIntent.ts defines: MarketIntent interface (id |
 | REQ-MARKET-002 | `READY` | `NOT_STARTED` | — | — | — |
-| REQ-MARKET-003 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MARKET-003 | `READY` | `IMPLEMENTED` | #251 | #252 | Deterministic local clearing primitive for M3 local market procurement (sections 7 |
 | REQ-MARKET-004 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-MARKET-005 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-ACCEPTANCE-004 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-VISUALIZATION-006 | `READY` | `NOT_STARTED` | — | — | — |
 
-**Summary: 16 of 32 requirement identifiers implemented.**
+**Summary: 17 of 32 requirement identifiers implemented.**
 Also recorded: 3 partial.
 The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
 
