@@ -38,8 +38,6 @@ function createMinimalConfig(): SimulationConfig {
       inventorySignalWeight: 0.5,
       basePriceAdjustmentSpeed: 0.1,
       maxAbsoluteLogPriceMovePerTick: 0.1,
-      minimumPrice: 0.01,
-      maximumPrice: 1000,
       targetInventoryCoverageTicks: 1.0,
       expectationAlpha: 0.1,
     },

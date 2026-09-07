@@ -25,7 +25,14 @@ export interface NumericConfig {
 export interface CadenceConfig {}
 
 /** Concrete fields land with the markets requirement that owns them (section 4). */
-export interface MarketConfig {}
+export interface MarketConfig {
+  readonly shortageSignalWeight?: number;
+  readonly inventorySignalWeight?: number;
+  readonly basePriceAdjustmentSpeed?: number;
+  readonly maxAbsoluteLogPriceMovePerTick?: number;
+  readonly targetInventoryCoverageTicks?: number;
+  readonly expectationAlpha?: number;
+}
 
 /** Concrete fields land with the trade/FX requirement that owns them (section 5). */
 export interface TradeConfig {}
@@ -107,7 +114,14 @@ export function createDefaultSimulationConfig(): SimulationConfig {
       maxFiniteMagnitude: 1e15,
     },
     cadence: {},
-    markets: {},
+    markets: {
+      shortageSignalWeight: 0.5,
+      inventorySignalWeight: 0.5,
+      basePriceAdjustmentSpeed: 0.1,
+      maxAbsoluteLogPriceMovePerTick: 0.1,
+      targetInventoryCoverageTicks: 1.0,
+      expectationAlpha: 0.2,
+    },
     trade: {},
     production: {},
     labor: {},
