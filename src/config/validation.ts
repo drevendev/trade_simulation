@@ -178,6 +178,22 @@ export function validateDefinitionPack(definitionPack: DefinitionPack): void {
       }
     }
 
+    // Extraction resource/amount coupling: both present or both absent
+    const hasExtractionResource = recipe.extractionResourceId !== undefined;
+    const hasExtractedAmount = recipe.extractedResourcePerBatch !== undefined;
+
+    if (hasExtractionResource && !hasExtractedAmount) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": extractionResourceId "${recipe.extractionResourceId}" is present but extractedResourcePerBatch is missing — both must be present together`,
+      );
+    }
+
+    if (hasExtractedAmount && !hasExtractionResource) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": extractedResourcePerBatch is present but extractionResourceId is missing — both must be present together`,
+      );
+    }
+
     // extractedResourcePerBatch (if present): positive (> 0)
     if (recipe.extractedResourcePerBatch !== undefined) {
       if (!isFiniteCanonicalNumber(recipe.extractedResourcePerBatch) || recipe.extractedResourcePerBatch <= 0) {

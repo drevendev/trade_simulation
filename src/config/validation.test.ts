@@ -751,7 +751,10 @@ describe("validateDefinitionPack", () => {
 
   it("rejects extractedResourcePerBatch <= 0", () => {
     const pack = minimalPack({
-      "recipe-1": minimalRecipe({ extractedResourcePerBatch: 0 }),
+      "recipe-1": minimalRecipe({
+        extractionResourceId: "iron-ore",
+        extractedResourcePerBatch: 0,
+      }),
     });
     expect(() => validateDefinitionPack(pack)).toThrow(/extractedResourcePerBatch.*positive/);
   });
@@ -765,6 +768,46 @@ describe("validateDefinitionPack", () => {
     if (recipe) {
       delete (recipe as any).extractedResourcePerBatch;
     }
+    expect(() => validateDefinitionPack(pack)).not.toThrow();
+  });
+
+  it("rejects extractionResourceId without extractedResourcePerBatch", () => {
+    const pack = minimalPack({
+      "recipe-1": minimalRecipe({
+        extractionResourceId: "iron-ore",
+      } as any),
+    });
+    const recipe = pack.recipes["recipe-1"];
+    if (recipe) {
+      delete (recipe as any).extractedResourcePerBatch;
+    }
+    expect(() => validateDefinitionPack(pack)).toThrow(
+      /extractionResourceId.*extractedResourcePerBatch.*both must be present together/,
+    );
+  });
+
+  it("rejects extractedResourcePerBatch without extractionResourceId", () => {
+    const pack = minimalPack({
+      "recipe-1": minimalRecipe({
+        extractedResourcePerBatch: 5,
+      } as any),
+    });
+    const recipe = pack.recipes["recipe-1"];
+    if (recipe) {
+      delete (recipe as any).extractionResourceId;
+    }
+    expect(() => validateDefinitionPack(pack)).toThrow(
+      /extractedResourcePerBatch.*extractionResourceId.*both must be present together/,
+    );
+  });
+
+  it("accepts a valid extraction recipe with both extractionResourceId and extractedResourcePerBatch", () => {
+    const pack = minimalPack({
+      "recipe-1": minimalRecipe({
+        extractionResourceId: "iron-ore",
+        extractedResourcePerBatch: 5,
+      }),
+    });
     expect(() => validateDefinitionPack(pack)).not.toThrow();
   });
 
