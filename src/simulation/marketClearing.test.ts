@@ -49,6 +49,7 @@ describe("MarketAllocation validation", () => {
     const allocation: MarketAllocation = {
       id: createMarketAllocationId("ma:test-1"),
       marketId: testMarketId,
+      regionId: testRegionId,
       goodId: testGoodId,
       pass: "MAIN",
       sellerIntentId: createMarketIntentId("mi:seller-1"),
@@ -72,6 +73,7 @@ describe("MarketAllocation validation", () => {
     const allocation: MarketAllocation = {
       id: createMarketAllocationId("ma:test-2"),
       marketId: testMarketId,
+      regionId: testRegionId,
       goodId: testGoodId,
       pass: "MAIN",
       sellerIntentId: createMarketIntentId("mi:seller-1"),
@@ -95,6 +97,7 @@ describe("MarketAllocation validation", () => {
     const allocation: MarketAllocation = {
       id: createMarketAllocationId("ma:test-3"),
       marketId: testMarketId,
+      regionId: testRegionId,
       goodId: testGoodId,
       pass: "MAIN",
       sellerIntentId: createMarketIntentId("mi:seller-1"),
@@ -262,6 +265,7 @@ describe("Local clearing algorithm", () => {
   ): LocalClearingInput {
     return {
       marketId: testMarketId,
+      regionId: testRegionId,
       goodId: testGoodId,
       pass: "MAIN",
       marketCurrencyId: testCurrencyId,
@@ -564,6 +568,7 @@ describe("Shuffled intent insertion invariance", () => {
 
     const createInput = (buyers: MarketIntent[], sellers: MarketIntent[]): LocalClearingInput => ({
       marketId: testMarketId,
+      regionId: testRegionId,
       goodId: testGoodId,
       pass: "MAIN",
       marketCurrencyId: testCurrencyId,
@@ -634,6 +639,7 @@ describe("Tax-aware pricing in allocations", () => {
 
     const input: LocalClearingInput = {
       marketId: testMarketId,
+      regionId: testRegionId,
       goodId: testGoodId,
       pass: "MAIN",
       marketCurrencyId: testCurrencyId,

@@ -37,6 +37,7 @@ export function createMarketAllocationId(value: string): MarketAllocationId {
 export interface MarketAllocation {
   readonly id: MarketAllocationId;
   readonly marketId: MarketId;
+  readonly regionId: RegionId;
   readonly goodId: GoodId;
   readonly pass: "PRE_PRODUCTION" | "MAIN";
   readonly sellerIntentId: MarketIntentId;
@@ -58,6 +59,7 @@ export interface MarketAllocation {
  */
 export interface LocalClearingInput {
   readonly marketId: MarketId;
+  readonly regionId: RegionId;
   readonly goodId: GoodId;
   readonly pass: "PRE_PRODUCTION" | "MAIN";
   readonly marketCurrencyId: CurrencyId;
@@ -305,6 +307,7 @@ function twoPointerMatcher(
       const allocation: MarketAllocation = {
         id: createMarketAllocationId(`ma:${input.marketId}/${input.goodId}/${input.pass}/${allocationIdCounter.value}`),
         marketId: input.marketId,
+        regionId: input.regionId,
         goodId: input.goodId,
         pass: input.pass,
         sellerIntentId: seller.id,

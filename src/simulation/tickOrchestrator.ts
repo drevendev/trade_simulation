@@ -8,7 +8,8 @@
  * Phase order (0–15) is documented in CORE_SCHEMA_AND_LIFECYCLES.md section 10.
  */
 
-import type { RegionId, StateId, CurrencyId, CohortId, ProductionUnitId, MonetaryAuthorityId } from "../domain/id";
+import type { RegionId, StateId, CurrencyId, CohortId, ProductionUnitId, MonetaryAuthorityId, GoodId } from "../domain/id";
+import type { ActorRef } from "../domain/genesisLedger";
 import type { WorldState, PendingTransitions } from "./worldState";
 import type { TickLedger } from "./ledger";
 import { createEmptyTickLedger, validateZeroFlowReconciliation } from "./ledger";
@@ -32,18 +33,63 @@ export interface TickContext {
   readonly budgetLedger: BudgetCommitmentLedger;
 }
 
+/** Opaque transaction ID (tx:...) */
+export type TransactionId = string & { readonly __brand: "TransactionId" };
+
+export function createTransactionId(value: string): TransactionId {
+  if (!value.startsWith("tx:")) {
+    throw new Error(`TransactionId must start with "tx:", got ${value}`);
+  }
+  return value as TransactionId;
+}
+
+/** Opaque transaction bundle ID (tb:...) */
+export type TransactionBundleId = string & { readonly __brand: "TransactionBundleId" };
+
+export function createTransactionBundleId(value: string): TransactionBundleId {
+  if (!value.startsWith("tb:")) {
+    throw new Error(`TransactionBundleId must start with "tb:", got ${value}`);
+  }
+  return value as TransactionBundleId;
+}
+
+/** Opaque FX settlement ID (fxs:...) */
+export type FxSettlementId = string & { readonly __brand: "FxSettlementId" };
+
+export function createFxSettlementId(value: string): FxSettlementId {
+  if (!value.startsWith("fxs:")) {
+    throw new Error(`FxSettlementId must start with "fxs:", got ${value}`);
+  }
+  return value as FxSettlementId;
+}
+
 /**
  * M2 minimum accounting ledger contract.
  * Normalized projection of committed stock mutations with tick/phase/reason attribution.
+ *
+ * Extended for M3+ with transaction IDs, bundling, and actor/good endpoints.
+ * Supports MARKET_SALE and CONSUMPTION_TAX transaction types for local market settlement.
  */
 export interface EconomicTransaction {
   readonly tick: number;
   readonly phase: number;
   readonly type: string;
+  readonly transactionId: TransactionId;
+  readonly bundleId?: TransactionBundleId;
+  readonly originatingTransactionId?: TransactionId;
+  readonly fxSettlementId?: FxSettlementId;
+  readonly source?: ActorRef;
+  readonly destination?: ActorRef;
   readonly currencyId?: CurrencyId;
-  readonly goodId?: string;
+  readonly goodId?: GoodId;
+  readonly quantity?: number;
+  readonly unitPrice?: number;
+  readonly moneyAmount?: number;
+  readonly taxAmount?: number;
+  readonly sourceRegionId?: RegionId;
+  readonly destinationRegionId?: RegionId;
   readonly amount: number;
-  readonly reason: string;
+  readonly reason?: string;
 }
 
 export const PHASE_NAMES = [
