@@ -203,3 +203,49 @@ class OrdinaryBranchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LedgerProvenanceClassTests(unittest.TestCase):
+    """The class that fills MERGE_COMMIT after a merge.
+
+    Its shape is unusual and deliberately so: it owns no root. A root is a path the
+    class owns, and ordinary branches are refused anywhere under one — but the ledger
+    is shared. The AUTHOR writes the row that earns a requirement; this only fills the
+    column that run could not know, because the squash commit does not exist inside the
+    pull request that earns it.
+    """
+
+    BRANCH = "ledger-provenance"
+    LEDGER = "docs/spec/implementation_status.csv"
+    TABLE = "docs/spec/IMPLEMENTATION_STATUS.md"
+
+    def test_the_branch_is_recognised_as_machine_generated(self):
+        cls = guard.classify(self.BRANCH)
+        self.assertIsNotNone(cls)
+        self.assertEqual(cls.producer, ".github/workflows/release-tag.yml")
+
+    def test_it_may_write_the_ledger_and_its_rendered_table(self):
+        self.assertEqual(
+            guard.check(self.BRANCH, [self.LEDGER, self.TABLE], None,
+                        "github-actions[bot]"),
+            [],
+        )
+
+    def test_it_may_write_nothing_else(self):
+        problems = guard.check(self.BRANCH, [self.LEDGER, "src/simulation/index.ts"],
+                               None, "github-actions[bot]")
+        self.assertTrue(problems)
+        self.assertIn("src/simulation/index.ts", " ".join(problems))
+
+    def test_it_claims_no_root_so_ordinary_branches_keep_the_ledger(self):
+        # The failure this shape exists to avoid: making the ledger a root would refuse
+        # every AUTHOR pull request that records the row it just earned, which is the
+        # AUTHOR's core work.
+        self.assertEqual(guard.classify(self.BRANCH).roots, ())
+        self.assertNotIn(self.LEDGER, guard.MACHINE_ROOTS)
+        self.assertEqual(
+            guard.check("claude/issue-42-example", [self.LEDGER, self.TABLE], None,
+                        "zendev-author[bot]"),
+            [],
+        )
+
