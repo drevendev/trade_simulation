@@ -79,9 +79,21 @@ def parse_time(value):
 
 
 def last_progress(pull, head_committed_at, acceptor=""):
-    """When this pull request last moved, by the definition in the module docstring."""
+    """When this pull request last moved, by the definition in the module docstring.
+
+    Opening it counts, and that is not a detail. On 2026-09-08 this bound closed #285
+    two minutes after the AUTHOR opened it, reporting "idle 24.3h" — truthfully, because
+    the branch was one the author had abandoned the day before and re-proposed without
+    touching its head. Every other signal was 24 hours old and the arithmetic was right;
+    the meaning was not. A branch nobody has touched is abandoned, but a pull request
+    somebody just opened is a proposal, and this bound exists to end the first, never the
+    second.
+
+    (That the AUTHOR re-proposed a stale head instead of starting from `master`, as the
+    closure of #223 asked it to, is a separate defect and not this module's to correct.)
+    """
     author = select.normalize_login((pull.get("author") or {}).get("login"))
-    moments = [parse_time(head_committed_at)]
+    moments = [parse_time(head_committed_at), parse_time(pull.get("createdAt"))]
 
     for comment in pull.get("comments") or []:
         if select.is_the_authors(
