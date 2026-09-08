@@ -313,3 +313,35 @@ class LoadReadingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MalformedMessageTests(unittest.TestCase):
+    """A record is the only evidence a run happened; nothing in a transcript may cost it.
+
+    Run 34173179305 opened #285 and then died in `transcript`, because one message
+    carried a plain string where a dict was expected and the guard checked only the
+    outer envelope. The work landed and the ledger never heard about it.
+    """
+
+    MALFORMED = [
+        {"type": "assistant", "message": "a plain string where a dict belongs"},
+        {"type": "assistant", "message": {"content": "not a list"}},
+        {"type": "assistant", "message": None},
+        {"type": "assistant"},
+        "a message that is not a mapping at all",
+        {"type": "assistant", "message": {"content": ["a bare string block"]}},
+        {"type": "result", "result": "## AUTHOR handoff: opened #285"},
+    ]
+
+    def test_transcript_survives_every_shape(self):
+        self.assertIn("#285", rec.transcript(self.MALFORMED))
+
+    def test_final_text_survives_every_shape(self):
+        self.assertEqual(
+            rec.final_text(self.MALFORMED), "## AUTHOR handoff: opened #285"
+        )
+
+    def test_neither_raises_on_the_empty_case(self):
+        self.assertEqual(rec.transcript([]), "")
+        self.assertEqual(rec.final_text(None), "")
+
