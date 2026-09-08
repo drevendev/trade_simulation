@@ -388,6 +388,282 @@ describe("reconcileGenesisStocks", () => {
       const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
       expect(result.success).toBe(true);
     });
+
+    it("fails when money is moved from one owner to another (owner-bound check)", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find two states with treasuries
+      const statesWithTreasury = Array.from(worldState.states.values()).filter(
+        (s) => s.seed.treasury && Object.keys(s.seed.treasury).length > 0,
+      );
+      expect(statesWithTreasury.length).toBeGreaterThanOrEqual(2);
+      if (statesWithTreasury.length < 2) return;
+
+      const state1 = statesWithTreasury[0]!;
+      const state2 = statesWithTreasury[1]!;
+      const currencyKey = Object.keys(state1.seed.treasury ?? {})[0];
+      expect(currencyKey).toBeDefined();
+      if (!currencyKey) return;
+
+      const amount = (state1.seed.treasury as Record<string, number>)[currencyKey] ?? 100;
+
+      // Modify world state: move money from state1 to state2
+      const modifiedStates = new Map(worldState.states);
+      const modifiedState1 = {
+        ...state1,
+        seed: {
+          ...state1.seed,
+          treasury: {
+            ...(state1.seed.treasury ?? {}),
+            [currencyKey]: 0, // Remove from state1
+          },
+        },
+      };
+      const modifiedState2 = {
+        ...state2,
+        seed: {
+          ...state2.seed,
+          treasury: {
+            ...(state2.seed.treasury ?? {}),
+            [currencyKey]: ((state2.seed.treasury as Record<string, number>)?.[currencyKey] ?? 0) + amount,
+          },
+        },
+      };
+      modifiedStates.set(state1.stateId, modifiedState1);
+      modifiedStates.set(state2.stateId, modifiedState2);
+
+      const modifiedWorldState = {
+        ...worldState,
+        states: modifiedStates,
+      };
+
+      // Reconciliation should fail due to owner-bound check (even though aggregate is correct)
+      const result = reconcileGenesisStocks(modifiedWorldState, worldState.worldGenesisLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toMatch(/MONEY|OWNER/);
+    });
+
+    it("fails when a good is moved from one owner to another (owner-bound check)", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find states and clans with inventory
+      const statesWithGoods = Array.from(worldState.states.values()).filter(
+        (s) => s.seed.publicInventory && Object.keys(s.seed.publicInventory).length > 0,
+      );
+      const clansWithGoods = Array.from(worldState.clans.values()).filter(
+        (c) => c.seed.treasury && Object.keys(c.seed.treasury).length > 0,
+      );
+
+      if (statesWithGoods.length === 0) {
+        expect(statesWithGoods.length).toBeGreaterThan(0);
+        return;
+      }
+
+      const state = statesWithGoods[0]!;
+      const goodKey = Object.keys(state.seed.publicInventory ?? {})[0];
+      expect(goodKey).toBeDefined();
+      if (!goodKey) return;
+
+      const goodAmount = (state.seed.publicInventory as Record<string, number>)[goodKey] ?? 100;
+
+      // Move good from state to a clan
+      const clan = clansWithGoods[0] ?? Array.from(worldState.clans.values())[0];
+      expect(clan).toBeDefined();
+      if (!clan) return;
+
+      const modifiedStates = new Map(worldState.states);
+      const modifiedState = {
+        ...state,
+        seed: {
+          ...state.seed,
+          publicInventory: {
+            ...(state.seed.publicInventory ?? {}),
+            [goodKey]: 0,
+          },
+        },
+      };
+      modifiedStates.set(state.stateId, modifiedState);
+
+      const modifiedClans = new Map(worldState.clans);
+      const modifiedClan = {
+        ...clan,
+        seed: {
+          ...clan.seed,
+          treasury: {
+            ...(clan.seed.treasury ?? {}),
+            [goodKey]: ((clan.seed.treasury as Record<string, number>)?.[goodKey] ?? 0) + goodAmount,
+          },
+        },
+      };
+      modifiedClans.set(clan.clanId, modifiedClan);
+
+      const modifiedWorldState = {
+        ...worldState,
+        states: modifiedStates,
+        clans: modifiedClans,
+      };
+
+      // Reconciliation should fail due to owner-bound check
+      const result = reconcileGenesisStocks(modifiedWorldState, worldState.worldGenesisLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toMatch(/GOOD|OWNER/);
+    });
+
+    it("fails when capital is moved from one production unit to another (owner-bound check)", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find two production units with capital
+      const pusWithCapital = Array.from(worldState.productionUnits.values()).filter((pu) => pu.seed.installedCapital > 0);
+      expect(pusWithCapital.length).toBeGreaterThanOrEqual(2);
+      if (pusWithCapital.length < 2) return;
+
+      const pu1 = pusWithCapital[0]!;
+      const pu2 = pusWithCapital[1]!;
+      const transferAmount = Math.min(pu1.seed.installedCapital / 2, 10);
+
+      // Move capital from pu1 to pu2
+      const modifiedPUs = new Map(worldState.productionUnits);
+      const modifiedPU1 = {
+        ...pu1,
+        seed: {
+          ...pu1.seed,
+          installedCapital: pu1.seed.installedCapital - transferAmount,
+        },
+      };
+      const modifiedPU2 = {
+        ...pu2,
+        seed: {
+          ...pu2.seed,
+          installedCapital: pu2.seed.installedCapital + transferAmount,
+        },
+      };
+      modifiedPUs.set(pu1.productionUnitId, modifiedPU1);
+      modifiedPUs.set(pu2.productionUnitId, modifiedPU2);
+
+      const modifiedWorldState = {
+        ...worldState,
+        productionUnits: modifiedPUs,
+      };
+
+      // Reconciliation should fail due to owner-bound check
+      const result = reconcileGenesisStocks(modifiedWorldState, worldState.worldGenesisLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toMatch(/CAPITAL|OWNER/);
+    });
+
+    it("fails when population is moved between different owner/region combinations (owner-bound check)", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find two cohorts with population
+      const cohortsWithPop = Array.from(worldState.cohorts.values()).filter((c) => c.seed.population > 0);
+      expect(cohortsWithPop.length).toBeGreaterThanOrEqual(2);
+      if (cohortsWithPop.length < 2) return;
+
+      const cohortA = cohortsWithPop[0]!;
+      const cohortB = cohortsWithPop[1]!;
+      const transferPop = Math.min(cohortA.seed.population / 2, 5);
+
+      // Move population from cohortA to cohortB (they may be in same/different regions but different cohorts)
+      const modifiedCohorts = new Map(worldState.cohorts);
+      const modifiedCohortA = {
+        ...cohortA,
+        seed: {
+          ...cohortA.seed,
+          population: cohortA.seed.population - transferPop,
+        },
+      };
+      const modifiedCohortB = {
+        ...cohortB,
+        seed: {
+          ...cohortB.seed,
+          population: cohortB.seed.population + transferPop,
+        },
+      };
+      modifiedCohorts.set(cohortA.cohortId, modifiedCohortA);
+      modifiedCohorts.set(cohortB.cohortId, modifiedCohortB);
+
+      const modifiedWorldState = {
+        ...worldState,
+        cohorts: modifiedCohorts,
+      };
+
+      // Reconciliation should fail due to owner-bound check (population recorded per cohort)
+      const result = reconcileGenesisStocks(modifiedWorldState, worldState.worldGenesisLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toMatch(/POPULATION|OWNER/);
+    });
+
+    it("fails when resources are moved between regions (location-bound check)", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find two regions with deposits
+      const regionsWithDeposits = Array.from(worldState.regions.values()).filter(
+        (r) => r.seed.deposits && r.seed.deposits.length > 0,
+      );
+      expect(regionsWithDeposits.length).toBeGreaterThanOrEqual(2);
+      if (regionsWithDeposits.length < 2) return;
+
+      const region1 = regionsWithDeposits[0]!;
+      const region2 = regionsWithDeposits[1]!;
+      const deposit1 = region1.seed.deposits![0];
+      const deposit2 = region2.seed.deposits![0];
+      expect(deposit1).toBeDefined();
+      expect(deposit2).toBeDefined();
+      if (!deposit1 || !deposit2) return;
+
+      // Move a deposit from region1 to region2
+      const transferAmount = Math.min(deposit1.initialQuantity / 2, 5);
+      const modifiedRegions = new Map(worldState.regions);
+      const modifiedRegion1 = {
+        ...region1,
+        seed: {
+          ...region1.seed,
+          deposits: (region1.seed.deposits ?? []).map((d) =>
+            d === deposit1
+              ? { ...d, initialQuantity: d.initialQuantity - transferAmount }
+              : d,
+          ),
+        },
+      };
+      const modifiedRegion2 = {
+        ...region2,
+        seed: {
+          ...region2.seed,
+          deposits: (region2.seed.deposits ?? []).map((d) =>
+            d === deposit2
+              ? { ...d, initialQuantity: d.initialQuantity + transferAmount }
+              : d,
+          ),
+        },
+      };
+      modifiedRegions.set(region1.regionId, modifiedRegion1);
+      modifiedRegions.set(region2.regionId, modifiedRegion2);
+
+      const modifiedWorldState = {
+        ...worldState,
+        regions: modifiedRegions,
+      };
+
+      // Reconciliation should fail due to location-bound check
+      const result = reconcileGenesisStocks(modifiedWorldState, worldState.worldGenesisLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toMatch(/RESOURCE|LOCATION/);
+    });
   });
 
   describe("diagnostic output", () => {
