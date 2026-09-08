@@ -452,31 +452,30 @@ describe("reconcileGenesisStocks", () => {
 
       const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
 
-      // Find states and clans with inventory
+      // Find states with inventory and production units to move the good to
       const statesWithGoods = Array.from(worldState.states.values()).filter(
         (s) => s.seed.publicInventory && Object.keys(s.seed.publicInventory).length > 0,
       );
-      const clansWithGoods = Array.from(worldState.clans.values()).filter(
-        (c) => c.seed.treasury && Object.keys(c.seed.treasury).length > 0,
+      const productionUnitsWithInventory = Array.from(worldState.productionUnits.values()).filter(
+        (pu) => pu.seed.inputInventory,
       );
 
-      if (statesWithGoods.length === 0) {
+      if (statesWithGoods.length === 0 || productionUnitsWithInventory.length === 0) {
         expect(statesWithGoods.length).toBeGreaterThan(0);
+        expect(productionUnitsWithInventory.length).toBeGreaterThan(0);
         return;
       }
 
       const state = statesWithGoods[0]!;
+      const pu = productionUnitsWithInventory[0]!;
       const goodKey = Object.keys(state.seed.publicInventory ?? {})[0];
       expect(goodKey).toBeDefined();
       if (!goodKey) return;
 
       const goodAmount = (state.seed.publicInventory as Record<string, number>)[goodKey] ?? 100;
 
-      // Move good from state to a clan
-      const clan = clansWithGoods[0] ?? Array.from(worldState.clans.values())[0];
-      expect(clan).toBeDefined();
-      if (!clan) return;
-
+      // Move good from state's public inventory to production unit's input inventory
+      // This preserves the global good total while moving between different authoritative holders
       const modifiedStates = new Map(worldState.states);
       const modifiedState = {
         ...state,
@@ -490,26 +489,27 @@ describe("reconcileGenesisStocks", () => {
       };
       modifiedStates.set(state.stateId, modifiedState);
 
-      const modifiedClans = new Map(worldState.clans);
-      const modifiedClan = {
-        ...clan,
+      const modifiedPUs = new Map(worldState.productionUnits);
+      const modifiedPU = {
+        ...pu,
         seed: {
-          ...clan.seed,
-          treasury: {
-            ...(clan.seed.treasury ?? {}),
-            [goodKey]: ((clan.seed.treasury as Record<string, number>)?.[goodKey] ?? 0) + goodAmount,
+          ...pu.seed,
+          inputInventory: {
+            ...(pu.seed.inputInventory ?? {}),
+            [goodKey]: ((pu.seed.inputInventory as Record<string, number>)?.[goodKey] ?? 0) + goodAmount,
           },
         },
       };
-      modifiedClans.set(clan.clanId, modifiedClan);
+      modifiedPUs.set(pu.productionUnitId, modifiedPU);
 
       const modifiedWorldState = {
         ...worldState,
         states: modifiedStates,
-        clans: modifiedClans,
+        productionUnits: modifiedPUs,
       };
 
       // Reconciliation should fail due to owner-bound check
+      // (good was moved from state owner to production unit owner)
       const result = reconcileGenesisStocks(modifiedWorldState, worldState.worldGenesisLedger, config);
       expect(result.success).toBe(false);
       expect(result.details?.category).toMatch(/GOOD|OWNER/);
