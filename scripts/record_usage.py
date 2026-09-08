@@ -180,7 +180,12 @@ def transcript(messages) -> str:
             continue
         if message.get("type") == "result" and isinstance(message.get("result"), str):
             parts.append(message["result"])
-        content = (message.get("message") or {}).get("content")
+        # `message` is usually a dict, and on at least one shape of execution file it
+        # is a plain string. Guarding only the outer envelope let that through, and
+        # `.get` on a str raised several frames from here: run 34173179305 opened
+        # #285 and then lost its whole telemetry record to this line.
+        inner = message.get("message")
+        content = inner.get("content") if isinstance(inner, dict) else None
         if not isinstance(content, list):
             continue
         for block in content:
@@ -206,7 +211,12 @@ def final_text(messages) -> str:
             continue
         if message.get("type") == "result" and isinstance(message.get("result"), str):
             return message["result"]
-        content = (message.get("message") or {}).get("content")
+        # `message` is usually a dict, and on at least one shape of execution file it
+        # is a plain string. Guarding only the outer envelope let that through, and
+        # `.get` on a str raised several frames from here: run 34173179305 opened
+        # #285 and then lost its whole telemetry record to this line.
+        inner = message.get("message")
+        content = inner.get("content") if isinstance(inner, dict) else None
         if not isinstance(content, list):
             continue
         texts = [
