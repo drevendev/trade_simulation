@@ -187,10 +187,12 @@ export function computeLocalClearing(
   const correctedSellerAllocations = applyResidualCorrection(
     provisionalSellerAllocations,
     clearedQuantity,
+    quantityEpsilon,
   );
   const correctedBuyerAllocations = applyResidualCorrection(
     provisionalBuyerAllocations,
     clearedQuantity,
+    quantityEpsilon,
   );
 
   // Two-pointer concrete matching
@@ -200,6 +202,7 @@ export function computeLocalClearing(
     correctedBuyerAllocations,
     marketPrice,
     allocationIdCounter,
+    quantityEpsilon,
   );
 
   return allocations;
@@ -213,6 +216,7 @@ export function computeLocalClearing(
 function applyResidualCorrection<T extends { intent: MarketIntent; provisionalFill: number }>(
   data: T[],
   targetTotal: number,
+  quantityEpsilon: number,
 ): (T & { correctedFill: number })[] {
   // Sort by stable ID order: actor ID first, then intent ID
   const sorted = stableOrderBy(data, (d) => {
@@ -236,9 +240,9 @@ function applyResidualCorrection<T extends { intent: MarketIntent; provisionalFi
   const residualError = targetTotal - currentTotal;
 
   // If residual error is significant, apply correction in stable order
-  if (Math.abs(residualError) > quantityEpsilon()) {
+  if (Math.abs(residualError) > quantityEpsilon) {
     let remaining = residualError;
-    for (let i = 0; i < corrected.length && Math.abs(remaining) > quantityEpsilon(); i++) {
+    for (let i = 0; i < corrected.length && Math.abs(remaining) > quantityEpsilon; i++) {
       const curr = corrected[i]!;
       const toAdd = remaining > 0
         ? Math.min(remaining, 1 - (curr.correctedFill % 1))
@@ -249,10 +253,6 @@ function applyResidualCorrection<T extends { intent: MarketIntent; provisionalFi
   }
 
   return corrected;
-}
-
-function quantityEpsilon(): number {
-  return 1e-8;
 }
 
 /**
@@ -273,6 +273,7 @@ function twoPointerMatcher(
   }>,
   marketPrice: number,
   allocationIdCounter: { value: number },
+  quantityEpsilon: number,
 ): MarketAllocation[] {
   const allocations: MarketAllocation[] = [];
 
@@ -286,7 +287,7 @@ function twoPointerMatcher(
     const buyerData = buyerAllocations[buyerIdx]!;
 
     const matched = Math.min(sellerRemaining, buyerRemaining);
-    if (matched > quantityEpsilon()) {
+    if (matched > quantityEpsilon) {
       const seller = sellerData.intent;
       const buyer = buyerData.intent;
 
@@ -334,11 +335,11 @@ function twoPointerMatcher(
     sellerRemaining -= matched;
     buyerRemaining -= matched;
 
-    if (sellerRemaining <= quantityEpsilon()) {
+    if (sellerRemaining <= quantityEpsilon) {
       sellerIdx++;
       sellerRemaining = sellerAllocations[sellerIdx]?.correctedFill ?? 0;
     }
-    if (buyerRemaining <= quantityEpsilon()) {
+    if (buyerRemaining <= quantityEpsilon) {
       buyerIdx++;
       buyerRemaining = buyerAllocations[buyerIdx]?.correctedFill ?? 0;
     }
@@ -351,7 +352,7 @@ function twoPointerMatcher(
  * Validate a MarketAllocation against specification constraints.
  * Throws descriptive error if any constraint is violated.
  */
-export function validateMarketAllocation(allocation: MarketAllocation): void {
+export function validateMarketAllocation(allocation: MarketAllocation, quantityEpsilon: number = 1e-8): void {
   if (!allocation.id || !allocation.id.startsWith("ma:")) {
     throw new Error("MarketAllocation must have valid id starting with 'ma:'");
   }
@@ -388,7 +389,7 @@ export function validateMarketAllocation(allocation: MarketAllocation): void {
 
   // Tax amount must not exceed gross payment
   const grossPayment = allocation.quantity * allocation.buyerGrossUnitPrice;
-  if (allocation.consumptionTaxAmount > grossPayment + quantityEpsilon()) {
+  if (allocation.consumptionTaxAmount > grossPayment + quantityEpsilon) {
     throw new Error(
       `MarketAllocation consumptionTaxAmount ${allocation.consumptionTaxAmount} exceeds gross payment ${grossPayment}`,
     );
