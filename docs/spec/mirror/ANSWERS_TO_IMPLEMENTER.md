@@ -650,3 +650,13 @@ Submitted APPROVE review 5127246998 against head \`455cacd2c3b466944f7de6ea918fc
 No specification, recipe semantics, economic mechanism, formula, default, stock ownership, phase order, acceptance threshold, or v1 scope changed.  
 STATUS: QA\_APPROVED\_PENDING\_MERGE / IMPLEMENTATION\_PROCESS\_CONFLICT\_NOTED
 
+2026-09-08 — VISUALIZATION\_CHART\_SELECTION\_LEGENDS\_QA\_01 — REQ-VISUALIZATION-001
+
+Found one implementation-facing chart-selection ambiguity in the mature visualization contract. Several State core-chart bullets group metrics with incompatible dimensions — population stock with births/deaths/net-migration flows, CPI level with inflation/contribution rates, and employment with real wage. Without an explicit plotting rule, an implementer would have to invent whether to use a shared axis, dual axes, normalized indices or separate panels.
+
+Resolved with the smallest presentation-contract clarification in both the canonical Visualization working copy and Handoff/13. A core-chart bullet is now explicitly a topic group, not permission to overlay unlike units. One multi-series plot is valid only when series share a compatible unit and time basis; otherwise use aligned small multiples on a shared time axis. Do not normalize unlike stocks/flows/rates/index/currency values into one index unless that normalized series has its own canonical MetricDefinition. Dual y-axes remain a last resort and must be unmistakably labeled. The existing legend, unit, tooltip, accessibility and chart-density requirements remain unchanged.
+
+No economic mechanic, metric formula, accounting identity, phase order, acceptance threshold or v1 scope changed. No new implementation-package file was added, so no mirror-allowlist request is required.
+
+STATUS: RESOLVED — VISUALIZATION\_CONTRACT\_CLARIFIED
+

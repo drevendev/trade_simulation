@@ -145,6 +145,8 @@ Core charts:
 \- clan influence/loyalty composition  
 \- policy timeline: tax rates, transfers, tariffs, spending stance, monetary settings, legal/institutional changes
 
+Chart grouping rule: a “core chart” bullet groups related questions; it is not permission to place unlike units on one plotting scale. Use one multi-series plot only when the series share a compatible unit and time basis. When stocks, flows, rates, index levels or currency values differ, prefer aligned small multiples with a shared time axis. For example, show population stock separately from births/deaths/net-migration flows; show CPI level separately from inflation/contribution rates; and show employment separately from real wage unless a canonical compatible basis is defined. Do not normalize unlike series into a common index unless that normalized series has its own canonical MetricDefinition. Dual y-axes remain a last resort and must be unmistakably labeled.
+
 Each policy line is stepwise and visually distinct from endogenous economic series.
 
 7\. Region dashboard
