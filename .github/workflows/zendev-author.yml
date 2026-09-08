@@ -129,11 +129,21 @@ jobs:
           # the working tree it would be whatever the branch under review claims.
           cp scripts/schemes.py "${RUNNER_TEMP}/schemes.py"
           cp docs/zendev/schemes.json "${RUNNER_TEMP}/schemes.json"
+          # The whole control plane too: run_effect below imports its neighbours,
+          # and this role rewrites the working tree it would otherwise run from.
+          cp -r scripts "${RUNNER_TEMP}/control-plane"
 
       # The subscription is metered in rolling windows, not dollars. One reading before
       # the model and one after; the recorder writes the difference to the private
       # ledger. The token reaches this step and the model step only, and the reading
       # never prints what it read.
+      # The instant the model starts. run_effect asks the forge what this identity
+      # did after it, which is how a run that worked stops depending on how it
+      # phrased its last sentence.
+      - name: Mark when the model started
+        id: started
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+
       - name: Read the subscription windows before the model runs
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -227,6 +237,20 @@ jobs:
       # ledger. It never fails the run: a missing token or an unreachable ledger is a
       # warning, because a loop that stops over bookkeeping is worse than a gap in the
       # bookkeeping.
+      # Read from the staged copy, like everything else that runs after the
+      # model: this role rewrites the working tree it would otherwise run from.
+      - name: Read what this run actually did
+        id: effect
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python "${RUNNER_TEMP}/control-plane/run_effect.py" \
+            --repo "${{ github.repository }}" \
+            --role author \
+            --identity "${{ steps.identity.outputs.app-slug }}" \
+            --since "${{ steps.started.outputs.at }}"
+
       - name: Record what this run consumed
         if: always()
         env:
@@ -236,6 +260,7 @@ jobs:
             --execution-file "${{ steps.claude.outputs.execution_file }}" \
             --conclusion "${{ steps.claude.outputs.conclusion }}" \
             --role author \
+            --effect "${{ steps.effect.outputs.effect }}" \
             --ledger-repo drevendev/zen-telemetry \
             --run-id "${{ github.run_id }}" \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \

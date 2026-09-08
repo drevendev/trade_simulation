@@ -219,13 +219,28 @@ def final_text(messages) -> str:
     return last
 
 
-def classify_outcome(conclusion, text):
+def classify_outcome(conclusion, text, effect=""):
     """(outcome, source). Pure.
+
+    Four sources, consulted in order of how much each one knows.
 
     The workflow's own conclusion is trusted where it is specific: `no_work` means the
     model was never started, and anything that is not success or unknown is a failure.
-    Everything else is read from the run's final message, and the source says so. A
-    handoff or a verdict there means completed, whatever else the message mentions.
+    Then the run's final message, which is a claim about itself: a handoff or a verdict
+    there means completed, whatever else the message mentions.
+
+    `effect` comes last and comes from the forge (`run_effect.py`): what the role's
+    identity actually did in the repository while the model ran. It is consulted only
+    where nothing else knows anything, and that ordering is deliberate in both
+    directions. It rescues the case that used to be `unknown` — on 2026-09-08 an
+    ACCEPTOR run selected #252, spent thirty-two turns, posted a formal
+    `CHANGES_REQUESTED` and was filed as `unknown` because its closing words matched no
+    pattern. And it does not overrule the run's own account of itself: an effect says
+    work happened, not that it went well, so a run that posts a verdict *and* reports
+    being blocked is blocked, which only the run can know.
+
+    What survives as `unknown` is now a run that did nothing observable and claimed
+    nothing — a true statement rather than an artefact of phrasing.
     """
     if conclusion == "no_work":
         return "no_work", "workflow"
@@ -237,6 +252,8 @@ def classify_outcome(conclusion, text):
         return "blocked", "heuristic"
     if NO_WORK.search(text or ""):
         return "no_work", "heuristic"
+    if effect == "completed":
+        return "completed", "forge"
     # A green action and a final message that claims nothing is not a completed run.
     # It used to be recorded as one: on 2026-09-06 an author run met two pull requests
     # it could not merge, spent thirteen turns, said nothing, and was filed as
@@ -333,6 +350,10 @@ def main() -> int:
     parser.add_argument("--execution-file", default="")
     parser.add_argument("--role", required=True)
     parser.add_argument("--conclusion", default="unknown")
+    parser.add_argument(
+        "--effect", default="",
+        help="what the role's identity did in the forge during the run; see run_effect.py",
+    )
     parser.add_argument("--ledger-repo", required=True)
     parser.add_argument("--run-id", default="")
     parser.add_argument("--run-url", default="")
@@ -354,7 +375,9 @@ def main() -> int:
             warn("the execution file names no model; recording null")
 
     # The outcome is read from the run's last word; mentions and rework from everything.
-    outcome, outcome_source = classify_outcome(args.conclusion, final_text(messages))
+    outcome, outcome_source = classify_outcome(
+        args.conclusion, final_text(messages), args.effect
+    )
     before = load_reading(args.usage_before)
     after = load_reading(args.usage_after)
     if before is None or after is None:
