@@ -68,6 +68,33 @@ class MachineClass:
 
 MACHINE_CLASSES = (
     MachineClass(
+        # The merge commit a ledger row records cannot be written by the run that
+        # earns the row: the row lands inside a pull request, and the squash commit
+        # does not exist until that pull request merges. `backfill_merge_commits.py`
+        # writes it afterwards, and it has to arrive the way every other change to
+        # master arrives — through a pull request. Its first attempt to push master
+        # directly was refused by branch protection and took the release tagger down
+        # with it, since the tagger is the next step in that job.
+        #
+        # No allowlist: the two paths below are the whole rule, and neither is written
+        # by anything but the generator.
+        # `roots` is empty on purpose. A root is a path this class *owns*, and
+        # ordinary branches are refused anywhere under one — but the ledger is shared:
+        # the AUTHOR writes the row that earns a requirement, and this only fills the
+        # column that run could not know. Claiming it as a root would forbid the
+        # AUTHOR its own core work. Both files are listed as generated instead, which
+        # says the same thing about this branch without saying anything about others.
+        branch="ledger-provenance",
+        producer=".github/workflows/release-tag.yml",
+        roots=(),
+        generated=(
+            "docs/spec/implementation_status.csv",
+            "docs/spec/IMPLEMENTATION_STATUS.md",
+        ),
+        committer="github-actions[bot]",
+        allowlist=None,
+    ),
+    MachineClass(
         branch="spec-mirror",
         producer=".github/workflows/spec-sync.yml",
         roots=("docs/spec/mirror/",),

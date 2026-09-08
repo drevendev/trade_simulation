@@ -64,26 +64,92 @@ jobs:
 
       # MERGE_COMMIT cannot be written by the AUTHOR: the row lands inside the pull
       # request, and the squash commit does not exist until that pull request merges.
-      # Nothing filled it afterwards, so eleven of twenty-three rows were blank, eight
-      # of them IMPLEMENTED - and the tagger below hashes that field. It runs first, so
-      # a milestone is never considered for release on provenance nobody supplied.
+      # This fills it afterwards.
       #
-      # Its own commit re-triggers this workflow once, by design: that second run finds
-      # nothing to fill and goes straight to tagging. It cannot loop, because a run
-      # that changes nothing pushes nothing.
+      # It proposes the change; it does not push it. The first version pushed master
+      # directly and was refused by branch protection — "Changes must be made through a
+      # pull request" — which failed this job and took the tagger down with it, because
+      # the tagger is the next step. Releases stopped silently for two hours and the
+      # ledger kept a merged row with no provenance.
       - name: Record where merged work actually landed
+        id: backfill
         env:
           GH_TOKEN: ${{ steps.identity.outputs.token }}
         run: |
           python scripts/backfill_merge_commits.py --repo "${{ github.repository }}"
           if ! git diff --quiet -- docs/spec/implementation_status.csv; then
             python scripts/implementation_status.py
-            git add docs/spec/implementation_status.csv docs/spec/IMPLEMENTATION_STATUS.md
-            git commit -m "ledger: record the merge commits of requirements that landed"
-            git push origin HEAD:master
           fi
 
+      # The same class and the same mechanics as the specification mirror: no linked
+      # Issue, no agent review, accepted by branch protection once every required check
+      # is green. See docs/zendev/MACHINE_PULL_REQUESTS.md.
+      - name: Propose the provenance as a pull request
+        id: provenance_pr
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ steps.identity.outputs.token }}
+          branch: ledger-provenance
+          base: master
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          add-paths: |
+            docs/spec/implementation_status.csv
+            docs/spec/IMPLEMENTATION_STATUS.md
+          commit-message: "ledger: record the merge commits of requirements that landed"
+          title: "ledger: record the merge commits of requirements that landed"
+          labels: |
+            type:docs
+            area:spec
+          body: |
+            **Class: machine-generated, produced by `release-tag.yml`.** No linked
+            Issue by construction, no agent reviews it, accepted mechanically under
+            `docs/zendev/MACHINE_PULL_REQUESTS.md`.
+
+            `MERGE_COMMIT` names the commit that satisfied a requirement, and the run
+            that earns the row cannot know it: the row lands inside a pull request and
+            the squash commit does not exist until that pull request merges. This fills
+            that column and nothing else — no `STATUS` is touched, because whether a
+            requirement is satisfied is a judgement and this is a lookup.
+
+            It matters because `release_tag.py` hashes `(REQ_ID, MERGE_COMMIT)` pairs to
+            decide whether a milestone has been released at these commits or different
+            ones. With blanks in it, a milestone repaired at new commits hashes
+            identically to the one released before, and the patch release that exists
+            for exactly that case is never cut.
+
+      # A failure here is a warning, never a failed run: the provenance is already
+      # proposed, and being unable to arm auto-merge means it waits for a person.
+      #
+      # Not conditioned on this run having produced a pull request, for the reason
+      # spec-sync gives: the action reports a number only when it creates or updates
+      # one, so a first arming that failed would never be retried and the branch would
+      # sit open with nobody responsible for it.
+      - name: Arm auto-merge on the provenance
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.identity.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.provenance_pr.outputs.pull-request-number }}
+        run: |
+          if [ -z "${PR_NUMBER}" ]; then
+            PR_NUMBER=$(gh pr list --repo "${REPO}" --head ledger-provenance \
+              --state open --json number --jq '.[0].number // empty')
+          fi
+          if [ -z "${PR_NUMBER}" ]; then
+            echo "no open provenance pull request; nothing to arm"
+            exit 0
+          fi
+          if gh pr merge "${PR_NUMBER}" --repo "${REPO}" --auto --squash --delete-branch; then
+            echo "auto-merge armed on #${PR_NUMBER}"
+          else
+            echo "::warning::release-tag: could not arm auto-merge on #${PR_NUMBER}; it waits for a person"
+          fi
+
+      # Always: a release decision must not be lost because provenance could not be
+      # proposed. The tagger refuses a milestone with a blank merge commit on its
+      # own, so the worst case here is that it declines and says why.
       - name: Cut the tag if a milestone is newly complete
+        if: always()
         env:
           GH_TOKEN: ${{ steps.identity.outputs.token }}
         run: python scripts/release_tag.py
