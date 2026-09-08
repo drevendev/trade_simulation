@@ -57,7 +57,7 @@ export interface EconomicTransaction {
   readonly amount: number;
   readonly reason: string;
   // REQ-MARKET-004 transaction schema extensions:
-  readonly transactionId?: TransactionId;
+  readonly transactionId: TransactionId;
   readonly bundleId?: TransactionBundleId;
   readonly source?: ActorRef;
   readonly destination?: ActorRef | { readonly type: "STATE"; readonly id: StateId };
@@ -65,6 +65,9 @@ export interface EconomicTransaction {
   readonly fxSettlementId?: FxSettlementId;
   readonly unitPrice?: number;
   readonly taxAmount?: number;
+  readonly quantity?: number;
+  readonly sourceRegionId?: RegionId;
+  readonly destinationRegionId?: RegionId;
 }
 
 export const PHASE_NAMES = [

@@ -396,6 +396,62 @@ describe("Transaction Schemas (REQ-MARKET-004)", () => {
       const errors = validateMarketSaleTransaction(badTx);
       expect(errors.some((e) => e.includes("finite"))).toBe(true);
     });
+
+    it("enforces required quantity and region fields on MARKET_SALE", () => {
+      // Missing quantity
+      const noQuantity: any = {
+        type: "MARKET_SALE",
+        transactionId: "tx:1002" as TransactionId,
+        bundleId: "tb:1002" as TransactionBundleId,
+        source: testClan,
+        destination: testState,
+        goodId: testGood,
+        currencyId: testCurrency,
+        amount: 100,
+        unitPrice: 10.0,
+        sourceRegionId: testRegion,
+        destinationRegionId: testRegion,
+      };
+
+      let errors = validateMarketSaleTransaction(noQuantity);
+      expect(errors.some((e) => e.includes("quantity"))).toBe(true);
+
+      // Missing sourceRegionId
+      const noSourceRegion: any = {
+        type: "MARKET_SALE",
+        transactionId: "tx:1003" as TransactionId,
+        bundleId: "tb:1003" as TransactionBundleId,
+        source: testClan,
+        destination: testState,
+        goodId: testGood,
+        currencyId: testCurrency,
+        amount: 100,
+        unitPrice: 10.0,
+        quantity: 10,
+        destinationRegionId: testRegion,
+      };
+
+      errors = validateMarketSaleTransaction(noSourceRegion);
+      expect(errors.some((e) => e.includes("sourceRegionId"))).toBe(true);
+
+      // Missing destinationRegionId
+      const noDestRegion: any = {
+        type: "MARKET_SALE",
+        transactionId: "tx:1004" as TransactionId,
+        bundleId: "tb:1004" as TransactionBundleId,
+        source: testClan,
+        destination: testState,
+        goodId: testGood,
+        currencyId: testCurrency,
+        amount: 100,
+        unitPrice: 10.0,
+        quantity: 10,
+        sourceRegionId: testRegion,
+      };
+
+      errors = validateMarketSaleTransaction(noDestRegion);
+      expect(errors.some((e) => e.includes("destinationRegionId"))).toBe(true);
+    });
   });
 
   describe("Bundled transaction semantics", () => {

@@ -59,6 +59,9 @@ export function createMarketSaleTransaction(args: {
     currencyId: args.marketCurrencyId,
     amount: moneyAmount,
     unitPrice: args.sellerNetUnitPrice,
+    quantity: args.quantity,
+    sourceRegionId: args.marketRegionId,
+    destinationRegionId: args.marketRegionId,
     reason: `Local market sale: ${args.quantity} units of good at net price ${args.sellerNetUnitPrice}`,
   };
 }
@@ -147,6 +150,15 @@ export function validateMarketSaleTransaction(tx: EconomicTransaction): string[]
   }
   if (tx.unitPrice === undefined || !Number.isFinite(tx.unitPrice)) {
     errors.push(`unitPrice must be finite, got ${tx.unitPrice}`);
+  }
+  if (tx.quantity === undefined || !Number.isFinite(tx.quantity) || tx.quantity <= 0) {
+    errors.push(`quantity must be positive, got ${tx.quantity}`);
+  }
+  if (!tx.sourceRegionId) {
+    errors.push("Missing sourceRegionId (market region)");
+  }
+  if (!tx.destinationRegionId) {
+    errors.push("Missing destinationRegionId (market region)");
   }
 
   return errors;
