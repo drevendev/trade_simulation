@@ -501,7 +501,7 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
       expect(phasesExecuted).toEqual([0, 1, 2]);
     });
 
-    it("diagnostic includes affected category and residual value", () => {
+    it("diagnostic includes affected category, key and residual value", () => {
       const world = createTestWorldState();
       const pending = createEmptyPendingTransitions();
 
@@ -536,9 +536,9 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
         errorMsg = (e as Error).message;
       }
 
-      // Error should name phase 5 and the category/residual
+      // Error should name phase 5 and include category/key/residual
       expect(errorMsg).toContain("Phase 5");
-      expect(errorMsg).toContain("GOOD");
+      expect(errorMsg).toContain("GOOD/GOOD_A");
       expect(errorMsg).toMatch(/residual.*50\./); // Residual value ~50.12345
     });
 
@@ -554,17 +554,16 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
         executedPhases.push(context.phase);
 
         if (context.phase === 6) {
-          // Create physical loss imbalance
+          // Create unmatched MONEY flow that violates zero-flow conservation
           const record = {
-            type: "PHYSICAL_LOSS" as const,
+            type: "MONEY" as const,
             tick: context.tick,
             phase: context.phase,
-            resourceType: "good" as const,
-            resourceId: "GOOD_B",
-            locationKey: "REGION_2" as any,
-            amount: 25, // Unmatched loss
-            cause: "spoilage" as const,
-            reason: "test-loss",
+            currencyId: "CURR_TEST" as any,
+            ownerType: "state" as const,
+            ownerKey: "STATE_FAIL",
+            delta: -75.5, // Unmatched negative flow
+            reason: "test-imbalance",
           };
 
           return {
@@ -582,7 +581,7 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
       };
 
       expect(() => executeTick(world, 1, pending, failHandler)).toThrow(
-        /Phase 6.*reconciliation failed/,
+        /Phase 6.*reconciliation failed.*MONEY/,
       );
 
       // Phase 7 handler was never reached

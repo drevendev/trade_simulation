@@ -176,7 +176,7 @@ export function executePhase(
 export function validateTickInvariants(
   context: TickContext,
   tolerance: number = 1e-9,
-): { category: string; residual: number }[] | null {
+): { category: string; key: string; residual: number }[] | null {
   return validateZeroFlowReconciliation(context.currentLedger, tolerance);
 }
 
@@ -206,7 +206,7 @@ export function executeTick(
     if (phaseErrors !== null) {
       throw new Error(
         `Phase ${phase} (${PHASE_NAMES[phase]}) reconciliation failed: ` +
-        phaseErrors.map(e => `${e.category} residual ${e.residual.toFixed(12)}`).join("; ")
+        phaseErrors.map(e => `${e.category}/${e.key} residual ${e.residual.toFixed(12)}`).join("; ")
       );
     }
   }

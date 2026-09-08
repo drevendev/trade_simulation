@@ -139,35 +139,47 @@ export function computeNetFlow(
 export function validateZeroFlowReconciliation(
   ledger: TickLedger,
   tolerance: number = 1e-9
-): { category: string; residual: number }[] | null {
-  const unmatched: { category: string; residual: number }[] = [];
+): { category: string; key: string; residual: number }[] | null {
+  const unmatched: { category: string; key: string; residual: number }[] = [];
 
-  // Compute total flow for each category
-  let totalMoneyFlow = 0;
-  let totalGoodFlow = 0;
-  let totalLossFlow = 0;
+  // Track flows by (category, key) pairs identifying the specific resource
+  const moneyFlowsByKey = new Map<string, number>();
+  const goodFlowsByKey = new Map<string, number>();
+  const lossFlowsByKey = new Map<string, number>();
 
   for (const record of ledger.records) {
     if (record.type === "MONEY") {
-      totalMoneyFlow += (record as MoneyFlowRecord).delta;
+      const moneyRecord = record as MoneyFlowRecord;
+      const key = moneyRecord.currencyId;
+      moneyFlowsByKey.set(key, (moneyFlowsByKey.get(key) ?? 0) + moneyRecord.delta);
     } else if (record.type === "GOOD") {
-      totalGoodFlow += (record as GoodFlowRecord).delta;
+      const goodRecord = record as GoodFlowRecord;
+      const key = goodRecord.goodId;
+      goodFlowsByKey.set(key, (goodFlowsByKey.get(key) ?? 0) + goodRecord.delta);
     } else if (record.type === "PHYSICAL_LOSS") {
-      totalLossFlow += (record as PhysicalLossRecord).amount;
+      const lossRecord = record as PhysicalLossRecord;
+      const key = lossRecord.resourceId;
+      lossFlowsByKey.set(key, (lossFlowsByKey.get(key) ?? 0) + lossRecord.amount);
     }
   }
 
-  // Check if each category's total flow is zero (within tolerance)
-  if (Math.abs(totalMoneyFlow) > tolerance) {
-    unmatched.push({ category: "MONEY", residual: totalMoneyFlow });
+  // Check for unmatched flows in each category/key combination
+  for (const [key, residual] of moneyFlowsByKey) {
+    if (Math.abs(residual) > tolerance) {
+      unmatched.push({ category: "MONEY", key, residual });
+    }
   }
 
-  if (Math.abs(totalGoodFlow) > tolerance) {
-    unmatched.push({ category: "GOOD", residual: totalGoodFlow });
+  for (const [key, residual] of goodFlowsByKey) {
+    if (Math.abs(residual) > tolerance) {
+      unmatched.push({ category: "GOOD", key, residual });
+    }
   }
 
-  if (Math.abs(totalLossFlow) > tolerance) {
-    unmatched.push({ category: "PHYSICAL_LOSS", residual: totalLossFlow });
+  for (const [key, residual] of lossFlowsByKey) {
+    if (Math.abs(residual) > tolerance) {
+      unmatched.push({ category: "PHYSICAL_LOSS", key, residual });
+    }
   }
 
   return unmatched.length > 0 ? unmatched : null;
