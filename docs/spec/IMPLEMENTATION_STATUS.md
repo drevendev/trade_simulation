@@ -84,13 +84,13 @@ that fact; this file does not.
 | REQ-VISUALIZATION-005 | `READY` | `IMPLEMENTED` | #243 | #244 | M2 Milestone Preview (REQ-VISUALIZATION-005): deterministic JSON snapshot of canonical M2 tick orchestration and zero-flow reconciliation without exposing mutable domain objects. src/diagnostics/m2Preview.ts generates typed M2Preview interface exposing scenario ID/seed/configVersion |
 | REQ-MARKET-001 | `READY` | `IMPLEMENTED` | #246 | #248 | Ephemeral MarketIntent contract and budget commitment ledger for M3 local market procurement (sections 5-6 of MARKETS_TRADE_FX_CONTRACTS.md). src/simulation/marketIntent.ts defines: MarketIntent interface (id |
 | REQ-MARKET-002 | `READY` | `IMPLEMENTED` | #249 | #250 | Phase-6 price formation with persistent market expectations (Handoff/04 section 9). src/simulation/marketPricing.ts implements: repriceGoodInPhase6() bounded log-space repricing formula (pressure = wExcess × excess + wInventory × inventoryGap; logChange = clamp(priceSpeed × pressure |
-| REQ-MARKET-003 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MARKET-003 | `READY` | `IMPLEMENTED` | #251 | #252 | Deterministic local clearing primitive (Handoff/04 sections 4, 10-11). src/simulation/marketClearing.ts implements allocateLocal() pure planning function with stable residual correction (computes leftover seller/buyer quantities to maintain fill totals within tolerance) and two-pointer matching (concrete counterparty pairing by sorted stable ID). MarketAllocation interface carries matched pair, quantities, prices, and tax fields. src/simulation/marketClearing.test.ts: 17 comprehensive new tests covering seller/buyer fill balance, no-exceed constraints (sellable, reserve, effective demand, maxSpend), stable-ID ordering (matching invariant independent of array order), shuffled-input determinism, tax handling (collectedTaxPerUnit computation), edge cases (zero quantities, exact matches, fractional allocations). All acceptance criteria met: seller fills + buyer fills = cleared quantity (within 1e-9), no fill exceeds constraints (sellable, reserve, effective demand, maxSpend), residual correction stable-ID ordered, shuffled input produces identical allocations, no insertion-order dependency in concrete matching. TypeScript: 339 tests passed (17 new), typecheck clean, build succeeded. C#/.NET: 45 tests passed, build clean (REQ-MIGRATION-003 maintained). REQ-MARKET-003 ready for M3 integration with Phase-8 MAIN clearing gate." |
 | REQ-MARKET-004 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-MARKET-005 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-ACCEPTANCE-004 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-VISUALIZATION-006 | `READY` | `NOT_STARTED` | — | — | — |
 
-**Summary: 20 of 32 requirement identifiers implemented.**
+**Summary: 21 of 32 requirement identifiers implemented.**
 Also recorded: 3 partial.
 The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
 
