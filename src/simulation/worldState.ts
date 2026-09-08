@@ -43,6 +43,7 @@ import type {
 } from "../config/scenarioDefinition";
 import type { DefinitionPack } from "../config/definitionPack";
 import type { SimulationConfig } from "../config/simulationConfig";
+import { validateDefinitionPack } from "../config/validation";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
 
@@ -170,6 +171,7 @@ export function buildInitialWorld(
 ): WorldState {
   // Step 1: Validate schema versions, uniqueness, references, finite values and config bounds
   validateWorldGenesis(scenarioDefinition, definitionPack, resolvedConfig);
+  validateDefinitionPack(definitionPack);
 
   // Step 2: Resolve stable runtime IDs from sorted human keys
   const allocator = createIdAllocator();
@@ -409,10 +411,13 @@ export function buildInitialWorld(
 
   // Step 9: Instantiate LocalMarkets (one per Region)
   const marketRegistry = new Map(
-    (scenarioDefinition.markets ?? []).map((marketSeed) => [
-      idMap.marketIds.get(marketSeed.regionKey ?? "")!,
-      buildLocalMarketState(marketSeed, definitionPack),
-    ]),
+    (scenarioDefinition.markets ?? []).map((marketSeed) => {
+      const marketId = idMap.marketIds.get(marketSeed.regionKey ?? "")!;
+      return [
+        marketId,
+        buildLocalMarketState(marketSeed, marketId, definitionPack),
+      ];
+    }),
   );
 
   // Step 10: Instantiate ProductionUnits with capacity derivation
@@ -727,7 +732,7 @@ function buildMonetaryAuthorityState(seed: MonetaryAuthoritySeed, idMap: IdMaps)
   };
 }
 
-function buildLocalMarketState(seed: MarketSeed, definitionPack: DefinitionPack): LocalMarketState {
+function buildLocalMarketState(seed: MarketSeed, marketId: MarketId, definitionPack: DefinitionPack): LocalMarketState {
   const priceByGood = new Map<string, number>();
   const expectationsByGood = new Map<string, MarketExpectationState>();
 
@@ -746,7 +751,7 @@ function buildLocalMarketState(seed: MarketSeed, definitionPack: DefinitionPack)
   });
 
   return {
-    marketId: undefined as unknown as MarketId,
+    marketId,
     seed,
     priceByGood,
     expectationsByGood,
@@ -838,6 +843,15 @@ function validateInitializationInvariants(
 ): void {
   // Invariant 3: All IDs are unique (ensured by allocator)
   // Invariant 5: Every Region owns exactly one LocalMarket (checked if markets are required)
+  // Validate that every market's marketId matches its registry key
+  markets.forEach((market, marketKey) => {
+    if (market.marketId !== marketKey) {
+      throw new Error(
+        `Market invariant violation: registry key ${marketKey} does not match market.marketId ${market.marketId}`,
+      );
+    }
+  });
+
   // Invariant 6: Every controlled Region points to one live State
   regions.forEach((region) => {
     if (region.controllerStateId) {
