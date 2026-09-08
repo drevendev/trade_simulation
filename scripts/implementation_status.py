@@ -95,6 +95,19 @@ def validate(registry, ledger):
     seen: set[str] = set()
 
     for index, row in enumerate(ledger, start=2):  # header is line 1
+        # A row whose EVIDENCE holds an unquoted comma parses into more than the six
+        # declared fields. `csv.DictReader` files the surplus under the key None and
+        # says nothing, `row["EVIDENCE"]` then holds only the text before that comma,
+        # and the rendered document shows the truncation as if it were the evidence.
+        # Ten of twenty-three rows were in that state before this check existed; the
+        # loudest example lost everything after "jurisdictionChanges".
+        if row.get(None):
+            problems.append(
+                "line %d: %s has an unquoted comma in EVIDENCE, so the row parses into "
+                "more than the six declared fields and its evidence is truncated at the "
+                "first comma. Quote the whole EVIDENCE cell."
+                % (index, (row.get("REQ_ID") or "?").strip())
+            )
         req_id = (row.get("REQ_ID") or "").strip()
         status = (row.get("STATUS") or "").strip()
         evidence = (row.get("EVIDENCE") or "").strip()
