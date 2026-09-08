@@ -181,10 +181,11 @@ export function validateTickInvariants(
 }
 
 /**
- * Execute one complete tick (phases 0–15) with no-op handlers.
+ * Execute one complete tick (phases 0–15) with phase-boundary invariant hooks.
  * Returns trace of phase execution for determinism proof.
  * WorldState remains immutable; TickContext carries tick-scoped mutations.
- * M2: Validates zero-flow reconciliation after tick completion.
+ * M2: Validates zero-flow reconciliation after every completed phase (fail-fast).
+ * Throws if any phase-boundary reconciliation is non-empty (unmatched flows detected).
  */
 export function executeTick(
   world: WorldState,
@@ -194,14 +195,24 @@ export function executeTick(
 ): { context: TickContext; phaseTrace: number[]; reconciliationErrors: { category: string; residual: number }[] | null } {
   let context = initializeTickContext(tickNumber, world.seed);
   const phaseTrace: number[] = [];
+  const tolerance = world.simulationConfig.numeric.reconciliationRelativeTolerance;
 
   for (let phase = 0; phase < TOTAL_PHASES; phase++) {
     context = executePhase(phase, noOpHandler, world, context, pendingTransitions);
     phaseTrace.push(phase);
+
+    // Phase-boundary invariant hook: validate zero-flow reconciliation (REQ-CORE-006)
+    const phaseErrors = validateTickInvariants(context, tolerance);
+    if (phaseErrors !== null) {
+      throw new Error(
+        `Phase ${phase} (${PHASE_NAMES[phase]}) reconciliation failed: ` +
+        phaseErrors.map(e => `${e.category} residual ${e.residual.toFixed(12)}`).join("; ")
+      );
+    }
   }
 
-  // Validate tick invariants after all phases complete
-  const reconciliationErrors = validateTickInvariants(context, world.simulationConfig.numeric.reconciliationRelativeTolerance);
+  // Tick-end validation remains as a redundant safety check
+  const reconciliationErrors = validateTickInvariants(context, tolerance);
 
   return { context, phaseTrace, reconciliationErrors };
 }

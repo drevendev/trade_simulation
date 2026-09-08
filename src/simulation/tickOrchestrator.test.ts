@@ -18,6 +18,7 @@ import {
 } from "./tickOrchestrator";
 import type { WorldState, PendingTransitions } from "./worldState";
 import type { RegionId, StateId } from "../domain/id";
+import { addLedgerRecord } from "./ledger";
 import type { SimulationConfig } from "../config/simulationConfig";
 
 /**
@@ -432,6 +433,180 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
 
       // Phase 14 would enqueue (not tested here, as it's not yet implemented)
       // This test documents the intended barrier structure.
+    });
+  });
+
+  describe("Phase-boundary invariant hooks (REQ-CORE-006)", () => {
+    it("validates zero-flow reconciliation after each phase completes", () => {
+      const world = createTestWorldState();
+      const pending = createEmptyPendingTransitions();
+
+      let phasesExecuted: number[] = [];
+      const tracingHandler: PhaseHandler = (_w, context) => {
+        phasesExecuted.push(context.phase);
+        return context;
+      };
+
+      // Execute with no-op handler; all phases should execute successfully
+      const { phaseTrace, reconciliationErrors } = executeTick(
+        world,
+        1,
+        pending,
+        tracingHandler,
+      );
+
+      expect(phaseTrace).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+      expect(reconciliationErrors).toBeNull(); // No-op: no unmatched flows
+      expect(phasesExecuted).toEqual(phaseTrace);
+    });
+
+    it("fails fast when phase creates unmatched ledger flow", () => {
+      const world = createTestWorldState();
+      const pending = createEmptyPendingTransitions();
+
+      let phasesExecuted: number[] = [];
+
+      // Handler that introduces an unmatched MONEY flow in phase 2
+      const unbalancedHandler: PhaseHandler = (_w, context) => {
+        phasesExecuted.push(context.phase);
+
+        // In phase 2, add an unmatched money flow (negative delta with no offset)
+        if (context.phase === 2) {
+          const unbalancedRecord = {
+            type: "MONEY" as const,
+            tick: context.tick,
+            phase: context.phase,
+            currencyId: "CURR_1" as any,
+            ownerType: "state" as const,
+            ownerKey: "STATE_1",
+            delta: -100, // Unmatched negative flow
+            reason: "test-imbalance",
+          };
+
+          return {
+            ...context,
+            currentLedger: addLedgerRecord(context.currentLedger, unbalancedRecord),
+          };
+        }
+
+        return context;
+      };
+
+      // executeTick should throw when phase 2 boundary validation fails
+      expect(() => executeTick(world, 1, pending, unbalancedHandler)).toThrow(
+        /Phase 2.*reconciliation failed.*MONEY.*residual/,
+      );
+
+      // Verify phase 2 executed but phase 3 did not
+      expect(phasesExecuted).toEqual([0, 1, 2]);
+    });
+
+    it("diagnostic includes affected category and residual value", () => {
+      const world = createTestWorldState();
+      const pending = createEmptyPendingTransitions();
+
+      // Handler that creates a GOOD imbalance in phase 5
+      const goodImbalanceHandler: PhaseHandler = (_w, context) => {
+        if (context.phase === 5) {
+          const record = {
+            type: "GOOD" as const,
+            tick: context.tick,
+            phase: context.phase,
+            goodId: "GOOD_A",
+            holderType: "state" as const,
+            holderKey: "REGION_1" as any,
+            bucket: "public" as const,
+            delta: 50.12345, // Unmatched positive flow
+            reason: "test-surplus",
+          };
+
+          return {
+            ...context,
+            currentLedger: addLedgerRecord(context.currentLedger, record),
+          };
+        }
+
+        return context;
+      };
+
+      let errorMsg = "";
+      try {
+        executeTick(world, 1, pending, goodImbalanceHandler);
+      } catch (e) {
+        errorMsg = (e as Error).message;
+      }
+
+      // Error should name phase 5 and the category/residual
+      expect(errorMsg).toContain("Phase 5");
+      expect(errorMsg).toContain("GOOD");
+      expect(errorMsg).toMatch(/residual.*50\./); // Residual value ~50.12345
+    });
+
+    it("prevents phase N+1 from executing when phase N fails reconciliation", () => {
+      const world = createTestWorldState();
+      const pending = createEmptyPendingTransitions();
+
+      const executedPhases: number[] = [];
+      let phase7Tried = false;
+
+      // Add unmatched flow in phase 6
+      const failHandler: PhaseHandler = (_w, context) => {
+        executedPhases.push(context.phase);
+
+        if (context.phase === 6) {
+          // Create physical loss imbalance
+          const record = {
+            type: "PHYSICAL_LOSS" as const,
+            tick: context.tick,
+            phase: context.phase,
+            resourceType: "good" as const,
+            resourceId: "GOOD_B",
+            locationKey: "REGION_2" as any,
+            amount: 25, // Unmatched loss
+            cause: "spoilage" as const,
+            reason: "test-loss",
+          };
+
+          return {
+            ...context,
+            currentLedger: addLedgerRecord(context.currentLedger, record),
+          };
+        }
+
+        // If we get to phase 7, mark it
+        if (context.phase === 7) {
+          phase7Tried = true;
+        }
+
+        return context;
+      };
+
+      expect(() => executeTick(world, 1, pending, failHandler)).toThrow(
+        /Phase 6.*reconciliation failed/,
+      );
+
+      // Phase 7 handler was never reached
+      expect(phase7Tried).toBe(false);
+      // Only phases 0-6 executed before failure
+      expect(executedPhases).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    });
+
+    it("no-op ticks still reconcile successfully after phase-boundary validation added", () => {
+      const world = createTestWorldState();
+      const pending = createEmptyPendingTransitions();
+
+      // Multiple consecutive no-op ticks should all pass phase-boundary validation
+      for (let tick = 0; tick < 25; tick++) {
+        const { phaseTrace, reconciliationErrors } = executeTick(
+          world,
+          tick,
+          pending,
+          noOpPhaseHandler,
+        );
+
+        expect(phaseTrace).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        expect(reconciliationErrors).toBeNull();
+      }
     });
   });
 });
