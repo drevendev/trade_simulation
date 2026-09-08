@@ -113,6 +113,40 @@ class TagListingTests(unittest.TestCase):
         self.assertEqual(got, {"M0": [], "M1": []})
 
 
+class ForeignTaggerTests(unittest.TestCase):
+    """A release this job did not cut has passed none of its gates."""
+
+    MACHINE = "zendev-machine[bot]"
+
+    def test_a_tag_cut_by_a_model_run_is_reported(self):
+        # v0.2.0, 2026-09-08 06:02Z: cut by hand while REQ-CORE-006 was still PARTIAL,
+        # bypassing the completeness check, the provenance refusal and the digest.
+        listing = ("v0.0.0\tzendev-machine[bot]\x00"
+                   "v0.2.0\tclaude[bot]\x00")
+        self.assertEqual(
+            release_tag.foreign_taggers(listing, self.MACHINE),
+            [("v0.2.0", "claude[bot]")],
+        )
+
+    def test_this_jobs_own_tags_are_not_reported(self):
+        listing = "v0.0.0\tzendev-machine[bot]\x00"
+        self.assertEqual(release_tag.foreign_taggers(listing, self.MACHINE), [])
+
+    def test_scheme_tags_are_not_releases(self):
+        # scheme/N shares the namespace and is cut by the operator by design.
+        listing = "scheme/4\tDreven\x00"
+        self.assertEqual(release_tag.foreign_taggers(listing, self.MACHINE), [])
+
+    def test_a_lightweight_tag_with_no_tagger_is_not_reported(self):
+        # An unannotated tag carries no tagger; reporting every one of those would be
+        # noise that trains the reader to ignore the warning that matters.
+        listing = "v0.3.0\t\x00"
+        self.assertEqual(release_tag.foreign_taggers(listing, self.MACHINE), [])
+
+    def test_an_empty_listing_reports_nothing(self):
+        self.assertEqual(release_tag.foreign_taggers("", self.MACHINE), [])
+
+
 class TheRepositorysOwnMapTests(unittest.TestCase):
     """The map is data about the specification, and the specification changes."""
 
