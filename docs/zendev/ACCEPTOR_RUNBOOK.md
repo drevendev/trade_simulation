@@ -325,5 +325,6 @@ clear a queue.
 - Never push commits to a pull request branch.
 - Never close an Issue you did not verify.
 - Never close an Issue whose pull request is not in state `MERGED`.
+- **Never create a tag or a GitHub release.** Releasing is mechanical: `.github/workflows/release-tag.yml` cuts `v0.<milestone>.<patch>` from the ledger when every requirement of a milestone reads `IMPLEMENTED`, and refuses when any row lacks its merge commit. On 2026-09-08 a run cut `v0.2.0` by hand at 06:02Z while `REQ-CORE-006` was still `PARTIAL`: the completeness check, the provenance refusal and the coverage digest were all bypassed, and the tag asserted a milestone that was not finished. A release is a claim to everyone outside this repository, and no role makes it.
 - Never post an ACCEPT while another account's `CHANGES_REQUESTED` stands: the merge
   cannot execute, and the verdict takes the pull request out of the queue anyway.

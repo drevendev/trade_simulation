@@ -214,12 +214,50 @@ def parse_tag_listing(listing, milestones):
     return found
 
 
+def foreign_taggers(listing, expected: str):
+    """Release tags this job did not create, as (tag, tagger) pairs.
+
+    It cannot prevent one — anything holding a token with contents write can push a
+    tag, and only a repository ruleset stops that. It can refuse to be the last to
+    know. On 2026-09-08 a model run cut `v0.2.0` by hand at 06:02Z while REQ-CORE-006
+    was still PARTIAL, bypassing the completeness check, the provenance refusal and the
+    coverage digest at once; nothing noticed for ten hours, and only then because
+    someone read the tag list by eye.
+
+    A release is a claim made outside this repository. One made by something that
+    skipped the gates is worth a loud line in the log of the very next run.
+    """
+    out = []
+    for block in (listing or "").split("\x00"):
+        ref, _, tagger = block.partition("\t")
+        ref, tagger = ref.strip(), tagger.strip()
+        if TAG.match(ref) and tagger and tagger != expected:
+            out.append((ref, tagger))
+    return sorted(out)
+
+
 def existing_tags(milestones):
     listing = _git([
         "tag", "--list", "v0.*",
         "--format=%(refname:strip=2)%09%(contents)%00",
     ])
     return parse_tag_listing(listing, milestones)
+
+
+def report_foreign_tags(expected: str) -> None:
+    try:
+        listing = _git(["tag", "--list", "v0.*",
+                        "--format=%(refname:strip=2)%09%(taggername)%00"])
+    except RuntimeError as error:
+        print(f"::warning::release-tag: could not read tag authorship: {error}")
+        return
+    for ref, tagger in foreign_taggers(listing, expected):
+        print(
+            "::warning::release-tag: %s was created by %s, not by this job. A release "
+            "cut outside it has passed none of the gates here — completeness, merge "
+            "provenance, coverage digest — and may name a milestone that is not "
+            "finished." % (ref, tagger)
+        )
 
 
 def main() -> int:
@@ -232,7 +270,13 @@ def main() -> int:
         "--milestones", default=str(root / "docs" / "zendev" / "milestones.json")
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--tagger", default="zendev-machine[bot]",
+        help="the identity that legitimately creates release tags",
+    )
     args = parser.parse_args()
+
+    report_foreign_tags(args.tagger)
 
     document = json.loads(pathlib.Path(args.milestones).read_text(encoding="utf-8"))
     milestones = document["milestones"]

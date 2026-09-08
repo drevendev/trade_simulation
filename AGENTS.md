@@ -39,6 +39,8 @@ same job, and a run performs exactly one of them.
 
 An AUTHOR run must never merge. An ACCEPTOR run must never implement.
 
+Neither creates a tag or a release. `release-tag.yml` cuts `v0.<milestone>.<patch>` from the ledger, mechanically, and it is the only thing that may: a release is a claim made to everyone outside this repository, and it is gated on a milestone being complete and fully evidenced. A run that tags by hand bypasses both gates — which happened on 2026-09-08, and produced a `v0.2.0` announcing a milestone that was not finished.
+
 ### Voices that are not roles
 
 Other accounts post here. None of them is a role, none has authority over the merge,
