@@ -53,7 +53,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
 
-      - name: Cut the tag if a milestone is newly complete
+      - name: Act as the MACHINE identity towards git
         env:
           GH_TOKEN: ${{ steps.identity.outputs.token }}
         run: |
@@ -61,4 +61,29 @@ jobs:
           git config user.email "${{ steps.identity.outputs.app-slug }}[bot]@users.noreply.github.com"
           git remote set-url origin \
             "https://x-access-token:${{ steps.identity.outputs.token }}@github.com/${{ github.repository }}.git"
-          python scripts/release_tag.py
+
+      # MERGE_COMMIT cannot be written by the AUTHOR: the row lands inside the pull
+      # request, and the squash commit does not exist until that pull request merges.
+      # Nothing filled it afterwards, so eleven of twenty-three rows were blank, eight
+      # of them IMPLEMENTED - and the tagger below hashes that field. It runs first, so
+      # a milestone is never considered for release on provenance nobody supplied.
+      #
+      # Its own commit re-triggers this workflow once, by design: that second run finds
+      # nothing to fill and goes straight to tagging. It cannot loop, because a run
+      # that changes nothing pushes nothing.
+      - name: Record where merged work actually landed
+        env:
+          GH_TOKEN: ${{ steps.identity.outputs.token }}
+        run: |
+          python scripts/backfill_merge_commits.py --repo "${{ github.repository }}"
+          if ! git diff --quiet -- docs/spec/implementation_status.csv; then
+            python scripts/implementation_status.py
+            git add docs/spec/implementation_status.csv docs/spec/IMPLEMENTATION_STATUS.md
+            git commit -m "ledger: record the merge commits of requirements that landed"
+            git push origin HEAD:master
+          fi
+
+      - name: Cut the tag if a milestone is newly complete
+        env:
+          GH_TOKEN: ${{ steps.identity.outputs.token }}
+        run: python scripts/release_tag.py

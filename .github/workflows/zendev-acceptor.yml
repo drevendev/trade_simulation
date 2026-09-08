@@ -144,6 +144,13 @@ jobs:
       # ledger. Only when a model run is about to happen: a run with no work spends
       # nothing and needs no reading. The token reaches this step and the model step
       # only, and the reading never prints what it read.
+      # The instant the model starts. run_effect asks the forge what this identity
+      # did after it, which is how a run that worked stops depending on how it
+      # phrased its last sentence.
+      - name: Mark when the model started
+        id: started
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+
       - name: Read the subscription windows before the model runs
         if: steps.select.outputs.target != 'none'
         env:
@@ -289,6 +296,21 @@ jobs:
           repositories: zen-telemetry
 
       # Telemetry only. See the note in zendev-author.yml: this never fails the run.
+      # Read from the staged copy, like everything else that runs after the
+      # model: this role rewrites the working tree it would otherwise run from.
+      - name: Read what this run actually did
+        id: effect
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python "${RUNNER_TEMP}/control-plane/run_effect.py" \
+            --repo "${{ github.repository }}" \
+            --role acceptor \
+            --identity "${{ steps.identity.outputs.app-slug }}" \
+            --pull "${{ steps.select.outputs.target }}" \
+            --since "${{ steps.started.outputs.at }}"
+
       - name: Record what this run consumed
         if: always()
         env:
@@ -298,6 +320,7 @@ jobs:
             --execution-file "${{ steps.claude.outputs.execution_file }}" \
             --conclusion "${{ steps.select.outputs.target == 'none' && 'no_work' || steps.claude.outputs.conclusion }}" \
             --role acceptor \
+            --effect "${{ steps.effect.outputs.effect }}" \
             --ledger-repo drevendev/zen-telemetry \
             --run-id "${{ github.run_id }}" \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \

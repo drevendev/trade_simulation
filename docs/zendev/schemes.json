@@ -13,7 +13,7 @@
     "descriptor in the tag message, and every telemetry record carries {id, digest} so",
     "a measurement window can be sliced by scheme without knowing any dates."
   ],
-  "active": "scheme/3",
+  "active": "scheme/4",
   "schemes": [
     {
       "id": "scheme/1",
@@ -68,8 +68,8 @@
     },
     {
       "id": "scheme/4",
-      "in_force_from": "",
-      "commit": "",
+      "in_force_from": "2026-09-07T22:53:33Z",
+      "commit": "2057de0",
       "summary": "SLOPSTER joins as an external QA voice with read access only; its findings reach the loop through the intake job.",
       "roles": {
         "author": {"identity": "zendev-author[bot]", "model": "claude-haiku-4-5", "max_budget_usd": 5.0},
@@ -79,12 +79,12 @@
       "verdict_owner": "zendev-acceptor",
       "voices": [
         "EndlessZen as drevendev, owns the specification",
-        "SLOPSTER as AndyDev, read-only: comments and Issues, never a formal review"
+        "SLOPSTER as andy-zen-dev, read-only: comments and Issues, never a formal review"
       ],
       "required_checks": ["build-and-test", "typescript", "policy-guard", "mergeability"],
       "rework_limit": 3,
       "cadence_minutes": 25,
-      "note": "Not in force. Activated when the QA voice's hourly cadence starts."
+      "note": "Activated by a repository variable rather than a merge, so `commit` records where master stood at `in_force_from`: ZENDEV_QA_LOGIN was set at 2026-09-07T22:53:33Z and the intake job cannot run without it. The QA voice began commenting earlier, at 21:48Z, so telemetry records between 21:48Z and 22:53Z say scheme/3 while a third voice was already speaking — two comments, no verdict taken on either. The earlier plan named this account AndyDev; the account is andy-zen-dev."
     }
   ]
 }

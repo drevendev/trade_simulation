@@ -232,8 +232,21 @@ python scripts/implementation_status.py
 python scripts/implementation_status.py --check
 ```
 
-A row carries `REQ_ID`, `STATUS`, `ISSUE`, `PR`, an optional `MERGE_COMMIT` and
-`EVIDENCE`. `IMPLEMENTED` names a merged pull request and a test that fails without the
+A row carries `REQ_ID`, `STATUS`, `ISSUE`, `PR`, `MERGE_COMMIT` and `EVIDENCE`.
+
+Leave `MERGE_COMMIT` empty: you cannot know it. The row lands inside your pull request
+and the squash commit does not exist until that pull request merges, so
+`scripts/backfill_merge_commits.py` fills it afterwards and the release tagger refuses
+to release a milestone whose rows still lack it. It was called *optional* here until
+2026-09-07, which is why eleven of twenty-three rows carried nothing and eight of those
+were marked `IMPLEMENTED`. Optional and nobody's job are the same thing.
+
+**Quote `EVIDENCE` whenever it contains a comma.** A bare comma splits the row into more
+than the six declared fields; `csv.DictReader` files the surplus where nothing reads it,
+and every consumer sees only the text before that comma. Ten rows were in that state,
+one of them losing everything after the word `jurisdictionChanges`.
+`implementation_status.py --check` now refuses such a row, so this fails the build rather
+than the record. `IMPLEMENTED` names a merged pull request and a test that fails without the
 change; `PARTIAL` does the same for a named slice and says what is left open; `BLOCKED`,
 `DEFERRED` and `CONTESTED` carry their reason in the evidence cell. There is no
 `IN_PROGRESS` row — claimed work is a `status:in-progress` label on the Issue.
