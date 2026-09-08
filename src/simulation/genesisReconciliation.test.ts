@@ -388,6 +388,189 @@ describe("reconcileGenesisStocks", () => {
       const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
       expect(result.success).toBe(true);
     });
+
+    it("fails when money is moved from one owner to another while keeping currency total unchanged", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find two state money records for the same currency
+      const moneyRecords = worldState.worldGenesisLedger.records.filter(
+        (r) => r.type === "MONEY_ENDOWMENT"
+      );
+      const moneyByOwnerCurrency = new Map<string, GenesisRecord[]>();
+      moneyRecords.forEach((r) => {
+        if (r.type === "MONEY_ENDOWMENT" && r.owner && r.currencyId) {
+          const key = `${JSON.stringify(r.owner)}-${r.currencyId}`;
+          if (!moneyByOwnerCurrency.has(key)) {
+            moneyByOwnerCurrency.set(key, []);
+          }
+          moneyByOwnerCurrency.get(key)!.push(r);
+        }
+      });
+
+      // Find two different owners for the same currency to swap money between them
+      const currencyKeys = new Map<string, GenesisRecord[]>();
+      moneyRecords.forEach((r) => {
+        if (r.type === "MONEY_ENDOWMENT" && r.currencyId) {
+          const key = String(r.currencyId);
+          if (!currencyKeys.has(key)) {
+            currencyKeys.set(key, []);
+          }
+          currencyKeys.get(key)!.push(r);
+        }
+      });
+
+      // Find a currency with at least 2 different owners
+      let record1: GenesisRecord | undefined;
+      let record2: GenesisRecord | undefined;
+      for (const records of currencyKeys.values()) {
+        if (records.length >= 2) {
+          record1 = records[0];
+          record2 = records[1];
+          break;
+        }
+      }
+
+      if (!record1 || !record2 || record1.type !== "MONEY_ENDOWMENT" || record2.type !== "MONEY_ENDOWMENT") {
+        // Skip if scenario doesn't have multiple owners of same currency
+        expect(record1).toBeDefined();
+        return;
+      }
+
+      // Swap amounts between the two owners: subtract from record1, add to record2
+      const swapAmount = Math.min(record1.amount, record2.amount) * 0.5;
+
+      const modifiedRecords = worldState.worldGenesisLedger.records.map((r) => {
+        if (r === record1) {
+          return { ...r, amount: r.amount - swapAmount };
+        }
+        if (r === record2) {
+          return { ...r, amount: r.amount + swapAmount };
+        }
+        return r;
+      });
+
+      const modifiedLedger = { records: modifiedRecords };
+
+      // Reconciliation should fail because we've moved money from one owner to another
+      const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("MONEY");
+    });
+
+    it("fails when goods are moved from one owner to another while keeping good total unchanged", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find two good records for the same good with different owners
+      const goodRecords = worldState.worldGenesisLedger.records.filter(
+        (r) => r.type === "GOOD_ENDOWMENT"
+      );
+      const goodByOwnerGoodId = new Map<string, GenesisRecord[]>();
+      goodRecords.forEach((r) => {
+        if (r.type === "GOOD_ENDOWMENT" && r.owner && r.goodId) {
+          const key = `${JSON.stringify(r.owner)}-${r.goodId}`;
+          if (!goodByOwnerGoodId.has(key)) {
+            goodByOwnerGoodId.set(key, []);
+          }
+          goodByOwnerGoodId.get(key)!.push(r);
+        }
+      });
+
+      // Find good IDs that have multiple owners
+      const goodIds = new Map<string, GenesisRecord[]>();
+      goodRecords.forEach((r) => {
+        if (r.type === "GOOD_ENDOWMENT" && r.goodId) {
+          const key = String(r.goodId);
+          if (!goodIds.has(key)) {
+            goodIds.set(key, []);
+          }
+          goodIds.get(key)!.push(r);
+        }
+      });
+
+      // Find a good with at least 2 different owners
+      let record1: GenesisRecord | undefined;
+      let record2: GenesisRecord | undefined;
+      for (const records of goodIds.values()) {
+        if (records.length >= 2) {
+          record1 = records[0];
+          record2 = records[1];
+          break;
+        }
+      }
+
+      if (!record1 || !record2 || record1.type !== "GOOD_ENDOWMENT" || record2.type !== "GOOD_ENDOWMENT") {
+        // Skip if scenario doesn't have multiple owners of same good
+        expect(record1).toBeDefined();
+        return;
+      }
+
+      // Swap amounts between the two owners: subtract from record1, add to record2
+      const swapAmount = Math.min(record1.amount, record2.amount) * 0.5;
+
+      const modifiedRecords = worldState.worldGenesisLedger.records.map((r) => {
+        if (r === record1) {
+          return { ...r, amount: r.amount - swapAmount };
+        }
+        if (r === record2) {
+          return { ...r, amount: r.amount + swapAmount };
+        }
+        return r;
+      });
+
+      const modifiedLedger = { records: modifiedRecords };
+
+      // Reconciliation should fail because we've moved goods from one owner to another
+      const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("GOOD");
+    });
+
+    it("fails when capital is relocated between ProductionUnits while keeping total unchanged", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find two CAPITAL_ENDOWMENT records with different owners
+      const capitalRecords = worldState.worldGenesisLedger.records.filter(
+        (r) => r.type === "CAPITAL_ENDOWMENT" && r.owner && r.owner.type === "PRODUCTION_UNIT"
+      );
+
+      if (capitalRecords.length < 2) {
+        // Skip if scenario doesn't have multiple production units with capital
+        expect(capitalRecords.length).toBeGreaterThanOrEqual(2);
+        return;
+      }
+
+      const record1 = capitalRecords[0]!;
+      const record2 = capitalRecords[1]!;
+
+      // Swap capital amounts between the two production units
+      const swapAmount = Math.min(record1.amount, record2.amount) * 0.5;
+
+      const modifiedRecords = worldState.worldGenesisLedger.records.map((r) => {
+        if (r === record1) {
+          return { ...r, amount: r.amount - swapAmount };
+        }
+        if (r === record2) {
+          return { ...r, amount: r.amount + swapAmount };
+        }
+        return r;
+      });
+
+      const modifiedLedger = { records: modifiedRecords };
+
+      // Reconciliation should fail because we've relocated capital between different owners
+      const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("CAPITAL");
+    });
   });
 
   describe("diagnostic output", () => {
