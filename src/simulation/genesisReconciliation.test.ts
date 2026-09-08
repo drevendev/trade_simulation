@@ -670,6 +670,81 @@ describe("reconcileGenesisStocks", () => {
       expect(result.details?.residual).toBeGreaterThan(0);
     });
 
+    it("fails when FX pool reserves are moved between distinct pools at same currency (pool identity validation)", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find two authorities with FX pools
+      const authoritiesWithPools = Array.from(worldState.monetaryAuthorities.values()).filter(
+        (a) => a.seed.fxPools && a.seed.fxPools.length > 0
+      );
+      expect(authoritiesWithPools.length).toBeGreaterThanOrEqual(2);
+      if (authoritiesWithPools.length < 2) return;
+
+      const auth1 = authoritiesWithPools[0]!;
+      const auth2 = authoritiesWithPools[1]!;
+      const pool1 = auth1.seed.fxPools?.[0];
+      const pool2 = auth2.seed.fxPools?.[0];
+      expect(pool1).toBeDefined();
+      expect(pool2).toBeDefined();
+      if (!pool1 || !pool2 || !pool1.cash || !pool2.cash) return;
+
+      // Move an equal amount of a shared currency from pool1 to pool2
+      // The per-currency total stays constant, but pool identity is wrong
+      const sharedCurrency = pool1.baseCurrencyKey;
+      const moveAmount = 100;
+
+      const modifiedAuthorities = new Map(worldState.monetaryAuthorities);
+      const modifiedAuth1: typeof auth1 = {
+        ...auth1,
+        seed: {
+          ...auth1.seed,
+          fxPools: [
+            {
+              ...pool1,
+              cash: {
+                ...pool1.cash,
+                [sharedCurrency]: (pool1.cash[sharedCurrency] ?? 0) - moveAmount,
+              },
+            },
+            ...(auth1.seed.fxPools?.slice(1) ?? []),
+          ],
+        },
+      };
+      const modifiedAuth2: typeof auth2 = {
+        ...auth2,
+        seed: {
+          ...auth2.seed,
+          fxPools: [
+            {
+              ...pool2,
+              cash: {
+                ...pool2.cash,
+                [sharedCurrency]: (pool2.cash[sharedCurrency] ?? 0) + moveAmount,
+              },
+            },
+            ...(auth2.seed.fxPools?.slice(1) ?? []),
+          ],
+        },
+      };
+      modifiedAuthorities.set(auth1.authorityId, modifiedAuth1);
+      modifiedAuthorities.set(auth2.authorityId, modifiedAuth2);
+
+      const modifiedWorldState = {
+        ...worldState,
+        monetaryAuthorities: modifiedAuthorities,
+      };
+
+      // Reconciliation should fail because pool+currency identity is wrong
+      // even though per-currency totals are preserved
+      const result = reconcileGenesisStocks(modifiedWorldState, worldState.worldGenesisLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("FX_POOL");
+      expect(result.details?.residual).toBeGreaterThan(0);
+    });
+
     it("fails when FX pool cash is moved from ledger but not from world state", () => {
       const scenario = baselineScenario;
       const config = createTestConfig();
