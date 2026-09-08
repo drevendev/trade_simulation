@@ -8,7 +8,18 @@
  * Phase order (0–15) is documented in CORE_SCHEMA_AND_LIFECYCLES.md section 10.
  */
 
-import type { RegionId, StateId, CurrencyId, CohortId, ProductionUnitId, MonetaryAuthorityId } from "../domain/id";
+import type {
+  RegionId,
+  StateId,
+  CurrencyId,
+  CohortId,
+  ProductionUnitId,
+  MonetaryAuthorityId,
+  TransactionId,
+  TransactionBundleId,
+  FxSettlementId,
+} from "../domain/id";
+import type { ActorRef } from "../domain/genesisLedger";
 import type { WorldState, PendingTransitions } from "./worldState";
 import type { TickLedger } from "./ledger";
 import { createEmptyTickLedger, validateZeroFlowReconciliation } from "./ledger";
@@ -33,8 +44,9 @@ export interface TickContext {
 }
 
 /**
- * M2 minimum accounting ledger contract.
+ * M2 minimum accounting ledger contract, extended in M3+ with transaction schema fields.
  * Normalized projection of committed stock mutations with tick/phase/reason attribution.
+ * REQ-MARKET-004 extends this with transactionId, bundleId, source, destination and tax linkage.
  */
 export interface EconomicTransaction {
   readonly tick: number;
@@ -44,6 +56,15 @@ export interface EconomicTransaction {
   readonly goodId?: string;
   readonly amount: number;
   readonly reason: string;
+  // REQ-MARKET-004 transaction schema extensions:
+  readonly transactionId?: TransactionId;
+  readonly bundleId?: TransactionBundleId;
+  readonly source?: ActorRef;
+  readonly destination?: ActorRef | { readonly type: "STATE"; readonly id: StateId };
+  readonly originatingTransactionId?: TransactionId;
+  readonly fxSettlementId?: FxSettlementId;
+  readonly unitPrice?: number;
+  readonly taxAmount?: number;
 }
 
 export const PHASE_NAMES = [

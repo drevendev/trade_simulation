@@ -21,6 +21,7 @@ export {
   type CohortId,
   type CurrencyId,
   type EventInstanceId,
+  type FxSettlementId,
   type GoodId,
   type IdAllocator,
   type IdKind,
@@ -31,6 +32,8 @@ export {
   type RegionId,
   type ShipmentId,
   type StateId,
+  type TransactionBundleId,
+  type TransactionId,
   type TransportLinkId,
 } from "./id";
 

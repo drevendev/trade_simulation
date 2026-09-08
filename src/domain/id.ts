@@ -26,6 +26,15 @@ export type BondId = OpaqueId<"Bond">;
 export type EventInstanceId = OpaqueId<"EventInstance">;
 export type GoodId = OpaqueId<"Good">;
 
+/** Ephemeral transaction ID (tx:...), created during clearing/settlement (REQ-MARKET-004). */
+export type TransactionId = string & { readonly __brand: "TransactionId" };
+
+/** Ephemeral transaction bundle ID (tb:...), groups paired transactions (REQ-MARKET-004). */
+export type TransactionBundleId = string & { readonly __brand: "TransactionBundleId" };
+
+/** Ephemeral FX settlement ID (fxs:...), links FX conversion to trade bundles (REQ-MARKET-004+). */
+export type FxSettlementId = string & { readonly __brand: "FxSettlementId" };
+
 /** Stable string prefixes, fixed by the specification (section 2). */
 export const ID_KIND_PREFIX = {
   Region: "r",
