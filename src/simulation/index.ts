@@ -31,8 +31,15 @@ export {
   executeTick,
   computeTickHash,
   noOpPhaseHandler,
+  validateTickInvariants,
+  createTransactionId,
+  createTransactionBundleId,
+  createFxSettlementId,
   type TickContext,
   type EconomicTransaction,
+  type TransactionId,
+  type TransactionBundleId,
+  type FxSettlementId,
   type PhaseHandler,
 } from "./tickOrchestrator";
 
@@ -58,8 +65,6 @@ export {
   type M2DiagnosticRunProjection,
 } from "./m2DiagnosticProjection";
 
-export { validateTickInvariants } from "./tickOrchestrator";
-
 export {
   calculateMarketPressure,
   calculateLogPriceChange,
@@ -67,3 +72,13 @@ export {
   repriceGoodInPhase6,
   updateMarketExpectations,
 } from "./marketPricing";
+
+export {
+  computeConsumptionTax,
+  preflightMarketSettlement,
+  createMarketSaleTransaction,
+  createConsumptionTaxTransaction,
+  executeMarketSettlement,
+  type TaxPolicyProvider,
+  type MarketSettlementBundle,
+} from "./marketSettlement";
