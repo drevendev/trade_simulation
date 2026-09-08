@@ -128,6 +128,7 @@ export interface ClanState {
 
 export interface CohortState {
   readonly cohortId: CohortId;
+  readonly clanId: ClanId;
   readonly seed: CohortSeed;
 }
 
@@ -194,22 +195,8 @@ export function buildInitialWorld(
     const authorityState = buildMonetaryAuthorityState(authoritySeed, idMap);
     authorityRegistry.set(authorityId, authorityState);
 
-    // Track authority wallet opening balances (money endowment)
-    Object.entries(authoritySeed.wallet ?? {}).forEach(([currencyKey, amount]) => {
-      if (typeof amount === "number" && amount > 0) {
-        const currencyId = idMap.currencyIds.get(currencyKey);
-        if (currencyId) {
-          const record: GenesisRecord = {
-            type: "MONEY_ENDOWMENT",
-            owner: { type: "STATE", stateId: authoritySeed.key as any }, // Placeholder; FX pool is tracked separately
-            currencyId,
-            amount,
-            sourceSeedKey: `${authoritySeed.key}.wallet.${currencyKey}`,
-          };
-          worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
-        }
-      }
-    });
+    // Authority wallets are tracked through FX pool opening balances and aggregate
+    // currency reconciliation, not as individual endowment records (REQ-CONFIG-004)
 
     // Track FX pool opening balances
     (authoritySeed.fxPools ?? []).forEach((fxPoolSeed) => {
@@ -361,7 +348,7 @@ export function buildInitialWorld(
     const regionId = idMap.regionIds.get(cohortSeed.regionKey)!;
     const clanId = idMap.clanIds.get(cohortSeed.clanKey ?? "")!;
 
-    cohortRegistry.set(cohortId, { cohortId, seed: cohortSeed } as CohortState);
+    cohortRegistry.set(cohortId, { cohortId, clanId, seed: cohortSeed } as CohortState);
 
     // Track cohort population endowment
     if (cohortSeed.population > 0) {

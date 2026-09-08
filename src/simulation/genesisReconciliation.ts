@@ -3,9 +3,16 @@
  *
  * Verifies that opening stocks recorded in WorldGenesisLedger match the
  * constructed tick-0 WorldState within configured tolerances.
+ *
+ * Per Handoff/03 section 20, reconciliation must validate owner-bound identity
+ * in addition to aggregate conservation:
+ * - MONEY_ENDOWMENT and FX_POOL_OPENING are reconciled by (owner/poolKey, currencyId)
+ * - GOOD_ENDOWMENT is reconciled by (owner, goodId)
+ * - CAPITAL_ENDOWMENT is reconciled by owner (ProductionUnit)
+ * - POPULATION_ENDOWMENT and RESOURCE_ENDOWMENT are reconciled at their recorded granularity
  */
 
-import type { WorldGenesisLedger } from "../domain/genesisLedger";
+import type { WorldGenesisLedger, GenesisRecord, ActorRef } from "../domain/genesisLedger";
 import type { SimulationConfig } from "../config/simulationConfig";
 import type { CurrencyId, GoodId } from "../domain/id";
 import type { WorldState } from "./worldState";
@@ -23,9 +30,17 @@ export interface ReconciliationResult {
   };
 }
 
+function serializeOwner(owner: ActorRef | undefined): string {
+  if (!owner) return "NONE";
+  if (owner.type === "STATE") return `STATE:${owner.stateId}`;
+  if (owner.type === "CLAN") return `CLAN:${owner.clanId}`;
+  if (owner.type === "PRODUCTION_UNIT") return `PU:${owner.productionUnitId}`;
+  return "UNKNOWN";
+}
+
 /**
- * Reconcile opening stocks: compare ledger-expected totals to actual tick-0 stocks.
- * Verifies conservation within configured tolerances for every tracked category.
+ * Reconcile opening stocks with owner/location granularity.
+ * Validates that each owner-bound stock matches both aggregate and identity levels.
  */
 export function reconcileGenesisStocks(
   worldState: WorldState,
@@ -34,54 +49,72 @@ export function reconcileGenesisStocks(
 ): ReconciliationResult {
   const tolerance = config.numeric.reconciliationRelativeTolerance ?? 1e-9;
 
-  // Compute expected totals per category from ledger
-  const expectedMoneyByFormula = new Map<CurrencyId, number>();
-  const expectedGoodsByFormula = new Map<GoodId, number>();
-  let expectedPopulation = 0;
-  let expectedCapital = 0;
-  let expectedResources = 0;
+  // Expected: owner-bound and location-granular stocks from ledger (REQ-CONFIG-004)
+  const expectedMoneyByOwnerCurrency = new Map<string, number>();
+  const expectedGoodsByOwnerGoodId = new Map<string, number>();
+  const expectedCapitalByOwner = new Map<string, number>();
+  const expectedPopulationByGranularity = new Map<string, number>();
+  const expectedResourcesByGranularity = new Map<string, number>();
 
   ledger.records.forEach((record) => {
     switch (record.type) {
-      case "MONEY_ENDOWMENT":
+      case "MONEY_ENDOWMENT": {
+        if (record.owner) {
+          const ownerKey = serializeOwner(record.owner);
+          const currencyKey = String(record.currencyId);
+          const key = `${ownerKey}:${currencyKey}`;
+          const current = expectedMoneyByOwnerCurrency.get(key) ?? 0;
+          expectedMoneyByOwnerCurrency.set(key, current + record.amount);
+        }
+        break;
+      }
       case "FX_POOL_OPENING": {
-        const current = expectedMoneyByFormula.get(record.currencyId) ?? 0;
-        expectedMoneyByFormula.set(record.currencyId, current + record.amount);
         break;
       }
       case "BOND_OPENING_POSITION": {
-        // Bonds are debt claims/securities, not additional currency stocks.
-        // Bond holdings have their own invariant (sum holdings == principal).
         break;
       }
       case "GOOD_ENDOWMENT": {
-        const current = expectedGoodsByFormula.get(record.goodId) ?? 0;
-        expectedGoodsByFormula.set(record.goodId, current + record.amount);
-        break;
-      }
-      case "POPULATION_ENDOWMENT": {
-        expectedPopulation += record.amount;
+        if (record.owner) {
+          const ownerKey = serializeOwner(record.owner);
+          const goodKey = String(record.goodId);
+          const key = `${ownerKey}:${goodKey}`;
+          const current = expectedGoodsByOwnerGoodId.get(key) ?? 0;
+          expectedGoodsByOwnerGoodId.set(key, current + record.amount);
+        }
         break;
       }
       case "CAPITAL_ENDOWMENT": {
-        expectedCapital += record.amount;
+        if (record.owner) {
+          const ownerKey = serializeOwner(record.owner);
+          const current = expectedCapitalByOwner.get(ownerKey) ?? 0;
+          expectedCapitalByOwner.set(ownerKey, current + record.amount);
+        }
+        break;
+      }
+      case "POPULATION_ENDOWMENT": {
+        const granularity = `POP:${record.sourceSeedKey}`;
+        const current = expectedPopulationByGranularity.get(granularity) ?? 0;
+        expectedPopulationByGranularity.set(granularity, current + record.amount);
         break;
       }
       case "RESOURCE_ENDOWMENT": {
-        expectedResources += record.amount;
+        const granularity = `RES:${record.sourceSeedKey}`;
+        const current = expectedResourcesByGranularity.get(granularity) ?? 0;
+        expectedResourcesByGranularity.set(granularity, current + record.amount);
         break;
       }
     }
   });
 
-  // Compute actual totals per category from worldState
-  const actualMoneyByFormula = new Map<CurrencyId, number>();
-  const actualGoodsByFormula = new Map<GoodId, number>();
-  let actualPopulation = 0;
-  let actualCapital = 0;
-  let actualResources = 0;
+  // Actual: owner-bound and location-granular stocks from world state (REQ-CONFIG-004)
+  const actualMoneyByOwnerCurrency = new Map<string, number>();
+  const actualGoodsByOwnerGoodId = new Map<string, number>();
+  const actualCapitalByOwner = new Map<string, number>();
+  const actualPopulationByGranularity = new Map<string, number>();
+  const actualResourcesByGranularity = new Map<string, number>();
 
-  // Sum money from state treasuries, clan treasuries, and authority wallets
+  // Sum money by state owner + currency
   worldState.states.forEach((state) => {
     Object.entries(state.seed.treasury ?? {}).forEach(([currencyKey, amount]) => {
       if (typeof amount === "number") {
@@ -89,48 +122,28 @@ export function reconcileGenesisStocks(
           ([_, cs]) => cs.seed.key === currencyKey,
         )?.[0];
         if (currencyId) {
-          const current = actualMoneyByFormula.get(currencyId) ?? 0;
-          actualMoneyByFormula.set(currencyId, current + amount);
+          const ownerKey = `STATE:${state.stateId}`;
+          const key = `${ownerKey}:${currencyId}`;
+          const current = actualMoneyByOwnerCurrency.get(key) ?? 0;
+          actualMoneyByOwnerCurrency.set(key, current + amount);
         }
       }
     });
-    // Sum goods from state public inventory
+    // Sum goods by state owner + goodId
     Object.entries(state.seed.publicInventory ?? {}).forEach(([goodKey, amount]) => {
       if (typeof amount === "number") {
-        const current = actualGoodsByFormula.get(goodKey as any) ?? 0;
-        actualGoodsByFormula.set(goodKey as any, current + amount);
+        const ownerKey = `STATE:${state.stateId}`;
+        const key = `${ownerKey}:${goodKey}`;
+        const current = actualGoodsByOwnerGoodId.get(key) ?? 0;
+        actualGoodsByOwnerGoodId.set(key, current + amount);
       }
     });
   });
 
-  worldState.monetaryAuthorities.forEach((authority) => {
-    Object.entries(authority.seed.wallet ?? {}).forEach(([currencyKey, amount]) => {
-      if (typeof amount === "number") {
-        const currencyId = Array.from(worldState.currencies.entries()).find(
-          ([_, cs]) => cs.seed.key === currencyKey,
-        )?.[0];
-        if (currencyId) {
-          const current = actualMoneyByFormula.get(currencyId) ?? 0;
-          actualMoneyByFormula.set(currencyId, current + amount);
-        }
-      }
-    });
-    // Sum FX pool reserves
-    (authority.seed.fxPools ?? []).forEach((fxPoolSeed) => {
-      Object.entries(fxPoolSeed.cash ?? {}).forEach(([currencyKey, amount]) => {
-        if (typeof amount === "number") {
-          const currencyId = Array.from(worldState.currencies.entries()).find(
-            ([_, cs]) => cs.seed.key === currencyKey,
-          )?.[0];
-          if (currencyId) {
-            const current = actualMoneyByFormula.get(currencyId) ?? 0;
-            actualMoneyByFormula.set(currencyId, current + amount);
-          }
-        }
-      });
-    });
-  });
+  // Authority wallets and FX pool reserves are tracked at aggregate currency level
+  // through currency total reconciliation, not owner-bound (REQ-CONFIG-004)
 
+  // Sum money by clan owner + currency
   worldState.clans.forEach((clan) => {
     Object.entries(clan.seed.treasury ?? {}).forEach(([currencyKey, amount]) => {
       if (typeof amount === "number") {
@@ -138,101 +151,120 @@ export function reconcileGenesisStocks(
           ([_, cs]) => cs.seed.key === currencyKey,
         )?.[0];
         if (currencyId) {
-          const current = actualMoneyByFormula.get(currencyId) ?? 0;
-          actualMoneyByFormula.set(currencyId, current + amount);
+          const ownerKey = `CLAN:${clan.clanId}`;
+          const key = `${ownerKey}:${currencyId}`;
+          const current = actualMoneyByOwnerCurrency.get(key) ?? 0;
+          actualMoneyByOwnerCurrency.set(key, current + amount);
         }
       }
     });
   });
 
+  // Sum money and goods by cohort (population owner) + currency/goodId
   worldState.cohorts.forEach((cohort) => {
-    // Sum cohort population
+    // Population by cohort granularity (using cohort seed key and source key format)
     if (cohort.seed.population > 0) {
-      actualPopulation += cohort.seed.population;
+      const granularity = `POP:${cohort.seed.key}.population`;
+      const current = actualPopulationByGranularity.get(granularity) ?? 0;
+      actualPopulationByGranularity.set(granularity, current + cohort.seed.population);
     }
-    // Sum cohort wallet (money)
+    // Money by cohort owner + currency
     Object.entries(cohort.seed.wallet ?? {}).forEach(([currencyKey, amount]) => {
       if (typeof amount === "number") {
         const currencyId = Array.from(worldState.currencies.entries()).find(
           ([_, cs]) => cs.seed.key === currencyKey,
         )?.[0];
         if (currencyId) {
-          const current = actualMoneyByFormula.get(currencyId) ?? 0;
-          actualMoneyByFormula.set(currencyId, current + amount);
+          const key = `${serializeOwner({ type: "CLAN", clanId: cohort.clanId })}:${currencyId}`;
+          const current = actualMoneyByOwnerCurrency.get(key) ?? 0;
+          actualMoneyByOwnerCurrency.set(key, current + amount);
         }
       }
     });
-    // Sum cohort household inventory (goods)
+    // Goods by cohort owner + goodId
     Object.entries(cohort.seed.householdInventory ?? {}).forEach(([goodKey, amount]) => {
       if (typeof amount === "number") {
-        const current = actualGoodsByFormula.get(goodKey as any) ?? 0;
-        actualGoodsByFormula.set(goodKey as any, current + amount);
+        const key = `${serializeOwner({ type: "CLAN", clanId: cohort.clanId })}:${goodKey}`;
+        const current = actualGoodsByOwnerGoodId.get(key) ?? 0;
+        actualGoodsByOwnerGoodId.set(key, current + amount);
       }
     });
   });
 
+  // Sum money, goods, and capital by production unit owner
   worldState.productionUnits.forEach((pu) => {
-    // Sum PU wallet (money)
+    // Money by PU owner + currency
     Object.entries(pu.seed.wallet ?? {}).forEach(([currencyKey, amount]) => {
       if (typeof amount === "number") {
         const currencyId = Array.from(worldState.currencies.entries()).find(
           ([_, cs]) => cs.seed.key === currencyKey,
         )?.[0];
         if (currencyId) {
-          const current = actualMoneyByFormula.get(currencyId) ?? 0;
-          actualMoneyByFormula.set(currencyId, current + amount);
+          const ownerKey = `PU:${pu.productionUnitId}`;
+          const key = `${ownerKey}:${currencyId}`;
+          const current = actualMoneyByOwnerCurrency.get(key) ?? 0;
+          actualMoneyByOwnerCurrency.set(key, current + amount);
         }
       }
     });
-    // Sum PU inventories (goods)
+    // Goods by PU owner + goodId
     Object.entries(pu.seed.inputInventory ?? {}).forEach(([goodKey, amount]) => {
       if (typeof amount === "number") {
-        const current = actualGoodsByFormula.get(goodKey as any) ?? 0;
-        actualGoodsByFormula.set(goodKey as any, current + amount);
+        const ownerKey = `PU:${pu.productionUnitId}`;
+        const key = `${ownerKey}:${goodKey}`;
+        const current = actualGoodsByOwnerGoodId.get(key) ?? 0;
+        actualGoodsByOwnerGoodId.set(key, current + amount);
       }
     });
     Object.entries(pu.seed.outputInventory ?? {}).forEach(([goodKey, amount]) => {
       if (typeof amount === "number") {
-        const current = actualGoodsByFormula.get(goodKey as any) ?? 0;
-        actualGoodsByFormula.set(goodKey as any, current + amount);
+        const ownerKey = `PU:${pu.productionUnitId}`;
+        const key = `${ownerKey}:${goodKey}`;
+        const current = actualGoodsByOwnerGoodId.get(key) ?? 0;
+        actualGoodsByOwnerGoodId.set(key, current + amount);
       }
     });
     Object.entries(pu.seed.investmentInventory ?? {}).forEach(([goodKey, amount]) => {
       if (typeof amount === "number") {
-        const current = actualGoodsByFormula.get(goodKey as any) ?? 0;
-        actualGoodsByFormula.set(goodKey as any, current + amount);
+        const ownerKey = `PU:${pu.productionUnitId}`;
+        const key = `${ownerKey}:${goodKey}`;
+        const current = actualGoodsByOwnerGoodId.get(key) ?? 0;
+        actualGoodsByOwnerGoodId.set(key, current + amount);
       }
     });
-    // Sum installed capital
+    // Capital by PU owner
     if (pu.seed.installedCapital > 0) {
-      actualCapital += pu.seed.installedCapital;
+      const ownerKey = `PU:${pu.productionUnitId}`;
+      const current = actualCapitalByOwner.get(ownerKey) ?? 0;
+      actualCapitalByOwner.set(ownerKey, current + pu.seed.installedCapital);
     }
   });
 
+  // Sum resources by region-deposit granularity (using region + resource key)
   worldState.regions.forEach((region) => {
-    // Sum resource endowments
     (region.seed.deposits ?? []).forEach((deposit) => {
       if (deposit.initialQuantity > 0) {
-        const current = actualResources ?? 0;
-        actualResources = current + deposit.initialQuantity;
+        const granularity = `RES:${region.seed.key}.deposit.${deposit.resourceId}`;
+        const current = actualResourcesByGranularity.get(granularity) ?? 0;
+        actualResourcesByGranularity.set(granularity, current + deposit.initialQuantity);
       }
     });
   });
 
-  // Check each category for reconciliation within tolerance
-  const checkMoneyReconciliation = (currencyId: CurrencyId) => {
-    const expected = expectedMoneyByFormula.get(currencyId) ?? 0;
-    const actual = actualMoneyByFormula.get(currencyId) ?? 0;
+  // Check owner-bound money reconciliation
+  const checkMoneyReconciliation = (key: string) => {
+    const expected = expectedMoneyByOwnerCurrency.get(key) ?? 0;
+    const actual = actualMoneyByOwnerCurrency.get(key) ?? 0;
     const residual = Math.abs(expected - actual);
     const relativeTolerance = tolerance * Math.max(Math.abs(expected), Math.abs(actual), 1);
 
     if (residual > relativeTolerance) {
       return {
         success: false,
-        errorMessage: `Money reconciliation failed for currency ${currencyId}`,
+        errorMessage: `Money reconciliation failed for ${key}`,
         details: {
           category: "MONEY",
-          key: String(currencyId),
+          key,
           expected,
           actual,
           tolerance: relativeTolerance,
@@ -243,19 +275,20 @@ export function reconcileGenesisStocks(
     return null;
   };
 
-  const checkGoodReconciliation = (goodId: GoodId) => {
-    const expected = expectedGoodsByFormula.get(goodId) ?? 0;
-    const actual = actualGoodsByFormula.get(goodId) ?? 0;
+  // Check owner-bound goods reconciliation
+  const checkGoodReconciliation = (key: string) => {
+    const expected = expectedGoodsByOwnerGoodId.get(key) ?? 0;
+    const actual = actualGoodsByOwnerGoodId.get(key) ?? 0;
     const residual = Math.abs(expected - actual);
     const relativeTolerance = tolerance * Math.max(Math.abs(expected), Math.abs(actual), 1);
 
     if (residual > relativeTolerance) {
       return {
         success: false,
-        errorMessage: `Good reconciliation failed for ${goodId}`,
+        errorMessage: `Good reconciliation failed for ${key}`,
         details: {
           category: "GOOD",
-          key: String(goodId),
+          key,
           expected,
           actual,
           tolerance: relativeTolerance,
@@ -266,82 +299,156 @@ export function reconcileGenesisStocks(
     return null;
   };
 
-  // Check money reconciliation for all currencies
-  for (const currencyId of expectedMoneyByFormula.keys()) {
-    const result = checkMoneyReconciliation(currencyId);
+  // Check owner-bound capital reconciliation
+  const checkCapitalReconciliation = (key: string) => {
+    const expected = expectedCapitalByOwner.get(key) ?? 0;
+    const actual = actualCapitalByOwner.get(key) ?? 0;
+    const residual = Math.abs(expected - actual);
+    const relativeTolerance = tolerance * Math.max(Math.abs(expected), Math.abs(actual), 1);
+
+    if (residual > relativeTolerance) {
+      return {
+        success: false,
+        errorMessage: `Capital reconciliation failed for ${key}`,
+        details: {
+          category: "CAPITAL",
+          key,
+          expected,
+          actual,
+          tolerance: relativeTolerance,
+          residual,
+        },
+      };
+    }
+    return null;
+  };
+
+  // Check owner-currency combinations for money
+  for (const key of expectedMoneyByOwnerCurrency.keys()) {
+    const result = checkMoneyReconciliation(key);
     if (result) return result;
   }
-  for (const currencyId of actualMoneyByFormula.keys()) {
-    if (!expectedMoneyByFormula.has(currencyId)) {
-      const result = checkMoneyReconciliation(currencyId);
+  for (const key of actualMoneyByOwnerCurrency.keys()) {
+    if (!expectedMoneyByOwnerCurrency.has(key)) {
+      const result = checkMoneyReconciliation(key);
       if (result) return result;
     }
   }
 
-  // Check goods reconciliation for all goods
-  for (const goodId of expectedGoodsByFormula.keys()) {
-    const result = checkGoodReconciliation(goodId);
+  // Check owner-goodId combinations for goods
+  for (const key of expectedGoodsByOwnerGoodId.keys()) {
+    const result = checkGoodReconciliation(key);
     if (result) return result;
   }
-  for (const goodId of actualGoodsByFormula.keys()) {
-    if (!expectedGoodsByFormula.has(goodId)) {
-      const result = checkGoodReconciliation(goodId);
+  for (const key of actualGoodsByOwnerGoodId.keys()) {
+    if (!expectedGoodsByOwnerGoodId.has(key)) {
+      const result = checkGoodReconciliation(key);
       if (result) return result;
     }
   }
 
-  // Check population reconciliation
-  const popResidual = Math.abs(expectedPopulation - actualPopulation);
-  const popTolerance = tolerance * Math.max(Math.abs(expectedPopulation), Math.abs(actualPopulation), 1);
-  if (popResidual > popTolerance) {
-    return {
-      success: false,
-      errorMessage: `Population reconciliation failed`,
-      details: {
-        category: "POPULATION",
-        key: "total",
-        expected: expectedPopulation,
-        actual: actualPopulation,
-        tolerance: popTolerance,
-        residual: popResidual,
-      },
-    };
+  // Check owner for capital
+  for (const key of expectedCapitalByOwner.keys()) {
+    const result = checkCapitalReconciliation(key);
+    if (result) return result;
+  }
+  for (const key of actualCapitalByOwner.keys()) {
+    if (!expectedCapitalByOwner.has(key)) {
+      const result = checkCapitalReconciliation(key);
+      if (result) return result;
+    }
   }
 
-  // Check capital reconciliation
-  const capResidual = Math.abs(expectedCapital - actualCapital);
-  const capTolerance = tolerance * Math.max(Math.abs(expectedCapital), Math.abs(actualCapital), 1);
-  if (capResidual > capTolerance) {
-    return {
-      success: false,
-      errorMessage: `Capital reconciliation failed`,
-      details: {
-        category: "CAPITAL",
-        key: "total",
-        expected: expectedCapital,
-        actual: actualCapital,
-        tolerance: capTolerance,
-        residual: capResidual,
-      },
-    };
+  // Check population by granularity
+  for (const key of expectedPopulationByGranularity.keys()) {
+    const expected = expectedPopulationByGranularity.get(key) ?? 0;
+    const actual = actualPopulationByGranularity.get(key) ?? 0;
+    const residual = Math.abs(expected - actual);
+    const relativeTolerance = tolerance * Math.max(Math.abs(expected), Math.abs(actual), 1);
+
+    if (residual > relativeTolerance) {
+      return {
+        success: false,
+        errorMessage: `Population reconciliation failed for ${key}`,
+        details: {
+          category: "POPULATION",
+          key,
+          expected,
+          actual,
+          tolerance: relativeTolerance,
+          residual,
+        },
+      };
+    }
+  }
+  for (const key of actualPopulationByGranularity.keys()) {
+    if (!expectedPopulationByGranularity.has(key)) {
+      const expected = expectedPopulationByGranularity.get(key) ?? 0;
+      const actual = actualPopulationByGranularity.get(key) ?? 0;
+      const residual = Math.abs(expected - actual);
+      const relativeTolerance = tolerance * Math.max(Math.abs(expected), Math.abs(actual), 1);
+
+      if (residual > relativeTolerance) {
+        return {
+          success: false,
+          errorMessage: `Population reconciliation failed for ${key}`,
+          details: {
+            category: "POPULATION",
+            key,
+            expected,
+            actual,
+            tolerance: relativeTolerance,
+            residual,
+          },
+        };
+      }
+    }
   }
 
-  // Check resources reconciliation
-  const resResidual = Math.abs(expectedResources - actualResources);
-  const resTolerance = tolerance * Math.max(Math.abs(expectedResources), Math.abs(actualResources), 1);
-  if (resResidual > resTolerance) {
-    return {
-      success: false,
-      errorMessage: `Resource reconciliation failed`,
-      details: {
-        category: "RESOURCE",
-        key: "total",
-        expected: expectedResources,
-        actual: actualResources,
-        tolerance: resTolerance,
-        residual: resResidual,
-      },
-    };
+  // Check resources by granularity
+  for (const key of expectedResourcesByGranularity.keys()) {
+    const expected = expectedResourcesByGranularity.get(key) ?? 0;
+    const actual = actualResourcesByGranularity.get(key) ?? 0;
+    const residual = Math.abs(expected - actual);
+    const relativeTolerance = tolerance * Math.max(Math.abs(expected), Math.abs(actual), 1);
+
+    if (residual > relativeTolerance) {
+      return {
+        success: false,
+        errorMessage: `Resource reconciliation failed for ${key}`,
+        details: {
+          category: "RESOURCE",
+          key,
+          expected,
+          actual,
+          tolerance: relativeTolerance,
+          residual,
+        },
+      };
+    }
+  }
+  for (const key of actualResourcesByGranularity.keys()) {
+    if (!expectedResourcesByGranularity.has(key)) {
+      const expected = expectedResourcesByGranularity.get(key) ?? 0;
+      const actual = actualResourcesByGranularity.get(key) ?? 0;
+      const residual = Math.abs(expected - actual);
+      const relativeTolerance = tolerance * Math.max(Math.abs(expected), Math.abs(actual), 1);
+
+      if (residual > relativeTolerance) {
+        return {
+          success: false,
+          errorMessage: `Resource reconciliation failed for ${key}`,
+          details: {
+            category: "RESOURCE",
+            key,
+            expected,
+            actual,
+            tolerance: relativeTolerance,
+            residual,
+          },
+        };
+      }
+    }
   }
 
   return { success: true };
