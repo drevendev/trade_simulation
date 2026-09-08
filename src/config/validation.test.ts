@@ -18,6 +18,7 @@ import type {
 } from "./scenarioDefinition";
 import { assertNoBehavioralOverrides, validateScenarioContent, validateDefinitionPack } from "./validation";
 import type { DefinitionPack, RecipeDefinition } from "./definitionPack";
+import { createDefaultSimulationConfig } from "./simulationConfig";
 
 /** A minimal, well-formed `ScenarioDefinition`-shaped object (required keys only). */
 function minimalScenario(): Record<string, unknown> {
@@ -842,5 +843,37 @@ describe("validateDefinitionPack", () => {
   it("accepts empty recipes map", () => {
     const pack = minimalPack({});
     expect(() => validateDefinitionPack(pack)).not.toThrow();
+  });
+});
+
+describe("canonical market defaults (REQ-MARKET-002)", () => {
+  it("shortageSignalWeight matches Handoff/03 section 4", () => {
+    const config = createDefaultSimulationConfig();
+    expect(config.markets.shortageSignalWeight).toBe(0.65);
+  });
+
+  it("inventorySignalWeight matches Handoff/03 section 4", () => {
+    const config = createDefaultSimulationConfig();
+    expect(config.markets.inventorySignalWeight).toBe(0.35);
+  });
+
+  it("basePriceAdjustmentSpeed matches Handoff/03 section 4", () => {
+    const config = createDefaultSimulationConfig();
+    expect(config.markets.basePriceAdjustmentSpeed).toBe(0.12);
+  });
+
+  it("maxAbsoluteLogPriceMovePerTick matches Handoff/03 section 4", () => {
+    const config = createDefaultSimulationConfig();
+    expect(config.markets.maxAbsoluteLogPriceMovePerTick).toBe(0.18);
+  });
+
+  it("expectationAlpha matches Handoff/03 section 4", () => {
+    const config = createDefaultSimulationConfig();
+    expect(config.markets.expectationAlpha).toBe(0.25);
+  });
+
+  it("targetInventoryCoverageTicks matches Handoff/03 section 4", () => {
+    const config = createDefaultSimulationConfig();
+    expect(config.markets.targetInventoryCoverageTicks).toBe(1.0);
   });
 });
