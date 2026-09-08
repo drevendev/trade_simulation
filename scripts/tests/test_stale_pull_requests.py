@@ -22,9 +22,10 @@ RECENT = "2026-09-08T06:00:00Z"  # 6 hours before NOW
 
 
 def pull(number=208, draft=False, labels=(), head_ref="claude/issue-201-config-004",
-         author="app/zendev-author", comments=(), reviews=()):
+         author="app/zendev-author", comments=(), reviews=(), created=OLD):
     return {
         "number": number,
+        "createdAt": created,
         "isDraft": draft,
         "labels": [{"name": name} for name in labels],
         "headRefName": head_ref,
@@ -55,6 +56,21 @@ class ClosesWhatNothingCanReachTests(unittest.TestCase):
 
     def test_242_quietly_superseded_by_a_duplicate(self):
         action, _ = call(pull(number=242, head_ref="claude/issue-240-acceptance-003"))
+        self.assertEqual(action, "close")
+
+    def test_285_a_freshly_opened_pull_request_is_never_stale(self):
+        # #285: the AUTHOR re-proposed a branch it had abandoned the day before,
+        # without touching its head. Every other signal was 24 hours old, the
+        # arithmetic said "idle 24.3h", and this bound closed the pull request two
+        # minutes after it was opened. Opening one is an act.
+        action, reason = call(
+            pull(number=285, created="2026-09-08T11:58:00Z"), committed=OLD
+        )
+        self.assertEqual(action, "keep", reason)
+
+    def test_a_pull_request_opened_long_ago_and_untouched_is_still_stale(self):
+        # The other half: creation is progress once, not forever.
+        action, _ = call(pull(created=OLD), committed=OLD)
         self.assertEqual(action, "close")
 
     def test_the_window_is_measured_from_the_head_not_from_the_opening(self):
