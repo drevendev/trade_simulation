@@ -571,6 +571,129 @@ describe("reconcileGenesisStocks", () => {
       expect(result.success).toBe(false);
       expect(result.details?.category).toBe("CAPITAL");
     });
+
+    it("fails when FX pool base currency cash is perturbed after ledger was created", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find an authority with FX pools
+      const authorityWithPools = Array.from(worldState.monetaryAuthorities.values()).find(
+        (a) => a.seed.fxPools && a.seed.fxPools.length > 0
+      );
+      expect(authorityWithPools).toBeDefined();
+      if (!authorityWithPools) return;
+
+      // Create a modified world state with perturbed FX pool base cash
+      const modifiedAuthorities = new Map(worldState.monetaryAuthorities);
+      const firstPool = authorityWithPools.seed.fxPools?.[0];
+      expect(firstPool).toBeDefined();
+      if (!firstPool || !firstPool.cash) return;
+
+      const modifiedAuthority = {
+        ...authorityWithPools,
+        seed: {
+          ...authorityWithPools.seed,
+          fxPools: [
+            {
+              ...firstPool,
+              cash: {
+                ...firstPool.cash,
+                [firstPool.baseCurrencyKey]: (firstPool.cash[firstPool.baseCurrencyKey] ?? 0) + 1000,
+              },
+            },
+            ...(authorityWithPools.seed.fxPools?.slice(1) ?? []),
+          ],
+        },
+      };
+      modifiedAuthorities.set(authorityWithPools.authorityId, modifiedAuthority);
+
+      const modifiedWorldState = {
+        ...worldState,
+        monetaryAuthorities: modifiedAuthorities,
+      };
+
+      // Reconciliation should fail
+      const result = reconcileGenesisStocks(modifiedWorldState, worldState.worldGenesisLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("FX_POOL");
+      expect(result.details?.residual).toBeGreaterThan(0);
+    });
+
+    it("fails when FX pool quote currency cash is perturbed after ledger was created", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find an authority with FX pools
+      const authorityWithPools = Array.from(worldState.monetaryAuthorities.values()).find(
+        (a) => a.seed.fxPools && a.seed.fxPools.length > 0
+      );
+      expect(authorityWithPools).toBeDefined();
+      if (!authorityWithPools) return;
+
+      // Create a modified world state with perturbed FX pool quote cash
+      const modifiedAuthorities = new Map(worldState.monetaryAuthorities);
+      const firstPool = authorityWithPools.seed.fxPools?.[0];
+      expect(firstPool).toBeDefined();
+      if (!firstPool || !firstPool.cash) return;
+
+      const modifiedAuthority = {
+        ...authorityWithPools,
+        seed: {
+          ...authorityWithPools.seed,
+          fxPools: [
+            {
+              ...firstPool,
+              cash: {
+                ...firstPool.cash,
+                [firstPool.quoteCurrencyKey]: (firstPool.cash[firstPool.quoteCurrencyKey] ?? 0) - 500,
+              },
+            },
+            ...(authorityWithPools.seed.fxPools?.slice(1) ?? []),
+          ],
+        },
+      };
+      modifiedAuthorities.set(authorityWithPools.authorityId, modifiedAuthority);
+
+      const modifiedWorldState = {
+        ...worldState,
+        monetaryAuthorities: modifiedAuthorities,
+      };
+
+      // Reconciliation should fail
+      const result = reconcileGenesisStocks(modifiedWorldState, worldState.worldGenesisLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("FX_POOL");
+      expect(result.details?.residual).toBeGreaterThan(0);
+    });
+
+    it("fails when FX pool cash is moved from ledger but not from world state", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find an FX pool opening record
+      const fxPoolRecord = worldState.worldGenesisLedger.records.find(
+        (r) => r.type === "FX_POOL_OPENING"
+      );
+      expect(fxPoolRecord).toBeDefined();
+      if (!fxPoolRecord) return;
+
+      // Remove the FX pool opening record from ledger (simulating a ledger error)
+      const modifiedRecords = worldState.worldGenesisLedger.records.filter(
+        (r) => r !== fxPoolRecord
+      );
+      const modifiedLedger = { records: modifiedRecords };
+
+      // Reconciliation should fail because the world state still has the pool cash
+      const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("FX_POOL");
+    });
   });
 
   describe("diagnostic output", () => {

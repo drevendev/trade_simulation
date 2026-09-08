@@ -55,6 +55,7 @@ export function reconcileGenesisStocks(
   const expectedCapitalByOwner = new Map<string, number>();
   const expectedPopulationByGranularity = new Map<string, number>();
   const expectedResourcesByGranularity = new Map<string, number>();
+  const expectedFxPoolByCurrency = new Map<string, number>();
 
   ledger.records.forEach((record) => {
     switch (record.type) {
@@ -69,6 +70,10 @@ export function reconcileGenesisStocks(
         break;
       }
       case "FX_POOL_OPENING": {
+        const currencyKey = String(record.currencyId);
+        const key = `FX_POOL:${record.sourceSeedKey}:${currencyKey}`;
+        const current = expectedFxPoolByCurrency.get(key) ?? 0;
+        expectedFxPoolByCurrency.set(key, current + record.amount);
         break;
       }
       case "BOND_OPENING_POSITION": {
@@ -113,6 +118,7 @@ export function reconcileGenesisStocks(
   const actualCapitalByOwner = new Map<string, number>();
   const actualPopulationByGranularity = new Map<string, number>();
   const actualResourcesByGranularity = new Map<string, number>();
+  const actualFxPoolByCurrency = new Map<string, number>();
 
   // Sum money by state owner + currency
   worldState.states.forEach((state) => {
@@ -140,8 +146,6 @@ export function reconcileGenesisStocks(
     });
   });
 
-  // Authority wallets and FX pool reserves are tracked at aggregate currency level
-  // through currency total reconciliation, not owner-bound (REQ-CONFIG-004)
 
   // Sum money by clan owner + currency
   worldState.clans.forEach((clan) => {
@@ -251,6 +255,41 @@ export function reconcileGenesisStocks(
     });
   });
 
+  // Sum FX pool reserves by pool + currency granularity (REQ-CONFIG-004)
+  worldState.monetaryAuthorities.forEach((authority) => {
+    (authority.seed.fxPools ?? []).forEach((fxPool) => {
+      // Base currency side
+      if (fxPool.cash) {
+        const baseCash = fxPool.cash[fxPool.baseCurrencyKey];
+        if (typeof baseCash === "number" && baseCash > 0) {
+          const currencyId = Array.from(worldState.currencies.entries()).find(
+            ([_, cs]) => cs.seed.key === fxPool.baseCurrencyKey,
+          )?.[0];
+          if (currencyId) {
+            const key = `FX_POOL:${authority.seed.key}.fxPool.${fxPool.key}.base:${currencyId}`;
+            const current = actualFxPoolByCurrency.get(key) ?? 0;
+            actualFxPoolByCurrency.set(key, current + baseCash);
+          }
+        }
+      }
+
+      // Quote currency side
+      if (fxPool.cash) {
+        const quoteCash = fxPool.cash[fxPool.quoteCurrencyKey];
+        if (typeof quoteCash === "number" && quoteCash > 0) {
+          const currencyId = Array.from(worldState.currencies.entries()).find(
+            ([_, cs]) => cs.seed.key === fxPool.quoteCurrencyKey,
+          )?.[0];
+          if (currencyId) {
+            const key = `FX_POOL:${authority.seed.key}.fxPool.${fxPool.key}.quote:${currencyId}`;
+            const current = actualFxPoolByCurrency.get(key) ?? 0;
+            actualFxPoolByCurrency.set(key, current + quoteCash);
+          }
+        }
+      }
+    });
+  });
+
   // Check owner-bound money reconciliation
   const checkMoneyReconciliation = (key: string) => {
     const expected = expectedMoneyByOwnerCurrency.get(key) ?? 0;
@@ -312,6 +351,30 @@ export function reconcileGenesisStocks(
         errorMessage: `Capital reconciliation failed for ${key}`,
         details: {
           category: "CAPITAL",
+          key,
+          expected,
+          actual,
+          tolerance: relativeTolerance,
+          residual,
+        },
+      };
+    }
+    return null;
+  };
+
+  // Check FX pool reserve reconciliation by pool + currency
+  const checkFxPoolReconciliation = (key: string) => {
+    const expected = expectedFxPoolByCurrency.get(key) ?? 0;
+    const actual = actualFxPoolByCurrency.get(key) ?? 0;
+    const residual = Math.abs(expected - actual);
+    const relativeTolerance = tolerance * Math.max(Math.abs(expected), Math.abs(actual), 1);
+
+    if (residual > relativeTolerance) {
+      return {
+        success: false,
+        errorMessage: `FX pool reconciliation failed for ${key}`,
+        details: {
+          category: "FX_POOL",
           key,
           expected,
           actual,
@@ -448,6 +511,18 @@ export function reconcileGenesisStocks(
           },
         };
       }
+    }
+  }
+
+  // Check FX pool reserves by pool + currency key
+  for (const key of expectedFxPoolByCurrency.keys()) {
+    const result = checkFxPoolReconciliation(key);
+    if (result) return result;
+  }
+  for (const key of actualFxPoolByCurrency.keys()) {
+    if (!expectedFxPoolByCurrency.has(key)) {
+      const result = checkFxPoolReconciliation(key);
+      if (result) return result;
     }
   }
 
