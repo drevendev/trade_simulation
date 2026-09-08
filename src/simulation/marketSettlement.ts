@@ -123,15 +123,15 @@ export function preflightMarketSettlement(
   }
   assertFiniteCanonicalNumber(allocation.consumptionTaxAmount, "consumptionTaxAmount");
 
-  // Preflight math check: buyer debit >= seller net receipt + tax
+  // Preflight math check: buyer debit must equal seller net receipt + tax (MTFX-I2)
   const sellerNetReceipt = allocation.quantity * allocation.sellerNetUnitPrice;
   const buyerGrossDebit = allocation.quantity * allocation.buyerGrossUnitPrice;
-  const expectedMinBuyerDebit = sellerNetReceipt + allocation.consumptionTaxAmount;
+  const expectedBuyerDebit = sellerNetReceipt + allocation.consumptionTaxAmount;
 
   // Use epsilon for floating-point comparison
   const epsilon = 1e-8;
-  if (buyerGrossDebit < expectedMinBuyerDebit - epsilon) {
-    return `Buyer debit (${buyerGrossDebit}) must be >= seller net (${sellerNetReceipt}) + tax (${allocation.consumptionTaxAmount})`;
+  if (Math.abs(buyerGrossDebit - expectedBuyerDebit) > epsilon) {
+    return `Buyer debit (${buyerGrossDebit}) must equal seller net (${sellerNetReceipt}) + tax (${allocation.consumptionTaxAmount}), got difference of ${Math.abs(buyerGrossDebit - expectedBuyerDebit)}`;
   }
 
   return null;

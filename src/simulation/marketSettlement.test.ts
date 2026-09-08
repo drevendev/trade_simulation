@@ -173,19 +173,19 @@ describe("Market settlement transaction schemas (REQ-MARKET-004)", () => {
       expect(error).toMatch(/consumptionTaxAmount must be >= 0/);
     });
 
-    it("rejects when buyer debit < seller net + tax", () => {
-      // quantity=100, sellerNetUnitPrice=10, buyerGrossUnitPrice=11, tax=50
-      // seller net = 1000, buyer debit = 1100, required = 1050 ✓
-      // But if buyerGrossUnitPrice too low: buyer debit < 1050
+    it("rejects when buyer debit does not equal seller net + tax", () => {
+      // quantity=100, sellerNetUnitPrice=10, tax=50
+      // seller net = 1000, required identity = 1050
+      // But if buyerGrossUnitPrice too low: buyer debit = 1040 ≠ 1050
       const allocation = createTestAllocation({
         quantity: 100,
         sellerNetUnitPrice: 10,
-        buyerGrossUnitPrice: 10.4, // debit = 1040, required = 1050
+        buyerGrossUnitPrice: 10.4, // debit = 1040, but identity requires 1050
         consumptionTaxAmount: 50,
       });
       const error = preflightMarketSettlement(allocation, 5, 8);
 
-      expect(error).toMatch(/Buyer debit.*must be >=/);
+      expect(error).toMatch(/Buyer debit.*must equal/);
     });
   });
 
@@ -387,7 +387,11 @@ describe("Market settlement transaction schemas (REQ-MARKET-004)", () => {
     });
 
     it("omits CONSUMPTION_TAX when tax = 0", () => {
-      const allocation = createTestAllocation({ consumptionTaxAmount: 0 });
+      const allocation = createTestAllocation({
+        sellerNetUnitPrice: 10,
+        buyerGrossUnitPrice: 10, // Must match identity: buyerGrossUnitPrice = sellerNetUnitPrice + (tax / quantity)
+        consumptionTaxAmount: 0,
+      });
       const counter = { value: 0 };
 
       const bundle = executeMarketSettlement(allocation, 5, 8, counter);
@@ -402,7 +406,7 @@ describe("Market settlement transaction schemas (REQ-MARKET-004)", () => {
       const allocation = createTestAllocation({
         quantity: 100,
         sellerNetUnitPrice: 100,
-        buyerGrossUnitPrice: 112, // Must include 10% tax with 80% collection
+        buyerGrossUnitPrice: 100.8, // seller net (100) + collected tax per unit (0.8)
         consumptionTaxAmount: 80, // Only collected portion (100 × 0.1 × 0.8)
         destinationStateId: testStateId,
       });
@@ -419,10 +423,11 @@ describe("Market settlement transaction schemas (REQ-MARKET-004)", () => {
       expect(bundle.consumptionTaxTransaction?.moneyAmount).toBe(80);
       expect(bundle.consumptionTaxTransaction?.taxAmount).toBe(80);
 
-      // Buyer debit = 100 × 112 = 11200
-      // Seller net receipt = 10000
+      // Buyer debit = 100 × 100.8 = 10080
+      // Seller net receipt = 100 × 100 = 10000
       // Collected tax = 80
-      // Assessed but uncollected = 20 (100 × 0.1 × 0.2) remains with buyer
+      // Identity: buyer debit = seller net + collected tax (MTFX-I2)
+      // Assessed but uncollected = 20 (100 × 0.1 × 0.2) remains with buyer as telemetry
     });
 
     it("handles ProductionUnit actors correctly", () => {
@@ -444,6 +449,8 @@ describe("Market settlement transaction schemas (REQ-MARKET-004)", () => {
 
     it("handles uncontrolled region (null state) correctly", () => {
       const allocation = createTestAllocation({
+        sellerNetUnitPrice: 10,
+        buyerGrossUnitPrice: 10,
         consumptionTaxAmount: 0,
         destinationStateId: null,
       });
