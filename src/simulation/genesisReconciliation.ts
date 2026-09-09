@@ -69,6 +69,10 @@ export function reconcileGenesisStocks(
         break;
       }
       case "FX_POOL_OPENING": {
+        // FX pool reserves are reconciled by pool identity + currency granularity
+        const fxPoolKey = `FX_POOL:${record.sourceSeedKey}:${record.currencyId}`;
+        const current = expectedMoneyByOwnerCurrency.get(fxPoolKey) ?? 0;
+        expectedMoneyByOwnerCurrency.set(fxPoolKey, current + record.amount);
         break;
       }
       case "BOND_OPENING_POSITION": {
@@ -140,8 +144,50 @@ export function reconcileGenesisStocks(
     });
   });
 
-  // Authority wallets and FX pool reserves are tracked at aggregate currency level
-  // through currency total reconciliation, not owner-bound (REQ-CONFIG-004)
+  // Project FX pool reserves by pool identity + currency (REQ-CONFIG-004)
+  worldState.monetaryAuthorities.forEach((authority) => {
+    (authority.seed.fxPools ?? []).forEach((fxPool) => {
+      // Process base currency side
+      if (fxPool.baseCurrencyKey && fxPool.cash) {
+        const baseCurrencyId = Array.from(worldState.currencies.entries()).find(
+          ([_, cs]) => cs.seed.key === fxPool.baseCurrencyKey,
+        )?.[0];
+        const amount = fxPool.cash[fxPool.baseCurrencyKey];
+        if (baseCurrencyId && typeof amount === "number" && amount > 0) {
+          const fxPoolKey = `FX_POOL:${authority.seed.key}.fxPool.${fxPool.key}.base:${baseCurrencyId}`;
+          const current = actualMoneyByOwnerCurrency.get(fxPoolKey) ?? 0;
+          actualMoneyByOwnerCurrency.set(fxPoolKey, current + amount);
+        }
+      }
+      // Process quote currency side
+      if (fxPool.quoteCurrencyKey && fxPool.cash) {
+        const quoteCurrencyId = Array.from(worldState.currencies.entries()).find(
+          ([_, cs]) => cs.seed.key === fxPool.quoteCurrencyKey,
+        )?.[0];
+        const amount = fxPool.cash[fxPool.quoteCurrencyKey];
+        if (quoteCurrencyId && typeof amount === "number" && amount > 0) {
+          const fxPoolKey = `FX_POOL:${authority.seed.key}.fxPool.${fxPool.key}.quote:${quoteCurrencyId}`;
+          const current = actualMoneyByOwnerCurrency.get(fxPoolKey) ?? 0;
+          actualMoneyByOwnerCurrency.set(fxPoolKey, current + amount);
+        }
+      }
+    });
+
+    // Project authority wallets and validate no duplication (REQ-CONFIG-004 criterion 3)
+    Object.entries(authority.seed.wallet ?? {}).forEach(([currencyKey, amount]) => {
+      if (typeof amount === "number") {
+        const currencyId = Array.from(worldState.currencies.entries()).find(
+          ([_, cs]) => cs.seed.key === currencyKey,
+        )?.[0];
+        if (currencyId) {
+          const ownerKey = `AUTHORITY:${authority.authorityId}`;
+          const key = `${ownerKey}:${currencyId}`;
+          const current = actualMoneyByOwnerCurrency.get(key) ?? 0;
+          actualMoneyByOwnerCurrency.set(key, current + amount);
+        }
+      }
+    });
+  });
 
   // Sum money by clan owner + currency
   worldState.clans.forEach((clan) => {

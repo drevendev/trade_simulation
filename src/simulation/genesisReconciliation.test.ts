@@ -571,6 +571,188 @@ describe("reconcileGenesisStocks", () => {
       expect(result.success).toBe(false);
       expect(result.details?.category).toBe("CAPITAL");
     });
+
+    it("fails when FX pool base currency is perturbed after ledger was created", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find an FX pool opening record
+      const fxPoolRecord = worldState.worldGenesisLedger.records.find(
+        (r) => r.type === "FX_POOL_OPENING" && r.sourceSeedKey?.includes(".base"),
+      );
+      expect(fxPoolRecord).toBeDefined();
+
+      // Find the corresponding monetary authority and reduce its pool cash
+      const authorityEntry = Array.from(worldState.monetaryAuthorities.entries()).find(
+        ([_, auth]) =>
+          fxPoolRecord && auth.seed.fxPools?.some((pool) =>
+            fxPoolRecord.sourceSeedKey?.includes(`${auth.seed.key}.fxPool.${pool.key}.base`),
+          ),
+      );
+      expect(authorityEntry).toBeDefined();
+
+      // Create modified world state with reduced pool cash
+      if (authorityEntry && fxPoolRecord) {
+        const [authorityId, authority] = authorityEntry;
+        const modifiedFxPools = authority.seed.fxPools?.map((pool) => {
+          if (fxPoolRecord.sourceSeedKey?.includes(`${pool.key}.base`) && pool.cash) {
+            return {
+              ...pool,
+              cash: {
+                ...pool.cash,
+                [pool.baseCurrencyKey]: ((pool.cash[pool.baseCurrencyKey] as number) ?? 0) - 1000,
+              },
+            };
+          }
+          return pool;
+        });
+
+        const modifiedAuthority = { ...authority, seed: { ...authority.seed, fxPools: modifiedFxPools } };
+        const modifiedAuthorities = new Map(worldState.monetaryAuthorities);
+        modifiedAuthorities.set(authorityId, modifiedAuthority);
+
+        const modifiedWorldState = { ...worldState, monetaryAuthorities: modifiedAuthorities };
+
+        // Reconciliation should fail
+        const result = reconcileGenesisStocks(modifiedWorldState, worldState.worldGenesisLedger, config);
+        expect(result.success).toBe(false);
+        expect(result.details?.category).toBe("MONEY");
+        expect(result.details?.key).toContain("FX_POOL");
+      }
+    });
+
+    it("fails when FX pool reserves are moved between distinct pools at same currency (pool identity validation)", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find two FX pools with the same currency
+      const fxPoolRecords = worldState.worldGenesisLedger.records.filter(
+        (r) => r.type === "FX_POOL_OPENING",
+      );
+      expect(fxPoolRecords.length).toBeGreaterThanOrEqual(2);
+
+      // Find two pools with matching base currency
+      const currenciesInPools = new Map<string, GenesisRecord[]>();
+      fxPoolRecords.forEach((r) => {
+        const currencyId = String(r.currencyId);
+        const list = currenciesInPools.get(currencyId) ?? [];
+        list.push(r);
+        currenciesInPools.set(currencyId, list);
+      });
+
+      let foundPair = false;
+      for (const [currencyId, records] of currenciesInPools.entries()) {
+        if (records.length >= 2) {
+          // Found two pools sharing the same currency, modify amounts to create equal-and-opposite
+          const record1 = records[0]!;
+          const record2 = records[1]!;
+          const transferAmount = record1.amount * 0.5;
+
+          // Find corresponding authorities and pools to modify
+          const auth1Entry = Array.from(worldState.monetaryAuthorities.entries()).find(
+            ([_, auth]) => record1.sourceSeedKey?.includes(auth.seed.key),
+          );
+          const auth2Entry = Array.from(worldState.monetaryAuthorities.entries()).find(
+            ([_, auth]) => record2.sourceSeedKey?.includes(auth.seed.key),
+          );
+
+          if (auth1Entry && auth2Entry) {
+            const modifiedAuthorities = new Map(worldState.monetaryAuthorities);
+
+            // Reduce pool 1 and increase pool 2 by equal amounts
+            const [auth1Id, auth1] = auth1Entry;
+            const [auth2Id, auth2] = auth2Entry;
+
+            const currencyKey = Array.from(worldState.currencies.entries()).find(
+              ([id]) => String(id) === currencyId,
+            )?.[1]?.seed.key;
+
+            if (currencyKey) {
+              const modifiedFxPools1 = auth1.seed.fxPools?.map((pool) => {
+                if (record1.sourceSeedKey?.includes(`${pool.key}`)) {
+                  return {
+                    ...pool,
+                    cash: { ...pool.cash, [currencyKey]: ((pool.cash?.[currencyKey] as number) ?? 0) - transferAmount },
+                  };
+                }
+                return pool;
+              });
+
+              const modifiedFxPools2 = auth2.seed.fxPools?.map((pool) => {
+                if (record2.sourceSeedKey?.includes(`${pool.key}`)) {
+                  return {
+                    ...pool,
+                    cash: { ...pool.cash, [currencyKey]: ((pool.cash?.[currencyKey] as number) ?? 0) + transferAmount },
+                  };
+                }
+                return pool;
+              });
+
+              const modifiedAuth1 = { ...auth1, seed: { ...auth1.seed, fxPools: modifiedFxPools1 } };
+              const modifiedAuth2 = { ...auth2, seed: { ...auth2.seed, fxPools: modifiedFxPools2 } };
+
+              modifiedAuthorities.set(auth1Id, modifiedAuth1);
+              modifiedAuthorities.set(auth2Id, modifiedAuth2);
+
+              const modifiedWorldState = { ...worldState, monetaryAuthorities: modifiedAuthorities };
+
+              // Reconciliation should fail because pool identity was violated
+              const result = reconcileGenesisStocks(modifiedWorldState, worldState.worldGenesisLedger, config);
+              expect(result.success).toBe(false);
+              expect(result.details?.category).toBe("MONEY");
+              expect(result.details?.key).toContain("FX_POOL");
+              foundPair = true;
+              break;
+            }
+          }
+        }
+      }
+      expect(foundPair).toBe(true);
+    });
+
+    it("fails when authority wallet contains unexpected money", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find an authority and add money to its wallet
+      const authorityEntry = Array.from(worldState.monetaryAuthorities.entries())[0];
+      expect(authorityEntry).toBeDefined();
+
+      if (authorityEntry) {
+        const [authorityId, authority] = authorityEntry;
+        const currencyEntry = Array.from(worldState.currencies.entries())[0];
+
+        if (currencyEntry) {
+          const [_, currency] = currencyEntry;
+
+          // Add unexpected money to the authority wallet
+          const modifiedAuthority = {
+            ...authority,
+            seed: {
+              ...authority.seed,
+              wallet: { [currency.seed.key]: 10000 },
+            },
+          };
+
+          const modifiedAuthorities = new Map(worldState.monetaryAuthorities);
+          modifiedAuthorities.set(authorityId, modifiedAuthority);
+
+          const modifiedWorldState = { ...worldState, monetaryAuthorities: modifiedAuthorities };
+
+          // Reconciliation should fail because authority wallet has unexpected money
+          const result = reconcileGenesisStocks(modifiedWorldState, worldState.worldGenesisLedger, config);
+          expect(result.success).toBe(false);
+          expect(result.details?.category).toBe("MONEY");
+          expect(result.details?.key).toContain("AUTHORITY");
+        }
+      }
+    });
   });
 
   describe("diagnostic output", () => {
