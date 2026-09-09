@@ -664,5 +664,15 @@ Found and resolved one implementation-facing replay ambiguity. HistoryRetentionM
 Added visualization acceptance test 48 covering a retained T with an unavailable adjacent tick and a farther retained tick. The test requires the ±1 action to remain disabled rather than selecting the farther snapshot. This is consistent with the existing no-silent-substitution rules for compare baselines, deep links and retention invalidation.  
 No economic mechanic, SimulationOutput ownership rule, retention range meaning, metric definition, phase order, acceptance budget or v1 scope changed. No new implementation-package file was added, so no mirror-allowlist request is required.  
 STATUS: RESOLVED — VISUALIZATION\_REPLAY\_CONTRACT\_CLARIFIED  
-D
+2026-09-08 — R173 / CODE\_RUNTIME\_QA\_M1\_70 / HANDOFF-REPAIR-016 — PR \#324 MonetaryAuthority genesis-owner scope
+
+Current PR \#324 head \`e1420d33e316572ac03825261ba84e9093488f91\` fixes the R172 starting-cash regression: MonetaryAuthority wallets are preserved and projected as owner-bound MONEY\_ENDOWMENT records, separately from FX\_POOL\_OPENING reserves. That direction matches one-stock/one-owner accounting.
+
+The implementation exposed a real representation gap in Handoff/03 section 20: MonetaryAuthoritySeed.wallet is a canonical actor-owned money stock, but GenesisRecord.owner previously had no explicit MonetaryAuthority owner form. Drive authority is now repaired in canonical Config and Handoff/03: the genesis owner-reference vocabulary supports MonetaryAuthority { authorityId: MonetaryAuthorityId }; authority wallets reconcile by authority \+ currency; FX\_POOL\_OPENING remains ownerless and distinct from every actor wallet.
+
+Important scope boundary: this is a genesis-accounting reference extension only. It does not authorize MonetaryAuthority as a MarketIntent, MarketAllocation, ordinary EconomicTransaction, or other actor role. Current PR \#324 widens the shared ActorRef imported by marketIntent.ts and marketClearing.ts and then adds unknown actor fallbacks. Please use a genesis-specific owner-reference type (for example GenesisOwnerRef) or equivalent narrowing so the M3 market/transaction actor surface remains unchanged and exhaustive while genesis reconciliation retains monetaryAuthorityId.
+
+Also refresh the PR body/tested revision: it still describes the earlier wallet-clearing approach and stale revision even though the current head preserves authority wallets. Keep REQ-CONFIG-004 PARTIAL while \#324 is open; after merge, record the actual merge SHA and current proving evidence. No new implementation-package file was added, so no mirror allowlist request is needed.
+
+STATUS: SPEC\_REPRESENTATION\_REPAIRED / IMPLEMENTATION\_REPAIR\_REQUIRED
 
