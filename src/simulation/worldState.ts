@@ -195,8 +195,7 @@ export function buildInitialWorld(
     const authorityState = buildMonetaryAuthorityState(authoritySeed, idMap);
     authorityRegistry.set(authorityId, authorityState);
 
-    // Authority wallets are tracked through FX pool opening balances and aggregate
-    // currency reconciliation, not as individual endowment records (REQ-CONFIG-004)
+    // Track authority wallet money separately from FX pool reserves (REQ-CONFIG-004)
 
     // Track FX pool opening balances
     (authoritySeed.fxPools ?? []).forEach((fxPoolSeed) => {
@@ -224,6 +223,23 @@ export function buildInitialWorld(
             currencyId: quoteCurrencyId,
             amount,
             sourceSeedKey: `${authoritySeed.key}.fxPool.${fxPoolSeed.key}.quote`,
+          };
+          worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+        }
+      }
+    });
+
+    // Track authority wallet opening amounts as money endowments
+    Object.entries(authoritySeed.wallet ?? {}).forEach(([currencyKey, amount]) => {
+      if (typeof amount === "number" && amount > 0) {
+        const currencyId = idMap.currencyIds.get(currencyKey);
+        if (currencyId) {
+          const record: GenesisRecord = {
+            type: "MONEY_ENDOWMENT",
+            owner: { type: "MONETARY_AUTHORITY", authorityId },
+            currencyId,
+            amount,
+            sourceSeedKey: `${authoritySeed.key}.wallet.${currencyKey}`,
           };
           worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
         }
