@@ -35,6 +35,7 @@ function serializeOwner(owner: ActorRef | undefined): string {
   if (owner.type === "STATE") return `STATE:${owner.stateId}`;
   if (owner.type === "CLAN") return `CLAN:${owner.clanId}`;
   if (owner.type === "PRODUCTION_UNIT") return `PU:${owner.productionUnitId}`;
+  if (owner.type === "MONETARY_AUTHORITY") return `AUTHORITY:${owner.authorityId}`;
   return "UNKNOWN";
 }
 

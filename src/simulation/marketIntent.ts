@@ -167,7 +167,8 @@ function buildEnvelopeKey(actor: ActorRef, currencyId: CurrencyId, envelope: str
   const actorKey =
     actor.type === "CLAN" ? `clan:${actor.clanId}` :
     actor.type === "STATE" ? `state:${actor.stateId}` :
-    `pu:${actor.productionUnitId}`;
+    actor.type === "PRODUCTION_UNIT" ? `pu:${actor.productionUnitId}` :
+    `unknown:${actor.type}`;
   return `${actorKey}|${currencyId}|${envelope}`;
 }
 

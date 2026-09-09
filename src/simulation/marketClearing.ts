@@ -227,7 +227,9 @@ function applyResidualCorrection<T extends { intent: MarketIntent; provisionalFi
         ? `clan:${d.intent.actor.clanId}`
         : d.intent.actor.type === "STATE"
           ? `state:${d.intent.actor.stateId}`
-          : `pu:${d.intent.actor.productionUnitId}`;
+          : d.intent.actor.type === "PRODUCTION_UNIT"
+            ? `pu:${d.intent.actor.productionUnitId}`
+            : `unknown:${d.intent.actor.type}`;
     return `${actorKey}|${d.intent.id}`;
   });
 
