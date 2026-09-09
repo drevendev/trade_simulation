@@ -1,8 +1,9 @@
 # TradeCraftSimulation
 
 A deterministic economic simulation that models price formation, trade, and settlement in an
-interconnected local-market system. **The canonical implementation is TypeScript and runs in
-the browser on [GitHub Pages](https://drevendev.github.io/trade_simulation/).**
+interconnected local-market system. The **canonical implementation is TypeScript** and is
+browser-capable (scheduled for M11+). The current [GitHub Pages](https://drevendev.github.io/trade_simulation/)
+deployment shows the legacy reference viewer and M1/M2 milestone previews, not the canonical engine executing.
 
 ## Current state
 
@@ -33,14 +34,6 @@ npm run typecheck
 npm test
 npm run build
 ```
-
-To view the interactive GitHub Pages experience locally:
-
-```bash
-npm run dev
-```
-
-Then open http://localhost:5173 in your browser.
 
 ### Legacy reference oracle
 
@@ -80,12 +73,14 @@ dotnet test --configuration Release
 The canonical simulation is **deterministic**:
 - Same configuration, seed, and tick count produce identical replay hash across runs
 - No random-number consumption outside of reproducible seeded calls
-- All economic identities (money conservation, stock reconciliation, no negative balances) are enforced at settlement boundary
+
+**M3 local market settlement** (in progress, with refinements ongoing):
+- Settlement boundary enforcement of economic identities (money conservation, no negative balances)
+- Stock reconciliation residuals maintained within configured tolerance (1e-9 by default)
+- All ledger mutations isolated to atomic operation boundaries (phases and transactions)
 
 Money and goods flows are **fully accounted**:
-- Every transaction creates equal-and-opposite ledger entries
-- Stocks reconcile to zero across the full system at configured tolerance (1e-9 by default)
-- All ledger mutations are isolated to atomic operation boundaries (phases and transactions)
+- Every transaction creates equal-and-opposite ledger entries across all buckets
 
 ## Known scope boundaries
 
@@ -97,12 +92,14 @@ Money and goods flows are **fully accounted**:
 **In progress:**
 - Refinement of M3 local market acceptance test coverage
 
-**Out of scope (v1):**
-- Production function specification and dynamics
-- Population cohort behavior and labor allocation
-- Fiscal policy, monetary policy, and macroeconomic dynamics
-- Inter-regional transport and trade logistics beyond M3 local markets
-- Housing, property, speculative finance, or individuals
+**Not implemented yet (later milestones M4–M8):**
+- Production function specification and dynamics (M4–M5)
+- Population cohort behavior and labor allocation (M5–M6)
+- Fiscal policy, monetary policy, and macroeconomic dynamics (M7–M8)
+- Inter-regional transport and trade logistics (M4–M7)
+
+**Out of scope (hard exclusions for all versions):**
+- Housing, property, speculative finance, or individuals as modeled entities
 - Warfare or explicit political dynamics
 
 For the full specification boundary, see [`docs/spec/mirror/06 - Handoff/START_HERE.md`](docs/spec/mirror/06%20-%20Handoff/START_HERE%20—%20Economic%20Simulation%20Implementation%20Handoff.md).
