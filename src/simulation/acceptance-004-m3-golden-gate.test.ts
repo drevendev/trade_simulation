@@ -30,7 +30,7 @@ import { describe, it, expect } from "vitest";
 import type { MarketIntent, MarketIntentId, BudgetCommitmentLedger } from "./marketIntent";
 import { createMarketIntentId, createEmptyBudgetCommitmentLedger } from "./marketIntent";
 import type { LocalClearingInput, MarketAllocation } from "./marketClearing";
-import { computeLocalClearing, createMarketAllocationId } from "./marketClearing";
+import { computeLocalClearing, createMarketAllocationId, computeEffectiveDemand } from "./marketClearing";
 import type { ActorRef } from "../domain/genesisLedger";
 import type { ClanId, GoodId, MarketId, RegionId, CurrencyId, StateId } from "../domain/id";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
@@ -333,36 +333,64 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
     it("invokes production tax-aware affordability path and proves tax reduces quantity at fixed cash", () => {
       // MTFX-T3: Execute the production/market affordability path with tax-aware calculations.
       // Prove: at fixed cash, consumption tax reduces affordable quantity.
-      // This tests the effective demand calculation: effectiveDemand = min(desiredQuantity, maxSpend / max(grossUnitPrice, moneyEpsilon))
+      // This test calls the actual computeEffectiveDemand() function from marketClearing.ts
       const fixedBudget = 10.0; // Fixed cash
       const marketPrice = 1.0;
       const desiredQuantity = 100.0; // Enough that affordability is the limit
+      const buyerClanId = createTestClanId("mtfx-t3-buyer");
+      const regionId = createTestRegionId("mtfx-t3-region");
+      const goodId = createTestGoodId("mtfx-t3-good");
 
-      // Helper: calculate effective demand given tax rate
-      const calculateEffectiveDemand = (budget: number, price: number, taxRate: number, collectionEff: number): number => {
-        const assessedTaxPerUnit = price * taxRate;
-        const collectedTaxPerUnit = assessedTaxPerUnit * collectionEff;
-        const grossUnitPrice = price + collectedTaxPerUnit;
-        return Math.min(desiredQuantity, budget / Math.max(grossUnitPrice, moneyEpsilon));
-      };
+      // Create a base MarketIntent for BUY with fixed budget and desired quantity
+      const createBuyIntent = (budget: number, quantity: number): MarketIntent => ({
+        id: createMarketIntentId(`mi:mtfx-t3-buy-${budget}`),
+        actor: { type: "CLAN", clanId: buyerClanId },
+        regionId,
+        goodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: quantity,
+        maxSpend: budget,
+        sourcePlanId: "plan-t3-buyer",
+        inventoryBucket: "GENERAL",
+      });
 
-      // Scenario 1: No tax (0% rate, or 0% collection efficiency)
-      const effectiveDemandNoTax = calculateEffectiveDemand(fixedBudget, marketPrice, 0.0, 1.0);
+      // Scenario 1: No tax (gross price = net price = 1.0)
+      const intentNoTax = createBuyIntent(fixedBudget, desiredQuantity);
+      const effectiveDemandNoTax = computeEffectiveDemand(intentNoTax, marketPrice, moneyEpsilon);
 
       // Scenario 2: 10% tax collected at 100% collection efficiency
       // Gross price = 1.0 + (1.0 * 0.1 * 1.0) = 1.1
       // Affordable quantity = 10 / 1.1 ≈ 9.09
-      const effectiveDemandWith10PercentTax = calculateEffectiveDemand(fixedBudget, marketPrice, 0.1, 1.0);
+      const intentWith10PercentTax = createBuyIntent(fixedBudget, desiredQuantity);
+      const grossPriceWith10PercentTax = marketPrice + (marketPrice * 0.1 * 1.0);
+      const effectiveDemandWith10PercentTax = computeEffectiveDemand(
+        intentWith10PercentTax,
+        grossPriceWith10PercentTax,
+        moneyEpsilon,
+      );
 
       // Scenario 3: 20% tax collected at 100% collection efficiency
       // Gross price = 1.0 + (1.0 * 0.2 * 1.0) = 1.2
       // Affordable quantity = 10 / 1.2 ≈ 8.33
-      const effectiveDemandWith20PercentTax = calculateEffectiveDemand(fixedBudget, marketPrice, 0.2, 1.0);
+      const intentWith20PercentTax = createBuyIntent(fixedBudget, desiredQuantity);
+      const grossPriceWith20PercentTax = marketPrice + (marketPrice * 0.2 * 1.0);
+      const effectiveDemandWith20PercentTax = computeEffectiveDemand(
+        intentWith20PercentTax,
+        grossPriceWith20PercentTax,
+        moneyEpsilon,
+      );
 
       // Scenario 4: 10% tax but only 50% collection efficiency
       // Gross price = 1.0 + (1.0 * 0.1 * 0.5) = 1.05
       // Affordable quantity = 10 / 1.05 ≈ 9.52
-      const effectiveDemandWith10PercentTax50PercentCollection = calculateEffectiveDemand(fixedBudget, marketPrice, 0.1, 0.5);
+      const intentWith10PercentTax50PercentCollection = createBuyIntent(fixedBudget, desiredQuantity);
+      const grossPriceWith10PercentTax50PercentCollection = marketPrice + (marketPrice * 0.1 * 0.5);
+      const effectiveDemandWith10PercentTax50PercentCollection = computeEffectiveDemand(
+        intentWith10PercentTax50PercentCollection,
+        grossPriceWith10PercentTax50PercentCollection,
+        moneyEpsilon,
+      );
 
       // Verify the production affordability identity
       expect(effectiveDemandNoTax).toBeCloseTo(10.0, 6);
@@ -383,7 +411,11 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       // affordableQuantity(budget, netPrice, taxRate) = budget / (netPrice × (1 + taxRate))
       // As taxRate increases, affordableQuantity decreases
       const taxRates = [0, 0.05, 0.1, 0.15, 0.2, 0.25];
-      const affordabilities = taxRates.map(rate => calculateEffectiveDemand(fixedBudget, marketPrice, rate, 1.0));
+      const affordabilities = taxRates.map((rate) => {
+        const intent = createBuyIntent(fixedBudget, desiredQuantity);
+        const grossPrice = marketPrice + (marketPrice * rate * 1.0);
+        return computeEffectiveDemand(intent, grossPrice, moneyEpsilon);
+      });
 
       // Verify strictly decreasing: each tax increase reduces affordability
       for (let i = 1; i < affordabilities.length; i++) {
