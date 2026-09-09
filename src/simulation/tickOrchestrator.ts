@@ -15,6 +15,7 @@ import type { TickLedger } from "./ledger";
 import { createEmptyTickLedger, validateZeroFlowReconciliation } from "./ledger";
 import type { BudgetCommitmentLedger } from "./marketIntent";
 import { createEmptyBudgetCommitmentLedger } from "./marketIntent";
+import type { LocalMarketTelemetry } from "./marketTelemetry";
 import { createHash } from "crypto";
 
 /**
@@ -22,6 +23,7 @@ import { createHash } from "crypto";
  * Plans are immutable intent created in Phase 2; transaction records accumulate.
  * M2: currentLedger accumulates typed MONEY/GOOD/PHYSICAL_LOSS flow records across phases.
  * M3+: budgetLedger tracks actor+currency+envelope commitments for market planning.
+ * M3+: marketTelemetry accumulates LocalMarketTelemetry from Phase-8 clearing/settlement.
  */
 export interface TickContext {
   readonly tick: number;
@@ -31,6 +33,7 @@ export interface TickContext {
   readonly transactions: ReadonlyArray<EconomicTransaction>;
   readonly currentLedger: TickLedger;
   readonly budgetLedger: BudgetCommitmentLedger;
+  readonly marketTelemetry: LocalMarketTelemetry[];
 }
 
 /** Opaque transaction ID (tx:...) */
@@ -129,6 +132,7 @@ export type PhaseHandler = (
  * Phase-0 resets flow telemetry and derives deterministic RNG substreams.
  * M2: currentLedger is initialized empty and accumulates records across phases.
  * M3+: budgetLedger is initialized empty for market planning phase handlers.
+ * M3+: marketTelemetry is initialized empty for Phase-8 clearing telemetry.
  */
 export function initializeTickContext(tick: number, seed: number): TickContext {
   return {
@@ -139,6 +143,7 @@ export function initializeTickContext(tick: number, seed: number): TickContext {
     transactions: [],
     currentLedger: createEmptyTickLedger(tick),
     budgetLedger: createEmptyBudgetCommitmentLedger(),
+    marketTelemetry: [],
   };
 }
 
