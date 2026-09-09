@@ -17,7 +17,7 @@ import {
   type TickContext,
 } from "./tickOrchestrator";
 import type { WorldState, PendingTransitions } from "./worldState";
-import type { RegionId, StateId } from "../domain/id";
+import type { RegionId, StateId, CurrencyId } from "../domain/id";
 import { addLedgerRecord, type MoneyFlowRecord } from "./ledger";
 import type { SimulationConfig } from "../config/simulationConfig";
 
@@ -449,9 +449,9 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
             tick: context.tick,
             phase: 3,
             type: "MONEY",
-            currencyId: "CURRENCY_1",
+            currencyId: "CURRENCY_1" as CurrencyId,
             ownerType: "state",
-            ownerKey: "STATE_1",
+            ownerKey: "STATE_1" as StateId,
             delta: 100, // Unmatched positive delta
             reason: "TEST_UNMATCHED_DELTA",
           };
@@ -468,10 +468,11 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
 
       // Phase 3 should fail validation, stopping before phase 4
       expect(result.phaseBoundaryError).toBeDefined();
-      expect(result.phaseBoundaryError?.phase).toBe(3);
-      expect(result.phaseBoundaryError?.errors).toHaveLength(1);
-      expect(result.phaseBoundaryError?.errors[0].category).toBe("MONEY");
-      expect(Math.abs((result.phaseBoundaryError?.errors[0].residual ?? 0) - 100)).toBeLessThan(1e-6);
+      if (!result.phaseBoundaryError) throw new Error("Expected phaseBoundaryError");
+      expect(result.phaseBoundaryError.phase).toBe(3);
+      expect(result.phaseBoundaryError.errors).toHaveLength(1);
+      expect(result.phaseBoundaryError.errors[0]?.category).toBe("MONEY");
+      expect(Math.abs((result.phaseBoundaryError.errors[0]?.residual ?? 0) - 100)).toBeLessThan(1e-6);
 
       // Phase trace should stop at phase 3 (3 was executed)
       expect(result.phaseTrace).toEqual([0, 1, 2, 3]);
@@ -493,7 +494,7 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
             tick: context.tick,
             phase: 5,
             type: "MONEY",
-            currencyId: "CURRENCY_1",
+            currencyId: "CURRENCY_1" as CurrencyId,
             ownerType: "clan",
             ownerKey: "CLAN_1",
             delta: 50,
@@ -511,7 +512,7 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
             tick: context.tick,
             phase: 6,
             type: "MONEY",
-            currencyId: "CURRENCY_1",
+            currencyId: "CURRENCY_1" as CurrencyId,
             ownerType: "clan",
             ownerKey: "CLAN_1",
             delta: -50, // Would cancel phase 5's delta
@@ -534,9 +535,11 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
       expect(result.phaseTrace).toEqual([0, 1, 2, 3, 4, 5]);
 
       // Verify the residual is exactly 50
-      const error = result.phaseBoundaryError?.errors[0];
-      expect(error?.category).toBe("MONEY");
-      expect(Math.abs(((error?.residual) ?? 0) - 50)).toBeLessThan(1e-6);
+      if (!result.phaseBoundaryError) throw new Error("Expected phaseBoundaryError");
+      const error = result.phaseBoundaryError.errors[0];
+      if (!error) throw new Error("Expected error object");
+      expect(error.category).toBe("MONEY");
+      expect(Math.abs(error.residual - 50)).toBeLessThan(1e-6);
     });
 
     it("passes phase boundary when delta is zero (balanced)", () => {
@@ -551,9 +554,9 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
             tick: context.tick,
             phase: 2,
             type: "MONEY",
-            currencyId: "CURRENCY_1",
+            currencyId: "CURRENCY_1" as CurrencyId,
             ownerType: "state",
-            ownerKey: "STATE_A",
+            ownerKey: "STATE_A" as StateId,
             delta: 75,
             reason: "BALANCED_FLOW_A",
           };
@@ -562,9 +565,9 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
             tick: context.tick,
             phase: 2,
             type: "MONEY",
-            currencyId: "CURRENCY_1",
+            currencyId: "CURRENCY_1" as CurrencyId,
             ownerType: "state",
-            ownerKey: "STATE_B",
+            ownerKey: "STATE_B" as StateId,
             delta: -75,
             reason: "BALANCED_FLOW_B",
           };
@@ -617,10 +620,13 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
       const result = executeTick(world, 0, pending, goodMismatchHandler);
 
       // Check fail-fast diagnostic
-      expect(result.phaseBoundaryError?.phase).toBe(7);
-      const error = result.phaseBoundaryError?.errors[0];
-      expect(error?.category).toBe("GOOD");
-      expect(Math.abs(((error?.residual) ?? 0) - 25.5)).toBeLessThan(1e-5);
+      expect(result.phaseBoundaryError).toBeDefined();
+      if (!result.phaseBoundaryError) throw new Error("Expected phaseBoundaryError");
+      expect(result.phaseBoundaryError.phase).toBe(7);
+      const error = result.phaseBoundaryError.errors[0];
+      if (!error) throw new Error("Expected error object");
+      expect(error.category).toBe("GOOD");
+      expect(Math.abs(error.residual - 25.5)).toBeLessThan(1e-5);
     });
   });
 });
