@@ -255,6 +255,23 @@ export function reconcileGenesisStocks(
     });
   });
 
+  // Sum money by monetary authority owner + currency (REQ-CONFIG-004)
+  worldState.monetaryAuthorities.forEach((authority) => {
+    Object.entries(authority.seed.wallet ?? {}).forEach(([currencyKey, amount]) => {
+      if (typeof amount === "number") {
+        const currencyId = Array.from(worldState.currencies.entries()).find(
+          ([_, cs]) => cs.seed.key === currencyKey,
+        )?.[0];
+        if (currencyId) {
+          const ownerKey = `AUTHORITY:${authority.authorityId}`;
+          const key = `${ownerKey}:${currencyId}`;
+          const current = actualMoneyByOwnerCurrency.get(key) ?? 0;
+          actualMoneyByOwnerCurrency.set(key, current + amount);
+        }
+      }
+    });
+  });
+
   // Sum FX pool reserves by pool + currency granularity (REQ-CONFIG-004)
   worldState.monetaryAuthorities.forEach((authority) => {
     (authority.seed.fxPools ?? []).forEach((fxPool) => {

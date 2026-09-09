@@ -769,6 +769,48 @@ describe("reconcileGenesisStocks", () => {
       expect(result.success).toBe(false);
       expect(result.details?.category).toBe("FX_POOL");
     });
+
+    it("fails when authority wallet contains money not recorded in ledger", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Find an authority (any will do, they start with empty wallets)
+      const authority = Array.from(worldState.monetaryAuthorities.values())[0];
+      expect(authority).toBeDefined();
+      if (!authority) return;
+
+      // Find a currency to add to the authority wallet
+      const currencyKey = Array.from(worldState.currencies.values())[0]?.seed.key;
+      expect(currencyKey).toBeDefined();
+      if (!currencyKey) return;
+
+      // Add unexpected money to the authority wallet (not in ledger)
+      const modifiedAuthorities = new Map(worldState.monetaryAuthorities);
+      const modifiedAuthority = {
+        ...authority,
+        seed: {
+          ...authority.seed,
+          wallet: {
+            ...authority.seed.wallet,
+            [currencyKey]: 1000,
+          },
+        },
+      };
+      modifiedAuthorities.set(authority.authorityId, modifiedAuthority);
+
+      const modifiedWorldState = {
+        ...worldState,
+        monetaryAuthorities: modifiedAuthorities,
+      };
+
+      // Reconciliation should fail because authority wallet money is not in ledger
+      const result = reconcileGenesisStocks(modifiedWorldState, worldState.worldGenesisLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("MONEY");
+      expect(result.details?.residual).toBeGreaterThan(0);
+    });
   });
 
   describe("diagnostic output", () => {

@@ -195,8 +195,8 @@ export function buildInitialWorld(
     const authorityState = buildMonetaryAuthorityState(authoritySeed, idMap);
     authorityRegistry.set(authorityId, authorityState);
 
-    // Authority wallets are tracked through FX pool opening balances and aggregate
-    // currency reconciliation, not as individual endowment records (REQ-CONFIG-004)
+    // Authority wallets are tracking reserves; they should be empty at genesis.
+    // FX pool reserves are tracked separately (REQ-CONFIG-004, acceptance criterion 3).
 
     // Track FX pool opening balances
     (authoritySeed.fxPools ?? []).forEach((fxPoolSeed) => {
