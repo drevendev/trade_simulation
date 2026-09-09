@@ -1,141 +1,108 @@
 # TradeCraftSimulation
 
-A toy economy across four trading cities. Nobody sets prices: each city has its own market,
-prices follow local supply and demand, and merchants make a living carrying goods from the
-market where they are cheap to the market where they are dear.
+A deterministic economic simulation that models price formation, trade, and settlement in an
+interconnected local-market system. **The canonical implementation is TypeScript and runs in
+the browser on [GitHub Pages](https://drevendev.github.io/trade_simulation/).**
 
-Run it for a few hundred turns and the interesting part shows up on its own — every good ends
-up cheapest in the city that specialises in it, and the capital turns into the entrepot the
-provinces trade through.
+## Current state
 
-**[See a run of 300 turns](https://drevendev.github.io/trade_simulation/)** — prices per city
-over time, and the trade flows turn by turn.
+**Milestone 1 & 2:** Complete. Canonical TypeScript implementation provides:
+- Deterministic world genesis with configured regions, currencies, clans and production units
+- Sixteen-phase tick orchestrator with stable execution order
+- Stock reconciliation across all economic categories (money, goods, population, capital, resources)
+- Ledger framework tracking all economic flows
 
-## The model
+**Milestone 3:** In progress. Local market implementation adds:
+- Ephemeral budget commitments and persistent MarketIntent contracts
+- Log-space price formation using supply/demand expectations with bounded daily movement
+- Deterministic proportional local clearing with stable allocation
+- Atomic market settlement with tax-aware money and goods transfers
+- Comprehensive settlement telemetry (shortage/surplus rates, cleared/traded quantities, collection efficiency)
+- Deterministic replay and accounting invariants verified at settlement boundary
 
-**Goods.** Food, wood and tools. Money is not a good: it is held by the population and is the
-unit every price is quoted in, which is what makes prices comparable between cities.
+**Interactive viewer:** [View the current M2 Milestone Preview](https://drevendev.github.io/trade_simulation/) — see baseline-scenario world topology, tick execution, and zero-flow reconciliation across 100+ ticks.
 
-**Population.** Every city has four pops. Farmers make food, woodcutters make wood, crafters
-make tools, and traders make nothing at all — they live off the margin between two markets.
-Every pop, traders included, eats every turn, owns its own goods and its own money.
+## Building and testing
 
-**Cities.** Four of them, wired in a star around the capital, so the provinces can only reach
-each other through the middle. Each province is 1.5x better at its own trade; the capital is
-1.25x better at everything, because a quarter of its people are merchants who grow nothing and
-it would otherwise be permanently short of every good.
-
-| City | Type | Good at |
-| --- | --- | --- |
-| Capitalist | center | everything, a little |
-| Farmland | plain | food |
-| Forresty | forest | wood |
-| Craftovo | mountains | tools |
-
-## A turn
-
-```
-produce -> price -> trade between cities -> local market -> consume -> spoil
-```
-
-The order is not arbitrary:
-
-- **Prices** are set before anybody trades, from the stocks and needs of this turn.
-- **Trade between cities runs before the local market.** The other way round, the locals spend
-  all their money on the insufficient local supply first and there is nobody left to sell the
-  imports to — the traders go bankrupt and trade stops for good.
-- **Consumption** happens at the end, out of what a pop managed to buy.
-- **Spoilage** destroys a share of the leftovers. Without it every stock grows without bound
-  and every price slides to the floor.
-
-## How a price moves
-
-A price is a stock, not a fresh calculation: every turn it is nudged towards the
-demand/supply ratio by at most `MaxPriceStep` (10% by default) and clamped into
-`[MinPrice, MaxPrice]`.
-
-Two details matter more than they look:
-
-- **Demand is what the citizens can pay for**, not what they wish they could buy. Counting the
-  wishes of a bankrupt city keeps pushing its prices up, which is the last thing its broke
-  citizens need, and the whole economy seizes up within a hundred turns.
-- **Demand is elastic.** Cheap goods are worth stockpiling, dear ones are done without. Without
-  that, demand is a hard ceiling and supply a hard floor, any lasting imbalance compounds at
-  10% a turn until it hits a clamp, and a pop that has accumulated money has nothing left to
-  spend it on — so the money never comes back to the producers.
-
-## How a deal works
-
-A trader buys a resource in one city, carries it to a neighbour and sells it there. The deal is
-worth doing when the price gap is wider than the transport loss, and its size is capped by
-every constraint that actually applies: the trade power the traders have left this turn, the
-share of the local surplus they are allowed to strip, the money they can put up front, and the
-demand the destination can actually pay for. Traders work in both directions — they export a
-local surplus and import what a neighbour sells cheaply.
-
-Transport costs a share of the cargo rather than a fee in money, on purpose: a money fee burns
-the fixed money stock of the world turn after turn until everybody is broke. As it stands,
-**the money stock never changes** — that invariant is covered by a test.
-
-## Running it
+The current codebase is **TypeScript + Node.js + Vitest** for the canonical simulation engine.
 
 ```bash
-dotnet run --project TradeCraftSimulation -- --turns 200 --quiet --csv run.csv
+# Verify everything builds and tests pass
+npm ci
+npm run typecheck
+npm test
+npm run build
 ```
 
-| Option | Meaning |
-| --- | --- |
-| `--turns <n>` | how many turns to simulate (default 30) |
-| `--seed <n>` | seed of the production noise; the same seed replays the same run (default 42) |
-| `--csv <path>` | per-turn time series in long format, one row per turn/city/resource |
-| `--quiet` | print only the final state |
-| `--config K=V` | override any knob of `SimulationConfig`, repeatable |
-
-Every tunable number lives in [`SimulationConfig`](TradeCraftSimulation/SimulationConfig.cs) and
-can be overridden from the command line, so balancing does not need a rebuild:
+To view the interactive GitHub Pages experience locally:
 
 ```bash
-dotnet run --project TradeCraftSimulation -- --turns 300 --quiet \
-  --config TransportLossShare=0.02 --config MaxPriceStep=0.05
+npm run dev
 ```
 
-The CSV is the point of the exercise: a time series is the only way to tell a converging
-economy from a slowly exploding one. Columns are `turn, city, resource, price, demand, supply,
-traded, imported, exported, stock, satisfaction, city_money`.
+Then open http://localhost:5173 in your browser.
 
-## The page
+### Legacy reference oracle
 
-`docs/` is a single self-contained HTML page with no dependencies, served by GitHub Pages from
-the `master` branch. It reads the very CSV the simulator writes, so refreshing the data is one
-command and no format in between:
+The original **C# / .NET 9** implementation in `TradeCraftSimulation/` is retained as a stable
+reference oracle for baseline behavior, not as the active development target. It remains
+functional and tested, but canonical feature development occurs in TypeScript.
+
+To build and test the legacy code:
 
 ```bash
-dotnet run --project TradeCraftSimulation -- --turns 300 --seed 42 --quiet --csv docs/run.csv
+dotnet restore
+dotnet build --configuration Release
+dotnet test --configuration Release
 ```
 
-Because the provinces are only connected to the capital, each province's `imported` and
-`exported` columns are enough to reconstruct every trade route exactly.
+## Project structure
 
-## Tests
+- `src/` — Canonical TypeScript simulation engine
+  - `config/` — Configuration layers and validation
+  - `domain/` — Core types, IDs, registries, and numeric contracts
+  - `simulation/` — Tick orchestrator, market clearing, settlement, telemetry
+  - `diagnostics/` — Milestone preview generation and test utilities
 
-```bash
-dotnet test
-```
+- `TradeCraftSimulation/` — Legacy C# reference implementation (frozen at M0)
+- `docs/` — GitHub Pages viewer and milestone preview artifacts
+- `docs/spec/` — Implementation specification and handoff documentation
 
-They cover the invariants that are easy to break and hard to notice: money is neither created
-nor destroyed, goods are conserved apart from the transport loss, no pop ever spends money it
-does not have, prices stay inside their range, the same seed replays the same run, and trade
-does not quietly die out halfway through a run.
+## Implementation evidence
 
-## Known limitations
+- **Specification registry:** [`docs/spec/mirror/REQUIREMENTS_REGISTRY.csv`](docs/spec/mirror/REQUIREMENTS_REGISTRY.csv)
+- **Implementation status:** [`docs/spec/implementation_status.csv`](docs/spec/implementation_status.csv)
+- **Specification handoff:** [`docs/spec/mirror/06 - Handoff/`](docs/spec/mirror/) (numbered sections covering scope, schema, config, markets, acceptance, and migration)
+- **ADRs:** [`docs/adr/`](docs/adr/) — Architectural decisions (identity, numeric contracts, etc.)
 
-- **Nobody changes trade.** Population counts are fixed, so a glutted trade stays glutted. A
-  woodcutter in a city drowning in wood is poor forever instead of becoming a farmer, and a
-  merchant who goes bankrupt stays a bankrupt merchant. Labour mobility is the single biggest
-  thing missing.
-- **No demography.** Nobody is born and nobody starves to death; hunger only shows up as a
-  satisfaction below 1.
-- **Merchant capital concentrates.** The capital's traders end up holding a large share of the
-  world's money, and provincial traders can be squeezed out of business entirely.
-- **Prices are quantity-driven.** The money side only enters through what buyers can afford;
-  there is no proper money-bid price formation, and no credit.
+## Invariants and guarantees
+
+The canonical simulation is **deterministic**:
+- Same configuration, seed, and tick count produce identical replay hash across runs
+- No random-number consumption outside of reproducible seeded calls
+- All economic identities (money conservation, stock reconciliation, no negative balances) are enforced at settlement boundary
+
+Money and goods flows are **fully accounted**:
+- Every transaction creates equal-and-opposite ledger entries
+- Stocks reconcile to zero across the full system at configured tolerance (1e-9 by default)
+- All ledger mutations are isolated to atomic operation boundaries (phases and transactions)
+
+## Known scope boundaries
+
+**Completed:**
+- Core deterministic orchestration and ledger framework
+- Configuration, scenario definition, and world genesis
+- Local market price formation, clearing, and settlement with tax
+
+**In progress:**
+- Refinement of M3 local market acceptance test coverage
+
+**Out of scope (v1):**
+- Production function specification and dynamics
+- Population cohort behavior and labor allocation
+- Fiscal policy, monetary policy, and macroeconomic dynamics
+- Inter-regional transport and trade logistics beyond M3 local markets
+- Housing, property, speculative finance, or individuals
+- Warfare or explicit political dynamics
+
+For the full specification boundary, see [`docs/spec/mirror/06 - Handoff/START_HERE.md`](docs/spec/mirror/06%20-%20Handoff/START_HERE%20—%20Economic%20Simulation%20Implementation%20Handoff.md).
