@@ -100,6 +100,7 @@ export class LocalMarketTelemetryBuilder {
   readonly regionId: RegionId;
   readonly goodId: GoodId;
   readonly pass: "PRE_PRODUCTION" | "MAIN";
+  readonly quantityEpsilon: number;
 
   desiredDemandQuantity: number = 0;
   effectiveDemandQuantity: number = 0;
@@ -111,11 +112,18 @@ export class LocalMarketTelemetryBuilder {
   unsoldOfferQuantity: number = 0;
   consumptionTaxCollected: number = 0;
 
-  constructor(marketId: MarketId, regionId: RegionId, goodId: GoodId, pass: "PRE_PRODUCTION" | "MAIN") {
+  constructor(
+    marketId: MarketId,
+    regionId: RegionId,
+    goodId: GoodId,
+    pass: "PRE_PRODUCTION" | "MAIN",
+    quantityEpsilon: number = 1e-9,
+  ) {
     this.marketId = marketId;
     this.regionId = regionId;
     this.goodId = goodId;
     this.pass = pass;
+    this.quantityEpsilon = quantityEpsilon;
   }
 
   /**
@@ -165,8 +173,16 @@ export class LocalMarketTelemetryBuilder {
    * Build the final LocalMarketTelemetry object.
    */
   build(): LocalMarketTelemetry {
-    const shortageRate = computeShortageRate(this.unmetDemandQuantity, this.effectiveDemandQuantity);
-    const surplusRate = computeSurplusRate(this.unsoldOfferQuantity, this.offeredQuantity);
+    const shortageRate = computeShortageRate(
+      this.unmetDemandQuantity,
+      this.effectiveDemandQuantity,
+      this.quantityEpsilon,
+    );
+    const surplusRate = computeSurplusRate(
+      this.unsoldOfferQuantity,
+      this.offeredQuantity,
+      this.quantityEpsilon,
+    );
 
     return {
       marketId: this.marketId,

@@ -315,5 +315,59 @@ describe("marketTelemetry", () => {
       const telemetry = builder.build();
       expect(telemetry.consumptionTaxCollected).toBe(10);
     });
+
+    it("uses configured quantityEpsilon (non-default regression)", () => {
+      const builder = new LocalMarketTelemetryBuilder(
+        "market:1" as MarketId,
+        "region:1" as RegionId,
+        "good:1" as GoodId,
+        "MAIN",
+        1e-6, // non-default epsilon
+      );
+
+      // Set quantities where effectiveDemand is between default (1e-8) and configured (1e-6)
+      builder.setClearingQuantities(
+        100, // desiredDemand
+        5e-7, // effectiveDemand (below 1e-6, above 1e-8)
+        100, // offeredQuantity
+        0, // clearedQuantity
+      );
+      builder.setPrices(10, 12);
+
+      const telemetry = builder.build();
+
+      // With 1e-6 epsilon, 5e-7 effectiveDemand is below epsilon, so shortageRate should be 0
+      expect(telemetry.shortageRate).toBe(0);
+
+      // If default 1e-8 was used instead, shortageRate would be non-zero (5e-7 / 5e-7 = 1)
+      // This regression catches if epsilon silently falls back to hard-coded value
+    });
+
+    it("uses configured quantityEpsilon for surplusRate", () => {
+      const builder = new LocalMarketTelemetryBuilder(
+        "market:1" as MarketId,
+        "region:1" as RegionId,
+        "good:1" as GoodId,
+        "MAIN",
+        1e-6, // non-default epsilon
+      );
+
+      // Set quantities where offeredQuantity is between default (1e-8) and configured (1e-6)
+      builder.setClearingQuantities(
+        100, // desiredDemand
+        100, // effectiveDemand
+        5e-7, // offeredQuantity (below 1e-6, above 1e-8)
+        0, // clearedQuantity
+      );
+      builder.setPrices(10, 12);
+
+      const telemetry = builder.build();
+
+      // With 1e-6 epsilon, 5e-7 offeredQuantity is below epsilon, so surplusRate should be 0
+      expect(telemetry.surplusRate).toBe(0);
+
+      // If default 1e-8 was used instead, surplusRate would be non-zero (5e-7 / 5e-7 = 1)
+      // This regression catches if epsilon silently falls back to hard-coded value
+    });
   });
 });
