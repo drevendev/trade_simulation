@@ -171,18 +171,18 @@ export function executePhase(
 /**
  * Validate phase-level invariants after tick completion.
  * M2: Checks zero-flow reconciliation for the accumulated ledger.
- * Returns validation result: null if passes, array of unmatched flows if fails.
+ * Returns validation result: null if passes, array of unmatched flows (keyed) if fails.
  */
 export function validateTickInvariants(
   context: TickContext,
   tolerance: number = 1e-9,
-): { category: string; residual: number }[] | null {
+): { category: string; key: string; residual: number }[] | null {
   return validateZeroFlowReconciliation(context.currentLedger, tolerance);
 }
 
 export interface PhaseBoundaryValidationError {
   readonly phase: number;
-  readonly errors: { category: string; residual: number }[];
+  readonly errors: { category: string; key: string; residual: number }[];
 }
 
 /**
@@ -197,7 +197,7 @@ export function executeTick(
   tickNumber: number,
   pendingTransitions: PendingTransitions,
   noOpHandler: PhaseHandler,
-): { context: TickContext; phaseTrace: number[]; phaseBoundaryError?: PhaseBoundaryValidationError; reconciliationErrors: { category: string; residual: number }[] | null } {
+): { context: TickContext; phaseTrace: number[]; phaseBoundaryError?: PhaseBoundaryValidationError; reconciliationErrors: { category: string; key: string; residual: number }[] | null } {
   let context = initializeTickContext(tickNumber, world.seed);
   const phaseTrace: number[] = [];
   const tolerance = world.simulationConfig.numeric.reconciliationRelativeTolerance;

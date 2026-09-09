@@ -84,11 +84,27 @@ export function createEmptyTickLedger(tick: number): TickLedger {
 
 /**
  * Add a record to a tick ledger (returns a new ledger instance).
+ * Validates PHYSICAL_LOSS records to reject non-finite or invalid amounts.
  */
 export function addLedgerRecord(
   ledger: TickLedger,
   record: LedgerRecord
 ): TickLedger {
+  // Validate PHYSICAL_LOSS records: amount must be finite and positive
+  if (record.type === "PHYSICAL_LOSS") {
+    const r = record as PhysicalLossRecord;
+    if (!Number.isFinite(r.amount)) {
+      throw new Error(
+        `PHYSICAL_LOSS amount must be finite; got ${r.amount}`
+      );
+    }
+    if (r.amount < 0) {
+      throw new Error(
+        `PHYSICAL_LOSS amount must be non-negative (loss magnitude >= 0); got ${r.amount}`
+      );
+    }
+  }
+
   return {
     tick: ledger.tick,
     records: [...ledger.records, record],
@@ -97,6 +113,9 @@ export function addLedgerRecord(
 
 /**
  * Compute net flow for a given stock key across all records of a category.
+ * MONEY flows are keyed by currencyId only (conserved asset, independent of owner).
+ * GOOD flows are keyed by goodId only (conserved asset, independent of holder/bucket).
+ * PHYSICAL_LOSS flows are keyed by resourceId:locationKey for tracking loss source.
  */
 export function computeNetFlow(
   ledger: TickLedger,
@@ -112,11 +131,11 @@ export function computeNetFlow(
 
     if (record.type === "MONEY") {
       const r = record as MoneyFlowRecord;
-      key = `${r.currencyId}:${r.ownerType}:${r.ownerKey}`;
+      key = r.currencyId;
       delta = r.delta;
     } else if (record.type === "GOOD") {
       const r = record as GoodFlowRecord;
-      key = `${r.goodId}:${r.holderType}:${r.holderKey}:${r.bucket}`;
+      key = r.goodId;
       delta = r.delta;
     } else {
       const r = record as PhysicalLossRecord;
@@ -133,42 +152,37 @@ export function computeNetFlow(
 
 /**
  * Validate zero-flow reconciliation for a ledger.
- * Checks that all flows within each category sum to zero (conservation law).
- * Returns null if reconciliation passes, or a list of unmatched flows by category.
+ * Checks that transfer flows (MONEY and GOOD) sum to zero per stock key (conservation law).
+ * Physical loss is a one-sided sink and is not subject to zero-sum validation.
+ * Returns null if reconciliation passes, or a list of unmatched flows by category/key.
  */
 export function validateZeroFlowReconciliation(
   ledger: TickLedger,
   tolerance: number = 1e-9
-): { category: string; residual: number }[] | null {
-  const unmatched: { category: string; residual: number }[] = [];
+): { category: string; key: string; residual: number }[] | null {
+  const unmatched: { category: string; key: string; residual: number }[] = [];
 
-  // Compute total flow for each category
-  let totalMoneyFlow = 0;
-  let totalGoodFlow = 0;
-  let totalLossFlow = 0;
+  // Compute net flows keyed by stock identifier
+  const moneyFlows = computeNetFlow(ledger, "MONEY");
+  const goodFlows = computeNetFlow(ledger, "GOOD");
 
-  for (const record of ledger.records) {
-    if (record.type === "MONEY") {
-      totalMoneyFlow += (record as MoneyFlowRecord).delta;
-    } else if (record.type === "GOOD") {
-      totalGoodFlow += (record as GoodFlowRecord).delta;
-    } else if (record.type === "PHYSICAL_LOSS") {
-      totalLossFlow += (record as PhysicalLossRecord).amount;
+  // Check MONEY flows: each key must sum to zero
+  for (const [key, residual] of moneyFlows.entries()) {
+    if (Math.abs(residual) > tolerance) {
+      unmatched.push({ category: "MONEY", key, residual });
     }
   }
 
-  // Check if each category's total flow is zero (within tolerance)
-  if (Math.abs(totalMoneyFlow) > tolerance) {
-    unmatched.push({ category: "MONEY", residual: totalMoneyFlow });
+  // Check GOOD flows: each key must sum to zero
+  for (const [key, residual] of goodFlows.entries()) {
+    if (Math.abs(residual) > tolerance) {
+      unmatched.push({ category: "GOOD", key, residual });
+    }
   }
 
-  if (Math.abs(totalGoodFlow) > tolerance) {
-    unmatched.push({ category: "GOOD", residual: totalGoodFlow });
-  }
-
-  if (Math.abs(totalLossFlow) > tolerance) {
-    unmatched.push({ category: "PHYSICAL_LOSS", residual: totalLossFlow });
-  }
+  // PHYSICAL_LOSS is not subject to zero-sum validation:
+  // it represents one-sided destruction, not transfers.
+  // Its validity is enforced by the owning contract (finite, proper sign, attribution).
 
   return unmatched.length > 0 ? unmatched : null;
 }

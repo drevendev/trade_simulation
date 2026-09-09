@@ -177,7 +177,7 @@ describe("M2 diagnostic projection", () => {
         resourceType: "good",
         resourceId: "WHEAT",
         locationKey: "REGION_1" as any,
-        amount: -10,
+        amount: 10,
         cause: "spoilage",
       };
 
@@ -186,7 +186,7 @@ describe("M2 diagnostic projection", () => {
 
       expect(projection.flowSummaries).toHaveLength(1);
       expect(projection.flowSummaries[0]!.category).toBe("PHYSICAL_LOSS");
-      expect(projection.flowSummaries[0]!.totalDelta).toBe(-10);
+      expect(projection.flowSummaries[0]!.totalDelta).toBe(10);
       expect(projection.flowSummaries[0]!.ownerType).toContain("spoilage");
     });
   });
@@ -226,7 +226,7 @@ describe("M2 diagnostic projection", () => {
         resourceType: "good",
         resourceId: "WHEAT",
         locationKey: "REGION_1" as any,
-        amount: -10,
+        amount: 10,
         cause: "spoilage",
       };
 
