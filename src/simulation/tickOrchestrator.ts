@@ -180,30 +180,50 @@ export function validateTickInvariants(
   return validateZeroFlowReconciliation(context.currentLedger, tolerance);
 }
 
+export interface PhaseBoundaryValidationError {
+  readonly phase: number;
+  readonly errors: { category: string; residual: number }[];
+}
+
 /**
- * Execute one complete tick (phases 0–15) with no-op handlers.
+ * Execute one complete tick (phases 0–15) with phase-boundary validation.
  * Returns trace of phase execution for determinism proof.
  * WorldState remains immutable; TickContext carries tick-scoped mutations.
- * M2: Validates zero-flow reconciliation after tick completion.
+ * M2: Validates zero-flow reconciliation after each phase boundary (fail-fast).
+ * If a phase-boundary validation fails, returns error details and stops before next phase.
  */
 export function executeTick(
   world: WorldState,
   tickNumber: number,
   pendingTransitions: PendingTransitions,
   noOpHandler: PhaseHandler,
-): { context: TickContext; phaseTrace: number[]; reconciliationErrors: { category: string; residual: number }[] | null } {
+): { context: TickContext; phaseTrace: number[]; phaseBoundaryError?: PhaseBoundaryValidationError; reconciliationErrors: { category: string; residual: number }[] | null } {
   let context = initializeTickContext(tickNumber, world.seed);
   const phaseTrace: number[] = [];
+  const tolerance = world.simulationConfig.numeric.reconciliationRelativeTolerance;
 
   for (let phase = 0; phase < TOTAL_PHASES; phase++) {
     context = executePhase(phase, noOpHandler, world, context, pendingTransitions);
     phaseTrace.push(phase);
+
+    // Validate phase-boundary invariants before proceeding to next phase
+    const boundaryErrors = validateTickInvariants(context, tolerance);
+    if (boundaryErrors !== null) {
+      // Phase-boundary validation failed: report error and stop
+      return {
+        context,
+        phaseTrace,
+        phaseBoundaryError: {
+          phase,
+          errors: boundaryErrors,
+        },
+        reconciliationErrors: boundaryErrors,
+      };
+    }
   }
 
-  // Validate tick invariants after all phases complete
-  const reconciliationErrors = validateTickInvariants(context, world.simulationConfig.numeric.reconciliationRelativeTolerance);
-
-  return { context, phaseTrace, reconciliationErrors };
+  // All phases passed: tick invariants are satisfied
+  return { context, phaseTrace, reconciliationErrors: null };
 }
 
 /**

@@ -17,7 +17,8 @@ import {
   type TickContext,
 } from "./tickOrchestrator";
 import type { WorldState, PendingTransitions } from "./worldState";
-import type { RegionId, StateId } from "../domain/id";
+import type { RegionId, StateId, CurrencyId } from "../domain/id";
+import { addLedgerRecord, type MoneyFlowRecord } from "./ledger";
 import type { SimulationConfig } from "../config/simulationConfig";
 
 /**
@@ -432,6 +433,200 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
 
       // Phase 14 would enqueue (not tested here, as it's not yet implemented)
       // This test documents the intended barrier structure.
+    });
+  });
+
+  describe("REQ-CORE-006: Phase-boundary invariant validation (fail-fast)", () => {
+    it("fails fast when early phase creates unmatched money flow", () => {
+      const world = createTestWorldState();
+      const pending = createEmptyPendingTransitions();
+
+      // Handler that creates an unmatched money flow in phase 3
+      const mismatchHandler: PhaseHandler = (_, context) => {
+        if (context.phase === 3) {
+          // Add unmatched MONEY delta: +100 with no corresponding -100 elsewhere
+          const moneyRecord: MoneyFlowRecord = {
+            tick: context.tick,
+            phase: 3,
+            type: "MONEY",
+            currencyId: "CURRENCY_1" as CurrencyId,
+            ownerType: "state",
+            ownerKey: "STATE_1" as StateId,
+            delta: 100, // Unmatched positive delta
+            reason: "TEST_UNMATCHED_DELTA",
+          };
+          return {
+            ...context,
+            currentLedger: addLedgerRecord(context.currentLedger, moneyRecord),
+          };
+        }
+        return context;
+      };
+
+      // Execute the tick with unmatched handler
+      const result = executeTick(world, 0, pending, mismatchHandler);
+
+      // Phase 3 should fail validation, stopping before phase 4
+      expect(result.phaseBoundaryError).toBeDefined();
+      if (!result.phaseBoundaryError) throw new Error("Expected phaseBoundaryError");
+      expect(result.phaseBoundaryError.phase).toBe(3);
+      expect(result.phaseBoundaryError.errors).toHaveLength(1);
+      expect(result.phaseBoundaryError.errors[0]?.category).toBe("MONEY");
+      expect(Math.abs((result.phaseBoundaryError.errors[0]?.residual ?? 0) - 100)).toBeLessThan(1e-6);
+
+      // Phase trace should stop at phase 3 (3 was executed)
+      expect(result.phaseTrace).toEqual([0, 1, 2, 3]);
+    });
+
+    it("stops before phase N+1 when phase N has unmatched delta", () => {
+      const world = createTestWorldState();
+      const pending = createEmptyPendingTransitions();
+
+      const executedPhases: number[] = [];
+
+      // Handler that creates unmatched flow in phase 5, then tries to cancel in phase 6
+      const twoPhaseHandler: PhaseHandler = (_, context) => {
+        executedPhases.push(context.phase);
+
+        if (context.phase === 5) {
+          // Add +50 MONEY (unmatched)
+          const record: MoneyFlowRecord = {
+            tick: context.tick,
+            phase: 5,
+            type: "MONEY",
+            currencyId: "CURRENCY_1" as CurrencyId,
+            ownerType: "clan",
+            ownerKey: "CLAN_1",
+            delta: 50,
+            reason: "PHASE_5_UNMATCHED",
+          };
+          return {
+            ...context,
+            currentLedger: addLedgerRecord(context.currentLedger, record),
+          };
+        }
+
+        if (context.phase === 6) {
+          // This should never execute because phase 5 validation will fail
+          const cancelRecord: MoneyFlowRecord = {
+            tick: context.tick,
+            phase: 6,
+            type: "MONEY",
+            currencyId: "CURRENCY_1" as CurrencyId,
+            ownerType: "clan",
+            ownerKey: "CLAN_1",
+            delta: -50, // Would cancel phase 5's delta
+            reason: "PHASE_6_COMPENSATING",
+          };
+          return {
+            ...context,
+            currentLedger: addLedgerRecord(context.currentLedger, cancelRecord),
+          };
+        }
+
+        return context;
+      };
+
+      const result = executeTick(world, 0, pending, twoPhaseHandler);
+
+      // Phase 5 fails, phase 6 never executes
+      expect(result.phaseBoundaryError?.phase).toBe(5);
+      expect(executedPhases).not.toContain(6);
+      expect(result.phaseTrace).toEqual([0, 1, 2, 3, 4, 5]);
+
+      // Verify the residual is exactly 50
+      if (!result.phaseBoundaryError) throw new Error("Expected phaseBoundaryError");
+      const error = result.phaseBoundaryError.errors[0];
+      if (!error) throw new Error("Expected error object");
+      expect(error.category).toBe("MONEY");
+      expect(Math.abs(error.residual - 50)).toBeLessThan(1e-6);
+    });
+
+    it("passes phase boundary when delta is zero (balanced)", () => {
+      const world = createTestWorldState();
+      const pending = createEmptyPendingTransitions();
+
+      // Handler that creates balanced flows (matched pairs)
+      const balancedHandler: PhaseHandler = (_, context) => {
+        if (context.phase === 2) {
+          // Add +75 MONEY to StateA
+          const record1: MoneyFlowRecord = {
+            tick: context.tick,
+            phase: 2,
+            type: "MONEY",
+            currencyId: "CURRENCY_1" as CurrencyId,
+            ownerType: "state",
+            ownerKey: "STATE_A" as StateId,
+            delta: 75,
+            reason: "BALANCED_FLOW_A",
+          };
+          // Add -75 MONEY to StateB (balances out)
+          const record2: MoneyFlowRecord = {
+            tick: context.tick,
+            phase: 2,
+            type: "MONEY",
+            currencyId: "CURRENCY_1" as CurrencyId,
+            ownerType: "state",
+            ownerKey: "STATE_B" as StateId,
+            delta: -75,
+            reason: "BALANCED_FLOW_B",
+          };
+          return {
+            ...context,
+            currentLedger: addLedgerRecord(
+              addLedgerRecord(context.currentLedger, record1),
+              record2
+            ),
+          };
+        }
+        return context;
+      };
+
+      const result = executeTick(world, 0, pending, balancedHandler);
+
+      // No phase-boundary errors; all phases should complete
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.phaseTrace).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+      expect(result.reconciliationErrors).toBeNull();
+    });
+
+    it("reports category, key and residual in fail-fast diagnostic", () => {
+      const world = createTestWorldState();
+      const pending = createEmptyPendingTransitions();
+
+      // Handler with unmatched GOOD flow
+      const goodMismatchHandler: PhaseHandler = (_, context) => {
+        if (context.phase === 7) {
+          // Unmatched good flow for testing diagnostics
+          const goodRecord = {
+            tick: context.tick,
+            phase: 7,
+            type: "GOOD" as const,
+            goodId: "GRAIN_001",
+            holderType: "cohort" as const,
+            holderKey: "COHORT_1",
+            bucket: "household" as const,
+            delta: 25.5, // Unmatched quantity
+            reason: "TEST_GOOD_MISMATCH",
+          };
+          return {
+            ...context,
+            currentLedger: addLedgerRecord(context.currentLedger, goodRecord),
+          };
+        }
+        return context;
+      };
+
+      const result = executeTick(world, 0, pending, goodMismatchHandler);
+
+      // Check fail-fast diagnostic
+      expect(result.phaseBoundaryError).toBeDefined();
+      if (!result.phaseBoundaryError) throw new Error("Expected phaseBoundaryError");
+      expect(result.phaseBoundaryError.phase).toBe(7);
+      const error = result.phaseBoundaryError.errors[0];
+      if (!error) throw new Error("Expected error object");
+      expect(error.category).toBe("GOOD");
+      expect(Math.abs(error.residual - 25.5)).toBeLessThan(1e-5);
     });
   });
 });
