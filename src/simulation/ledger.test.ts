@@ -76,10 +76,11 @@ describe("ledger", () => {
   });
 
   describe("computeNetFlow", () => {
-    it("computes zero net flow for balanced money transfers", () => {
+    it("computes zero net flow for balanced money transfers between different owners", () => {
       let ledger = createEmptyTickLedger(1);
 
-      // Debit state-1, credit state-2
+      // Debit state-1, credit state-2 (different owners, same currency)
+      // Keys should be just currencyId, not owner-inclusive
       const debit: MoneyFlowRecord = {
         type: "MONEY",
         tick: 1,
@@ -107,8 +108,9 @@ describe("ledger", () => {
 
       const flows = computeNetFlow(ledger, "MONEY");
 
-      expect(flows.get("currency-1:state:state-1")).toBe(-100);
-      expect(flows.get("currency-1:state:state-2")).toBe(100);
+      // Single key for the currency: transfers between different owners cancel out
+      expect(flows.get("currency-1")).toBe(0);
+      expect(flows.size).toBe(1);
     });
 
     it("returns empty map for no matching records", () => {
@@ -134,21 +136,11 @@ describe("ledger", () => {
   });
 
   describe("validateZeroFlowReconciliation", () => {
-    it("passes when all stock keys balance independently", () => {
+    it("passes when equal-and-opposite transfers between different owners balance at currency level", () => {
       let ledger = createEmptyTickLedger(1);
 
-      // state-1 receives and sends equal amounts within its own key (balanced)
-      const receive: MoneyFlowRecord = {
-        type: "MONEY",
-        tick: 1,
-        phase: 5,
-        currencyId: "currency-1" as CurrencyId,
-        ownerType: "state",
-        ownerKey: "state-1",
-        delta: 100,
-        reason: "receive",
-      };
-
+      // state-1 sends, state-2 receives (different owners, same currency)
+      // Flows balance at the currency level, not at the owner level
       const send: MoneyFlowRecord = {
         type: "MONEY",
         tick: 1,
@@ -157,19 +149,30 @@ describe("ledger", () => {
         ownerType: "state",
         ownerKey: "state-1",
         delta: -100,
-        reason: "send",
+        reason: "transfer",
       };
 
-      ledger = addLedgerRecord(ledger, receive);
+      const receive: MoneyFlowRecord = {
+        type: "MONEY",
+        tick: 1,
+        phase: 5,
+        currencyId: "currency-1" as CurrencyId,
+        ownerType: "state",
+        ownerKey: "state-2",
+        delta: 100,
+        reason: "transfer",
+      };
+
       ledger = addLedgerRecord(ledger, send);
+      ledger = addLedgerRecord(ledger, receive);
 
       const result = validateZeroFlowReconciliation(ledger);
 
-      // Both flows are for the same key and sum to zero
+      // Key "currency-1" nets to 0: transfer between different owners balances
       expect(result).toBeNull();
     });
 
-    it("detects unmatched flow in a specific stock key", () => {
+    it("detects unmatched flow in a specific currency", () => {
       let ledger = createEmptyTickLedger(1);
 
       const unmatched: MoneyFlowRecord = {
@@ -190,14 +193,14 @@ describe("ledger", () => {
       expect(result).not.toBeNull();
       expect(result).toHaveLength(1);
       expect(result?.[0]?.category).toBe("MONEY");
-      expect(result?.[0]?.key).toBe("currency-1:state:state-1");
+      expect(result?.[0]?.key).toBe("currency-1");
       expect(result?.[0]?.residual).toBe(100);
     });
 
-    it("detects mismatches in different keys as separate errors", () => {
+    it("detects mismatches in different currencies as separate errors", () => {
       let ledger = createEmptyTickLedger(1);
 
-      // state-1 unmatched in currency-1
+      // Unmatched in currency-1 (from any owner)
       const r1: MoneyFlowRecord = {
         type: "MONEY",
         tick: 1,
@@ -209,7 +212,7 @@ describe("ledger", () => {
         reason: "test",
       };
 
-      // state-2 unmatched in currency-2
+      // Unmatched in currency-2 (from any owner, different currency)
       const r2: MoneyFlowRecord = {
         type: "MONEY",
         tick: 1,
@@ -228,9 +231,9 @@ describe("ledger", () => {
 
       expect(result).not.toBeNull();
       expect(result).toHaveLength(2);
-      expect(result?.[0]?.key).toBe("currency-1:state:state-1");
+      expect(result?.[0]?.key).toBe("currency-1");
       expect(result?.[0]?.residual).toBe(100);
-      expect(result?.[1]?.key).toBe("currency-2:state:state-2");
+      expect(result?.[1]?.key).toBe("currency-2");
       expect(result?.[1]?.residual).toBe(50);
     });
 
@@ -302,10 +305,10 @@ describe("ledger", () => {
       expect(result).toBeNull();
     });
 
-    it("permits non-zero PHYSICAL_LOSS with balanced GOOD transfers in same key", () => {
+    it("permits non-zero PHYSICAL_LOSS with balanced GOOD transfers at good-level key", () => {
       let ledger = createEmptyTickLedger(1);
 
-      // Both GOOD flows for the same holder (same key) - they balance
+      // GOOD flows between different holders for same good - balance at good-level key
       const good1: GoodFlowRecord = {
         type: "GOOD",
         tick: 1,
@@ -324,7 +327,7 @@ describe("ledger", () => {
         phase: 8,
         goodId: "wheat",
         holderType: "cohort",
-        holderKey: "cohort-1",
+        holderKey: "cohort-2",
         bucket: "household",
         delta: 100,
         reason: "receive",
@@ -348,8 +351,90 @@ describe("ledger", () => {
 
       const result = validateZeroFlowReconciliation(ledger);
 
-      // Goods for same key balance to zero, PHYSICAL_LOSS excluded from zero-sum
+      // Key "wheat" nets to 0: transfer between different holders balances
+      // PHYSICAL_LOSS excluded from zero-sum validation
       expect(result).toBeNull();
+    });
+
+    it("rejects PHYSICAL_LOSS with NaN amount", () => {
+      let ledger = createEmptyTickLedger(1);
+
+      const invalidLoss: PhysicalLossRecord = {
+        type: "PHYSICAL_LOSS",
+        tick: 1,
+        phase: 15,
+        resourceType: "good",
+        resourceId: "wheat",
+        locationKey: "region-1" as RegionId,
+        amount: NaN,
+        reason: "invalid",
+        cause: "spoilage",
+      };
+
+      expect(() => {
+        addLedgerRecord(ledger, invalidLoss);
+      }).toThrow("PHYSICAL_LOSS amount must be finite");
+    });
+
+    it("rejects PHYSICAL_LOSS with Infinity amount", () => {
+      let ledger = createEmptyTickLedger(1);
+
+      const invalidLoss: PhysicalLossRecord = {
+        type: "PHYSICAL_LOSS",
+        tick: 1,
+        phase: 15,
+        resourceType: "good",
+        resourceId: "wheat",
+        locationKey: "region-1" as RegionId,
+        amount: Infinity,
+        reason: "invalid",
+        cause: "spoilage",
+      };
+
+      expect(() => {
+        addLedgerRecord(ledger, invalidLoss);
+      }).toThrow("PHYSICAL_LOSS amount must be finite");
+    });
+
+    it("rejects PHYSICAL_LOSS with negative amount", () => {
+      let ledger = createEmptyTickLedger(1);
+
+      const invalidLoss: PhysicalLossRecord = {
+        type: "PHYSICAL_LOSS",
+        tick: 1,
+        phase: 15,
+        resourceType: "good",
+        resourceId: "wheat",
+        locationKey: "region-1" as RegionId,
+        amount: -50,
+        reason: "invalid",
+        cause: "spoilage",
+      };
+
+      expect(() => {
+        addLedgerRecord(ledger, invalidLoss);
+      }).toThrow("PHYSICAL_LOSS amount must be non-negative");
+    });
+
+    it("accepts valid PHYSICAL_LOSS with positive finite amount", () => {
+      let ledger = createEmptyTickLedger(1);
+
+      const validLoss: PhysicalLossRecord = {
+        type: "PHYSICAL_LOSS",
+        tick: 1,
+        phase: 15,
+        resourceType: "good",
+        resourceId: "wheat",
+        locationKey: "region-1" as RegionId,
+        amount: 100,
+        reason: "spoilage",
+        cause: "spoilage",
+      };
+
+      const updated = addLedgerRecord(ledger, validLoss);
+
+      expect(updated.records).toHaveLength(1);
+      expect(updated.records[0]).toEqual(validLoss);
     });
   });
 });

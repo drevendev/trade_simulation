@@ -474,7 +474,7 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
       const err = result.phaseBoundaryError.errors[0];
       if (!err) throw new Error("Expected error object");
       expect(err.category).toBe("MONEY");
-      expect(err.key).toBe("CURRENCY_1:state:STATE_1");
+      expect(err.key).toBe("CURRENCY_1");
       expect(Math.abs(err.residual - 100)).toBeLessThan(1e-6);
 
       // Phase trace should stop at phase 3 (3 was executed)
@@ -542,7 +542,7 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
       const error = result.phaseBoundaryError.errors[0];
       if (!error) throw new Error("Expected error object");
       expect(error.category).toBe("MONEY");
-      expect(error.key).toBe("CURRENCY_1:clan:CLAN_1");
+      expect(error.key).toBe("CURRENCY_1");
       expect(Math.abs(error.residual - 50)).toBeLessThan(1e-6);
     });
 
@@ -630,19 +630,20 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
       const error = result.phaseBoundaryError.errors[0];
       if (!error) throw new Error("Expected error object");
       expect(error.category).toBe("GOOD");
-      expect(error.key).toBe("GRAIN_001:cohort:COHORT_1:household");
+      expect(error.key).toBe("GRAIN_001");
       expect(Math.abs(error.residual - 25.5)).toBeLessThan(1e-5);
     });
 
-    it("detects separate key mismatches even with opposite residuals (negative control)", () => {
+    it("detects separate currency mismatches (negative control: different currencies don't cancel)", () => {
       const world = createTestWorldState();
       const pending = createEmptyPendingTransitions();
 
-      // Handler that creates opposite mismatches in different keys:
-      // +100 in STATE_A and -100 in STATE_B (should both be reported as errors)
-      const oppositeMismatchHandler: PhaseHandler = (_, context) => {
+      // Handler that creates opposite mismatches in different currencies:
+      // +100 in CURRENCY_1 and -100 in CURRENCY_2 (should both be reported as errors)
+      // This proves that different currencies don't cancel each other
+      const multipleCurrencyHandler: PhaseHandler = (_, context) => {
         if (context.phase === 4) {
-          // +100 to STATE_A (unmatched)
+          // +100 in CURRENCY_1 (unmatched)
           const record1: MoneyFlowRecord = {
             tick: context.tick,
             phase: 4,
@@ -651,18 +652,18 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
             ownerType: "state",
             ownerKey: "STATE_A" as StateId,
             delta: 100,
-            reason: "STATE_A_UNMATCHED",
+            reason: "CURRENCY_1_UNMATCHED",
           };
-          // -100 to STATE_B (unmatched in opposite direction)
+          // -100 in CURRENCY_2 (unmatched in different currency)
           const record2: MoneyFlowRecord = {
             tick: context.tick,
             phase: 4,
             type: "MONEY",
-            currencyId: "CURRENCY_1" as CurrencyId,
+            currencyId: "CURRENCY_2" as CurrencyId,
             ownerType: "state",
             ownerKey: "STATE_B" as StateId,
             delta: -100,
-            reason: "STATE_B_UNMATCHED",
+            reason: "CURRENCY_2_UNMATCHED",
           };
           return {
             ...context,
@@ -675,24 +676,24 @@ describe("REQ-CORE-004: Canonical tick orchestrator", () => {
         return context;
       };
 
-      const result = executeTick(world, 0, pending, oppositeMismatchHandler);
+      const result = executeTick(world, 0, pending, multipleCurrencyHandler);
 
-      // Both keys should be reported as errors (not canceled)
+      // Both currencies should be reported as errors (not canceled)
       expect(result.phaseBoundaryError).toBeDefined();
       if (!result.phaseBoundaryError) throw new Error("Expected phaseBoundaryError");
       expect(result.phaseBoundaryError.phase).toBe(4);
       expect(result.phaseBoundaryError.errors).toHaveLength(2);
 
-      const errorA = result.phaseBoundaryError.errors.find((e) => e.key === "CURRENCY_1:state:STATE_A");
-      const errorB = result.phaseBoundaryError.errors.find((e) => e.key === "CURRENCY_1:state:STATE_B");
+      const errorC1 = result.phaseBoundaryError.errors.find((e) => e.key === "CURRENCY_1");
+      const errorC2 = result.phaseBoundaryError.errors.find((e) => e.key === "CURRENCY_2");
 
-      expect(errorA).toBeDefined();
-      expect(errorA?.category).toBe("MONEY");
-      expect(Math.abs((errorA?.residual ?? 0) - 100)).toBeLessThan(1e-6);
+      expect(errorC1).toBeDefined();
+      expect(errorC1?.category).toBe("MONEY");
+      expect(Math.abs((errorC1?.residual ?? 0) - 100)).toBeLessThan(1e-6);
 
-      expect(errorB).toBeDefined();
-      expect(errorB?.category).toBe("MONEY");
-      expect(Math.abs((errorB?.residual ?? 0) - (-100))).toBeLessThan(1e-6);
+      expect(errorC2).toBeDefined();
+      expect(errorC2?.category).toBe("MONEY");
+      expect(Math.abs((errorC2?.residual ?? 0) - (-100))).toBeLessThan(1e-6);
     });
   });
 });

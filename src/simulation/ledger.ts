@@ -84,11 +84,27 @@ export function createEmptyTickLedger(tick: number): TickLedger {
 
 /**
  * Add a record to a tick ledger (returns a new ledger instance).
+ * Validates PHYSICAL_LOSS records to reject non-finite or invalid amounts.
  */
 export function addLedgerRecord(
   ledger: TickLedger,
   record: LedgerRecord
 ): TickLedger {
+  // Validate PHYSICAL_LOSS records: amount must be finite and positive
+  if (record.type === "PHYSICAL_LOSS") {
+    const r = record as PhysicalLossRecord;
+    if (!Number.isFinite(r.amount)) {
+      throw new Error(
+        `PHYSICAL_LOSS amount must be finite; got ${r.amount}`
+      );
+    }
+    if (r.amount < 0) {
+      throw new Error(
+        `PHYSICAL_LOSS amount must be non-negative (loss magnitude >= 0); got ${r.amount}`
+      );
+    }
+  }
+
   return {
     tick: ledger.tick,
     records: [...ledger.records, record],
@@ -97,6 +113,9 @@ export function addLedgerRecord(
 
 /**
  * Compute net flow for a given stock key across all records of a category.
+ * MONEY flows are keyed by currencyId only (conserved asset, independent of owner).
+ * GOOD flows are keyed by goodId only (conserved asset, independent of holder/bucket).
+ * PHYSICAL_LOSS flows are keyed by resourceId:locationKey for tracking loss source.
  */
 export function computeNetFlow(
   ledger: TickLedger,
@@ -112,11 +131,11 @@ export function computeNetFlow(
 
     if (record.type === "MONEY") {
       const r = record as MoneyFlowRecord;
-      key = `${r.currencyId}:${r.ownerType}:${r.ownerKey}`;
+      key = r.currencyId;
       delta = r.delta;
     } else if (record.type === "GOOD") {
       const r = record as GoodFlowRecord;
-      key = `${r.goodId}:${r.holderType}:${r.holderKey}:${r.bucket}`;
+      key = r.goodId;
       delta = r.delta;
     } else {
       const r = record as PhysicalLossRecord;
