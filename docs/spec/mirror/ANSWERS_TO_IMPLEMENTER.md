@@ -658,5 +658,11 @@ Resolved with the smallest presentation-contract clarification in both the canon
 
 No economic mechanic, metric formula, accounting identity, phase order, acceptance threshold or v1 scope changed. No new implementation-package file was added, so no mirror-allowlist request is required.
 
-STATUS: RESOLVED — VISUALIZATION\_CONTRACT\_CLARIFIED
+STATUS: RESOLVED — VISUALIZATION\_CONTRACT\_CLARIFIE  
+2026-09-08 — VISUALIZATION\_REPLAY\_STEP\_QA\_01 — REQ-VISUALIZATION-001  
+Found and resolved one implementation-facing replay ambiguity. HistoryRetentionMetadata explicitly permits disjoint aggregateTickRanges, while the timeline contract required a ±1 tick control without defining behavior when the exact adjacent tick has been evicted/downsampled but a farther tick remains retained. Canonical Visualization and Handoff/13 now define ±1 as an exact T-1/T+1 action. If that exact aggregate tick is unavailable, the corresponding direction is disabled with a concise unavailable explanation; it must not silently jump across the retention gap. The existing scrubber remains the explicit way to choose another retained tick.  
+Added visualization acceptance test 48 covering a retained T with an unavailable adjacent tick and a farther retained tick. The test requires the ±1 action to remain disabled rather than selecting the farther snapshot. This is consistent with the existing no-silent-substitution rules for compare baselines, deep links and retention invalidation.  
+No economic mechanic, SimulationOutput ownership rule, retention range meaning, metric definition, phase order, acceptance budget or v1 scope changed. No new implementation-package file was added, so no mirror-allowlist request is required.  
+STATUS: RESOLVED — VISUALIZATION\_REPLAY\_CONTRACT\_CLARIFIED  
+D
 

@@ -306,7 +306,7 @@ The simulation is deterministic, so replay is central.
 
 Required controls:  
 \- play/pause  
-\- ±1 tick  
+\- ±1 exact tick. The control targets T-1 or T+1 only. If that exact aggregate snapshot is not retained, disable that direction and explain that the adjacent tick is unavailable; never jump across a retention gap to a farther retained tick. The scrubber remains the explicit way to choose another retained tick.  
 \- scrub to arbitrary retained tick  
 \- jump to next/previous event  
 \- speed controls  
@@ -563,6 +563,7 @@ Any invariant breach should surface a persistent banner with the failing metric 
 45\. Staging/live-progress presentation test: partial, duplicate, delayed or reordered Worker deliveries never move the selected tick, live-head tick, timeline extent, event log, ExplanationFact notices, metric deltas or compare state before a verified logical commit is admitted. Identical committed re-delivery produces no duplicate notification, animation or progress increment. When the user is viewing an older retained tick, a newly committed live tick advances only the live-head marker and does not pull the selection forward. Background processing/recovery status may change, but raw chunk/retry counts do not create visible progress flicker or imply committed simulation state.  
 46\. Retention/downsampling atomicity test: a retention transition reads only committed same-run observations. When fine detail is downsampled, any replacement aggregate is verified before source detail is deleted; removing aggregate coverage also removes detailed coverage for that tick. Observation blocks, retention ranges and affected lifecycle records become visible atomically, and a delayed pre-eviction payload cannot restore a tier removed by the newer retention transition. Retention/downsampling itself never creates new availability; only a verified observation commit can do that.  
 47\. Active-selection retention invalidation test: while the user is viewing retained tick T with compare baseline B, apply retention transitions that first remove only T detail, then remove B aggregate coverage, then remove T aggregate coverage. T remains selected through detail-only degradation; B becomes visibly unavailable and all compare deltas/overlays disable without substitution; when T aggregate coverage disappears, the UI shows an explicit unavailable selected-tick state and does not jump to another tick. Live-head progress may continue independently, and returning to a retained tick requires an explicit user action.  
+48\. Sparse-retention step test: when T is retained but exact T-1 or T+1 is outside aggregateTickRanges while a farther tick in that direction is retained, the corresponding ±1 control is disabled with an unavailable explanation. It never jumps to the farther retained tick; selecting that farther tick requires an explicit scrub/navigation action.  
 21\. Benchmark scenarios for UI acceptance
 
 A. Stable trade world  
