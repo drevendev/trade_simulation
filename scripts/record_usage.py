@@ -229,7 +229,7 @@ def final_text(messages) -> str:
     return last
 
 
-def classify_outcome(conclusion, text, effect=""):
+def classify_outcome(conclusion, text, effect="", execution_file=True):
     """(outcome, source). Pure.
 
     Four sources, consulted in order of how much each one knows.
@@ -251,10 +251,21 @@ def classify_outcome(conclusion, text, effect=""):
 
     What survives as `unknown` is now a run that did nothing observable and claimed
     nothing — a true statement rather than an artefact of phrasing.
+
+    `execution_file` says whether the model step left its output file at all. A step
+    that crashed — six runs did on 2026-09-08, `SDK execution error` inside the action —
+    ends with an *empty* conclusion and no file. That is neither of the conclusions the
+    workflow is trusted for above, so it fell through to the text heuristic, found no
+    final message, and was filed as `unknown` — the word reserved for a run that
+    produced output and claimed nothing. A crash is a `failed` run, and the workflow is
+    the source that knows it (#346). An empty conclusion *with* a file keeps the run's
+    own account: the step wrote something, so its last word still decides.
     """
     if conclusion == "no_work":
         return "no_work", "workflow"
     if conclusion not in (None, "", "unknown", "success"):
+        return "failed", "workflow"
+    if conclusion in (None, "") and not execution_file:
         return "failed", "workflow"
     if COMPLETED.search(text or ""):
         return "completed", "heuristic"
@@ -386,7 +397,11 @@ def main() -> int:
 
     # The outcome is read from the run's last word; mentions and rework from everything.
     outcome, outcome_source = classify_outcome(
-        args.conclusion, final_text(messages), args.effect
+        args.conclusion,
+        final_text(messages),
+        args.effect,
+        execution_file=bool(args.execution_file)
+        and pathlib.Path(args.execution_file).is_file(),
     )
     before = load_reading(args.usage_before)
     after = load_reading(args.usage_after)
