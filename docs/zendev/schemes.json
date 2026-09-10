@@ -13,7 +13,7 @@
     "descriptor in the tag message, and every telemetry record carries {id, digest} so",
     "a measurement window can be sliced by scheme without knowing any dates."
   ],
-  "active": "scheme/4",
+  "active": "scheme/5",
   "schemes": [
     {
       "id": "scheme/1",
@@ -85,6 +85,26 @@
       "rework_limit": 3,
       "cadence_minutes": 25,
       "note": "Activated by a repository variable rather than a merge, so `commit` records where master stood at `in_force_from`: ZENDEV_QA_LOGIN was set at 2026-09-07T22:53:33Z and the intake job cannot run without it. The QA voice began commenting earlier, at 21:48Z, so telemetry records between 21:48Z and 22:53Z say scheme/3 while a third voice was already speaking — two comments, no verdict taken on either. The earlier plan named this account AndyDev; the account is andy-zen-dev."
+    },
+    {
+      "id": "scheme/5",
+      "in_force_from": "",
+      "commit": "",
+      "summary": "Both roles move from Haiku 4.5 to Sonnet 5; everything else exactly as scheme/4.",
+      "roles": {
+        "author": {"identity": "zendev-author[bot]", "model": "claude-sonnet-5", "max_budget_usd": 5.0},
+        "acceptor": {"identity": "zendev-acceptor[bot]", "model": "claude-sonnet-5", "max_budget_usd": 3.0},
+        "machine": {"identity": "zendev-machine[bot]", "model": null}
+      },
+      "verdict_owner": "zendev-acceptor",
+      "voices": [
+        "EndlessZen as drevendev, owns the specification",
+        "SLOPSTER as andy-zen-dev, read-only: comments and Issues, never a formal review"
+      ],
+      "required_checks": ["build-and-test", "typescript", "policy-guard", "mergeability"],
+      "rework_limit": 3,
+      "cadence_minutes": 25,
+      "note": "The experiment decided on 2026-09-09: does a stronger model need fewer rework rounds per requirement, so that the cost of a landed requirement grows by less than the 2x per-token price? Measured against the scheme/4 day of 2026-09-08 21:24Z to 2026-09-09 21:24Z: $27.47 per day, author mean $0.445 and max $1.30, acceptor mean $0.128 and max $0.59, 22 merges, one pull request closed by the rework bound. Forecast at equal volume about $55 per day. Ceilings unchanged on purpose: the costliest runs reached 26% and 20% of them. Effort is the CLI's default; no effort flag is passed. Activated by the two model variables (ZENDEV_AUTHOR_MODEL, ZENDEV_ACCEPTOR_MODEL) after this descriptor is active and the tag is cut, so `in_force_from` and `commit` are filled after activation, which does not change the digest. The queue at activation is the M3 tail: four PARTIAL rows under rework and one blocked, with M4's fifteen rows indexed and waiting on the M3 gate."
     }
   ]
 }
