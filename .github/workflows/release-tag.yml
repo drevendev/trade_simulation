@@ -14,7 +14,7 @@ on:
     branches: [master]
     paths:
       - 'docs/spec/implementation_status.csv'
-      - 'docs/zendev/milestones.json'
+      - 'docs/spec/mirror/REQUIREMENTS_REGISTRY.csv'
   workflow_dispatch:
 
 permissions: {}

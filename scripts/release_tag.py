@@ -27,6 +27,15 @@ remembered between runs: the tags are the state.
 
 This is also what makes the job idempotent. It runs on every push to master, and on a
 push that changed nothing about coverage the digest is identical and nothing is cut.
+
+## Where membership comes from
+
+The registry's `MILESTONE` column: one milestone per row, empty for the cross-cutting
+rows that gate no single milestone. It is the researcher's own statement, delivered by
+the mirror. The hand transcription in `docs/zendev/milestones.json` that preceded it
+blocked the very mirror proposal that registered a new requirement — the map did not
+name it, and no ordinary branch could name it before the registry did (#377). A copy
+of the researcher's data cannot be updated before the data arrives, so there is no copy.
 """
 
 from __future__ import annotations
@@ -59,6 +68,29 @@ def coverage_digest(rows) -> str:
 
 def milestone_number(name: str) -> int:
     return int(name[1:])
+
+
+MILESTONE_NAME = re.compile(r"^M\d+$")
+
+
+def milestones_from_registry(rows):
+    """Milestone -> the requirement ids it gates, in registry order. Pure.
+
+    A row with an empty `MILESTONE` gates no milestone and appears nowhere here: the
+    scope statements and the cross-cutting visibility rule. A value that is not `M<n>`
+    is a malformed registry, and refusing it is what keeps a typo from quietly leaving
+    a requirement out of every gate.
+    """
+    out: dict[str, list[str]] = {}
+    for row in rows:
+        req_id = (row.get("REQ_ID") or "").strip()
+        name = (row.get("MILESTONE") or "").strip()
+        if not req_id or not name:
+            continue
+        if not MILESTONE_NAME.match(name):
+            raise ValueError("%s names milestone %r, which is not M<n>" % (req_id, name))
+        out.setdefault(name, []).append(req_id)
+    return out
 
 
 def complete(rows, required_ids):
@@ -138,7 +170,7 @@ def plan(rows, milestones, existing):
     return out
 
 
-def notes(entry, source: str) -> str:
+def notes(entry) -> str:
     """The tag message and release body: what shipped, and where to verify it."""
     dash = "—"
     lines = [
@@ -161,7 +193,8 @@ def notes(entry, source: str) -> str:
         )
     lines += [
         "",
-        "Milestone membership read from docs/zendev/milestones.json (source: %s)." % source,
+        "Milestone membership read from the MILESTONE column of "
+        "docs/spec/mirror/REQUIREMENTS_REGISTRY.csv.",
         "Generated from docs/spec/implementation_status.csv. No model was involved.",
         "",
         "coverage-digest: %s" % entry["digest"],
@@ -267,7 +300,9 @@ def main() -> int:
         "--status", default=str(root / "docs" / "spec" / "implementation_status.csv")
     )
     parser.add_argument(
-        "--milestones", default=str(root / "docs" / "zendev" / "milestones.json")
+        "--registry",
+        default=str(root / "docs" / "spec" / "mirror" / "REQUIREMENTS_REGISTRY.csv"),
+        help="the requirements registry whose MILESTONE column says what each gate covers",
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
@@ -278,8 +313,7 @@ def main() -> int:
 
     report_foreign_tags(args.tagger)
 
-    document = json.loads(pathlib.Path(args.milestones).read_text(encoding="utf-8"))
-    milestones = document["milestones"]
+    milestones = milestones_from_registry(read_rows(args.registry))
     entries = plan(read_rows(args.status), milestones, existing_tags(milestones))
 
     if not entries:
@@ -287,8 +321,7 @@ def main() -> int:
         return 0
 
     for entry in entries:
-        source = (document.get("source") or {}).get(entry["milestone"], "unknown")
-        body = notes(entry, source)
+        body = notes(entry)
         print("release-tag: %s (%s, digest %s)" % (entry["tag"], entry["milestone"], entry["digest"]))
         if args.dry_run:
             print(body)

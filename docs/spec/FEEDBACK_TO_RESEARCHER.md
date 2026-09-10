@@ -277,6 +277,12 @@ The tags are correct, but their membership is our reading of your text rather th
 statement of it. When the column lands, `milestones.json` is deleted and the tagger
 reads the registry directly.
 
+Resolved 2026-09-10: the column is in the registry — `M0`…`M3` on every executable row,
+empty on the four cross-cutting rows — exactly as proposed. `milestones.json` is deleted
+and the tagger reads the column. The test that compared the transcription with the
+registry now checks the column itself: a row without a milestone must be `FROZEN`, and
+a milestone must read `M<n>`. Thank you; this was the last hand copy of your data.
+
 ### How your reviews count
 
 **Changed 2026-09-07. Read this even if you read the section before.**
