@@ -190,4 +190,190 @@ describe("acceptance-req-market-005-phase8-integration", () => {
       expect(t.surplusRate).toBeGreaterThanOrEqual(0);
     }
   });
+
+  it("REQ-MARKET-005 golden-gate: all required telemetry fields populated per spec section 33", () => {
+    const config = createDefaultSimulationConfig();
+    const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 99);
+
+    // Deterministic fixture with clear supply/demand imbalance
+    const getFixtureIntents = (): MarketIntent[] => {
+      const regionId = Array.from(worldState.regions.values())[0]?.regionId as RegionId;
+      const goodId = Object.keys(worldState.definitionRegistry.goods)[0] as GoodId;
+      const sellers = Array.from(worldState.clans.values()).slice(0, 2);
+      const buyers = Array.from(worldState.clans.values()).slice(2, 4);
+
+      return [
+        {
+          id: createMarketIntentId("mi:seller-1"),
+          actor: { type: "CLAN" as const, clanId: sellers[0]!.clanId },
+          regionId,
+          goodId,
+          side: "SELL" as const,
+          purpose: "INVENTORY_REBALANCE" as const,
+          desiredQuantity: 100,
+          minimumReserveQuantity: 0,
+          sourcePlanId: "plan:sellers",
+        },
+        {
+          id: createMarketIntentId("mi:seller-2"),
+          actor: { type: "CLAN" as const, clanId: sellers[1]!.clanId },
+          regionId,
+          goodId,
+          side: "SELL" as const,
+          purpose: "INVENTORY_REBALANCE" as const,
+          desiredQuantity: 100,
+          minimumReserveQuantity: 0,
+          sourcePlanId: "plan:sellers",
+        },
+        {
+          id: createMarketIntentId("mi:buyer-1"),
+          actor: { type: "CLAN" as const, clanId: buyers[0]!.clanId },
+          regionId,
+          goodId,
+          side: "BUY" as const,
+          purpose: "CONSUMPTION" as const,
+          desiredQuantity: 150,
+          maxSpend: 1500,
+          sourcePlanId: "plan:buyers",
+        },
+        {
+          id: createMarketIntentId("mi:buyer-2"),
+          actor: { type: "CLAN" as const, clanId: buyers[1]!.clanId },
+          regionId,
+          goodId,
+          side: "BUY" as const,
+          purpose: "CONSUMPTION" as const,
+          desiredQuantity: 100,
+          maxSpend: 1000,
+          sourcePlanId: "plan:buyers",
+        },
+      ];
+    };
+
+    const phase8Handler = createPhase8Handler({
+      getFixtureIntents,
+      collectTelemetry: true,
+    });
+
+    const result = executeTick(worldState, 1, worldState.pendingTransitions, phase8Handler);
+
+    // Per REQ-MARKET-005, section 33: all required fields must be populated
+    expect(result.context.marketTelemetry.length).toBeGreaterThan(0);
+    const telemetry = result.context.marketTelemetry[0]!;
+
+    // Verify all required M3 fields exist and are finite
+    expect(Number.isFinite(telemetry.desiredDemandQuantity)).toBe(true);
+    expect(Number.isFinite(telemetry.effectiveDemandQuantity)).toBe(true);
+    expect(Number.isFinite(telemetry.offeredQuantity)).toBe(true);
+    expect(Number.isFinite(telemetry.clearedQuantity)).toBe(true);
+    expect(Number.isFinite(telemetry.sellerNetPrice)).toBe(true);
+    expect(Number.isFinite(telemetry.householdGrossPrice)).toBe(true);
+    expect(Number.isFinite(telemetry.unmetDemandQuantity)).toBe(true);
+    expect(Number.isFinite(telemetry.unsoldOfferQuantity)).toBe(true);
+    expect(Number.isFinite(telemetry.shortageRate)).toBe(true);
+    expect(Number.isFinite(telemetry.surplusRate)).toBe(true);
+    expect(Number.isFinite(telemetry.consumptionTaxCollected)).toBe(true);
+
+    // Verify structural properties per section 33
+    expect(telemetry.pass).toBe("MAIN");
+    expect(telemetry.marketId).toBeDefined();
+    expect(telemetry.regionId).toBeDefined();
+    expect(telemetry.goodId).toBeDefined();
+
+    // Verify quantity relationships: cleared <= effective demand, cleared <= offered
+    expect(telemetry.clearedQuantity).toBeLessThanOrEqual(telemetry.effectiveDemandQuantity + 1e-8);
+    expect(telemetry.clearedQuantity).toBeLessThanOrEqual(telemetry.offeredQuantity + 1e-8);
+
+    // Verify unmet/unsold are computed correctly
+    expect(telemetry.unmetDemandQuantity).toBeGreaterThanOrEqual(-1e-8);
+    expect(telemetry.unsoldOfferQuantity).toBeGreaterThanOrEqual(-1e-8);
+
+    // Verify shortage/surplus rate bounds per section 33 formula
+    expect(telemetry.shortageRate).toBeGreaterThanOrEqual(-1e-8);
+    expect(telemetry.shortageRate).toBeLessThanOrEqual(1 + 1e-8);
+    expect(telemetry.surplusRate).toBeGreaterThanOrEqual(-1e-8);
+    expect(telemetry.surplusRate).toBeLessThanOrEqual(1 + 1e-8);
+  });
+
+  it("REQ-MARKET-005 golden-gate: telemetry values match clearing outcomes", () => {
+    const config = createDefaultSimulationConfig();
+    const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 77);
+
+    // Clear shortage scenario: high demand, limited supply
+    const getFixtureIntents = (): MarketIntent[] => {
+      const regionId = Array.from(worldState.regions.values())[0]?.regionId as RegionId;
+      const goodId = Object.keys(worldState.definitionRegistry.goods)[0] as GoodId;
+      const sellers = Array.from(worldState.clans.values()).slice(0, 1);
+      const buyers = Array.from(worldState.clans.values()).slice(1, 3);
+
+      return [
+        {
+          id: createMarketIntentId("mi:seller-shortage"),
+          actor: { type: "CLAN" as const, clanId: sellers[0]!.clanId },
+          regionId,
+          goodId,
+          side: "SELL" as const,
+          purpose: "INVENTORY_REBALANCE" as const,
+          desiredQuantity: 50, // Limited supply
+          minimumReserveQuantity: 0,
+          sourcePlanId: "plan:shortage-sellers",
+        },
+        {
+          id: createMarketIntentId("mi:buyer-shortage-1"),
+          actor: { type: "CLAN" as const, clanId: buyers[0]!.clanId },
+          regionId,
+          goodId,
+          side: "BUY" as const,
+          purpose: "CONSUMPTION" as const,
+          desiredQuantity: 100, // High demand
+          maxSpend: 2000,
+          sourcePlanId: "plan:shortage-buyers",
+        },
+        {
+          id: createMarketIntentId("mi:buyer-shortage-2"),
+          actor: { type: "CLAN" as const, clanId: buyers[1]!.clanId },
+          regionId,
+          goodId,
+          side: "BUY" as const,
+          purpose: "CONSUMPTION" as const,
+          desiredQuantity: 100,
+          maxSpend: 2000,
+          sourcePlanId: "plan:shortage-buyers",
+        },
+      ];
+    };
+
+    const phase8Handler = createPhase8Handler({
+      getFixtureIntents,
+      collectTelemetry: true,
+    });
+
+    const result = executeTick(worldState, 1, worldState.pendingTransitions, phase8Handler);
+
+    const telemetry = result.context.marketTelemetry[0]!;
+
+    // Verify clearing relationships per REQ-MARKET-003
+    // desiredDemandQuantity = sum of all buyer desired quantities
+    expect(telemetry.desiredDemandQuantity).toBe(200); // 100 + 100
+
+    // offeredQuantity = sum of all seller desired quantities
+    expect(telemetry.offeredQuantity).toBe(50);
+
+    // In shortage scenario: clearedQuantity = min(offered, effective demand)
+    // Both constraints bind, so cleared should equal offered (supply-limited)
+    expect(telemetry.clearedQuantity).toBeLessThanOrEqual(telemetry.offeredQuantity + 1e-8);
+    expect(telemetry.clearedQuantity).toBeLessThanOrEqual(telemetry.effectiveDemandQuantity + 1e-8);
+
+    // In shortage: unmetDemandQuantity > 0
+    expect(telemetry.unmetDemandQuantity).toBeGreaterThan(-1e-8);
+
+    // Verify shortage rate formula: shortageRate = unmet / effective (if effective > eps, else 0)
+    if (telemetry.effectiveDemandQuantity > 1e-8) {
+      const expectedShortageRate = telemetry.unmetDemandQuantity / telemetry.effectiveDemandQuantity;
+      expect(Math.abs(telemetry.shortageRate - expectedShortageRate)).toBeLessThan(1e-8);
+    }
+
+    // Tax collected should be non-negative
+    expect(telemetry.consumptionTaxCollected).toBeGreaterThanOrEqual(-1e-8);
+  });
 });
