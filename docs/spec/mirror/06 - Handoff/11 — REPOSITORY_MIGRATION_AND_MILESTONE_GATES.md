@@ -42,13 +42,13 @@ Legacy City/Pop/Market/Deal may coexist temporarily under Legacy or their curren
 8\. Do not preserve legacy formulas merely to minimize diff size. Preserve repository plumbing and useful concepts; replace obsolete economic mechanics explicitly.  
 9\. No banks/private credit in core v1.  
 10\. No multi-hop trade pathfinding or all-pairs routing in core v1; use explicit sparse TransportLinks.  
-11\. Milestone visibility is continuous. For every M0–M12, at least 5% of planned implementation units, rounded up with a minimum of one unit per milestone, must be visualization/presentation work that produces a directly visible GitHub Pages change. M11 satisfies this inherently; before M11 use the lightweight milestone-preview boundary below rather than pulling the final observatory architecture forward.
+11\. Milestone visibility is continuous. The baseline rule remains: every M0–M12 allocates at least 5% of planned implementation units, rounded up with a minimum of one unit per milestone, to user-visible visualization/presentation work. OWNER OVERRIDE 2026-09-10: M3 representation/documentation is a hard completion gate and must occupy at least 30% of M3 requirement-sized units. M3 now has nine permanent rows; REQ-VISUALIZATION-006, REQ-VISUALIZATION-007 and REQ-VISUALIZATION-008 are mandatory representation rows (3/9 \= 33.3%). M11 still owns the full canonical Worker \+ SimulationOutput observatory; M3 representation must remain static-hosting-compatible, one-way and non-authoritative.
 
 ## Milestone preview scope (M0–M12)
 
 ## The project should show visible progress throughout implementation without turning early milestones into UI-first work. Before M11, maintain one lightweight Milestone Preview area on the existing GitHub Pages site. A preview may consume a small deterministic static/generated JSON artifact or equivalent one-way export from that milestone's golden scenario. It is diagnostic/presentation output only: it must not mutate WorldState, consume economic RNG, become a second source of economic truth, or establish a competing browser API. Temporary preview adapters may be replaced at M11 by the canonical SimulationOutput \+ Worker architecture.
 
-## A unit counts toward the \>=5% visualization share only when its acceptance includes a user-visible Pages change and a basic build/render smoke check. Prefer one compact view with 1–3 legible visuals or metrics and a short plain-English explanation of what the milestone added. Do not create dashboard clutter or placeholder chrome merely to satisfy the quota.
+## A unit counts toward the baseline \>=5% visualization share only when its acceptance includes a directly visible presentation improvement and appropriate smoke/quality checks. For M3, the owner override is broader and mandatory: representation is 3/9 \= 33.3% of permanent M3 requirements and consists of (1) a polished GitHub Pages LocalMarket experience, (2) current README/public project documentation, and (3) at least two concise public explainer/reference articles. Prefer a small number of excellent, legible views over dashboard clutter. Representation must explain the actual model rather than decorate it.
 
 ## Suggested visible slice by milestone:
 
@@ -58,7 +58,7 @@ Legacy City/Pop/Market/Deal may coexist temporarily under Legacy or their curren
 
 ## \- M2: canonical 0–15 phase trace, tick counter and zero-flow reconciliation/ledger health for the no-op scenario.
 
-## \- M3: one LocalMarket view with price, traded quantity, the Section-33 realized Phase-8 MAIN-pass shortageRate and surplusRate, and settlement totals. Do not derive a second surplus metric for the preview.
+## \- M3: one consolidated current Milestone Preview centered on LocalMarket rather than a fourth stacked milestone-status panel. It must show a legible price/traded-quantity trend from the deterministic golden run, at least one current-tick market-balance or settlement visual, headline metrics for price, traded quantity, realized Phase-8 MAIN-pass shortageRate/surplusRate, seller-net receipt, buyer-gross cost and collected consumption tax, plus a short plain-English explanation of what changed and why it matters. Do not derive a second surplus metric. Provide responsive/narrow-layout behavior, readable units/legends/tooltips where applicable, accessible exact-value access, and explicit loading/empty/error states. The view remains a one-way static diagnostic/presentation export and must not mutate simulation state or pull the M11 Worker/read-model architecture forward.
 
 ## \- M4: one-region economy view with production, employment/wages, needs satisfaction and key inventories/capital.
 
@@ -141,6 +141,9 @@ Implementation:
 \- Implement atomic local settlement and market ledgers.  
 \- Use seeded static inventories/wallets from a tiny test scenario; production and population decision logic may still be scripted fixtures.  
 \- Preserve only useful conceptual behavior from legacy Market; do not adapt legacy Deal into the canonical transaction primitive.  
+\- Complete REQ-VISUALIZATION-006 as a polished M3 Pages representation, not a text-only diagnostics card: consolidate the Milestone Preview around the current M3 LocalMarket and render the required trend, market-balance/settlement visual, headline metrics and explanatory copy.  
+\- Complete REQ-VISUALIZATION-007 by refreshing the root README and directly linked public project documentation so they truthfully describe the canonical TypeScript runtime, current M3 capabilities, Pages experience, build/run/test commands, migration status and the retained C\# legacy path as reference/oracle rather than current architecture.  
+\- Complete REQ-VISUALIZATION-008 by publishing at least two concise public reference/explainer articles linked from README or Pages: one on local price formation/clearing/shortage-surplus and one on settlement/tax/reconciliation/telemetry. Use simple canonical English and do not invent mechanics.  
 Gate M3:  
 \- canonical local-market golden scenarios pass.  
 \- no buyer spends below zero; no seller transfers unavailable goods.  
@@ -148,6 +151,10 @@ Gate M3:
 \- allocation is deterministic under shuffled input enumeration.  
 \- price moves obey configured bounds and shortage/surplus direction.  
 \- consumption tax reaches the explicit recipient and is never a sink.  
+\- REQ-VISUALIZATION-006, REQ-VISUALIZATION-007 and REQ-VISUALIZATION-008 are all IMPLEMENTED; M3 may not close on simulation correctness alone.  
+\- The deployed Pages default visibly communicates M3 economic behavior on desktop and narrow layouts with meaningful visuals, units/labels and explicit unavailable/error states; a stack of text diagnostics does not satisfy the gate.  
+\- Root README and directly linked public project text accurately describe the current canonical runtime/capabilities and do not present legacy C\# toy architecture as the current implementation.  
+\- At least two concise public M3 explainer/reference articles are reachable from README or Pages and match canonical terminology/formulas without adding new economics.  
 Migration consequence: legacy Market/LocalMarket tests remain legacy-only; new canonical tests become authoritative for new code.
 
 Milestone 4 — Production, labor, consumption and local closed economy  
@@ -303,7 +310,7 @@ M0 \-\> M1 \-\> M2 \-\> M3 \-\> M4 \-\> M5 \-\> M6 \-\> M7 \-\> M8 \-\> M9 \-\> 
 Parallel work is allowed only inside a milestone when modules do not share mutable contracts. In particular, do not implement M7 monetary policy before M5 finite FX and M6 sovereign debt contracts exist; do not implement M8 migration before population wallets/inventories and routes are stable; do not implement M11 UI against legacy domain objects.
 
 Recommended commit/PR granularity for Codex/Claude  
-Each milestone should normally be 2–6 small commits/PR-sized changes, not one giant patch. At least 5% of the milestone's planned implementation units, rounded up with a minimum of one, must be visualization/presentation units meeting the Milestone Preview rule above. Preferred sequence inside a milestone: schemas/types \-\> pure algorithms \-\> settlement/mutations \-\> orchestration \-\> invariants/tests \-\> scenario/golden test \-\> milestone preview \-\> cleanup. A coding agent may subdivide further but must not move a later subsystem across a failed gate.
+Each milestone should normally be split into bounded PR-sized changes, not one giant patch. The baseline visibility allocation is at least 5%, rounded up with a minimum of one presentation unit. M3 is an explicit owner exception: its nine permanent requirements include three mandatory representation/documentation units, REQ-VISUALIZATION-006..008 (33.3%). These are first-class milestone work, not cleanup after the simulation is otherwise done. Preferred M3 sequencing allows README/explainer work to proceed in parallel with correctness repairs, while the final Pages LocalMarket view waits for its named telemetry/acceptance dependencies. A coding agent may subdivide further but must not move a later subsystem across a failed gate.
 
 Legacy-to-canonical responsibility map  
 \- Simulation.cs: preserve the idea of one top-level orchestrator; replace hard-coded city world and six-step loop with WorldState \+ canonical phase pipeline.  
@@ -321,7 +328,7 @@ Test migration policy
 Create canonical test namespaces/folders rather than editing every existing test in place. Classify tests as: LEGACY\_REGRESSION (protects pre-migration behavior temporarily), CANONICAL\_UNIT, CANONICAL\_INVARIANT, GOLDEN\_SCENARIO, DETERMINISM, and PERFORMANCE. A legacy test may be removed only when the production responsibility it guards has been deleted or when an equivalent canonical test proves the retained property. Never rewrite an old expected value solely to make a new formula pass.
 
 Definition of a passed milestone  
-A milestone is passed only when all of the following are true: production build compiles; tests for previous passed milestones still pass; new required tests pass; deterministic replay check passes; relevant accounting invariants pass; its golden scenario runs through the public canonical orchestrator; the milestone's required visualization share is satisfied and the current milestone preview is visibly deployable on GitHub Pages (or, at M11, the canonical observatory gate is satisfied); no TODO requires a material economic/product-design choice; and repository documentation or migration notes identify any intentionally retained legacy surface.
+A milestone is passed only when all of the following are true: production build compiles; tests for previous passed milestones still pass; new required tests pass; deterministic replay check passes; relevant accounting invariants pass; its golden scenario runs through the public canonical orchestrator; the milestone's required representation share is satisfied and the current milestone presentation is visibly deployable/reachable (or, at M11, the canonical observatory gate is satisfied); no TODO requires a material economic/product-design choice; and public repository documentation truthfully identifies current canonical behavior and any intentionally retained legacy surface. For M3 specifically, all three mandatory representation requirements REQ-VISUALIZATION-006..008 must be IMPLEMENTED before the milestone is passed.
 
 Stop/repair conditions  
 Stop forward implementation and repair the current milestone if any of these occur: unexplained stock drift; order-dependent deterministic failures; two writers for one stock; direct subsystem-specific FX transfer logic; UI mutation of domain state; a phase reads future-tick information; config value ownership is ambiguous; scenario initialization bypasses GenesisLedger; or a coding agent must invent a material formula not specified in the implementation contracts. These are architecture failures, not acceptable technical debt.
