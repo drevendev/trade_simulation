@@ -93,6 +93,32 @@ $0.96 and an acceptor run $0.42, so halving the interval roughly doubles the cei
 An idle acceptor is cheap (about $0.07); an idle author is not, because an empty queue
 sends it to create one ready Issue rather than to stop.
 
+## Models and ceilings
+
+The model each role runs, and the per-run cost ceiling that stops a runaway, are
+repository variables read by the two role workflows. When a variable is unset the
+workflow falls back to the value written beside it in the workflow file.
+
+| Variable | Role | Fallback |
+| --- | --- | --- |
+| `ZENDEV_AUTHOR_MODEL` | AUTHOR | `claude-haiku-4-5` |
+| `ZENDEV_AUTHOR_BUDGET_USD` | AUTHOR | `5.00` |
+| `ZENDEV_ACCEPTOR_MODEL` | ACCEPTOR | `claude-haiku-4-5` |
+| `ZENDEV_ACCEPTOR_BUDGET_USD` | ACCEPTOR | `3.00` |
+
+A change to any of them is a change of scheme: add the descriptor to
+`docs/zendev/schemes.json`, make it `active`, tag `scheme/N`, and only then set the
+variable, so that no run is recorded under a descriptor that does not describe it.
+`record_usage` compares the model a run actually used with the active scheme's
+declaration and marks the record when they differ, so a variable set without a scheme
+shows up in the ledger rather than passing silently. The ceiling is a circuit breaker,
+not a budget: over the measured day of 2026-09-08/09 the author's costliest run was
+$1.30 against $5.00 and the acceptor's $0.59 against $3.00.
+
+```sh
+gh variable set ZENDEV_AUTHOR_MODEL -R drevendev/trade_simulation --body "claude-haiku-4-5"
+```
+
 ## External timer
 
 GitHub cron delivery has been unreliable for this repository, and the watchdog runs on

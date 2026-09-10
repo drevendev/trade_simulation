@@ -180,6 +180,15 @@ jobs:
           # bill. The model is part of what governs a run, so it is declared here and
           # recorded in the telemetry ledger for every run.
           #
+          # The pin and the ceiling are read from repository variables, with the values
+          # written beside them as the fallback when a variable is unset. A model change
+          # is a new scheme (docs/zendev/schemes.json, tag scheme/N); as a line in this
+          # file it was a policy pull request with a full CI cycle each way, and as a
+          # variable the switch and the rollback take seconds and leave the definition
+          # untouched. What actually ran is still recorded per run, and record_usage
+          # marks a run whose model differs from the active scheme's declaration, so a
+          # variable set without a scheme shows up in the ledger rather than passing.
+          #
           # Circuit breaker, not a budget. A hard stop here is ungraceful — the run is
           # cut mid-work and cannot report its own blocker, and what it leaves behind
           # is an open branch nobody explains — so the ceiling is deliberately generous
@@ -193,7 +202,7 @@ jobs:
           # is the subscription window, where the whole loop occupies about three
           # points of a five-hour block, and a run approaching this figure is a defect
           # to read in the ledger rather than a budget being used up.
-          claude_args: --model claude-haiku-4-5 --max-budget-usd 3.00
+          claude_args: --model ${{ vars.ZENDEV_ACCEPTOR_MODEL || 'claude-haiku-4-5' }} --max-budget-usd ${{ vars.ZENDEV_ACCEPTOR_BUDGET_USD || '3.00' }}
           settings: |
             {
               "permissions": {
