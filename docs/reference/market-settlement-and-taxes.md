@@ -68,12 +68,13 @@ This reconciliation happens automatically each tick. It's a core invariant: the 
 Market telemetry records what actually happened, for diagnostics and visualization:
 
 ### Per-Market Telemetry
-After each phase, the market records:
-- **Desired quantity**: How much did buyers want to buy (at their budget limits)?
+The realized M3 observation is produced once per tick, after Phase-8 MAIN local clearing — never after the Phase-4 pre-production pass. The market records:
+- **Desired quantity**: How much did buyers want to buy, before any affordability limit?
+- **Effective demand quantity**: How much of that desired quantity could buyers actually afford to commit? Affordability can make this lower than desired quantity; the two are tracked separately.
 - **Offered quantity**: How much did sellers want to sell?
 - **Cleared quantity**: How much actually changed hands?
-- **Shortage rate**: (desired - cleared) / desired. What fraction of demand wasn't met?
-- **Surplus rate**: (offered - cleared) / offered. What fraction of supply went unsold?
+- **Shortage rate**: `max(0, effectiveDemandQuantity - clearedQuantity) / effectiveDemandQuantity` (zero when effective demand is at or below the numeric epsilon threshold). What fraction of effective demand wasn't met?
+- **Surplus rate**: `max(0, offeredQuantity - clearedQuantity) / offeredQuantity` (zero when offered quantity is at or below the numeric epsilon threshold). What fraction of supply went unsold?
 
 ### Authoritative Economic Transaction Records
 For each sale, the system records two types of authoritative transaction records (not telemetry):

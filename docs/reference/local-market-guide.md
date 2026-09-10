@@ -56,13 +56,11 @@ This determinism is essential for testing, debugging, and trusting the simulatio
 
 ## Market Expectations
 
-Over many ticks, the market learns approximate patterns through exponential moving averages (EMAs):
+Over time, the market learns approximate patterns through exponential moving averages (EMAs):
 
-- **Expected Use**: The market remembers roughly how much effective demand for this good there is each tick. This is the sum of what all actors want to use, not the sum of what they actually get to use (which may be constrained by rationing). This distinction is intentional: when shortage occurs, the market still learns what buyers actually wanted, not just what they obtained.
-- **Expected Shortage**: The market notes whether shortages are common or rare
-- **Expected Surplus**: The market notes whether surpluses are common or rare
+- **Expected Use**: The market remembers roughly how much effective demand for this good there is each tick, tracked as an EMA. This is the sum of what all actors want to use, not the sum of what they actually get to use (which may be constrained by rationing). This distinction is intentional: when shortage occurs, the market still learns what buyers actually wanted, not just what they obtained.
 
-These expectations are **not** inventories or financial assets. They are just weak memories of past patterns that help inform price adjustments. They cannot be bought, sold, or consumed. A market with zero expected use still sets prices based on current supply and demand.
+This expectation is **not** an inventory or financial asset. It is a weak memory of past patterns that helps inform price adjustments. It cannot be bought, sold, or consumed. A market with zero expected use still sets prices based on current supply and demand, and observed shortages/surpluses do not directly feed back into expectation tracking—only actual effective demand does.
 
 In the first tick a good trades, the market uses current effective demand and sellable supply only. After the first observation, it switches to using the lagged expected-use EMA in the price formula, making price movements less erratic as patterns stabilize.
 
