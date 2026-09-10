@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, createReadStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createServer, type Server } from "node:http";
-import { createReadStream } from "node:fs";
 import * as path from "node:path";
+import { JSDOM, type DOMWindow } from "jsdom";
 import type { M1Preview } from "./m1Preview";
 import type { M2Preview } from "./m2Preview";
 
@@ -12,46 +12,38 @@ const docsDir = path.join(repoRoot, "docs");
 
 let server: Server;
 let port: number;
+let baseUrl: string;
 
 beforeAll(() => {
   return new Promise<void>((resolve, reject) => {
     server = createServer((req, res) => {
-      if (req.url === "/" || req.url === "/index.html") {
-        const filePath = path.join(docsDir, "index.html");
-        const stream = createReadStream(filePath);
-        res.writeHead(200, { "Content-Type": "text/html" });
-        stream.pipe(res);
-        stream.on("error", () => {
-          res.writeHead(404);
-          res.end();
-        });
-      } else if (req.url === "/m1-preview.json") {
-        const filePath = path.join(docsDir, "m1-preview.json");
-        const stream = createReadStream(filePath);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        stream.pipe(res);
-        stream.on("error", () => {
-          res.writeHead(404);
-          res.end();
-        });
-      } else if (req.url === "/m2-preview.json") {
-        const filePath = path.join(docsDir, "m2-preview.json");
-        const stream = createReadStream(filePath);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        stream.pipe(res);
-        stream.on("error", () => {
-          res.writeHead(404);
-          res.end();
-        });
-      } else {
+      const requestPath = req.url === "/" ? "/index.html" : (req.url ?? "/index.html");
+      const filePath = path.join(docsDir, requestPath);
+
+      if (!filePath.startsWith(docsDir) || !existsSync(filePath)) {
         res.writeHead(404);
         res.end();
+        return;
       }
+
+      const contentType = filePath.endsWith(".json")
+        ? "application/json"
+        : filePath.endsWith(".csv")
+          ? "text/csv"
+          : "text/html";
+      res.writeHead(200, { "Content-Type": contentType });
+      const stream = createReadStream(filePath);
+      stream.pipe(res);
+      stream.on("error", () => {
+        res.writeHead(404);
+        res.end();
+      });
     });
 
     server.listen(0, "127.0.0.1", () => {
       const addr = server.address();
       port = typeof addr === "object" && addr !== null ? addr.port : 3000;
+      baseUrl = `http://127.0.0.1:${port}/`;
       resolve();
     });
 
@@ -62,47 +54,114 @@ beforeAll(() => {
 afterAll(() => {
   return new Promise<void>((resolve, reject) => {
     if (server) {
-      server.close((err) => {
-        if (err) reject(err);
-        else resolve();
-      });
+      server.close((err) => (err ? reject(err) : resolve()));
     } else {
       resolve();
     }
   });
 });
 
+/**
+ * Loads the real docs/index.html into a jsdom document and lets its inline scripts run,
+ * so tests observe actual DOM mutation from the page's own render path rather than
+ * re-implementing it against fetched JSON. `fetch` is bound to the local static server
+ * started above; jsdom itself does not implement `window.fetch`.
+ */
+function loadDom(
+  options: { transformHtml?: (html: string) => string; innerWidth?: number } = {}
+): DOMWindow {
+  const html = readFileSync(path.join(docsDir, "index.html"), "utf8");
+  const finalHtml = options.transformHtml ? options.transformHtml(html) : html;
+
+  const dom = new JSDOM(finalHtml, {
+    url: baseUrl,
+    runScripts: "dangerously",
+    pretendToBeVisual: true,
+    beforeParse(window) {
+      if (options.innerWidth !== undefined) {
+        Object.defineProperty(window, "innerWidth", {
+          value: options.innerWidth,
+          configurable: true,
+        });
+      }
+      window.fetch = ((input: string, init?: RequestInit) =>
+        fetch(new URL(input, baseUrl).toString(), init)) as typeof window.fetch;
+    },
+  });
+
+  return dom.window;
+}
+
+async function waitForText(
+  window: DOMWindow,
+  elementId: string,
+  predicate: (text: string) => boolean,
+  timeoutMs = 3000
+): Promise<void> {
+  const start = Date.now();
+  for (;;) {
+    const text = window.document.getElementById(elementId)?.textContent ?? "";
+    if (predicate(text)) return;
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`Timed out waiting for #${elementId} to satisfy the expected condition.`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+/** Loads the page and waits until both the M1 and M2 panels have finished rendering. */
+async function renderPage(options: { innerWidth?: number } = {}): Promise<DOMWindow> {
+  const window = loadDom(options);
+  await waitForText(window, "m1-preview-body", (text) => !text.includes("Loading world genesis data"));
+  await waitForText(
+    window,
+    "m2-preview-body",
+    (text) => !text.includes("Loading tick orchestration data")
+  );
+  return window;
+}
+
+/** Bypasses the M1 DOM-population write while leaving the milestone-tag update and the JSON fetch intact. */
+function bypassM1Population(html: string): string {
+  const marker = 'document.getElementById("m1-preview-body").innerHTML = `';
+  if (!html.includes(marker)) {
+    throw new Error("m1-preview-body population marker not found; index.html render script changed shape");
+  }
+  return html.replace(marker, `return; ${marker}`);
+}
+
+/** Bypasses the M2 DOM-population write while leaving the milestone-tag update and the JSON fetch intact. */
+function bypassM2Population(html: string): string {
+  const marker = 'document.getElementById("m2-preview-body").innerHTML = `';
+  if (!html.includes(marker)) {
+    throw new Error("m2-preview-body population marker not found; index.html render script changed shape");
+  }
+  return html.replace(marker, `return; ${marker}`);
+}
+
 describe("M1/M2 Pages render smoke test", () => {
   it("verifies M1 preview panel structure exists in HTML", () => {
     const html = readFileSync(path.join(docsDir, "index.html"), "utf8");
 
-    // Verify M1 panel exists
     expect(html).toContain('class="panel m1-preview"');
     expect(html).toContain('id="m1-preview"');
     expect(html).toContain('id="m1-preview-body"');
     expect(html).toContain("Loading world genesis data…");
-
-    // Verify M1 fetch is present
     expect(html).toContain("m1-preview.json");
   });
 
   it("verifies M2 preview panel structure exists in HTML", () => {
     const html = readFileSync(path.join(docsDir, "index.html"), "utf8");
 
-    // Verify M2 panel exists
     expect(html).toContain('class="panel m2-preview"');
     expect(html).toContain('id="m2-preview"');
     expect(html).toContain('id="m2-preview-body"');
     expect(html).toContain("Loading tick orchestration data…");
-
-    // Verify M2 fetch is present
     expect(html).toContain("m2-preview.json");
   });
 
   it("verifies M1 preview artifacts are fetchable", async () => {
-    const response = await fetch(
-      `http://127.0.0.1:${port}/m1-preview.json`
-    );
+    const response = await fetch(`${baseUrl}m1-preview.json`);
     expect(response.ok).toBe(true);
     expect(response.headers.get("content-type")).toContain("application/json");
 
@@ -115,9 +174,7 @@ describe("M1/M2 Pages render smoke test", () => {
   });
 
   it("verifies M2 preview artifacts are fetchable", async () => {
-    const response = await fetch(
-      `http://127.0.0.1:${port}/m2-preview.json`
-    );
+    const response = await fetch(`${baseUrl}m2-preview.json`);
     expect(response.ok).toBe(true);
     expect(response.headers.get("content-type")).toContain("application/json");
 
@@ -131,9 +188,7 @@ describe("M1/M2 Pages render smoke test", () => {
   });
 
   it("verifies M1 rendering provides required topology values", async () => {
-    const response = await fetch(
-      `http://127.0.0.1:${port}/m1-preview.json`
-    );
+    const response = await fetch(`${baseUrl}m1-preview.json`);
     const preview = (await response.json()) as M1Preview;
 
     const topo = preview.worldTopology;
@@ -147,9 +202,7 @@ describe("M1/M2 Pages render smoke test", () => {
   });
 
   it("verifies M2 rendering provides required phase/tick values", async () => {
-    const response = await fetch(
-      `http://127.0.0.1:${port}/m2-preview.json`
-    );
+    const response = await fetch(`${baseUrl}m2-preview.json`);
     const preview = (await response.json()) as M2Preview;
 
     expect(preview.phaseTrace).toHaveProperty("phasesPerTick");
@@ -158,63 +211,118 @@ describe("M1/M2 Pages render smoke test", () => {
     expect(preview.tickExecution).toHaveProperty("ticksExecuted");
     expect(preview.tickExecution).toHaveProperty("tickRange");
 
-    // Phase sequence should be 0-15 for M2
     expect(preview.phaseTrace.phaseSequence).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
     ]);
     expect(preview.tickExecution.ticksExecuted).toBeGreaterThan(100);
   });
 
-  it("verifies M1 rendering updates DOM elements correctly", async () => {
-    const response = await fetch(
-      `http://127.0.0.1:${port}/m1-preview.json`
-    );
-    const preview = (await response.json()) as M1Preview;
+  it("executes the real M1 render path and populates the DOM after the preview fetch resolves", async () => {
+    const window = await renderPage();
+    const document = window.document;
+    const m1Json = (await (await fetch(`${baseUrl}m1-preview.json`)).json()) as M1Preview;
 
-    // Simulate M1 DOM updates from HTML rendering
-    const scenario = preview.scenario;
-    const topo = preview.worldTopology;
+    expect(document.getElementById("m1-milestone")?.textContent).toBe(m1Json.milestone);
 
-    // These values should be rendered in the M1 panel
-    expect(scenario.scenarioId).toBeDefined();
-    expect(scenario.seed).toBeDefined();
-    expect(typeof scenario.seed).toBe("number");
-
-    // State list should be renderable
-    const stateNames = preview.states.map((s: any) => s.name);
-    expect(stateNames.length).toBeGreaterThan(0);
-    expect(stateNames[0]).toBeDefined();
-    expect(typeof stateNames[0]).toBe("string");
+    const bodyText = document.getElementById("m1-preview-body")?.textContent ?? "";
+    expect(bodyText).not.toContain("Loading world genesis data");
+    expect(bodyText).toContain(m1Json.scenario.scenarioId);
+    expect(bodyText).toContain(String(m1Json.scenario.seed));
+    expect(bodyText).toContain(String(m1Json.worldTopology.regionCount));
+    expect(bodyText).toContain(String(m1Json.worldTopology.currencyCount));
+    for (const state of m1Json.states) {
+      expect(bodyText).toContain(state.name);
+    }
   });
 
-  it("verifies M2 rendering updates DOM elements correctly", async () => {
-    const response = await fetch(
-      `http://127.0.0.1:${port}/m2-preview.json`
+  it("executes the real M2 render path and populates the DOM after the preview fetch resolves", async () => {
+    const window = await renderPage();
+    const document = window.document;
+    const m2Json = (await (await fetch(`${baseUrl}m2-preview.json`)).json()) as M2Preview;
+
+    expect(document.getElementById("m2-milestone")?.textContent).toBe(m2Json.milestone);
+
+    const bodyText = document.getElementById("m2-preview-body")?.textContent ?? "";
+    expect(bodyText).not.toContain("Loading tick orchestration data");
+    expect(bodyText).toContain(m2Json.scenario.scenarioId);
+    expect(bodyText).toContain(String(m2Json.tickExecution.ticksExecuted));
+    expect(bodyText).toContain(
+      `${m2Json.tickExecution.tickRange.firstTick} – ${m2Json.tickExecution.tickRange.lastTick}`
     );
-    const preview = (await response.json()) as M2Preview;
+    expect(bodyText).toContain(m2Json.phaseTrace.phaseSequence.join(", "));
+  });
 
-    // Simulate M2 DOM updates from HTML rendering
-    const scenario = preview.scenario;
-    const health = preview.reconciliationHealth;
+  it("renders the required M1/M2 content at a desktop viewport (1280px)", async () => {
+    const window = await renderPage({ innerWidth: 1280 });
+    const document = window.document;
+    expect(window.innerWidth).toBe(1280);
 
-    expect(scenario.scenarioId).toBeDefined();
-    expect(scenario.seed).toBeDefined();
+    const m1Panel = document.getElementById("m1-preview");
+    const m2Panel = document.getElementById("m2-preview");
+    expect(m1Panel).not.toBeNull();
+    expect(m2Panel).not.toBeNull();
+    expect(window.getComputedStyle(m1Panel as Element).display).not.toBe("none");
+    expect(window.getComputedStyle(m2Panel as Element).display).not.toBe("none");
 
-    // Health summary should be renderable
-    expect(health.passedTicks).toBeGreaterThan(0);
-    expect(health.failedTicks).toBeGreaterThanOrEqual(0);
-    expect(health.tolerance).toBeGreaterThan(0);
-
-    // Tick range should be valid
-    expect(preview.tickExecution.tickRange.firstTick).toBeLessThanOrEqual(
-      preview.tickExecution.tickRange.lastTick
+    expect(document.getElementById("m1-preview-body")?.textContent).not.toContain(
+      "Loading world genesis data"
     );
+    expect(document.getElementById("m2-preview-body")?.textContent).not.toContain(
+      "Loading tick orchestration data"
+    );
+  });
+
+  it("renders the required M1/M2 content at a narrow viewport (360px)", async () => {
+    const window = await renderPage({ innerWidth: 360 });
+    const document = window.document;
+    expect(window.innerWidth).toBe(360);
+
+    const m1Panel = document.getElementById("m1-preview");
+    const m2Panel = document.getElementById("m2-preview");
+    expect(m1Panel).not.toBeNull();
+    expect(m2Panel).not.toBeNull();
+    expect(window.getComputedStyle(m1Panel as Element).display).not.toBe("none");
+    expect(window.getComputedStyle(m2Panel as Element).display).not.toBe("none");
+
+    expect(document.getElementById("m1-preview-body")?.textContent).not.toContain(
+      "Loading world genesis data"
+    );
+    expect(document.getElementById("m2-preview-body")?.textContent).not.toContain(
+      "Loading tick orchestration data"
+    );
+  });
+
+  it("detects a regression when the M1 DOM-population step is bypassed while the JSON artifact stays valid", async () => {
+    const window = loadDom({ transformHtml: bypassM1Population });
+    // The milestone tag write runs before the bypassed population write, so waiting on it
+    // proves the fetch/.then() handler executed rather than merely timing out.
+    await waitForText(window, "m1-milestone", (text) => text === "M1");
+
+    const m1Json = (await (await fetch(`${baseUrl}m1-preview.json`)).json()) as M1Preview;
+    expect(m1Json.requirement).toBe("REQ-VISUALIZATION-004");
+    expect(readFileSync(path.join(docsDir, "index.html"), "utf8")).toContain("m1-preview.json");
+
+    const bodyText = window.document.getElementById("m1-preview-body")?.textContent ?? "";
+    expect(bodyText).toContain("Loading world genesis data");
+    expect(bodyText).not.toContain(m1Json.scenario.scenarioId);
+  });
+
+  it("detects a regression when the M2 DOM-population step is bypassed while the JSON artifact stays valid", async () => {
+    const window = loadDom({ transformHtml: bypassM2Population });
+    await waitForText(window, "m2-milestone", (text) => text === "M2");
+
+    const m2Json = (await (await fetch(`${baseUrl}m2-preview.json`)).json()) as M2Preview;
+    expect(m2Json.requirement).toBe("REQ-VISUALIZATION-005");
+    expect(readFileSync(path.join(docsDir, "index.html"), "utf8")).toContain("m2-preview.json");
+
+    const bodyText = window.document.getElementById("m2-preview-body")?.textContent ?? "";
+    expect(bodyText).toContain("Loading tick orchestration data");
+    expect(bodyText).not.toContain(m2Json.scenario.scenarioId);
   });
 
   it("detects regression if M1 fetch URL is missing", () => {
     const html = readFileSync(path.join(docsDir, "index.html"), "utf8");
 
-    // This test fails if the M1 fetch is removed while the panel exists
     const m1Panel = html.includes('class="panel m1-preview"');
     const m1Fetch = html.includes("m1-preview.json");
 
@@ -226,7 +334,6 @@ describe("M1/M2 Pages render smoke test", () => {
   it("detects regression if M2 fetch URL is missing", () => {
     const html = readFileSync(path.join(docsDir, "index.html"), "utf8");
 
-    // This test fails if the M2 fetch is removed while the panel exists
     const m2Panel = html.includes('class="panel m2-preview"');
     const m2Fetch = html.includes("m2-preview.json");
 
@@ -251,37 +358,5 @@ describe("M1/M2 Pages render smoke test", () => {
     const m2Content = readFileSync(m2Path, "utf8");
     const m2Preview = JSON.parse(m2Content);
     expect(m2Preview.requirement).toBe("REQ-VISUALIZATION-005");
-  });
-
-  it("verifies viewport-independent rendering of M1 (desktop width)", async () => {
-    const response = await fetch(
-      `http://127.0.0.1:${port}/m1-preview.json`
-    );
-    const preview = (await response.json()) as M1Preview;
-
-    // M1 data should render identically at any viewport
-    const scenario = preview.scenario;
-    const topo = preview.worldTopology;
-    const stateCount = preview.states.length;
-
-    expect(scenario).toBeDefined();
-    expect(topo).toBeDefined();
-    expect(stateCount).toBeGreaterThan(0);
-  });
-
-  it("verifies viewport-independent rendering of M2 (narrow width)", async () => {
-    const response = await fetch(
-      `http://127.0.0.1:${port}/m2-preview.json`
-    );
-    const preview = (await response.json()) as M2Preview;
-
-    // M2 data should render identically at any viewport
-    const scenario = preview.scenario;
-    const tickExecution = preview.tickExecution;
-    const phaseTrace = preview.phaseTrace;
-
-    expect(scenario).toBeDefined();
-    expect(tickExecution).toBeDefined();
-    expect(phaseTrace).toBeDefined();
   });
 });
