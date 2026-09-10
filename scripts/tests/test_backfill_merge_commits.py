@@ -9,6 +9,7 @@ import csv
 import io
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,47 @@ import backfill_merge_commits as backfill  # noqa: E402
 import release_tag  # noqa: E402
 
 SHA = "30e029c2b5d1fda6c0e365d4c61ee790235b9d8d"
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+LIVE_LEDGER = ROOT / "docs" / "spec" / "implementation_status.csv"
+
+# Every merge on master is a squash, and GitHub ends a squash subject with the pull
+# request's number in parentheses. That is the repository's own record of what merged,
+# and it needs no network to read.
+SQUASH_SUBJECT = re.compile(r"\(#(\d+)\)\s*$")
+
+
+def merged_pulls_in_history(cwd=None):
+    """Pull request numbers whose squash commit is in this checkout's history."""
+    log = subprocess.run(
+        ["git", "log", "--format=%s"],
+        cwd=cwd, check=True, capture_output=True, text=True, encoding="utf-8",
+    ).stdout
+    numbers = set()
+    for line in log.splitlines():
+        match = SQUASH_SUBJECT.search(line)
+        if match:
+            numbers.add(int(match.group(1)))
+    return numbers
+
+
+def shallow_checkout(cwd=None) -> bool:
+    """True when this checkout does not carry the history the check needs."""
+    done = subprocess.run(
+        ["git", "rev-parse", "--is-shallow-repository"],
+        cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+    )
+    return done.stdout.strip() == "true"
+
+
+def merged_without_commit(rows, merged):
+    """Identifiers whose row names a merged pull request and no commit. Pure."""
+    return [
+        (r.get("REQ_ID") or "").strip()
+        for r in rows
+        if (r.get("PR") or "").strip().isdigit()
+        and not (r.get("MERGE_COMMIT") or "").strip()
+        and int((r.get("PR") or "").strip()) in merged
+    ]
 
 
 def row(req_id="REQ-CORE-006", status="IMPLEMENTED", pull="239", commit="",
@@ -180,49 +222,60 @@ class PreMergeLedgerLifecycleTests(unittest.TestCase):
         self.assertEqual(violations, [], "rows without PR reference not checked")
 
     def test_regression_live_ledger_no_merged_pr_without_commit(self):
-        """Regression: verify current master ledger has no merged PR without commit.
+        """Regression: the live ledger names no merged pull request without its commit.
 
-        Query GitHub to determine which PRs are actually merged vs open. Open PRs are
-        allowed blank MERGE_COMMIT per AUTHOR_RUNBOOK section 7. Merged PRs must have
-        their commit recorded (or it will be backfilled by release_tag.py).
-
-        The lifecycle check happens in the three tests above, which establish merge
-        state explicitly with mocks.
+        A blank `MERGE_COMMIT` is the documented in-flight state of a row whose pull
+        request is still open (AUTHOR_RUNBOOK section 7); on a merged one it is the
+        state the backfill exists to end. Whether a pull request merged is read from
+        this checkout's history, never from the network. The earlier version asked
+        `gh`, which is unauthenticated in CI, swallowed the failure and passed on every
+        run over the two hours REQ-CONFIG-004 sat merged with a blank commit (#321).
+        Without the history this skips, visibly; it never passes for want of looking.
         """
-        rows = release_tag.read_rows(
-            pathlib.Path(__file__).resolve().parents[2]
-            / "docs" / "spec" / "implementation_status.csv"
+        if shallow_checkout(cwd=ROOT):
+            self.skipTest("shallow checkout: master's history is not available to read")
+        rows = release_tag.read_rows(LIVE_LEDGER)
+        self.assertEqual(
+            merged_without_commit(rows, merged_pulls_in_history(cwd=ROOT)),
+            [],
+            "regression: live ledger has merged pull request(s) without a commit",
         )
-        # Check for merged PRs with blank commits, distinguishing open from merged
-        blank = []
-        for r in rows:
-            pr = (r.get("PR") or "").strip()
-            commit = (r.get("MERGE_COMMIT") or "").strip()
 
-            if not pr or commit:
-                # No PR, or already has merge commit
-                continue
 
-            # PR is referenced but MERGE_COMMIT is blank.
-            # Query GitHub to check if this PR is actually merged.
-            try:
-                result = subprocess.run(
-                    ["gh", "pr", "view", str(pr), "--json", "state"],
-                    capture_output=True, text=True, check=True, encoding="utf-8"
+class MergedWithoutCommitTests(unittest.TestCase):
+    """The check behind the regression, on rows and history it controls."""
+
+    def test_a_merged_pull_request_with_a_blank_commit_is_a_violation(self):
+        self.assertEqual(merged_without_commit([row(pull="239", commit="")], {239}), ["REQ-CORE-006"])
+
+    def test_an_open_pull_request_with_a_blank_commit_is_in_flight(self):
+        self.assertEqual(merged_without_commit([row(pull="239", commit="")], {238}), [])
+
+    def test_a_recorded_commit_is_never_questioned(self):
+        self.assertEqual(merged_without_commit([row(pull="239", commit=SHA)], set()), [])
+
+    def test_a_row_naming_no_pull_request_is_not_the_check_s_business(self):
+        self.assertEqual(merged_without_commit([row(pull="", commit="")], set()), [])
+
+    def test_squash_subjects_are_read_from_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            def git(*args):
+                subprocess.run(
+                    ["git", *args], cwd=tmp, check=True, capture_output=True,
+                    text=True, encoding="utf-8",
                 )
-                data = json.loads(result.stdout)
-                if data.get("state") == "MERGED":
-                    # Merged PR with blank commit is a regression
-                    blank.append(r["REQ_ID"])
-            except (subprocess.CalledProcessError, json.JSONDecodeError, ValueError):
-                # If we can't query GitHub (e.g., offline), skip the check
-                # rather than failing with false positives
-                pass
-
-        if blank:
-            self.fail(
-                f"regression: live ledger has merged PR without commit: {blank}"
-            )
+            git("init", "-q", "-b", "master")
+            git("config", "user.email", "test@example.invalid")
+            git("config", "user.name", "Test")
+            for subject in (
+                "Implement REQ-CORE-001: the first thing (#12)",
+                "spec: sync specification mirror from Drive (#7)",
+                "a commit that is not a squash",
+                "PR #99 mentioned in the middle is not a merge",
+            ):
+                git("commit", "-q", "--allow-empty", "-m", subject)
+            self.assertEqual(merged_pulls_in_history(cwd=tmp), {12, 7})
+            self.assertFalse(shallow_checkout(cwd=tmp))
 
 
 if __name__ == "__main__":
