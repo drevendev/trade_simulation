@@ -196,6 +196,14 @@ def _gh(args):
     ).stdout
 
 
+# The listing is a window over the newest merges. It was 200 until 2026-09-10, when the
+# repository passed two hundred merges: #24 fell out of the window between the check on
+# #397 and the check on its merge, and rule 2 refused every push for a correct row
+# (#398). The limit is now far above the repository, and `cited_but_unlisted`
+# below asks the forge about any cited number the window still misses.
+MERGED_LISTING_LIMIT = 2000
+
+
 def load_merged_pulls(repo: str):
     """Return (merged numbers, {REQ-ID: [pull numbers]}) from merged pull titles."""
     raw = _gh(
@@ -207,7 +215,7 @@ def load_merged_pulls(repo: str):
             "--state",
             "merged",
             "--limit",
-            "200",
+            str(MERGED_LISTING_LIMIT),
             "--json",
             "number,title",
         ]
@@ -219,6 +227,26 @@ def load_merged_pulls(repo: str):
         for req in REQ_ID.findall(pull.get("title") or ""):
             claimed.setdefault(req, []).append(pull["number"])
     return numbers, claimed
+
+
+def cited_but_unlisted(rows, merged_pull_numbers):
+    """Pull numbers the ledger cites that the merged listing does not carry. Pure.
+
+    A window says nothing about what lies outside it, so each of these is asked about
+    individually before rule 2 may call it unmerged.
+    """
+    cited = set()
+    for row in rows:
+        pull = (row.get("PR") or "").strip()
+        if pull.isdigit() and int(pull) not in merged_pull_numbers:
+            cited.add(int(pull))
+    return sorted(cited)
+
+
+def is_merged(repo: str, number: int) -> bool:
+    """One pull request's state from the forge: the listing is a window, this is not."""
+    raw = _gh(["pr", "view", str(number), "--repo", repo, "--json", "state"])
+    return (json.loads(raw).get("state") or "").upper() == "MERGED"
 
 
 def main() -> int:
@@ -257,6 +285,11 @@ def main() -> int:
         bootstrapping = frozenset()
 
     merged_numbers, claimed = load_merged_pulls(args.repo)
+    for number in cited_but_unlisted(rows, merged_numbers):
+        if number == self_pull:
+            continue
+        if is_merged(args.repo, number):
+            merged_numbers.add(number)
     recorded = {(row.get("REQ_ID") or "").strip() for row in rows}
     for req in unregistered_claims(rows, claimed, head_ids):
         where = ", ".join("#%d" % p for p in sorted(claimed[req]))
