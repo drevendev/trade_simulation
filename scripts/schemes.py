@@ -121,8 +121,3 @@ def check_observed(scheme, role: str, model: str):
     if model == declared or model.startswith(declared + "-"):
         return None
     return f"{scheme['id']} declares {role} on {declared}, the run used {model}"
-
-
-def milestone_map(document):
-    """Milestone -> the requirement ids it gates. Empty when the file carries none."""
-    return {name: list(ids) for name, ids in (document.get("milestones") or {}).items()}

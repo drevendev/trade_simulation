@@ -1,6 +1,6 @@
-"""What may be released, and what the milestone map must keep true.
+"""What may be released, and what the registry's milestone column must keep true.
 
-The last test is the important one: it is the only thing standing between a
+The last tests are the important ones: they are the only thing standing between a
 requirement the researcher adds and a milestone gate that silently never covers it.
 """
 
@@ -16,7 +16,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import release_tag  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-MILESTONES = ROOT / "docs" / "zendev" / "milestones.json"
 REGISTRY = ROOT / "docs" / "spec" / "mirror" / "REQUIREMENTS_REGISTRY.csv"
 STATUS = ROOT / "docs" / "spec" / "implementation_status.csv"
 
@@ -147,49 +146,86 @@ class ForeignTaggerTests(unittest.TestCase):
         self.assertEqual(release_tag.foreign_taggers("", self.MACHINE), [])
 
 
-class TheRepositorysOwnMapTests(unittest.TestCase):
-    """The map is data about the specification, and the specification changes."""
+def registry_row(req_id, milestone="M1", status="READY"):
+    return {"REQ_ID": req_id, "STATUS": status, "MILESTONE": milestone}
 
-    def test_every_requirement_in_the_registry_is_mapped_exactly_once(self):
-        # This is the guard. The researcher adds requirements through the mirror, and
-        # one that belongs to no milestone is covered by no gate and would never
-        # appear in any release — silently. Failing here is how that gets noticed.
-        document = json.loads(MILESTONES.read_text(encoding="utf-8"))
-        placed = [
-            req_id
-            for ids in document["milestones"].values()
-            for req_id in ids
-        ] + list(document["unassigned"])
 
+class MembershipFromTheRegistryTests(unittest.TestCase):
+    """Membership is the researcher's column, not a copy of it."""
+
+    def test_rows_are_grouped_by_milestone_in_registry_order(self):
+        rows = [
+            registry_row("REQ-B", "M1"),
+            registry_row("REQ-A", "M0"),
+            registry_row("REQ-C", "M1"),
+        ]
         self.assertEqual(
-            len(placed), len(set(placed)), "a requirement is mapped to two milestones"
+            release_tag.milestones_from_registry(rows),
+            {"M1": ["REQ-B", "REQ-C"], "M0": ["REQ-A"]},
         )
 
+    def test_a_row_without_a_milestone_gates_nothing(self):
+        rows = [
+            registry_row("REQ-SCOPE-001", "", status="FROZEN"),
+            registry_row("REQ-A", "M0"),
+        ]
+        self.assertEqual(release_tag.milestones_from_registry(rows), {"M0": ["REQ-A"]})
+
+    def test_a_milestone_that_is_not_m_n_is_refused(self):
+        with self.assertRaises(ValueError):
+            release_tag.milestones_from_registry([registry_row("REQ-A", "Milestone 1")])
+
+    def test_the_plan_walks_milestones_in_numeric_order_whatever_the_registry_order(self):
+        rows = [registry_row("REQ-A", "M1"), registry_row("REQ-B", "M0")]
+        milestones = release_tag.milestones_from_registry(rows)
+        got = release_tag.plan([row("REQ-A"), row("REQ-B")], milestones, {})
+        self.assertEqual([e["milestone"] for e in got], ["M0", "M1"])
+
+
+class TheRegistrysOwnColumnTests(unittest.TestCase):
+    """The column is the researcher's data, and the specification changes.
+
+    The guard that used to live here compared a hand copy in docs/zendev/milestones.json
+    with the registry, in both directions. That copy blocked the mirror proposal that
+    registered REQ-VISUALIZATION-007 and -008: the map did not name them, and no
+    ordinary branch could name them before the registry did (#377). What the guard was
+    for survives — a requirement the researcher adds that belongs to no milestone is
+    covered by no gate and would never appear in any release, silently. Now that fails
+    here, in the column itself, and the only thing that fixes it is the researcher's row.
+    """
+
+    def setUp(self):
         with io.open(REGISTRY, encoding="utf-8", newline="") as handle:
-            registry = {r["REQ_ID"] for r in csv.DictReader(handle)}
+            self.registry = list(csv.DictReader(handle))
 
+    def test_the_registry_carries_the_column(self):
+        self.assertIn("MILESTONE", self.registry[0])
+
+    def test_a_requirement_without_a_milestone_is_a_frozen_cross_cutting_row(self):
+        # The researcher leaves the column empty on purpose for the scope statements
+        # and the cross-cutting visibility rule, and those are FROZEN. Anything else
+        # without a milestone is a requirement no gate covers.
+        loose = [
+            (r["REQ_ID"], (r.get("STATUS") or "").strip())
+            for r in self.registry
+            if not (r.get("MILESTONE") or "").strip()
+        ]
         self.assertEqual(
-            registry - set(placed), set(),
-            "requirements in the registry that no milestone claims",
+            [req_id for req_id, status in loose if status != "FROZEN"],
+            [],
+            "requirements that no milestone claims",
         )
-        self.assertEqual(
-            set(placed) - registry, set(),
-            "milestones claiming requirements the registry does not have",
-        )
+
+    def test_every_named_milestone_is_well_formed(self):
+        milestones = release_tag.milestones_from_registry(self.registry)  # raises on M?
+        self.assertTrue(milestones, "the registry names no milestone at all")
+        for name in milestones:
+            release_tag.milestone_number(name)
 
     def test_the_ledger_only_carries_requirements_the_registry_knows(self):
-        with io.open(REGISTRY, encoding="utf-8", newline="") as handle:
-            registry = {r["REQ_ID"] for r in csv.DictReader(handle)}
+        registry = {r["REQ_ID"] for r in self.registry}
         self.assertEqual(
             {r["REQ_ID"] for r in release_tag.read_rows(STATUS)} - registry, set()
-        )
-
-    def test_the_map_names_a_source_for_every_milestone(self):
-        # M1 and M2 are read off prose, and a release must be able to say so.
-        document = json.loads(MILESTONES.read_text(encoding="utf-8"))
-        self.assertEqual(
-            set(document["milestones"]), set(document["source"]),
-            "every milestone must declare whether its membership is explicit or prose",
         )
 
 
