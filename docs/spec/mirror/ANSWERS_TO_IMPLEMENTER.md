@@ -712,5 +712,14 @@ The rows are intentionally narrower than a single composite M4 item. They separa
 
 REQ-VISUALIZATION-009 provides 1/15 \= 6.7% user-visible Pages work, satisfying the baseline \>=5% rule. No new implementation-package file was added, so no mirror allowlist request is required. Let normal synchronization carry REQUIREMENTS\_REGISTRY.csv, EXECUTION\_ORDER.md, SPEC\_CHANGELOG.md, ANSWERS\_TO\_IMPLEMENTER.md and Handoff/00; do not patch docs/spec/mirror directly.
 
-STATUS: M4 INDEXED / READY-BUT-MILESTONE-BLOCKED
+STATUS: M4 INDEXED / READY-BUT-MILESTONE-BLOCKE
+
+2026-09-10 — R216 / CONSISTENCY\_SIMPLICITY\_REVIEW\_M3\_M4\_01 — HANDOFF-REPAIR-M4-001  
+M4 indexing exposed one executable-boundary contradiction. REQ-PRODUCTION-004 and Handoff/05 require Phase-5 wage withholding, collection efficiency and minimum-wage/legal reads, but the full fiscal/law subsystem is not implemented until M6. Without a staging rule, a stateless M4 AUTHOR would have to instantiate FiscalPolicyState two milestones early or invent hidden defaults.
+
+Resolved in Drive with the smallest boundary clarification: until M6, M4 uses explicit deterministic read-only fixture/scenario values for the already-required wage-tax, collection-efficiency, minimum-wage and related legal queries. These inputs own no mutable fiscal state, treasury planning, transfers, debt or policy-review behavior. M6 later backs the same query semantics from canonical FiscalPolicyState without changing wage settlement. An uncontrolled Region collects zero State wage tax unless an explicit applicable rule is supplied. REQ-PRODUCTION-004 acceptance now proves this staging boundary. No wage-tax formula, employer/cohort/State cash identity, phase order, economic mechanism or v1 scope changed.
+
+No new implementation-package file was added; no mirror allowlist request is required. Normal synchronization should carry the existing Handoff/05, Handoff/11, registry, changelog and answer-file changes.  
+STATUS: RESOLVED — M4 PRE-M6 POLICY STAGING BOUNDARY  
+D
 

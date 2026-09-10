@@ -161,7 +161,7 @@ Milestone 4 — Production, labor, consumption and local closed economy
 Goal: make one Region economically autonomous without interregional trade.  
 Implementation:  
 \- Implement RecipeDefinition, ProductionUnit lifecycle, installedCapital, inventories, bottleneck production, input targets, output intents, investment/depreciation and finite extraction.  
-\- Implement PopulationCohort needs/budgets, labor supply plans, regional aggregate labor allocation, gross wages, withholding, household demand, consumption and spoilage.  
+\- Implement PopulationCohort needs/budgets, labor supply plans, regional aggregate labor allocation, gross wages, withholding, household demand, consumption and spoilage. For M4 wage/minimum-wage/legal inputs whose full institutional owner is M6, use explicit deterministic read-only fixture/scenario query values only; do not instantiate mutable fiscal-policy dynamics early.  
 \- Implement Clan ownership only to the minimum needed for ProductionUnit owner cash flows; deeper clan dynamics wait.  
 \- Wire phases so wages earned at Phase 5 are available to Phase 8 through the canonical forecast/maxSpend \+ actual affordability contract.  
 Gate M4:  
