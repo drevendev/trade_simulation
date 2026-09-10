@@ -14,11 +14,13 @@ request closed without merging takes its row with it. So a row may cite the pull
 that carries it, and nothing else that is open.
 
 The fourth reproduces #369. `REQ-VISUALIZATION-007` was merged by #358 before the
-registry knew the name; the mirror proposal registering it was then refused here for
-the missing row, and the row could not be written because the validator refuses an
-unregistered identifier. The change that introduces an identifier may lack its row —
-that change only, that identifier only — and these prove the exception is computed
-from the registries and cannot outlive the change that used it.
+registry knew the name; every pull request was then refused here for the missing row,
+and the row could not be written because the validator refuses an unregistered
+identifier. Two things follow, and these prove both: a claim the registry does not
+know is a warning, never a violation, because nothing permitted could clear it; and
+the change that registers an identifier may lack its row — that change only, that
+identifier only — computed from the two registries, so it cannot outlive the change
+that used it.
 """
 
 import pathlib
@@ -252,6 +254,30 @@ class RegistryIntroductionTests(unittest.TestCase):
         self.assertEqual(len(violations), 1)
         self.assertIn("#999", violations[0])
 
+    def test_an_identifier_the_registry_does_not_know_is_a_warning_not_a_violation(self):
+        # #358 merged under a name the registry did not carry. No permitted action can
+        # write that row, so refusing every pull request for it is a stop, not a gate.
+        registered = {"REQ-CORE-001"}
+        self.assertEqual(
+            status_lint.lint([row()], {48, 358}, self.CLAIMED, registered=registered), []
+        )
+        self.assertEqual(
+            status_lint.unregistered_claims([row()], self.CLAIMED, registered), [NEW]
+        )
+
+    def test_a_registered_identifier_without_a_row_is_still_a_violation(self):
+        registered = {"REQ-CORE-001", NEW}
+        violations = status_lint.lint([row()], {48, 358}, self.CLAIMED, registered=registered)
+        self.assertEqual(len(violations), 1)
+        self.assertIn(NEW, violations[0])
+        self.assertEqual(status_lint.unregistered_claims([row()], self.CLAIMED, registered), [])
+
+    def test_without_a_registry_every_claim_counts_as_registered(self):
+        # The strict reading, for a caller that has no registry to consult.
+        violations = status_lint.lint([row()], {48, 358}, self.CLAIMED)
+        self.assertEqual(len(violations), 1)
+        self.assertIn(NEW, violations[0])
+
     def test_the_set_is_the_difference_of_the_registries(self):
         self.assertEqual(status_lint.newly_registered({"A"}, {"A", NEW}), {NEW})
         self.assertEqual(status_lint.newly_registered({"A", NEW}, {"A", NEW}), frozenset())
@@ -283,17 +309,34 @@ class RegistryAtRefTests(unittest.TestCase):
     def test_the_cycle_of_369_end_to_end(self):
         # Base: no NEW. Merged #358 claims NEW. The candidate registers NEW. No row.
         with RegistryHistory() as h:
-            head = status_lint.registry_ids_at(h.introducing, cwd=h.root)
             claimed = {NEW: [358]}
 
+            # Before the mirror arrives: any change measured against a base that does
+            # not know NEW, with a registry that does not know it either. A warning,
+            # and nothing is refused — this is where every pull request sat for seven
+            # hours, the fix included.
+            head = status_lint.registry_ids_at(h.without, cwd=h.root)
+            new = status_lint.newly_registered(
+                status_lint.registry_ids_at(h.without, cwd=h.root), head
+            )
+            self.assertEqual(new, frozenset())
+            self.assertEqual(
+                status_lint.lint([row()], {48, 358}, claimed, bootstrapping=new, registered=head),
+                [],
+            )
+            self.assertEqual(status_lint.unregistered_claims([row()], claimed, head), [NEW])
+
             # The registering change, measured against the base it is proposed to.
+            head = status_lint.registry_ids_at(h.introducing, cwd=h.root)
             new = status_lint.newly_registered(
                 status_lint.registry_ids_at(h.without, cwd=h.root), head
             )
             self.assertEqual(new, {NEW})
             self.assertEqual(
-                status_lint.lint([row()], {48, 358}, claimed, bootstrapping=new), []
+                status_lint.lint([row()], {48, 358}, claimed, bootstrapping=new, registered=head),
+                [],
             )
+            self.assertEqual(status_lint.unregistered_claims([row()], claimed, head), [])
 
             # The change after it, measured against a base that now carries NEW.
             new = status_lint.newly_registered(
@@ -301,13 +344,15 @@ class RegistryAtRefTests(unittest.TestCase):
             )
             self.assertEqual(new, frozenset())
             self.assertEqual(
-                len(status_lint.lint([row()], {48, 358}, claimed, bootstrapping=new)), 1
+                len(status_lint.lint([row()], {48, 358}, claimed, bootstrapping=new, registered=head)),
+                1,
             )
 
             # And once the row lands, nothing is exceptional any more.
             rows = [row(), row(req=NEW, status="PARTIAL", issue="355", pr="358")]
             self.assertEqual(
-                status_lint.lint(rows, {48, 358}, claimed, bootstrapping=new), []
+                status_lint.lint(rows, {48, 358}, claimed, bootstrapping=new, registered=head),
+                [],
             )
 
 

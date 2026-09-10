@@ -15,18 +15,24 @@ might:
    shows every registry identifier, so absence shows up as `NOT_STARTED` beside a
    requirement that demonstrably was started — which is a lie of the same shape.
 
-   One exception, and it lasts exactly one change. An identifier is created by the
-   researcher and reaches the repository through the machine mirror, so a pull request
-   can merge under a name the registry does not know yet — #358 did, for
-   `REQ-VISUALIZATION-007` — and then nothing can land: the mirror proposal that
-   registers the identifier is refused here for the missing row, and the row cannot
-   be written first because `implementation_status.validate` refuses an identifier the
-   registry does not carry (#369). So the change that introduces an identifier into the
-   registry — the proposal, and the push that lands it, each measured against its own
-   base — may lack that identifier's row. That identifier only, that change only: the
-   next change to land is refused until a truthful row exists. The set is computed from
-   the diff between the base registry and this one, so no label, flag or body text can
-   widen it or make it last.
+   The rule reaches the identifiers the registry knows, because those are the ones the
+   table renders. A merged pull request can also name an identifier the registry does
+   not know yet: identifiers are created by the researcher and delivered by the machine
+   mirror, and #358 merged under `REQ-VISUALIZATION-007` before the mirror carried it.
+   Such a claim is reported as a warning, not a violation. The row cannot be written
+   until the registry carries the identifier — `implementation_status.validate` sees to
+   that — and a violation that no permitted action can clear is not a gate but a stop:
+   it held every pull request, the fix for it included, for the seven hours of #369.
+
+   One exception on the registered side, and it lasts exactly one change. When the
+   mirror proposal that registers such an identifier arrives, the identifier becomes
+   registered and its row is still missing, so the proposal would be refused for the
+   very claim it is trying to make honest. So the change that introduces an identifier
+   into the registry — the proposal, and the push that lands it, each measured against
+   its own base — may lack that identifier's row. That identifier only, that change
+   only: the next change to land is refused until a truthful row exists. The set is
+   computed from the diff between the base registry and this one, so no label, flag or
+   body text can widen it or make it last.
 
 2. **Every pull request a ledger row cites has merged** — except the pull request being
    checked, which is the row's own. That exception is new, and it is the mechanism that
@@ -82,18 +88,26 @@ def lint(
     requirements_claimed_by_merged,
     self_pull=None,
     bootstrapping=frozenset(),
+    registered=None,
 ):
     """Pure. Returns a list of human-readable violations.
 
+    `registered` is the set of identifiers the registry under test knows; rule 1 reaches
+    those and no others. None means every claimed identifier counts as registered,
+    which is the strict reading a caller without a registry gets.
+
     `bootstrapping` is the set of identifiers this very change introduces into the
-    registry — see `newly_registered` — and the only identifiers whose missing row is
-    not a violation. A caller that is not measuring a change passes nothing, and then
-    every claimed identifier must have its row.
+    registry — see `newly_registered` — and the only registered identifiers whose
+    missing row is not a violation. A caller that is not measuring a change passes
+    nothing, and then every registered claimed identifier must have its row.
     """
     violations = []
     recorded = {(row.get("REQ_ID") or "").strip() for row in rows}
 
-    for req in sorted(set(requirements_claimed_by_merged) - recorded - set(bootstrapping)):
+    missing = set(requirements_claimed_by_merged) - recorded - set(bootstrapping)
+    if registered is not None:
+        missing &= set(registered)
+    for req in sorted(missing):
         where = ", ".join("#%d" % p for p in sorted(requirements_claimed_by_merged[req]))
         violations.append(
             "%s was claimed by merged pull request(s) %s but has no ledger row; the "
@@ -123,6 +137,13 @@ def lint(
         )
 
     return violations
+
+
+def unregistered_claims(rows, requirements_claimed_by_merged, registered):
+    """Identifiers merged pull requests claim that neither the ledger nor the registry
+    knows. Pure. Reported, never refused: nothing permitted could clear the refusal."""
+    recorded = {(row.get("REQ_ID") or "").strip() for row in rows}
+    return sorted(set(requirements_claimed_by_merged) - recorded - set(registered))
 
 
 def newly_registered(base_ids, head_ids):
@@ -237,6 +258,14 @@ def main() -> int:
 
     merged_numbers, claimed = load_merged_pulls(args.repo)
     recorded = {(row.get("REQ_ID") or "").strip() for row in rows}
+    for req in unregistered_claims(rows, claimed, head_ids):
+        where = ", ".join("#%d" % p for p in sorted(claimed[req]))
+        print(
+            "::warning::status-lint: %s is claimed by merged pull request(s) %s but the "
+            "registry does not know it, so no ledger row can be written for it yet. The "
+            "mirror proposal that registers it may land without the row; the change "
+            "after that one must carry it." % (req, where)
+        )
     for req in sorted((set(claimed) - recorded) & bootstrapping):
         where = ", ".join("#%d" % p for p in sorted(claimed[req]))
         print(
@@ -245,7 +274,9 @@ def main() -> int:
             "registers it. The next change to land is refused until a truthful row "
             "exists." % (req, where)
         )
-    violations = lint(rows, merged_numbers, claimed, self_pull, bootstrapping)
+    violations = lint(
+        rows, merged_numbers, claimed, self_pull, bootstrapping, registered=head_ids
+    )
 
     if not violations:
         print(
