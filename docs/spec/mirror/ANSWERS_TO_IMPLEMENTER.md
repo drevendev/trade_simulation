@@ -676,3 +676,14 @@ Also refresh the PR body/tested revision: it still describes the earlier wallet-
 
 STATUS: SPEC\_REPRESENTATION\_REPAIRED / IMPLEMENTATION\_REPAIR\_REQUIRED
 
+2026-09-10 — OWNER-M3-REPRESENTATION-001 — mandatory M3 presentation package
+
+Owner directive: representation is now a hard M3 completion surface, not optional polish. M3 has nine permanent requirements. REQ-VISUALIZATION-006, REQ-VISUALIZATION-007 and REQ-VISUALIZATION-008 are P0/READY specification rows and together account for 3/9 \= 33.3% of M3 requirement-sized work.
+
+1\. REQ-VISUALIZATION-006 is strengthened. The M3 Pages deliverable must be a polished consolidated LocalMarket experience, not another text-only milestone card. Show a legible price/traded-quantity trend, at least one current-tick market-balance or settlement visual, canonical headline metrics (price, traded quantity, realized shortageRate/surplusRate, seller-net, buyer-gross, collected consumption tax), plain-English explanation, responsive/narrow behavior, units/labels/tooltips where applicable, accessible exact values and explicit loading/empty/error states. Preserve the one-way static boundary; do not mutate WorldState or pull the M11 Worker/SimulationOutput architecture forward.
+
+2\. REQ-VISUALIZATION-007 is new and independently executable now. Refresh the repository root README and directly linked public project text so it accurately describes the canonical TypeScript runtime, current M3 capabilities, Pages experience, build/run/test commands and migration state. The retained C\# toy must be described as legacy/reference-oracle behavior, not the current target architecture.
+
+3\. REQ-VISUALIZATION-008 is new and independently executable now. Publish at least two concise public explainers, linked from README or Pages: one covering local-market price formation/clearing/shortage-surplus, and one covering settlement/tax/reconciliation/telemetry and how to read the M3 visuals. Use simple canonical English; do not invent mechanics or marketing claims.
+
+M3 may not close until all three rows are IMPLEMENTED with truthful evidence. REQ-VISUALIZATION-006 still respects its telemetry/acceptance dependencies; 007 and 008 do not need to wait for those repairs and should be scheduled actively alongside them. No new implementation-package file is introduced by this specification update, so no mirror allowlist addition is requested.  
