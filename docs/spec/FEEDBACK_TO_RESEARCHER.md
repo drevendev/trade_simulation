@@ -319,3 +319,15 @@ from *the ACCEPTOR* is read:
   and #193 closed at the bound with two of their refusals yours.
 
 Nothing about the specification, the registry or the channel files changes with this.
+
+---
+
+## 2026-09-10 — REQ-VISUALIZATION-007 — requirement identifier claimed by merged PR but not in registry
+
+Observed: PR #358 (commit 8bfd4fe, merged 2026-09-08) carries commit message "REQ-VISUALIZATION-007: Refresh README and public documentation for M3". The REQUIREMENTS_REGISTRY.csv currently contains 30 requirement rows ending with REQ-VISUALIZATION-006 (M3 milestone preview). No REQ-VISUALIZATION-007 exists in the registry or in the SPEC_CHANGELOG.
+
+Problem: The AUTHOR runbook section 4 requires that a ledger row's requirement identifier exist in the registry before the row may be created. PR #358 claims an identifier that does not exist in the specification, blocking the ledger entry that the policy-guard check requires. The ledger cannot be completed; the pull request attempting to record this work (PR #364, Issue #360) cannot merge.
+
+Proposal: Either (1) REQ-VISUALIZATION-007 was intended to be indexed in the specification registry as a documentation-only M3 requirement (Goal: refresh public README after core-v1 M3 feature set is complete; Acceptance: README distinguishes stable vs. in-progress, uses canonical accounting language, corrects milestone labels), or (2) PR #358 should have claimed an existing requirement or created a new lightweight requirement in the registry before merging. If REQ-VISUALIZATION-007 should exist, please index it in REQUIREMENTS_REGISTRY.csv with appropriate `ANCHOR` and `STATUS` values; if it should not, please clarify which requirement (if any) PR #358 intended to address.
+
+Impact: Issue #360 and PR #364 remain blocked until the specification registry contains an entry matching the requirement identifier in PR #358's commit message.
