@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -153,6 +154,36 @@ class DelegationTests(unittest.TestCase):
         self.assertIn("IMPLEMENTED", status_lint.CITES_MERGED_CODE)
         self.assertIn("PARTIAL", status_lint.CITES_MERGED_CODE)
         self.assertNotIn("BLOCKED", status_lint.CITES_MERGED_CODE)
+
+
+class MergedListingWindowTests(unittest.TestCase):
+    """The merged listing is a window over the newest merges, not the whole history.
+
+    On 2026-09-10 the repository passed two hundred merges. #24 fell out of the window
+    between the check on #397 and the check on its merge, and rule 2 refused every push
+    for a row that was correct. A window says nothing about what lies outside it.
+    """
+
+    def test_a_cited_number_the_listing_does_not_carry_is_singled_out(self):
+        rows = [row(req="REQ-MIGRATION-001", pr="24"), row(req="REQ-CORE-002", pr="48")]
+        self.assertEqual(status_lint.cited_but_unlisted(rows, {48}), [24])
+
+    def test_rows_without_a_numeric_citation_are_left_alone(self):
+        rows = [row(status="BLOCKED", pr=""), row(req="REQ-CORE-002", pr="n/a")]
+        self.assertEqual(status_lint.cited_but_unlisted(rows, set()), [])
+
+    def test_the_listing_asks_for_far_more_than_the_repository_holds(self):
+        with mock.patch.object(status_lint, "_gh", return_value="[]") as gh:
+            status_lint.load_merged_pulls("owner/name")
+        args = gh.call_args[0][0]
+        self.assertIn("--limit", args)
+        self.assertGreaterEqual(int(args[args.index("--limit") + 1]), 1000)
+
+    def test_a_number_outside_the_window_is_asked_about_individually(self):
+        with mock.patch.object(status_lint, "_gh", return_value='{"state": "MERGED"}'):
+            self.assertTrue(status_lint.is_merged("owner/name", 24))
+        with mock.patch.object(status_lint, "_gh", return_value='{"state": "OPEN"}'):
+            self.assertFalse(status_lint.is_merged("owner/name", 24))
 
 
 REGISTRY = "docs/spec/mirror/REQUIREMENTS_REGISTRY.csv"
