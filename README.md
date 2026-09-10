@@ -22,6 +22,13 @@ deployment shows the legacy reference viewer and M1/M2 milestone previews, not t
 
 **Interactive viewer:** [View the current M2 Milestone Preview](https://drevendev.github.io/trade_simulation/) — see baseline-scenario world topology, tick execution, and zero-flow reconciliation across 100+ ticks.
 
+## Understanding M3 local markets
+
+New to the simulation? Start here:
+
+- **[How the Local Market Works](docs/reference/local-market-guide.md)** — Price formation, supply/demand, shortage/surplus signals, and why deterministic ordering matters.
+- **[What Happens When a Trade Settles](docs/reference/market-settlement-and-taxes.md)** — Money and goods flow, buyer-gross vs. seller-net prices, consumption tax collection, and accounting reconciliation.
+
 ## Building and testing
 
 The current codebase is **TypeScript + Node.js + Vitest** for the canonical simulation engine.
