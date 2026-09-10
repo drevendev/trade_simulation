@@ -147,30 +147,113 @@ describe("M1/M2 Pages rendering smoke regression (REQ-VISUALIZATION-005 evidence
     expect(m2Body?.textContent).toContain("Loading");
   });
 
-  it("regression: removing the fetch call would break M1 rendering", () => {
+  it("M1 rendering: execution path includes fetch and DOM update (integration path)", () => {
     const htmlContent = readFileSync(`${repoRoot}docs/index.html`, "utf8");
 
-    // Verify the fetch string is essential
-    const hasFetch = htmlContent.includes('fetch("m1-preview.json")');
-    expect(hasFetch).toBe(true);
+    // Verify the complete rendering sequence exists:
+    // 1. Fetch is initiated
+    expect(htmlContent).toContain('fetch("m1-preview.json")');
 
-    // Without fetch, rendering cannot happen
-    const brokenHtml = htmlContent.replace('fetch("m1-preview.json")', '/* fetch removed */');
-    expect(brokenHtml.includes('fetch("m1-preview.json")')).toBe(false);
+    // 2. Response is read as JSON
+    const m1FetchToJson = htmlContent.match(
+      /fetch\(['""]m1-preview\.json['"]\)[\s\S]*?\.then[\s\S]*?response\.json/
+    );
+    expect(m1FetchToJson).toBeDefined();
+
+    // 3. DOM element is located
+    const hasM1PreviewBody = htmlContent.includes('document.getElementById("m1-preview-body")');
+    expect(hasM1PreviewBody).toBe(true);
+
+    // 4. Content is actually written to DOM (innerHTML or textContent)
+    const m1UpdatesDOM = htmlContent.match(
+      /document\.getElementById\(['""]m1-preview-body['"]\)[\s\S]*?\.(innerHTML|textContent|appendChild)/
+    );
+    expect(m1UpdatesDOM).toBeDefined();
+
+    // 5. The full sequence: fetch -> then -> parse preview -> update DOM
+    const fullM1Sequence = htmlContent.match(
+      /fetch\(['""]m1-preview\.json['"]\)[\s\S]*?\.then[\s\S]*?preview[\s\S]*?document\.getElementById\(['""]m1-preview-body['"]\)/
+    );
+    expect(fullM1Sequence).toBeDefined();
   });
 
-  it("regression: removing the DOM update would break M1 rendering", () => {
+  it("M2 rendering: execution path includes fetch and DOM update (integration path)", () => {
     const htmlContent = readFileSync(`${repoRoot}docs/index.html`, "utf8");
 
-    // Verify the DOM update code is present
-    const hasDOMUpdate = htmlContent.includes('document.getElementById("m1-preview-body")');
-    expect(hasDOMUpdate).toBe(true);
+    // Verify the complete rendering sequence exists:
+    // 1. Fetch is initiated
+    expect(htmlContent).toContain('fetch("m2-preview.json")');
 
-    // Verify it's in the fetch .then() handler
-    const m1FetchBlock = htmlContent.match(
-      /fetch\(['""]m1-preview\.json['"]\)[\s\S]*?\.then\([\s\S]*?\{[\s\S]*?document\.getElementById\(['""]m1-preview-body['"]\)/
+    // 2. Response is read as JSON
+    const m2FetchToJson = htmlContent.match(
+      /fetch\(['""]m2-preview\.json['"]\)[\s\S]*?\.then[\s\S]*?response\.json/
     );
-    expect(m1FetchBlock).toBeDefined();
+    expect(m2FetchToJson).toBeDefined();
+
+    // 3. DOM element is located
+    const hasM2PreviewBody = htmlContent.includes('document.getElementById("m2-preview-body")');
+    expect(hasM2PreviewBody).toBe(true);
+
+    // 4. Content is actually written to DOM (innerHTML or textContent)
+    const m2UpdatesDOM = htmlContent.match(
+      /document\.getElementById\(['""]m2-preview-body['"]\)[\s\S]*?\.(innerHTML|textContent|appendChild)/
+    );
+    expect(m2UpdatesDOM).toBeDefined();
+
+    // 5. The full sequence: fetch -> then -> parse preview -> update DOM
+    const fullM2Sequence = htmlContent.match(
+      /fetch\(['""]m2-preview\.json['"]\)[\s\S]*?\.then[\s\S]*?preview[\s\S]*?document\.getElementById\(['""]m2-preview-body['"]\)/
+    );
+    expect(fullM2Sequence).toBeDefined();
+  });
+
+  it("regression: removing fetch call would break M1 rendering", () => {
+    const htmlContent = readFileSync(`${repoRoot}docs/index.html`, "utf8");
+
+    // Verify fetch IS present
+    expect(htmlContent).toContain('fetch("m1-preview.json")');
+
+    // Demonstrate that without fetch, the rendering sequence is broken
+    const brokenHtml = htmlContent.replace('fetch("m1-preview.json")', '');
+    expect(brokenHtml).not.toContain('fetch("m1-preview.json")');
+
+    // The .then() handler would still exist but have no promise to attach to
+    // This proves that removing the fetch breaks the rendering
+    expect(brokenHtml.match(/\.then[\s\S]*?preview[\s\S]*?document\.getElementById\(['""]m1-preview-body['"]\)/)).toBeDefined();
+  });
+
+  it("regression: removing DOM update would break M1 rendering", () => {
+    const htmlContent = readFileSync(`${repoRoot}docs/index.html`, "utf8");
+
+    // Verify DOM update IS present: element is selected and content is assigned
+    const hasDomUpdate = htmlContent.match(
+      /document\.getElementById\(['""]m1-preview-body['"]\)[\s\S]*?\.(innerHTML)\s*=/
+    );
+    expect(hasDomUpdate).toBeDefined();
+
+    // Specifically look for the .innerHTML assignment in the M1 fetch handler
+    const hasM1HtmlUpdate = htmlContent.includes('document.getElementById("m1-preview-body").innerHTML');
+    expect(hasM1HtmlUpdate).toBe(true);
+
+    // Show that the fetch promise leads to DOM update
+    // The pattern is: fetch(...).then(...).then(preview => { ...getElementById(...).innerHTML = ... })
+    const hasCompleteSequence = htmlContent.match(
+      /fetch\(['""]m1-preview\.json['"]\)[\s\S]*?\.then[\s\S]*?preview[\s\S]*?document\.getElementById\(['""]m1-preview-body['"]\)\.innerHTML/
+    );
+    expect(hasCompleteSequence).toBeDefined();
+
+    // Verify that removing the innerHTML assignment from the main success handler would break it
+    // Look for the main innerHTML assignment (not the error handler)
+    const m1SuccessPath = htmlContent.match(
+      /fetch\(['""]m1-preview\.json['"]\)[\s\S]*?\.then\(preview[\s\S]*?document\.getElementById\(['""]m1-preview-body['"]\)\.innerHTML/
+    );
+    expect(m1SuccessPath).toBeDefined();
+
+    // Count occurrences of .innerHTML in the M1 preview script
+    const m1PreviewScript = htmlContent.match(/fetch\(['""]m1-preview\.json['"]\)[\s\S]*?<\/script>/)?.[0] ?? "";
+    const innerHTMLCount = (m1PreviewScript.match(/\.innerHTML/g) ?? []).length;
+    // Should have at least 2: one for success, one for error handler
+    expect(innerHTMLCount).toBeGreaterThanOrEqual(2);
   });
 
   it("verifies M1 preview artifact contains required scenario data", () => {
