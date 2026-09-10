@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -31,18 +32,28 @@ LIVE_LEDGER = ROOT / "docs" / "spec" / "implementation_status.csv"
 SQUASH_SUBJECT = re.compile(r"\(#(\d+)\)\s*$")
 
 
+# A merged row's commit is filled by the provenance backfill, which proposes its own
+# pull request the moment the merge lands and merges it a minute or two later. Inside
+# that window a blank is the in-flight state, not the defect; a blank that outlives the
+# window is. On 2026-09-10 the check without a window turned master red at 09:35:02Z, a
+# minute before the backfill landed, and refused an unrelated pull request at 12:45Z for
+# carrying that state of master.
+BACKFILL_GRACE_SECONDS = 30 * 60
+
+
 def merged_pulls_in_history(cwd=None):
-    """Pull request numbers whose squash commit is in this checkout's history."""
+    """{pull request number: squash commit time, unix seconds} from this checkout."""
     log = subprocess.run(
-        ["git", "log", "--format=%s"],
+        ["git", "log", "--format=%ct %s"],
         cwd=cwd, check=True, capture_output=True, text=True, encoding="utf-8",
     ).stdout
-    numbers = set()
+    merged = {}
     for line in log.splitlines():
-        match = SQUASH_SUBJECT.search(line)
-        if match:
-            numbers.add(int(match.group(1)))
-    return numbers
+        stamp, _, subject = line.partition(" ")
+        match = SQUASH_SUBJECT.search(subject)
+        if match and stamp.isdigit():
+            merged.setdefault(int(match.group(1)), int(stamp))
+    return merged
 
 
 def shallow_checkout(cwd=None) -> bool:
@@ -54,15 +65,18 @@ def shallow_checkout(cwd=None) -> bool:
     return done.stdout.strip() == "true"
 
 
-def merged_without_commit(rows, merged):
-    """Identifiers whose row names a merged pull request and no commit. Pure."""
-    return [
-        (r.get("REQ_ID") or "").strip()
-        for r in rows
-        if (r.get("PR") or "").strip().isdigit()
-        and not (r.get("MERGE_COMMIT") or "").strip()
-        and int((r.get("PR") or "").strip()) in merged
-    ]
+def merged_without_commit(rows, merged, now, grace=BACKFILL_GRACE_SECONDS):
+    """Identifiers whose row names a pull request merged longer than `grace` seconds
+    ago and records no commit. Pure. `merged` maps pull number to merge time."""
+    out = []
+    for r in rows:
+        pull = (r.get("PR") or "").strip()
+        if not pull.isdigit() or (r.get("MERGE_COMMIT") or "").strip():
+            continue
+        merged_at = merged.get(int(pull))
+        if merged_at is not None and now - merged_at > grace:
+            out.append((r.get("REQ_ID") or "").strip())
+    return out
 
 
 def row(req_id="REQ-CORE-006", status="IMPLEMENTED", pull="239", commit="",
@@ -231,12 +245,15 @@ class PreMergeLedgerLifecycleTests(unittest.TestCase):
         `gh`, which is unauthenticated in CI, swallowed the failure and passed on every
         run over the two hours REQ-CONFIG-004 sat merged with a blank commit (#321).
         Without the history this skips, visibly; it never passes for want of looking.
+
+        A blank inside the backfill's grace window is the in-flight state and passes;
+        the two-hour blank that motivated this would fail after thirty minutes.
         """
         if shallow_checkout(cwd=ROOT):
             self.skipTest("shallow checkout: master's history is not available to read")
         rows = release_tag.read_rows(LIVE_LEDGER)
         self.assertEqual(
-            merged_without_commit(rows, merged_pulls_in_history(cwd=ROOT)),
+            merged_without_commit(rows, merged_pulls_in_history(cwd=ROOT), now=time.time()),
             [],
             "regression: live ledger has merged pull request(s) without a commit",
         )
@@ -245,17 +262,45 @@ class PreMergeLedgerLifecycleTests(unittest.TestCase):
 class MergedWithoutCommitTests(unittest.TestCase):
     """The check behind the regression, on rows and history it controls."""
 
+    HOUR = 3600
+
     def test_a_merged_pull_request_with_a_blank_commit_is_a_violation(self):
-        self.assertEqual(merged_without_commit([row(pull="239", commit="")], {239}), ["REQ-CORE-006"])
+        # Merged an hour ago: the backfill has had its turn many times over.
+        self.assertEqual(
+            merged_without_commit([row(pull="239", commit="")], {239: 0}, now=self.HOUR),
+            ["REQ-CORE-006"],
+        )
+
+    def test_a_blank_inside_the_backfill_window_is_in_flight(self):
+        # Merged ten minutes ago: the backfill's own pull request is on its way.
+        self.assertEqual(
+            merged_without_commit([row(pull="239", commit="")], {239: 3000}, now=3600), []
+        )
+
+    def test_the_window_is_a_bound_not_a_licence(self):
+        # One second past the grace window is a violation; at the boundary it is not.
+        merged = {239: 0}
+        self.assertEqual(
+            merged_without_commit([row(pull="239", commit="")], merged, now=BACKFILL_GRACE_SECONDS),
+            [],
+        )
+        self.assertEqual(
+            merged_without_commit([row(pull="239", commit="")], merged, now=BACKFILL_GRACE_SECONDS + 1),
+            ["REQ-CORE-006"],
+        )
 
     def test_an_open_pull_request_with_a_blank_commit_is_in_flight(self):
-        self.assertEqual(merged_without_commit([row(pull="239", commit="")], {238}), [])
+        self.assertEqual(
+            merged_without_commit([row(pull="239", commit="")], {238: 0}, now=self.HOUR), []
+        )
 
     def test_a_recorded_commit_is_never_questioned(self):
-        self.assertEqual(merged_without_commit([row(pull="239", commit=SHA)], set()), [])
+        self.assertEqual(
+            merged_without_commit([row(pull="239", commit=SHA)], {}, now=self.HOUR), []
+        )
 
     def test_a_row_naming_no_pull_request_is_not_the_check_s_business(self):
-        self.assertEqual(merged_without_commit([row(pull="", commit="")], set()), [])
+        self.assertEqual(merged_without_commit([row(pull="", commit="")], {}, now=self.HOUR), [])
 
     def test_squash_subjects_are_read_from_history(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -274,7 +319,11 @@ class MergedWithoutCommitTests(unittest.TestCase):
                 "PR #99 mentioned in the middle is not a merge",
             ):
                 git("commit", "-q", "--allow-empty", "-m", subject)
-            self.assertEqual(merged_pulls_in_history(cwd=tmp), {12, 7})
+            merged = merged_pulls_in_history(cwd=tmp)
+            self.assertEqual(set(merged), {12, 7})
+            for stamp in merged.values():
+                self.assertGreater(stamp, 0)
+                self.assertLessEqual(stamp, int(time.time()) + 60)
             self.assertFalse(shallow_checkout(cwd=tmp))
 
 
