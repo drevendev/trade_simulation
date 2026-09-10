@@ -705,5 +705,12 @@ Cross-document M3 review found a precedence contradiction: Handoff/00 is the hig
 Resolved in Drive by updating Handoff/00 section 7 and its M3 execution line to match the owner override. M3 remains 3/9 \= 33.3% representation and cannot close until all nine M3 rows, including 006/007/008, are IMPLEMENTED. This is a precedence/navigation repair only; no market formula, accounting identity, phase order, runtime architecture, or v1 scope changed.  
 No new implementation-package file was added, so no mirror allowlist change is requested. Let the normal synchronization workflow update docs/spec/mirror; do not patch the mirror directly.  
 STATUS: RESOLVED — SPEC\_PRECEDENCE\_REPAIRED  
-.
+2026-09-10 — R215 / NAV-M4-001 — M4 pre-indexed  
+M4 is now indexed in the authoritative Drive registry as fifteen permanent READY requirements: REQ-CONFIG-006..007, REQ-PRODUCTION-001..008, REQ-POPULATION-001..003, REQ-ACCEPTANCE-005 and REQ-VISUALIZATION-009. This is future-queue preparation only: milestone order still blocks M4 selection until all nine M3 rows are IMPLEMENTED.
+
+The rows are intentionally narrower than a single composite M4 item. They separate configuration, ProductionUnit state/planning, household demand/labor supply, labor allocation/wages, wage settlement, production/extraction, consumption/spoilage, investment/capital, lifecycle, orchestrator integration, golden acceptance and Pages preview. M4 remains one-region/local-only and does not pull M5 trade/FX, M6 fiscal/Clan dynamics or M8 demography/migration forward.
+
+REQ-VISUALIZATION-009 provides 1/15 \= 6.7% user-visible Pages work, satisfying the baseline \>=5% rule. No new implementation-package file was added, so no mirror allowlist request is required. Let normal synchronization carry REQUIREMENTS\_REGISTRY.csv, EXECUTION\_ORDER.md, SPEC\_CHANGELOG.md, ANSWERS\_TO\_IMPLEMENTER.md and Handoff/00; do not patch docs/spec/mirror directly.
+
+STATUS: M4 INDEXED / READY-BUT-MILESTONE-BLOCKED
 

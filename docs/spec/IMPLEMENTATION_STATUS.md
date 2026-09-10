@@ -91,8 +91,23 @@ that fact; this file does not.
 | REQ-VISUALIZATION-006 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-VISUALIZATION-007 | `READY` | `PARTIAL` | #355 | #358, `8bfd4fe4d39795ba0e7a2172c0fb3fd7953b41d6` | Initial slice merged: PR #358 (Issue #355, merged 2026-09-09T23:33:41Z as 8bfd4fe4d39795ba0e7a2172c0fb3fd7953b41d6) rewrote the root README for the canonical TypeScript runtime, the M3 state, the Pages link, the build/typecheck/test/run commands and the legacy C# as a reference oracle. Open under the current Drive acceptance: residual README M3/accounting/scope claims (Issue #360, PR #364), README still marking PARTIAL M3 local-market work as complete (Issue #361, PR #366), and the directly linked public documents not yet re-verified against the refreshed README. Row added by the reconciliation of Issue #367 once the identifier entered the registry; promotion to IMPLEMENTED needs those corrections merged and every acceptance item re-checked. |
 | REQ-VISUALIZATION-008 | `READY` | `PARTIAL` | #356 | #382, `15caaa5bc79048b059273e1740eeae4ab8237cc4` | "Two concise public M3 reference articles: (1) local-market-guide.md explains price formation, supply/demand clearing, shortage/surplus signals and deterministic ordering without limit prices or order books; (2) market-settlement-and-taxes.md explains settlement mechanics, seller-net vs. buyer-gross pricing, consumption-tax collection and state treasury flow, atomic affordability/inventory checks, reconciliation, and telemetry semantics. Both articles corrected per researcher feedback (2026-09-10): fixed proportional clearing explanation, timing/causality of shortage/surplus signals (Phase-8 observation, not Phase-6 cause), expected-use definition (effective demand not cleared quantity), reconciliation diagnostic key (currencyId/goodId not actor), separation of transaction records from telemetry, affordability check (atomic all-or-nothing not partial quantity reduction). README.md updated with "Understanding M3 local markets" section linking both articles from main repository entry point. All acceptance criteria addressed, awaiting final acceptance review and merge." |
+| REQ-CONFIG-006 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-CONFIG-007 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-PRODUCTION-001 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-PRODUCTION-002 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-POPULATION-001 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-POPULATION-002 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-PRODUCTION-003 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-PRODUCTION-004 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-PRODUCTION-005 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-POPULATION-003 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-PRODUCTION-006 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-PRODUCTION-007 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-PRODUCTION-008 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-005 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-009 | `READY` | `NOT_STARTED` | — | — | — |
 
-**Summary: 25 of 34 requirement identifiers implemented.**
+**Summary: 25 of 49 requirement identifiers implemented.**
 Also recorded: 4 partial.
 The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
 
