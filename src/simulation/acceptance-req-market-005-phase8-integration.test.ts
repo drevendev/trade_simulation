@@ -299,7 +299,8 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     const config = createDefaultSimulationConfig();
     const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 77);
 
-    // Clear shortage scenario: high demand, limited supply
+    // Shortage scenario: high demand (200), limited supply (50)
+    // Expected: clearedQuantity = 50 (supply-constrained)
     const getFixtureIntents = (): MarketIntent[] => {
       const regionId = Array.from(worldState.regions.values())[0]?.regionId as RegionId;
       const goodId = Object.keys(worldState.definitionRegistry.goods)[0] as GoodId;
@@ -349,31 +350,58 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     });
 
     const result = executeTick(worldState, 1, worldState.pendingTransitions, phase8Handler);
-
+    const intents = getFixtureIntents();
     const telemetry = result.context.marketTelemetry[0]!;
 
-    // Verify clearing relationships per REQ-MARKET-003
-    // desiredDemandQuantity = sum of all buyer desired quantities
-    expect(telemetry.desiredDemandQuantity).toBe(200); // 100 + 100
+    // Verify clearing relationships from actual fixture
+    const tolerance = 1e-8;
+    const totalBuyerDesired = intents.filter(i => i.side === "BUY").reduce((sum, i) => sum + i.desiredQuantity, 0);
+    const totalSellerOffered = intents.filter(i => i.side === "SELL").reduce((sum, i) => sum + i.desiredQuantity, 0);
 
-    // offeredQuantity = sum of all seller desired quantities
-    expect(telemetry.offeredQuantity).toBe(50);
+    // Acceptance criterion 1: desiredDemandQuantity must equal sum of buyer intents
+    expect(telemetry.desiredDemandQuantity).toBeCloseTo(totalBuyerDesired, 8);
+    expect(telemetry.desiredDemandQuantity).toBeCloseTo(200, 8); // 100 + 100
 
-    // In shortage scenario: clearedQuantity = min(offered, effective demand)
-    // Both constraints bind, so cleared should equal offered (supply-limited)
-    expect(telemetry.clearedQuantity).toBeLessThanOrEqual(telemetry.offeredQuantity + 1e-8);
-    expect(telemetry.clearedQuantity).toBeLessThanOrEqual(telemetry.effectiveDemandQuantity + 1e-8);
+    // Acceptance criterion 2: offeredQuantity must equal sum of seller intents
+    expect(telemetry.offeredQuantity).toBeCloseTo(totalSellerOffered, 8);
+    expect(telemetry.offeredQuantity).toBeCloseTo(50, 8);
 
-    // In shortage: unmetDemandQuantity > 0
-    expect(telemetry.unmetDemandQuantity).toBeGreaterThan(-1e-8);
+    // Acceptance criterion 3: In shortage scenario (high demand, limited supply),
+    // clearedQuantity must equal offeredQuantity (supply-constrained)
+    expect(telemetry.clearedQuantity).toBeLessThanOrEqual(telemetry.offeredQuantity + tolerance);
+    expect(Math.abs(telemetry.clearedQuantity - 50)).toBeLessThan(tolerance);
 
-    // Verify shortage rate formula: shortageRate = unmet / effective (if effective > eps, else 0)
-    if (telemetry.effectiveDemandQuantity > 1e-8) {
+    // Acceptance criterion 4: unmetDemandQuantity = effectiveDemand - clearedQuantity
+    // With clearedQuantity ~= 50 and effective demand ~= min(200, all affordable),
+    // unmetDemandQuantity should be significantly positive (shortage condition)
+    expect(telemetry.unmetDemandQuantity).toBeGreaterThan(25); // At least 50 units of demand unmet
+
+    // Acceptance criterion 5: unsoldOfferQuantity = offeredQuantity - clearedQuantity
+    // With offered=50, cleared~=50, unsold should be ~0
+    expect(Math.abs(telemetry.unsoldOfferQuantity - 0)).toBeLessThan(tolerance);
+
+    // Acceptance criterion 6: shortageRate = unmetDemandQuantity / effectiveDemandQuantity
+    // With unmet >> 0 and effective demand >> 0, shortage rate should be high
+    if (telemetry.effectiveDemandQuantity > tolerance) {
       const expectedShortageRate = telemetry.unmetDemandQuantity / telemetry.effectiveDemandQuantity;
-      expect(Math.abs(telemetry.shortageRate - expectedShortageRate)).toBeLessThan(1e-8);
+      expect(Math.abs(telemetry.shortageRate - expectedShortageRate)).toBeLessThan(tolerance);
+      expect(telemetry.shortageRate).toBeGreaterThan(0.2); // Significant shortage
     }
 
-    // Tax collected should be non-negative
-    expect(telemetry.consumptionTaxCollected).toBeGreaterThanOrEqual(-1e-8);
+    // Acceptance criterion 7: surplusRate should be 0 in shortage scenario
+    expect(telemetry.surplusRate).toBeLessThan(tolerance);
+
+    // Acceptance criterion 8: prices should be finite and non-negative
+    expect(Number.isFinite(telemetry.sellerNetPrice)).toBe(true);
+    expect(Number.isFinite(telemetry.householdGrossPrice)).toBe(true);
+    expect(telemetry.sellerNetPrice).toBeGreaterThanOrEqual(0);
+    expect(telemetry.householdGrossPrice).toBeGreaterThanOrEqual(telemetry.sellerNetPrice);
+
+    // Acceptance criterion 9: Tax collected should be non-negative and scale with cleared quantity
+    expect(telemetry.consumptionTaxCollected).toBeGreaterThanOrEqual(-tolerance);
+    // Tax = (cleared quantity) * (gross price - net price) per unit
+    const expectedTaxPerUnit = telemetry.householdGrossPrice - telemetry.sellerNetPrice;
+    const expectedTotalTax = Math.max(0, telemetry.clearedQuantity * expectedTaxPerUnit);
+    expect(Math.abs(telemetry.consumptionTaxCollected - expectedTotalTax)).toBeLessThan(tolerance);
   });
 });
