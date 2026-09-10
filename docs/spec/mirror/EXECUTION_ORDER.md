@@ -1,17 +1,17 @@
 # EXECUTION\_ORDER
 
 Status: FROZEN  
-Version: 3  
-Updated: 2026-09-05
+Version: 4  
+Updated: 2026-09-10
 
-Rule: AUTHOR takes exactly one bounded unit from the earliest milestone whose dependencies and requirement statuses are satisfied. Only READY/FROZEN requirements are executable. A failed gate blocks promotion. Do not skip ahead because a later task looks easier. Every M0–M12 must also satisfy the cross-cutting visibility rule from Handoff/11: at least 5% of planned implementation units, rounded up with a minimum of one, are user-visible GitHub Pages visualization/presentation units.
+Rule: AUTHOR takes exactly one bounded unit from the earliest milestone whose dependencies and requirement statuses are satisfied. Only READY/FROZEN requirements are executable. A failed gate blocks promotion. Do not skip ahead because a later task looks easier. The baseline cross-cutting visibility rule remains at least 5% per milestone. OWNER OVERRIDE 2026-09-10: M3 has a hard \>=30% representation/documentation allocation and may not close until REQ-VISUALIZATION-006, REQ-VISUALIZATION-007 and REQ-VISUALIZATION-008 are all IMPLEMENTED.
 
 ## Dependency order
 
 M0 Baseline lock/scaffolding — executable now. Complete REQ-MIGRATION-001..004, then REQ-VISUALIZATION-003 publishes the visible M0 Milestone Preview once its baseline/scaffolding dependencies are satisfied.  
 M1 Canonical primitives/config/world genesis — after M0 gate. Read 00, 01, 02, 03 and M1 rows in REQUIREMENTS\_REGISTRY; REQ-VISUALIZATION-004 is the required world-gen Milestone Preview.  
 M2 Tick/ledger spine — after M1 gate. Read 01, 02, 11 and M2 rows; REQ-VISUALIZATION-005 is the required phase/ledger Milestone Preview.  
-M3 Local markets — indexed as REQ-MARKET-001..005, REQ-ACCEPTANCE-004 and REQ-VISUALIZATION-006. After M2, read Handoff/04 plus the listed dependencies. All seven M3 rows are READY after M3\_READY\_PROMOTION\_QA\_05; they are executable only when the earlier milestone gates are satisfied.  
+M3 Local markets — indexed as nine permanent rows: REQ-MARKET-001..005, REQ-ACCEPTANCE-004 and REQ-VISUALIZATION-006..008. After M2, read Handoff/04 plus the listed dependencies and Handoff/11 for the representation package. All nine registry rows are READY; implementation selection still respects each row's declared dependencies. REQ-VISUALIZATION-007/008 may proceed while market correctness repairs continue. REQ-VISUALIZATION-006 remains dependent on the completed M3 telemetry/acceptance surface. M3 is not complete until all three representation rows are IMPLEMENTED.  
 M4 Production/labor/population closed economy — after M3. Read 05, 06 plus relevant config/acceptance rows.  
 M5 Transport/trade/FX — after M4. Read 04 and 08 interfaces plus relevant rows.  
 M6 Fiscal/laws/clans/debt — after M5. Read 06, 07 plus relevant monetary debt interfaces.  
@@ -24,15 +24,15 @@ M12 Legacy removal/release candidate — after M11. Remove legacy responsibility
 
 ## First executable work
 
-M0-M2 remain governed by their existing executable rows. M3 is indexed and READY as REQ-MARKET-001..005, REQ-ACCEPTANCE-004 and REQ-VISUALIZATION-006; its seven planned requirement-sized units include one user-visible Pages unit (1/7 \= 14.3%, above the \>=5% minimum). Before promoting into M4, the researcher/QA side must extend the registry with M4-specific rows and enough VISUALIZATION work to preserve the \>=5% share. Apply the same rule to every later milestone promotion.
+M0-M2 remain governed by their existing executable rows. M3 is indexed as nine permanent requirement-sized units: REQ-MARKET-001..005, REQ-ACCEPTANCE-004 and REQ-VISUALIZATION-006..008. The three representation/documentation rows are 3/9 \= 33.3%, satisfying the owner's \>=30% M3 focus requirement. Treat them as first-class completion work: polished Pages, current README/public texts, and at least two public explainers. Before promoting into M4, all nine M3 rows must have truthful closing evidence, including all three representation rows. Later milestones return to the baseline \>=5% visibility rule unless the owner expands it again.
 
 ## Per-run AUTHOR protocol
 
-1\. Read repository docs/spec/IMPLEMENTATION\_STATUS.md, FEEDBACK\_TO\_RESEARCHER.md and OPEN\_QUESTIONS.md.  
+1\. Read repository docs/spec/implementation\_status.csv, FEEDBACK\_TO\_RESEARCHER.md and OPEN\_QUESTIONS.md. The CSV is the authoritative implementation-evidence ledger; rendered IMPLEMENTATION\_STATUS.md is presentation only.  
 2\. Read REQUIREMENTS\_REGISTRY.csv and select one READY/FROZEN requirement in the earliest unblocked milestone.  
 3\. Open the exact FILE \+ ANCHOR named by that row. Read at most one directly listed dependency document unless the requirement itself says otherwise.  
 4\. Implement one bounded change, add/adjust proving tests, run the relevant suite and open a PR. Do not merge.  
-5\. Update IMPLEMENTATION\_STATUS.md in the same PR with evidence. If blocked by the specification, append to OPEN\_QUESTIONS.md or FEEDBACK\_TO\_RESEARCHER.md instead of guessing.
+5\. Update docs/spec/implementation\_status.csv truthfully in the PR according to the evidence protocol and regenerate rendered IMPLEMENTATION\_STATUS.md. If blocked by the specification, append to OPEN\_QUESTIONS.md or FEEDBACK\_TO\_RESEARCHER.md instead of guessing.
 
 ## Per-run ACCEPTOR protocol
 
