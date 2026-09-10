@@ -187,6 +187,36 @@ class OutcomeTests(unittest.TestCase):
         text = "## AUTHOR blocker\n\nGate: the registry names no READY row. status:blocked set."
         self.assertEqual(rec.classify_outcome("success", text), ("blocked", "heuristic"))
 
+    def test_a_crashed_step_with_no_execution_file_is_failed(self):
+        # 2026-09-08 22:31-23:41Z: six runs in a row died with `SDK execution error`
+        # inside the action. The step's conclusion was empty and it wrote no file; the
+        # heuristic then read an empty final message and filed each one as `unknown`,
+        # which made a measurement day look nine percent confused instead of having had
+        # one outage (#346).
+        for conclusion in ("", None):
+            with self.subTest(conclusion=conclusion):
+                self.assertEqual(
+                    rec.classify_outcome(conclusion, "", execution_file=False),
+                    ("failed", "workflow"),
+                )
+
+    def test_an_empty_conclusion_with_a_file_keeps_the_run_s_own_account(self):
+        # The step wrote something, so its last word still decides.
+        handoff = "## AUTHOR handoff\n\nPull request: #163"
+        self.assertEqual(
+            rec.classify_outcome("", handoff, execution_file=True), ("completed", "heuristic")
+        )
+        self.assertEqual(rec.classify_outcome("", "", execution_file=True), ("unknown", "heuristic"))
+
+    def test_the_crash_rule_reaches_no_other_conclusion(self):
+        # `no_work` and an explicit failure are decided before the file is consulted,
+        # and a step that concluded — green or `unknown` — did not crash: the signature
+        # of a crash is the empty conclusion, and `unknown` keeps its meaning elsewhere.
+        self.assertEqual(rec.classify_outcome("no_work", "", execution_file=False), ("no_work", "workflow"))
+        self.assertEqual(rec.classify_outcome("failure", "", execution_file=False), ("failed", "workflow"))
+        self.assertEqual(rec.classify_outcome("success", "", execution_file=False), ("unknown", "heuristic"))
+        self.assertEqual(rec.classify_outcome("unknown", "", execution_file=False), ("unknown", "heuristic"))
+
 
 class FinalTextTests(unittest.TestCase):
     def test_the_result_text_is_the_final_word(self):
