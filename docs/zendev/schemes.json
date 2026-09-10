@@ -88,8 +88,8 @@
     },
     {
       "id": "scheme/5",
-      "in_force_from": "",
-      "commit": "",
+      "in_force_from": "2026-09-10T17:41:04Z",
+      "commit": "23765df",
       "summary": "Both roles move from Haiku 4.5 to Sonnet 5; everything else exactly as scheme/4.",
       "roles": {
         "author": {"identity": "zendev-author[bot]", "model": "claude-sonnet-5", "max_budget_usd": 5.0},
