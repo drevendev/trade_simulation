@@ -45,29 +45,21 @@ Goods move in parallel to money:
 
 For production units, the goods go into the specific inventory bucket (input, output, or investment goods) that was specified in the original purchase order. A buyer requesting "input goods" gets them in their input inventory, not a generic stockpile.
 
-## Affordability Check
+## Affordability Check During Settlement
 
-Before a sale completes, the market validates that the buyer has enough cash to pay the gross price for the quantity they're buying. If not, the purchase is reduced to what they can afford, or rejected entirely.
+After clearing determines a buyer's fill quantity, the settlement process validates that the buyer has enough cash to pay the gross price for that committed quantity. This is a revalidation—the buyer's maxSpend budget already bounded their fill during clearing. The settlement affordability check ensures this budget constraint is still satisfied as the transaction commits.
 
-The market never allows negative cash balances or impossible transactions. A preflight check ensures all inventory and cash changes are valid before any mutation happens.
+If the settlement preflight check fails (buyer lacks sufficient funds), the entire sale is rejected as a unit: no partial quantity reduction occurs, and all stocks remain unchanged. The sale is all-or-nothing. The market never allows negative cash balances or impossible transactions; atomic settlement means the preflight ensures all inventory and cash changes are valid before any mutation happens.
 
 ## Reconciliation: Goods and Money Balance
 
-After every tick, the system checks that goods and money are conserved:
+After every tick, the system checks that goods and money are conserved. M2 phase-boundary reconciliation verifies that transfers of money and goods are zero-flow: money conserved by currency ID, goods conserved by good ID, independent of which actors hold them.
 
-- **Goods:** The total quantity of each good across all actors should only change through:
-  - Production (creating new goods)
-  - Consumption (destroying goods)
-  - Physical loss (goods destroyed by events or transport shrinkage)
-  - Explicit trades (one actor loses exactly what another gains)
+**Goods**: The total quantity of each good across all actors is conserved. Goods leave one actor's inventory and enter another's during explicit trades. Physical loss (goods destroyed by events or transport shrinkage) is recorded separately and validated as a controlled, allowed exception.
 
-- **Money:** The total money in each currency should only change through:
-  - Taxation (State takes collected taxes from buyers)
-  - Wage payments (producing value)
-  - Intentional destruction (if ever used)
-  - Explicit transfers (one actor loses exactly what another gains)
+**Money**: The total money in each currency is conserved. Taxation and wage payments are transfers: money moves from one actor's wallet to another's (or to a State treasury) without changing the total currency supply. When other sources or sinks (production value creation, consumption value destruction, or monetary policy) arrive in later milestones, they will be described as explicit typed sources/sinks, not ordinary transfer imbalance.
 
-The reconciliation ledger tracks every transaction's effect on these totals. If any flow is unaccounted for, the ledger reports the exact discrepancy: which actor, which currency or good, and how much is missing or extra.
+The reconciliation diagnostic tracks the category (MONEY or GOOD), the key (`currencyId` for MONEY, `goodId` for GOOD), and any residual unmatched amount. If any flow is unaccounted for, the diagnostic reports the exact discrepancy and category/key pair affected—how much is missing or extra for that currency or good ID.
 
 This reconciliation happens automatically each tick. It's a core invariant: the system cannot tolerate accounting errors.
 
@@ -83,14 +75,16 @@ After each phase, the market records:
 - **Shortage rate**: (desired - cleared) / desired. What fraction of demand wasn't met?
 - **Surplus rate**: (offered - cleared) / offered. What fraction of supply went unsold?
 
-### Transaction-Level Telemetry
-For each sale, the ledger records:
-- **MARKET_SALE**: The good, quantity, seller net price, and both parties
-- **CONSUMPTION_TAX**: The tax amount, the destination (which State collects it), and a link back to the sale
+### Authoritative Economic Transaction Records
+For each sale, the system records two types of authoritative transaction records (not telemetry):
+- **MARKET_SALE**: The good, quantity, seller net price, and both parties. This is the authoritative record of economic state mutation (who bought what for how much).
+- **CONSUMPTION_TAX**: The tax amount, the destination (which State collects it), and a link back to the MARKET_SALE. This is the authoritative record of the tax transfer corresponding to that sale.
 
-### Important: Telemetry Is Read-Only
+These records are part of the ledger and reconciliation; they carry economic truth.
 
-Telemetry never becomes economic truth. It is pure observation. The market does not look back at "shortage rate from last tick" to decide what price to set this tick. It looks at actual current supply and demand, and at lagged expected-use (which is a separate market-memory field, not telemetry).
+### Important: Telemetry Is Read-Only Observation
+
+Per-market telemetry (shortage rate, surplus rate, desired quantity, offered quantity) records what actually happened but never becomes economic truth. It is pure observation. The market does not look back at "shortage rate from last tick" to decide what price to set this tick. It looks at actual current supply and demand, and at lagged expected-use (which is a separate market-memory field, not telemetry).
 
 Enabling or disabling telemetry recording does not change:
 - The transactions that happen
