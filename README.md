@@ -13,13 +13,13 @@ deployment shows the legacy reference viewer and M1/M2 milestone previews, not t
 - Stock reconciliation across all economic categories (money, goods, population, capital, resources)
 - Ledger framework tracking all economic flows
 
-**Milestone 3:** In progress. Local market implementation adds:
+**Milestone 3:** In progress. Local market foundations (requirements REQ-MARKET-001..005 and REQ-ACCEPTANCE-004):
 - Ephemeral budget commitments and persistent MarketIntent contracts
 - Log-space price formation using supply/demand expectations with bounded daily movement
 - Deterministic proportional local clearing with stable allocation
-- Atomic market settlement with tax-aware money and goods transfers
-- Comprehensive settlement telemetry (shortage/surplus rates, cleared/traded quantities, collection efficiency)
-- Deterministic replay and accounting invariants verified at settlement boundary
+- Atomic preflighted market settlement with tax-aware money and goods transfers
+- Market telemetry for diagnostics (shortage/surplus rates, cleared/traded quantities, collection efficiency) — development ongoing
+- Phase/tick reconciliation of conserved asset deltas within configured tolerance
 
 **Interactive viewer:** [View the current M2 Milestone Preview](https://drevendev.github.io/trade_simulation/) — see baseline-scenario world topology, tick execution, and zero-flow reconciliation across 100+ ticks.
 
@@ -74,31 +74,33 @@ The canonical simulation is **deterministic**:
 - Same configuration, seed, and tick count produce identical replay hash across runs
 - No random-number consumption outside of reproducible seeded calls
 
-**M3 local market settlement** (in progress, with refinements ongoing):
-- Settlement boundary enforcement of economic identities (money conservation, no negative balances)
+**Accounting and settlement**:
+- Market transactions are preflighted for atomic settlement; transactions are the authoritative settlement unit
+- Conserved asset deltas (money by currency, goods by kind) reconcile within configured tolerance at phase/tick boundaries
+- Physical losses and other typed sinks are separately attributed and do not require balancing credits
 - Stock reconciliation residuals maintained within configured tolerance (1e-9 by default)
 - All ledger mutations isolated to atomic operation boundaries (phases and transactions)
-
-Money and goods flows are **fully accounted**:
-- Every transaction creates equal-and-opposite ledger entries across all buckets
 
 ## Known scope boundaries
 
 **Completed:**
-- Core deterministic orchestration and ledger framework
+- Core deterministic orchestration and ledger framework (M0–M2)
 - Configuration, scenario definition, and world genesis
-- Local market price formation, clearing, and settlement with tax
+- Local market price formation and clearing (foundations)
 
 **In progress:**
-- Refinement of M3 local market acceptance test coverage
+- M3 local market settlement acceptance and telemetry completion
+- Refinement of M3 golden-gate acceptance test coverage
 
 **Not implemented yet (later milestones M4–M8):**
-- Production function specification and dynamics (M4–M5)
-- Population cohort behavior and labor allocation (M5–M6)
-- Fiscal policy, monetary policy, and macroeconomic dynamics (M7–M8)
-- Inter-regional transport and trade logistics (M4–M7)
+- Production function specification and dynamics (M4)
+- Population cohort behavior and labor allocation (M4)
+- Inter-regional transport and trade logistics (M5)
+- Fiscal policy, laws, clans and debt (M6)
+- Monetary policy and currency (M7)
+- Demography, migration, expansion and succession (M8)
 
-**Out of scope (hard exclusions for all versions):**
+**Core-v1 hard exclusions**:
 - Housing, property, speculative finance, or individuals as modeled entities
 - Warfare or explicit political dynamics
 
