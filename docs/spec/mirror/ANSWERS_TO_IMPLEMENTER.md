@@ -676,3 +676,29 @@ Also refresh the PR body/tested revision: it still describes the earlier wallet-
 
 STATUS: SPEC\_REPRESENTATION\_REPAIRED / IMPLEMENTATION\_REPAIR\_REQUIRED
 
+2026-09-10 — OWNER-M3-REPRESENTATION-001 — mandatory M3 presentation package
+
+Owner directive: representation is now a hard M3 completion surface, not optional polish. M3 has nine permanent requirements. REQ-VISUALIZATION-006, REQ-VISUALIZATION-007 and REQ-VISUALIZATION-008 are P0/READY specification rows and together account for 3/9 \= 33.3% of M3 requirement-sized work.
+
+1\. REQ-VISUALIZATION-006 is strengthened. The M3 Pages deliverable must be a polished consolidated LocalMarket experience, not another text-only milestone card. Show a legible price/traded-quantity trend, at least one current-tick market-balance or settlement visual, canonical headline metrics (price, traded quantity, realized shortageRate/surplusRate, seller-net, buyer-gross, collected consumption tax), plain-English explanation, responsive/narrow behavior, units/labels/tooltips where applicable, accessible exact values and explicit loading/empty/error states. Preserve the one-way static boundary; do not mutate WorldState or pull the M11 Worker/SimulationOutput architecture forward.
+
+2\. REQ-VISUALIZATION-007 is new and independently executable now. Refresh the repository root README and directly linked public project text so it accurately describes the canonical TypeScript runtime, current M3 capabilities, Pages experience, build/run/test commands and migration state. The retained C\# toy must be described as legacy/reference-oracle behavior, not the current target architecture.
+
+3\. REQ-VISUALIZATION-008 is new and independently executable now. Publish at least two concise public explainers, linked from README or Pages: one covering local-market price formation/clearing/shortage-surplus, and one covering settlement/tax/reconciliation/telemetry and how to read the M3 visuals. Use simple canonical English; do not invent mechanics or marketing claims.
+
+M3 may not close until all three rows are IMPLEMENTED with truthful evidence. REQ-VISUALIZATION-006 still respects its telemetry/acceptance dependencies; 007 and 008 do not need to wait for those repairs and should be scheduled actively alongside them. No new implementation-package file is introduced by this specification update, so no mirror allowlist addition is requested.  
+2026-09-10 — R200 / REQ-VISUALIZATION-007 — response to repository registry feedback
+
+The repository feedback on PR \#364 correctly reports what its current mirror can see, but the source-of-truth answer is unambiguous: \`REQ-VISUALIZATION-007\` exists and is a permanent P0/READY M3 requirement. It was added together with \`REQ-VISUALIZATION-008\` by \`OWNER-M3-REPRESENTATION-001\`; Drive \`REQUIREMENTS\_REGISTRY.csv\`, Handoff/11 and this file already carry that owner revision. Do not renumber, substitute, or retire the identifier merely because the repository mirror is behind.
+
+The current repository mirror is one semantic Drive revision behind \`OWNER-M3-REPRESENTATION-001\`. Under the established synchronization protocol, one missing semantic revision is ordinary lag; the pipeline is diagnosed as stalled only when two or more authored semantic revisions are absent. Therefore this is not yet a stalled-sync report and no mirror-allowlist action is required: no new implementation-package file was added by the owner revision.
+
+Implementation consequence: PR \#364 may remain mechanically blocked until the synchronized registry reaches the repository. Do not manufacture a pre-registry ledger workaround. Once the registry revision is visible, evidence for REQ-VISUALIZATION-007 must still follow the normal ledger protocol and reflect actual merged proof rather than using the stale mirror as specification authority.
+
+No requirement meaning, economic mechanic, accounting identity, phase order, or v1 scope changed in this response  
+2026-09-10 — R201 / M3-REPRESENTATION-ACCEPTANCE-001 — REQ-VISUALIZATION-007/008 registry acceptance repair  
+PR \#365's machine-generated mirror head now contains OWNER-M3-REPRESENTATION-001 and both permanent representation rows, so the prior one-revision lag is actively synchronizing and is not stalled. While verifying that snapshot, QA found that the source Drive REQUIREMENTS\_REGISTRY itself had blank ACCEPTANCE cells for REQ-VISUALIZATION-007 and REQ-VISUALIZATION-008. This was a specification navigation/verification defect, not a mirror defect.  
+Drive REQUIREMENTS\_REGISTRY now carries explicit closing criteria for both rows. REQ-VISUALIZATION-007 requires truthful current README/public docs, accurate canonical TypeScript/legacy C\#/Pages/milestone/build-test-run wording, and no premature completion claims. REQ-VISUALIZATION-008 requires two reachable public explainers covering the canonical local-market and settlement/tax/reconciliation/telemetry semantics with correct timing, units and economic-state-versus-telemetry boundaries.  
+No new implementation-package file was added, so no mirror allowlist request is required. Do not patch PR \#365 or docs/spec/mirror manually; the next synchronization should carry M3-REPRESENTATION-ACCEPTANCE-001. Until then, absence of these two acceptance strings from the repository mirror is expected synchronization lag. No economic mechanic, accounting identity, phase order, milestone membership or v1 scope changed.  
+.
+
