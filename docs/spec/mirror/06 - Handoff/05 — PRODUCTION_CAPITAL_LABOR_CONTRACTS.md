@@ -327,6 +327,8 @@ All are scenario config. Wage changes calculated in Phase 15 affect N+1 only.
 
 Phase 3 fixes gross wage obligations. Phase 5 pays them atomically after the allocated labor has been accepted for production. The ProductionUnit already reserved enough home-currency cash, so ordinary settlement cannot overdraw it.
 
+M4 staging boundary: wage withholding must not instantiate the M6 fiscal-policy subsystem. Until M6, the one-region M4 scenario supplies the wage-tax inputs, collection efficiency and minimum-wage floor through deterministic read-only policy queries backed by explicit fixture/scenario values. These are scenario inputs, not hidden defaults, and the M4 boundary owns no treasury planning, transfers, debt, policy review or mutable fiscal-policy behavior. M6 later backs the same query semantics from canonical FiscalPolicyState without changing Phase-5 wage settlement. An uncontrolled Region collects zero State wage tax; no State minimum-wage floor is assumed unless an explicit applicable rule is supplied.
+
 For allocation a:  
 gross \= a.grossWageObligation  
 stateId \= effective controller of a.regionId at Phase 1  
@@ -575,7 +577,7 @@ The public-infrastructure stock schema is defined by the fiscal and expansion im
 
 28\. Tax and law interfaces
 
-Production consumes pure queries from effective Phase-1 law/state:  
+Production consumes pure queries from effective Phase-1 law/state. During M4, any query whose full institutional owner is scheduled for M6 must be supplied as an explicit deterministic read-only fixture/scenario input; M4 must not construct mutable FiscalPolicyState, fiscal planning, debt, transfers or policy dynamics merely to answer these queries:  
 \- effectiveMinimumWageFloor(regionId, laborCategory)  
 \- applicableWageIncomeTax(cohortId, grossWage)  
 \- applicableBusinessProfitTax(unitId, standardizedTaxBase)  
