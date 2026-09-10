@@ -122,10 +122,23 @@ jobs:
       # check runs and becomes true at the moment it lands. Every other open citation is
       # still refused. On push there is no pull request and the argument is empty, so
       # every citation must already have merged.
+      #
+      # --base is what this change is measured against: the base branch of a pull
+      # request, the parent of the commit on a push. An identifier the registry gains
+      # relative to it may lack its ledger row in this change and in no later one —
+      # the one-change bootstrap of #369, computed from the two registries and nothing
+      # else. The ref arrives through the environment, as in the guards above.
       - name: Keep the ledger honest about what merged
         env:
           GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            BASE="origin/${BASE_REF}"
+          else
+            BASE="HEAD^1"
+          fi
           python scripts/status_lint.py \
             --repo "${{ github.repository }}" \
-            --self "${{ github.event.pull_request.number }}"
+            --self "${{ github.event.pull_request.number }}" \
+            --base "${BASE}"
