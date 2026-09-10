@@ -12,10 +12,21 @@ pull request can be closed without ever merging. Under the ledger a row is appen
 the pull request that earns it: the row and the citation land together, and a pull
 request closed without merging takes its row with it. So a row may cite the pull request
 that carries it, and nothing else that is open.
+
+The fourth reproduces #369. `REQ-VISUALIZATION-007` was merged by #358 before the
+registry knew the name; every pull request was then refused here for the missing row,
+and the row could not be written because the validator refuses an unregistered
+identifier. Two things follow, and these prove both: a claim the registry does not
+know is a warning, never a violation, because nothing permitted could clear it; and
+the change that registers an identifier may lack its row — that change only, that
+identifier only — computed from the two registries, so it cannot outlive the change
+that used it.
 """
 
 import pathlib
+import subprocess
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -142,6 +153,207 @@ class DelegationTests(unittest.TestCase):
         self.assertIn("IMPLEMENTED", status_lint.CITES_MERGED_CODE)
         self.assertIn("PARTIAL", status_lint.CITES_MERGED_CODE)
         self.assertNotIn("BLOCKED", status_lint.CITES_MERGED_CODE)
+
+
+REGISTRY = "docs/spec/mirror/REQUIREMENTS_REGISTRY.csv"
+HEADER = "REQ_ID,AREA,FILE,ANCHOR,STATEMENT,TYPE,PRIORITY,STATUS,MILESTONE,ACCEPTANCE\n"
+NEW = "REQ-VISUALIZATION-007"
+
+
+def registry(*ids):
+    return HEADER + "".join(
+        "%s,docs,file.md,anchor,statement,functional,high,READY,M3,acceptance\n" % i
+        for i in ids
+    )
+
+
+def git(cwd, *args):
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout.strip()
+
+
+class RegistryHistory:
+    """Three commits: before any registry, a registry without NEW, then one adding it.
+
+    That is the shape of #369 exactly: master had no `REQ-VISUALIZATION-007`, #358 had
+    merged under that name, and the mirror proposal was the change introducing it.
+    """
+
+    def __enter__(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = pathlib.Path(self.tmp.name)
+        git(root, "init", "-b", "master")
+        git(root, "config", "user.email", "test@example.invalid")
+        git(root, "config", "user.name", "Test")
+
+        (root / "README.md").write_text("base\n", encoding="utf-8")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "before any registry")
+        self.before_registry = git(root, "rev-parse", "HEAD")
+
+        path = root / REGISTRY
+        path.parent.mkdir(parents=True)
+        path.write_text(registry("REQ-CORE-001"), encoding="utf-8")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "registry")
+        self.without = git(root, "rev-parse", "HEAD")
+
+        path.write_text(registry("REQ-CORE-001", NEW), encoding="utf-8")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "registry introduces " + NEW)
+        self.introducing = git(root, "rev-parse", "HEAD")
+
+        self.root = root
+        return self
+
+    def __exit__(self, *exc):
+        self.tmp.cleanup()
+        return False
+
+
+class RegistryIntroductionTests(unittest.TestCase):
+    """#369: the change that registers an identifier may lack its row, once."""
+
+    CLAIMED = {"REQ-CORE-001": [48], NEW: [358]}
+
+    def test_the_identifier_this_change_registers_may_lack_its_row(self):
+        self.assertEqual(
+            status_lint.lint([row()], {48, 358}, self.CLAIMED, bootstrapping={NEW}), []
+        )
+
+    def test_an_unrelated_missing_row_is_still_refused_beside_it(self):
+        claimed = dict(self.CLAIMED, **{"REQ-CONFIG-005": [76]})
+        violations = status_lint.lint([row()], {48, 76, 358}, claimed, bootstrapping={NEW})
+        self.assertEqual(len(violations), 1)
+        self.assertIn("REQ-CONFIG-005", violations[0])
+        self.assertNotIn(NEW, violations[0])
+
+    def test_the_exception_expires_with_the_change_that_used_it(self):
+        # The next change is measured against a base that already carries the
+        # identifier, so nothing is new and the missing row is what it always was.
+        violations = status_lint.lint(
+            [row()], {48, 358}, self.CLAIMED, bootstrapping=frozenset()
+        )
+        self.assertEqual(len(violations), 1)
+        self.assertIn(NEW, violations[0])
+
+    def test_a_truthful_row_ends_the_bootstrap(self):
+        rows = [row(), row(req=NEW, status="PARTIAL", issue="355", pr="358")]
+        self.assertEqual(status_lint.lint(rows, {48, 358}, self.CLAIMED), [])
+
+    def test_the_exception_does_not_reach_the_citation_rule(self):
+        # Being newly registered says nothing about the pull request a row cites.
+        rows = [row(req=NEW, status="PARTIAL", pr="999")]
+        violations = status_lint.lint(rows, {48}, {}, bootstrapping={NEW})
+        self.assertEqual(len(violations), 1)
+        self.assertIn("#999", violations[0])
+
+    def test_an_identifier_the_registry_does_not_know_is_a_warning_not_a_violation(self):
+        # #358 merged under a name the registry did not carry. No permitted action can
+        # write that row, so refusing every pull request for it is a stop, not a gate.
+        registered = {"REQ-CORE-001"}
+        self.assertEqual(
+            status_lint.lint([row()], {48, 358}, self.CLAIMED, registered=registered), []
+        )
+        self.assertEqual(
+            status_lint.unregistered_claims([row()], self.CLAIMED, registered), [NEW]
+        )
+
+    def test_a_registered_identifier_without_a_row_is_still_a_violation(self):
+        registered = {"REQ-CORE-001", NEW}
+        violations = status_lint.lint([row()], {48, 358}, self.CLAIMED, registered=registered)
+        self.assertEqual(len(violations), 1)
+        self.assertIn(NEW, violations[0])
+        self.assertEqual(status_lint.unregistered_claims([row()], self.CLAIMED, registered), [])
+
+    def test_without_a_registry_every_claim_counts_as_registered(self):
+        # The strict reading, for a caller that has no registry to consult.
+        violations = status_lint.lint([row()], {48, 358}, self.CLAIMED)
+        self.assertEqual(len(violations), 1)
+        self.assertIn(NEW, violations[0])
+
+    def test_the_set_is_the_difference_of_the_registries(self):
+        self.assertEqual(status_lint.newly_registered({"A"}, {"A", NEW}), {NEW})
+        self.assertEqual(status_lint.newly_registered({"A", NEW}, {"A", NEW}), frozenset())
+        # A removal introduces nothing.
+        self.assertEqual(status_lint.newly_registered({"A", NEW}, {"A"}), frozenset())
+        # The registry's own first commit introduced everything in it.
+        self.assertEqual(status_lint.newly_registered(set(), {"A"}), {"A"})
+
+
+class RegistryAtRefTests(unittest.TestCase):
+    def test_the_registry_is_read_at_the_ref_not_from_the_working_tree(self):
+        with RegistryHistory() as h:
+            self.assertIn(NEW, status_lint.registry_ids_at(h.introducing, cwd=h.root))
+            self.assertNotIn(NEW, status_lint.registry_ids_at(h.without, cwd=h.root))
+            self.assertIn("REQ-CORE-001", status_lint.registry_ids_at(h.without, cwd=h.root))
+
+    def test_a_commit_before_the_registry_existed_holds_no_identifiers(self):
+        with RegistryHistory() as h:
+            self.assertEqual(
+                status_lint.registry_ids_at(h.before_registry, cwd=h.root), frozenset()
+            )
+
+    def test_a_base_that_does_not_resolve_is_refused_not_treated_as_empty(self):
+        # Empty would make every identifier new, and the exception permanent.
+        with RegistryHistory() as h:
+            with self.assertRaises(LookupError):
+                status_lint.registry_ids_at("no-such-ref", cwd=h.root)
+
+    def test_the_cycle_of_369_end_to_end(self):
+        # Base: no NEW. Merged #358 claims NEW. The candidate registers NEW. No row.
+        with RegistryHistory() as h:
+            claimed = {NEW: [358]}
+
+            # Before the mirror arrives: any change measured against a base that does
+            # not know NEW, with a registry that does not know it either. A warning,
+            # and nothing is refused — this is where every pull request sat for seven
+            # hours, the fix included.
+            head = status_lint.registry_ids_at(h.without, cwd=h.root)
+            new = status_lint.newly_registered(
+                status_lint.registry_ids_at(h.without, cwd=h.root), head
+            )
+            self.assertEqual(new, frozenset())
+            self.assertEqual(
+                status_lint.lint([row()], {48, 358}, claimed, bootstrapping=new, registered=head),
+                [],
+            )
+            self.assertEqual(status_lint.unregistered_claims([row()], claimed, head), [NEW])
+
+            # The registering change, measured against the base it is proposed to.
+            head = status_lint.registry_ids_at(h.introducing, cwd=h.root)
+            new = status_lint.newly_registered(
+                status_lint.registry_ids_at(h.without, cwd=h.root), head
+            )
+            self.assertEqual(new, {NEW})
+            self.assertEqual(
+                status_lint.lint([row()], {48, 358}, claimed, bootstrapping=new, registered=head),
+                [],
+            )
+            self.assertEqual(status_lint.unregistered_claims([row()], claimed, head), [])
+
+            # The change after it, measured against a base that now carries NEW.
+            new = status_lint.newly_registered(
+                status_lint.registry_ids_at(h.introducing, cwd=h.root), head
+            )
+            self.assertEqual(new, frozenset())
+            self.assertEqual(
+                len(status_lint.lint([row()], {48, 358}, claimed, bootstrapping=new, registered=head)),
+                1,
+            )
+
+            # And once the row lands, nothing is exceptional any more.
+            rows = [row(), row(req=NEW, status="PARTIAL", issue="355", pr="358")]
+            self.assertEqual(
+                status_lint.lint(rows, {48, 358}, claimed, bootstrapping=new, registered=head),
+                [],
+            )
 
 
 if __name__ == "__main__":
