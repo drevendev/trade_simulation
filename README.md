@@ -93,7 +93,7 @@ The canonical simulation is **deterministic**:
 - Configuration, scenario definition, and world genesis
 
 **In progress:**
-- M3 local market acceptance test coverage and telemetry completion
+- Local market price formation, clearing, and settlement with tax (core mechanics complete; telemetry and acceptance test refinement ongoing per REQ-MARKET-005 and REQ-ACCEPTANCE-004)
 
 **Not implemented yet (later milestones M4–M8):**
 - Production function, labor allocation and population dynamics (M4–M5)
