@@ -184,6 +184,38 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
           inventoryBucket: "GENERAL" as const,
         }));
 
+        // === PHASE 5 (assumed prior): this tick's aggregate D/S, computed at the price
+        // carried from the previous tick's Phase 6 (or the initial price for tick 0) --
+        // this is the input Phase 6 reprices from, per Handoff/04 §9. ===
+        const grossPriceForDemand = currentPrice * (1 + assessedTaxRate * collectionEfficiency);
+        const perBuyerEffectiveDemand = buyerIntents.map((intent) =>
+          computeEffectiveDemand(intent, grossPriceForDemand, moneyEpsilon),
+        );
+        const totalEffectiveDemand = perBuyerEffectiveDemand.reduce((a, b) => a + b, 0);
+        const totalSellableSupply = computeSellableQuantity(sellerIntent, sellerOwnedQuantity);
+
+        // === PHASE 6: reprice from this tick's own D/S and the expectation state carried
+        // from the previous tick, BEFORE this tick's clearing/settlement. ===
+        const nextPrice = repriceGoodInPhase6(
+          currentPrice,
+          totalEffectiveDemand,
+          totalSellableSupply,
+          // The market-facing stock is what the shocked offer actually makes available
+          // this tick, not the ample true regional ownership behind it.
+          /* marketFacingStock */ totalSellableSupply,
+          expectation,
+          quantityEpsilon,
+          priceConfig,
+        );
+
+        // No single tick's move exceeds the configured max log step, in either direction.
+        expect(nextPrice / currentPrice).toBeLessThanOrEqual(maxAllowedStepRatio);
+        expect(currentPrice / nextPrice).toBeLessThanOrEqual(maxAllowedStepRatio);
+        // The configured floor/ceiling are never crossed.
+        expect(nextPrice).toBeGreaterThanOrEqual(priceConfig.minimumPrice - 1e-9);
+        expect(nextPrice).toBeLessThanOrEqual(priceConfig.maximumPrice + 1e-9);
+
+        // === PHASE 7/8: clear and settle at the price Phase 6 just produced. ===
         const input: LocalClearingInput = {
           marketId,
           regionId,
@@ -203,16 +235,7 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
         };
 
         const idCounter = { value: 0 };
-        const allocations = computeLocalClearing(input, new Map(), currentPrice, quantityEpsilon, idCounter);
-
-        // Real production quantities for this tick's expectation update, computed the
-        // same way the clearing layer computed them internally.
-        const grossPriceForDemand = currentPrice * (1 + assessedTaxRate * collectionEfficiency);
-        const perBuyerEffectiveDemand = buyerIntents.map((intent) =>
-          computeEffectiveDemand(intent, grossPriceForDemand, moneyEpsilon),
-        );
-        const totalEffectiveDemand = perBuyerEffectiveDemand.reduce((a, b) => a + b, 0);
-        const totalSellableSupply = computeSellableQuantity(sellerIntent, sellerOwnedQuantity);
+        const allocations = computeLocalClearing(input, new Map(), nextPrice, quantityEpsilon, idCounter);
         const totalClearedQuantity = allocations.reduce((sum, a) => sum + a.quantity, 0);
 
         if (totalClearedQuantity < totalEffectiveDemand - quantityEpsilon) {
@@ -260,7 +283,9 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
           expect(sellerOwnedQuantity).toBeGreaterThanOrEqual(-quantityEpsilon);
         }
 
-        // === REPRICE FOR THE NEXT TICK, BOUNDED ===
+        // === Phase 6/8 expectation state updates only after this tick's Phase-8 MAIN
+        // clearing, from this tick's own realized D/S/cleared aggregates, to feed the
+        // NEXT tick's Phase 6 (not this one -- already repriced above). ===
         expectation = updateMarketExpectations(
           expectation,
           totalEffectiveDemand,
@@ -269,24 +294,6 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
           quantityEpsilon,
           expectationAlpha,
         );
-        const nextPrice = repriceGoodInPhase6(
-          currentPrice,
-          totalEffectiveDemand,
-          totalSellableSupply,
-          // The market-facing stock is what the shocked offer actually makes available
-          // this tick, not the ample true regional ownership behind it.
-          /* marketFacingStock */ totalSellableSupply,
-          expectation,
-          quantityEpsilon,
-          priceConfig,
-        );
-
-        // No single tick's move exceeds the configured max log step, in either direction.
-        expect(nextPrice / currentPrice).toBeLessThanOrEqual(maxAllowedStepRatio);
-        expect(currentPrice / nextPrice).toBeLessThanOrEqual(maxAllowedStepRatio);
-        // The configured floor/ceiling are never crossed.
-        expect(nextPrice).toBeGreaterThanOrEqual(priceConfig.minimumPrice - 1e-9);
-        expect(nextPrice).toBeLessThanOrEqual(priceConfig.maximumPrice + 1e-9);
 
         price = nextPrice;
         priceHistory.push(price);
