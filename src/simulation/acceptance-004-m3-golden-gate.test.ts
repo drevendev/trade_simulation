@@ -28,7 +28,11 @@
  *   documents this file's earlier local-numbering drift, where this case was
  *   previously labeled MTFX-I3)
  * - MTFX-I5: Price changes at most once per tick and stays within configured bounds
- *   (canonical Handoff/04 §38 numbering)
+ *   (canonical Handoff/04 §38 numbering). Only the price-bounds half is proven as a
+ *   dedicated slice in this file; the once-per-tick orchestration-timing half is not
+ *   observable yet because Phase 6 (repriceGoodInPhase6) and Phase 8
+ *   (computeLocalClearing) are not wired into a single dispatchable per-tick pipeline
+ *   (see src/simulation/index.ts) and remains outstanding on the ledger.
  * - MTFX-I6: Market owns no cash or physical goods (canonical Handoff/04 §38
  *   numbering; this file's earlier local numbering called this case MTFX-I5)
  */
@@ -1717,11 +1721,15 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
   // Canonical Handoff/04 §38 numbering (MTFX-I5: "Price changes at most once per tick
   // and stays within configured bounds"). MTFX-T2 above already proves the bounded
   // single-log-step half of this invariant across many isolated tick-by-tick calls to
-  // repriceGoodInPhase6(); this block adds the two things T2 does not cover: (a) the
-  // bound holds even when shortage pressure and inventory-gap pressure combine within
-  // one single repricing call, and (b) the "at most once per tick" half -- that
-  // Phase-8 local clearing settles at the exact single price Phase-6 already fixed for
-  // the tick and never independently re-derives a second price for the same tick.
+  // repriceGoodInPhase6(); this block adds what T2 does not cover: the bound holds
+  // even when shortage pressure and inventory-gap pressure combine within one single
+  // repricing call. The "at most once per tick" half of MTFX-I5 is an
+  // orchestration-timing property -- it requires observing a real per-tick Phase-6 ->
+  // Phase-8 pipeline, which does not exist yet (see src/simulation/index.ts) -- and is
+  // NOT proven by this block; it stays outstanding on the ledger. The second test below
+  // proves only that computeLocalClearing() is a pure pass-through for whichever price
+  // it is given, which is a narrower, necessary-but-not-sufficient precondition for the
+  // once-per-tick property, not the property itself.
   describe("MTFX-I5: Price changes at most once per tick and stays within configured bounds", () => {
     it("stays within configured bounds when shortage and inventory-gap pressure combine in one repricing call", () => {
       // Unlike MTFX-T2's isolated demand-only / supply-only fixtures, this fixture
@@ -1779,16 +1787,19 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       expect(price).toBeCloseTo(priceConfig.maximumPrice, 6);
     });
 
-    it("settles Phase-8 local clearing at the single fixed Phase-6 price and never re-derives a second price for the same tick", () => {
+    it("computeLocalClearing() is a pure pass-through for whichever price it is given, never re-deriving its own", () => {
       // computeLocalClearing() (src/simulation/marketClearing.ts) takes marketPrice as
       // a plain function parameter and writes it into every resulting allocation's
       // sellerNetUnitPrice/buyerGrossUnitPrice completely unconditionally -- it never
       // calls repriceGoodInPhase6() or otherwise recomputes price. This proves that
-      // property directly: it feeds one single Phase-6 price into clearing and shows
-      // every allocation settles at exactly that price, then proves the assertion is
-      // non-vacuous by re-running clearing with a second, deliberately different price
-      // (representing what a bug that re-priced during Phase-8 would produce) and
-      // showing the allocations track whichever price is actually passed in.
+      // pass-through property directly: it feeds one single price into clearing and
+      // shows every allocation settles at exactly that price, then proves the
+      // assertion is non-vacuous by re-running clearing with a second, deliberately
+      // different price and showing the allocations track whichever price is actually
+      // passed in. NOTE: this is necessary but not sufficient evidence for MTFX-I5's
+      // "at most once per tick" half -- it does not exercise or observe a real per-tick
+      // orchestration boundary, and does not constrain how many times Phase 6 may be
+      // invoked within one tick. That orchestration-timing half remains outstanding.
       const config = createDefaultSimulationConfig();
       const priceConfig = {
         shortageSignalWeight: config.markets.shortageSignalWeight ?? 0.5,
@@ -1870,8 +1881,8 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
         getTaxationInfo: () => ({ destinationStateId: null, assessedTaxRate: 0, collectionEfficiency: 0 }),
       });
 
-      // Clearing settled with the correct single Phase-6 price (price1): every
-      // allocation must settle at exactly price1, never at price2.
+      // Clearing settled with price1: every allocation must settle at exactly price1,
+      // never at price2.
       const idCounter1 = { value: 0 };
       const allocationsAtPrice1 = computeLocalClearing(buildInput(), new Map(), price1, quantityEpsilon, idCounter1);
       expect(allocationsAtPrice1.length).toBeGreaterThan(0);
@@ -1881,12 +1892,12 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       }
 
       // Negative-control half: the assertion above is not vacuously true for any
-      // price. Feeding the *second*, would-be-buggy repriced value through the exact
-      // same clearing call settles at price2 instead, proving clearing faithfully
-      // reflects whichever single price it is given rather than ignoring price
-      // entirely -- so a regression that let Phase-8 re-derive a second per-tick price
-      // (instead of consuming the one fixed Phase-6 price) would move
-      // sellerNetUnitPrice away from price1 and be caught by the assertion above.
+      // price. Feeding the *second*, distinctly different price through the exact same
+      // clearing call settles at price2 instead, proving clearing faithfully reflects
+      // whichever single price it is given rather than ignoring price entirely. This
+      // does not, by itself, prove anything about how many times a real per-tick
+      // pipeline would call repriceGoodInPhase6 or which of its outputs would reach
+      // clearing -- see the outstanding-scope note above the describe block.
       const idCounter2 = { value: 0 };
       const allocationsAtPrice2 = computeLocalClearing(buildInput(), new Map(), price2, quantityEpsilon, idCounter2);
       expect(allocationsAtPrice2.length).toBeGreaterThan(0);
