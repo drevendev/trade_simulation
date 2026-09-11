@@ -12,6 +12,7 @@ import type {
   ClanId,
   CohortId,
   CurrencyId,
+  GoodId,
   IdAllocator,
   MarketId,
   MonetaryAuthorityId,
@@ -101,11 +102,28 @@ export interface RegionState {
   readonly settlementCurrencyId: CurrencyId;
 }
 
+/**
+ * Live, mutable money balance keyed by currency. Canonical owner varies by actor
+ * (ClanState.treasury, CohortState.wallet, ProductionUnitState.wallet,
+ * StateState.treasury) -- see Handoff/04 sections 5, 10-11.
+ */
+export type Wallet = ReadonlyMap<CurrencyId, number>;
+
+/**
+ * Live, mutable physical-goods quantity keyed by good. Canonical owner and bucket
+ * vary by actor (CohortState.householdInventory, ProductionUnitState.input/output/
+ * investmentInventory, StateState.publicInventory) -- see Handoff/04 sections 5, 10-11.
+ * ClanState never owns a physical-goods inventory.
+ */
+export type Inventory = ReadonlyMap<GoodId, number>;
+
 export interface StateState {
   readonly stateId: StateId;
   readonly seed: StateSeed;
   readonly effectiveCurrencyId: CurrencyId;
   readonly memberAuthorityId: MonetaryAuthorityId | null;
+  readonly treasury: Wallet;
+  readonly publicInventory: Inventory;
 }
 
 export interface CurrencyState {
@@ -124,17 +142,24 @@ export interface MonetaryAuthorityState {
 export interface ClanState {
   readonly clanId: ClanId;
   readonly seed: ClanSeed;
+  readonly treasury: Wallet;
 }
 
 export interface CohortState {
   readonly cohortId: CohortId;
   readonly clanId: ClanId;
   readonly seed: CohortSeed;
+  readonly wallet: Wallet;
+  readonly householdInventory: Inventory;
 }
 
 export interface ProductionUnitState {
   readonly productionUnitId: ProductionUnitId;
   readonly seed: ProductionUnitSeed;
+  readonly wallet: Wallet;
+  readonly inputInventory: Inventory;
+  readonly outputInventory: Inventory;
+  readonly investmentInventory: Inventory;
 }
 
 export interface MarketExpectationState {
@@ -157,6 +182,39 @@ export interface LocalMarketState {
 export interface TransportLinkState {
   readonly linkId: TransportLinkId;
   readonly seed: TransportLinkSeed;
+}
+
+/**
+ * Convert a seed's `Readonly<Record<currencyKey, amount>>` money endowment into the
+ * live, mutable `Wallet` map keyed by resolved `CurrencyId`. An unresolvable currency
+ * key is skipped, mirroring the leniency already used for genesis-record tracking.
+ */
+function buildWalletFromSeed(
+  record: Readonly<Record<string, number>> | undefined,
+  currencyIds: ReadonlyMap<string, CurrencyId>,
+): Wallet {
+  const wallet = new Map<CurrencyId, number>();
+  for (const [currencyKey, amount] of Object.entries(record ?? {})) {
+    const currencyId = currencyIds.get(currencyKey);
+    if (currencyId) {
+      wallet.set(currencyId, amount);
+    }
+  }
+  return wallet;
+}
+
+/**
+ * Convert a seed's `Readonly<Record<goodKey, amount>>` physical-goods endowment into
+ * the live, mutable `Inventory` map. `GoodId` is not a separately-allocated stable ID
+ * (unlike currency/actor IDs); the human good key is the canonical `GoodId` value,
+ * matching the existing genesis-record good-key convention in this file.
+ */
+function buildInventoryFromSeed(record: Readonly<Record<string, number>> | undefined): Inventory {
+  const inventory = new Map<GoodId, number>();
+  for (const [goodKey, amount] of Object.entries(record ?? {})) {
+    inventory.set(goodKey as GoodId, amount);
+  }
+  return inventory;
 }
 
 /**
@@ -337,7 +395,11 @@ export function buildInitialWorld(
   const clanRegistry = new Map();
   (scenarioDefinition.clans ?? []).forEach((clanSeed) => {
     const clanId = idMap.clanIds.get(clanSeed.key ?? "")!;
-    clanRegistry.set(clanId, { clanId, seed: clanSeed } as ClanState);
+    clanRegistry.set(clanId, {
+      clanId,
+      seed: clanSeed,
+      treasury: buildWalletFromSeed(clanSeed.treasury, idMap.currencyIds),
+    } as ClanState);
 
     // Track clan treasury (money endowment)
     Object.entries(clanSeed.treasury ?? {}).forEach(([currencyKey, amount]) => {
@@ -364,7 +426,13 @@ export function buildInitialWorld(
     const regionId = idMap.regionIds.get(cohortSeed.regionKey)!;
     const clanId = idMap.clanIds.get(cohortSeed.clanKey ?? "")!;
 
-    cohortRegistry.set(cohortId, { cohortId, clanId, seed: cohortSeed } as CohortState);
+    cohortRegistry.set(cohortId, {
+      cohortId,
+      clanId,
+      seed: cohortSeed,
+      wallet: buildWalletFromSeed(cohortSeed.wallet, idMap.currencyIds),
+      householdInventory: buildInventoryFromSeed(cohortSeed.householdInventory),
+    } as CohortState);
 
     // Track cohort population endowment
     if (cohortSeed.population > 0) {
@@ -430,7 +498,14 @@ export function buildInitialWorld(
     const regionId = idMap.regionIds.get(puSeed.regionKey)!;
     productionUnitRegistry.set(
       productionUnitId,
-      { productionUnitId, seed: puSeed } as ProductionUnitState,
+      {
+        productionUnitId,
+        seed: puSeed,
+        wallet: buildWalletFromSeed(puSeed.wallet, idMap.currencyIds),
+        inputInventory: buildInventoryFromSeed(puSeed.inputInventory),
+        outputInventory: buildInventoryFromSeed(puSeed.outputInventory),
+        investmentInventory: buildInventoryFromSeed(puSeed.investmentInventory),
+      } as ProductionUnitState,
     );
 
     // ProductionUnit is its own owner for opening-stock records (REQ-CONFIG-004 Part 2)
@@ -711,6 +786,8 @@ function buildStateState(seed: StateSeed, idMap: IdMaps): StateState {
     seed,
     effectiveCurrencyId: currencyId,
     memberAuthorityId: authorityKey ? (idMap.authorityIds.get(authorityKey) ?? null) : null,
+    treasury: buildWalletFromSeed(seed.treasury, idMap.currencyIds),
+    publicInventory: buildInventoryFromSeed(seed.publicInventory),
   };
 }
 
