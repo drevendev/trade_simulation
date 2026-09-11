@@ -16,6 +16,7 @@ import { createEmptyTickLedger, validateZeroFlowReconciliation } from "./ledger"
 import type { BudgetCommitmentLedger } from "./marketIntent";
 import { createEmptyBudgetCommitmentLedger } from "./marketIntent";
 import type { LocalMarketTelemetry } from "./marketTelemetry";
+import type { MarketAllocation } from "./marketClearing";
 import { createHash } from "crypto";
 
 /**
@@ -24,6 +25,9 @@ import { createHash } from "crypto";
  * M2: currentLedger accumulates typed MONEY/GOOD/PHYSICAL_LOSS flow records across phases.
  * M3+: budgetLedger tracks actor+currency+envelope commitments for market planning.
  * M3+: marketTelemetry accumulates LocalMarketTelemetry from Phase-8 clearing/settlement.
+ * M3+: marketAllocations accumulates the realized MarketAllocation results of Phase-8
+ * clearing, independent of whether telemetry is collected, so callers can compare the
+ * clearing outcome itself (not just a telemetry-derived counter) across runs.
  */
 export interface TickContext {
   readonly tick: number;
@@ -34,6 +38,7 @@ export interface TickContext {
   readonly currentLedger: TickLedger;
   readonly budgetLedger: BudgetCommitmentLedger;
   readonly marketTelemetry: LocalMarketTelemetry[];
+  readonly marketAllocations: MarketAllocation[];
 }
 
 /** Opaque transaction ID (tx:...) */
@@ -133,6 +138,7 @@ export type PhaseHandler = (
  * M2: currentLedger is initialized empty and accumulates records across phases.
  * M3+: budgetLedger is initialized empty for market planning phase handlers.
  * M3+: marketTelemetry is initialized empty for Phase-8 clearing telemetry.
+ * M3+: marketAllocations is initialized empty for Phase-8 realized clearing results.
  */
 export function initializeTickContext(tick: number, seed: number): TickContext {
   return {
@@ -144,6 +150,7 @@ export function initializeTickContext(tick: number, seed: number): TickContext {
     currentLedger: createEmptyTickLedger(tick),
     budgetLedger: createEmptyBudgetCommitmentLedger(),
     marketTelemetry: [],
+    marketAllocations: [],
   };
 }
 

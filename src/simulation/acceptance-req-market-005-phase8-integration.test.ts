@@ -8,6 +8,14 @@
  * This test addresses issue #341: ensuring REQ-MARKET-005 acceptance
  * criterion "A seeded test reaches telemetry through the real Phase-8
  * MAIN production execution path".
+ *
+ * It also addresses issue #412: the telemetry toggle previously short-circuited
+ * clearing itself (a disabled run never called computeLocalClearing()), and the
+ * only cross-run comparison was computeTickHash(), which does not cover
+ * allocations/wallets/inventories/ledger state. The tests below compare
+ * context.marketAllocations directly between telemetry-on and telemetry-off runs
+ * so a real allocation divergence would fail the test, not just an unrelated
+ * transaction/hash counter.
  */
 
 import { describe, it, expect } from "vitest";
@@ -89,6 +97,9 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     expect(telemetry!.shortageRate).toBeGreaterThanOrEqual(0);
     expect(telemetry!.surplusRate).toBeGreaterThanOrEqual(0);
 
+    // Verify clearing itself ran and produced allocations, independent of telemetry
+    expect(resultWithTelemetry.context.marketAllocations.length).toBeGreaterThan(0);
+
     // Capture replay hash with telemetry enabled
     const hashWithTelemetry = computeTickHash(worldState, resultWithTelemetry.context);
 
@@ -113,9 +124,73 @@ describe("acceptance-req-market-005-phase8-integration", () => {
       resultWithTelemetry.context.transactions.length,
     );
 
-    // Most importantly: verify replay hash is identical
+    // Verify replay hash is identical
     const hashNoTelemetry = computeTickHash(worldState, resultNoTelemetry.context);
     expect(hashNoTelemetry).toBe(hashWithTelemetry);
+
+    // Most importantly: verify clearing itself executed identically when telemetry is
+    // disabled -- the toggle must not short-circuit computeLocalClearing(). Compare the
+    // realized allocations directly (not only the tick hash, which does not cover
+    // allocations/wallets/inventories/ledger state) so a divergence here would fail.
+    expect(resultNoTelemetry.context.marketAllocations.length).toBe(
+      resultWithTelemetry.context.marketAllocations.length,
+    );
+    expect(resultNoTelemetry.context.marketAllocations).toEqual(
+      resultWithTelemetry.context.marketAllocations,
+    );
+  });
+
+  it("REQ-MARKET-005 golden-gate: collectTelemetry=false still executes clearing", () => {
+    // Regression test for issue #412: createPhase8Handler previously returned early
+    // (`if (!collectTelemetry || !getFixtureIntents) return context;`) when telemetry
+    // was disabled, so computeLocalClearing() never ran and no allocation was produced.
+    const config = createDefaultSimulationConfig();
+    const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 55);
+
+    const getFixtureIntents = (): MarketIntent[] => {
+      const regionId = Array.from(worldState.regions.values())[0]?.regionId as RegionId;
+      const goodId = Object.keys(worldState.definitionRegistry.goods)[0] as GoodId;
+      const seller = Array.from(worldState.clans.values())[0]!;
+      const buyer = Array.from(worldState.clans.values())[1]!;
+
+      return [
+        {
+          id: createMarketIntentId("mi:seller-no-telemetry"),
+          actor: { type: "CLAN" as const, clanId: seller.clanId },
+          regionId,
+          goodId,
+          side: "SELL" as const,
+          purpose: "INVENTORY_REBALANCE" as const,
+          desiredQuantity: 60,
+          minimumReserveQuantity: 0,
+          sourcePlanId: "plan:no-telemetry-seller",
+        },
+        {
+          id: createMarketIntentId("mi:buyer-no-telemetry"),
+          actor: { type: "CLAN" as const, clanId: buyer.clanId },
+          regionId,
+          goodId,
+          side: "BUY" as const,
+          purpose: "CONSUMPTION" as const,
+          desiredQuantity: 40,
+          maxSpend: 400,
+          sourcePlanId: "plan:no-telemetry-buyer",
+        },
+      ];
+    };
+
+    const phase8HandlerNoTelemetry = createPhase8Handler({
+      getFixtureIntents,
+      collectTelemetry: false,
+    });
+
+    const result = executeTick(worldState, 1, worldState.pendingTransitions, phase8HandlerNoTelemetry);
+
+    // No telemetry should be built...
+    expect(result.context.marketTelemetry.length).toBe(0);
+    // ...but clearing must still have executed and produced an allocation.
+    expect(result.context.marketAllocations.length).toBeGreaterThan(0);
+    expect(result.context.marketAllocations[0]!.quantity).toBeGreaterThan(0);
   });
 
   it("Phase-8 handler integrates with orchestrator without affecting other phases", () => {
