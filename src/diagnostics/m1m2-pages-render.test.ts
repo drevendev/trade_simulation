@@ -155,6 +155,18 @@ async function renderPageInBrowser(options: {
   return page;
 }
 
+/**
+ * Playwright's `isVisible()` reflects a non-empty bounding box and non-`visibility:hidden`
+ * computed style, but it does not check opacity: an `opacity: 0` element is "visible" by
+ * that definition while being fully transparent and unreadable. This combines `isVisible()`
+ * with an explicit computed-opacity check so "readable" also rules out that gap.
+ */
+async function isReadable(locator: import("playwright").Locator): Promise<boolean> {
+  if (!(await locator.isVisible())) return false;
+  const opacity = await locator.evaluate((el) => window.getComputedStyle(el).opacity);
+  return opacity !== "0";
+}
+
 /** Bypasses the M1 DOM-population write while leaving the milestone-tag update and the JSON fetch intact. */
 function bypassM1Population(html: string): string {
   const marker = 'document.getElementById("m1-preview-body").innerHTML = `';
@@ -293,8 +305,8 @@ describe("M1/M2 Pages render smoke test", () => {
       try {
         expect(await page.locator("#m1-preview").isVisible()).toBe(true);
         expect(await page.locator("#m2-preview").isVisible()).toBe(true);
-        expect(await page.locator("#m1-preview-body").isVisible()).toBe(true);
-        expect(await page.locator("#m2-preview-body").isVisible()).toBe(true);
+        expect(await isReadable(page.locator("#m1-preview-body"))).toBe(true);
+        expect(await isReadable(page.locator("#m2-preview-body"))).toBe(true);
 
         expect(await page.locator("#m1-preview-body").textContent()).not.toContain(
           "Loading world genesis data"
@@ -316,8 +328,8 @@ describe("M1/M2 Pages render smoke test", () => {
       try {
         expect(await page.locator("#m1-preview").isVisible()).toBe(true);
         expect(await page.locator("#m2-preview").isVisible()).toBe(true);
-        expect(await page.locator("#m1-preview-body").isVisible()).toBe(true);
-        expect(await page.locator("#m2-preview-body").isVisible()).toBe(true);
+        expect(await isReadable(page.locator("#m1-preview-body"))).toBe(true);
+        expect(await isReadable(page.locator("#m2-preview-body"))).toBe(true);
 
         expect(await page.locator("#m1-preview-body").textContent()).not.toContain(
           "Loading world genesis data"
@@ -368,6 +380,30 @@ describe("M1/M2 Pages render smoke test", () => {
         // A real layout engine reports a zero-area clipped element as not visible; the
         // jsdom-based check this replaces has no box geometry and cannot see this at all.
         expect(await page.locator("#m2-preview-body").isVisible()).toBe(false);
+      } finally {
+        await page.close();
+      }
+    },
+    30_000
+  );
+
+  it(
+    "detects an opacity:0 regression on the populated M1 preview body",
+    async () => {
+      const page = await renderPageInBrowser({
+        viewportWidth: 1280,
+        injectCss: "#m1-preview-body { opacity: 0; }",
+      });
+      try {
+        // DOM population and the JSON fetch still succeeded...
+        expect(await page.locator("#m1-preview-body").textContent()).not.toContain(
+          "Loading world genesis data"
+        );
+        // ...and Playwright's own `isVisible()` does not check opacity, so it stays true
+        // even though the content is fully transparent and unreadable...
+        expect(await page.locator("#m1-preview-body").isVisible()).toBe(true);
+        // ...which is exactly the gap `isReadable` closes.
+        expect(await isReadable(page.locator("#m1-preview-body"))).toBe(false);
       } finally {
         await page.close();
       }
