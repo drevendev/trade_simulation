@@ -30,7 +30,12 @@ import { describe, it, expect } from "vitest";
 import type { MarketIntent, MarketIntentId, BudgetCommitmentLedger } from "./marketIntent";
 import { createMarketIntentId, createEmptyBudgetCommitmentLedger } from "./marketIntent";
 import type { LocalClearingInput, MarketAllocation } from "./marketClearing";
-import { computeLocalClearing, createMarketAllocationId, computeEffectiveDemand } from "./marketClearing";
+import {
+  computeLocalClearing,
+  createMarketAllocationId,
+  computeEffectiveDemand,
+  computeSellableQuantity,
+} from "./marketClearing";
 import type { ActorRef } from "../domain/genesisLedger";
 import type { ClanId, GoodId, MarketId, RegionId, CurrencyId, StateId } from "../domain/id";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
@@ -677,7 +682,7 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
         // Real production primitives, not fixtures: sellable is capped at actual owned
         // inventory, effective demand is capped at the actual wallet balance.
         computeEffectiveDemand: (intent, grossPrice) => computeEffectiveDemand(intent, grossPrice, moneyEpsilon),
-        computeSellableQuantity: () => Math.min(sellerIntent.desiredQuantity, sellerOwnedQuantity),
+        computeSellableQuantity: (intent) => computeSellableQuantity(intent, sellerOwnedQuantity),
         computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice,
         getTaxationInfo: () => ({
           destinationStateId: null,
