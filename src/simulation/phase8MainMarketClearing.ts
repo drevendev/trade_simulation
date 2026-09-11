@@ -104,6 +104,7 @@ export const createPhase8Handler = (options?: {
     // Process each market/good/pass combination through production clearing
     const newTelemetry: typeof context.marketTelemetry = [];
     const newAllocations: typeof context.marketAllocations = [];
+    const newAggregates = new Map(context.marketClearingAggregates);
     const allocationIdCounter = { value: 0 };
 
     for (const group of intentsByMarketGoodPass.values()) {
@@ -167,6 +168,26 @@ export const createPhase8Handler = (options?: {
       );
       newAllocations.push(...allocations);
 
+      // Realized MAIN-pass aggregates (effective demand, offered supply, cleared
+      // quantity) are computed unconditionally -- never gated on collectTelemetry --
+      // because the authoritative post-tick MarketExpectationState transition
+      // (Handoff/04 section 9) must not depend on the non-authoritative telemetry
+      // toggle (REQ-MARKET-005).
+      const totalSellerOffered = group.sellers.reduce((sum, i) => sum + i.desiredQuantity, 0);
+      const grossPrice = marketPrice * (1 + taxRate);
+      let totalBuyerEffective = 0;
+      for (const buyer of group.buyers) {
+        const buyerMaxSpend = (buyer as any).maxSpend ?? (buyer.desiredQuantity * grossPrice);
+        totalBuyerEffective += Math.min(buyer.desiredQuantity, buyerMaxSpend / grossPrice);
+      }
+      const totalCleared = allocations.reduce((sum, a) => sum + a.quantity, 0);
+
+      newAggregates.set(marketPriceKey(group.marketId, group.goodId as GoodId), {
+        effectiveDemandQuantity: totalBuyerEffective,
+        offeredQuantity: totalSellerOffered,
+        clearedQuantity: totalCleared,
+      });
+
       if (!collectTelemetry) {
         continue;
       }
@@ -180,20 +201,7 @@ export const createPhase8Handler = (options?: {
         quantityEpsilon,
       );
 
-      // Compute quantities from clearing results
       const totalBuyerDesired = group.buyers.reduce((sum, i) => sum + i.desiredQuantity, 0);
-      const totalSellerOffered = group.sellers.reduce((sum, i) => sum + i.desiredQuantity, 0);
-
-      // Effective demand: computed for each buyer using production formula
-      let totalBuyerEffective = 0;
-      const grossPrice = marketPrice * (1 + taxRate);
-      for (const buyer of group.buyers) {
-        const buyerMaxSpend = (buyer as any).maxSpend ?? (buyer.desiredQuantity * grossPrice);
-        totalBuyerEffective += Math.min(buyer.desiredQuantity, buyerMaxSpend / grossPrice);
-      }
-
-      // Cleared quantity from allocations
-      const totalCleared = allocations.reduce((sum, a) => sum + a.quantity, 0);
       const totalTaxCollected = allocations.reduce((sum, a) => sum + a.consumptionTaxAmount, 0);
 
       builder.setClearingQuantities(
@@ -213,6 +221,7 @@ export const createPhase8Handler = (options?: {
       ...context,
       marketTelemetry: [...context.marketTelemetry, ...newTelemetry],
       marketAllocations: [...context.marketAllocations, ...newAllocations],
+      marketClearingAggregates: newAggregates,
     };
   };
 };

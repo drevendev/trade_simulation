@@ -23,7 +23,7 @@ import type { MarketIntent } from "./marketIntent";
 import { computeEffectiveDemand, computeSellableQuantity } from "./marketClearing";
 import { repriceGoodInPhase6 } from "./marketPricing";
 
-const ZERO_EXPECTATION: MarketExpectationState = {
+export const ZERO_EXPECTATION: MarketExpectationState = {
   observationCount: 0,
   expectedUseEma: 0,
   shortageEma: 0,
@@ -47,6 +47,18 @@ export interface Phase6PriceConfig {
 /** Composite key shared with Phase-8's context.marketPrices lookup. */
 export function marketPriceKey(marketId: MarketId, goodId: GoodId): string {
   return `${marketId}|${goodId}`;
+}
+
+/** Inverse of marketPriceKey(): splits a composite "marketId|goodId" key back apart. */
+export function parseMarketPriceKey(key: string): { marketId: MarketId; goodId: GoodId } {
+  const separatorIndex = key.indexOf("|");
+  if (separatorIndex === -1) {
+    throw new Error(`Malformed market price key (expected "marketId|goodId"): ${key}`);
+  }
+  return {
+    marketId: key.slice(0, separatorIndex) as MarketId,
+    goodId: key.slice(separatorIndex + 1) as GoodId,
+  };
 }
 
 /**

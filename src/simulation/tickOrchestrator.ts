@@ -32,6 +32,11 @@ import { createHash } from "crypto";
  * this same tick (keyed "marketId|goodId"), so Phase 7/8 handlers can settle at exactly
  * that price instead of independently re-reading world state (Handoff/04 section 9: "Phase
  * 7 trade and Phase 8 clearing use the resulting Phase-6 price").
+ * M3+: marketClearingAggregates carries each market/good's realized MAIN-pass
+ * effectiveDemandQuantity/offeredQuantity/clearedQuantity (keyed "marketId|goodId"),
+ * computed unconditionally in Phase 8 regardless of whether telemetry collection is
+ * enabled, so the authoritative post-tick MarketExpectationState transition (Handoff/04
+ * section 9) never depends on the non-authoritative telemetry toggle.
  */
 export interface TickContext {
   readonly tick: number;
@@ -44,6 +49,14 @@ export interface TickContext {
   readonly marketTelemetry: LocalMarketTelemetry[];
   readonly marketAllocations: MarketAllocation[];
   readonly marketPrices: ReadonlyMap<string, number>;
+  readonly marketClearingAggregates: ReadonlyMap<string, MarketClearingAggregate>;
+}
+
+/** Realized MAIN-pass aggregates for one market/good, authoritative regardless of telemetry. */
+export interface MarketClearingAggregate {
+  readonly effectiveDemandQuantity: number;
+  readonly offeredQuantity: number;
+  readonly clearedQuantity: number;
 }
 
 /** Opaque transaction ID (tx:...) */
@@ -157,6 +170,8 @@ export function composePhaseHandlers(...handlers: PhaseHandler[]): PhaseHandler 
  * M3+: marketTelemetry is initialized empty for Phase-8 clearing telemetry.
  * M3+: marketAllocations is initialized empty for Phase-8 realized clearing results.
  * M3+: marketPrices is initialized empty; Phase 6 populates it for this tick only.
+ * M3+: marketClearingAggregates is initialized empty; Phase 8 populates it for this
+ * tick only, regardless of the telemetry toggle.
  */
 export function initializeTickContext(tick: number, seed: number): TickContext {
   return {
@@ -170,6 +185,7 @@ export function initializeTickContext(tick: number, seed: number): TickContext {
     marketTelemetry: [],
     marketAllocations: [],
     marketPrices: new Map(),
+    marketClearingAggregates: new Map(),
   };
 }
 
