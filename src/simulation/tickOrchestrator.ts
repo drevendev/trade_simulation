@@ -28,6 +28,10 @@ import { createHash } from "crypto";
  * M3+: marketAllocations accumulates the realized MarketAllocation results of Phase-8
  * clearing, independent of whether telemetry is collected, so callers can compare the
  * clearing outcome itself (not just a telemetry-derived counter) across runs.
+ * M3+: marketPrices carries the price each market/good was repriced to in Phase 6 of
+ * this same tick (keyed "marketId|goodId"), so Phase 7/8 handlers can settle at exactly
+ * that price instead of independently re-reading world state (Handoff/04 section 9: "Phase
+ * 7 trade and Phase 8 clearing use the resulting Phase-6 price").
  */
 export interface TickContext {
   readonly tick: number;
@@ -39,6 +43,7 @@ export interface TickContext {
   readonly budgetLedger: BudgetCommitmentLedger;
   readonly marketTelemetry: LocalMarketTelemetry[];
   readonly marketAllocations: MarketAllocation[];
+  readonly marketPrices: ReadonlyMap<string, number>;
 }
 
 /** Opaque transaction ID (tx:...) */
@@ -133,12 +138,25 @@ export type PhaseHandler = (
 ) => TickContext;
 
 /**
+ * Compose several PhaseHandlers into the single handler `executeTick` accepts.
+ * Each handler already self-guards on `context.phase` (see `createPhase6Handler`,
+ * `createPhase8Handler`), so composing them lets one real per-tick pipeline dispatch
+ * to whichever phase-specific handler applies, in the given order, threading the
+ * updated TickContext from one handler into the next.
+ */
+export function composePhaseHandlers(...handlers: PhaseHandler[]): PhaseHandler {
+  return (world: WorldState, context: TickContext, pendingTransitions: PendingTransitions): TickContext =>
+    handlers.reduce((ctx, handler) => handler(world, ctx, pendingTransitions), context);
+}
+
+/**
  * Initialize TickContext for tick N.
  * Phase-0 resets flow telemetry and derives deterministic RNG substreams.
  * M2: currentLedger is initialized empty and accumulates records across phases.
  * M3+: budgetLedger is initialized empty for market planning phase handlers.
  * M3+: marketTelemetry is initialized empty for Phase-8 clearing telemetry.
  * M3+: marketAllocations is initialized empty for Phase-8 realized clearing results.
+ * M3+: marketPrices is initialized empty; Phase 6 populates it for this tick only.
  */
 export function initializeTickContext(tick: number, seed: number): TickContext {
   return {
@@ -151,6 +169,7 @@ export function initializeTickContext(tick: number, seed: number): TickContext {
     budgetLedger: createEmptyBudgetCommitmentLedger(),
     marketTelemetry: [],
     marketAllocations: [],
+    marketPrices: new Map(),
   };
 }
 

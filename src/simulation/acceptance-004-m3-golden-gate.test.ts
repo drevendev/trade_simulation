@@ -28,11 +28,12 @@
  *   documents this file's earlier local-numbering drift, where this case was
  *   previously labeled MTFX-I3)
  * - MTFX-I5: Price changes at most once per tick and stays within configured bounds
- *   (canonical Handoff/04 §38 numbering). Only the price-bounds half is proven as a
- *   dedicated slice in this file; the once-per-tick orchestration-timing half is not
- *   observable yet because Phase 6 (repriceGoodInPhase6) and Phase 8
- *   (computeLocalClearing) are not wired into a single dispatchable per-tick pipeline
- *   (see src/simulation/index.ts) and remains outstanding on the ledger.
+ *   (canonical Handoff/04 §38 numbering). The price-bounds half is proven directly
+ *   against repriceGoodInPhase6(). The once-per-tick orchestration-timing half is proven
+ *   against the real composed Phase-6 -> Phase-8 dispatch pipeline (createPhase6Handler +
+ *   createPhase8Handler, composed with composePhaseHandlers() and run through the real
+ *   executeTick() phase loop), which did not exist before this file's dispatch-pipeline
+ *   test: see src/simulation/phase6MarketPriceFormation.ts.
  * - MTFX-I6: Market owns no cash or physical goods (canonical Handoff/04 §38
  *   numbering; this file's earlier local numbering called this case MTFX-I5)
  */
@@ -53,6 +54,9 @@ import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import { repriceGoodInPhase6, updateMarketExpectations } from "./marketPricing";
 import type { MarketExpectationState, LocalMarketState } from "./worldState";
+import { buildInitialWorld } from "./worldState";
+import { baselineScenario } from "../config/fixtures/baselineScenario";
+import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import type { TaxPolicyProvider } from "./marketSettlement";
 import {
   createMarketSaleTransaction,
@@ -62,7 +66,9 @@ import {
   computeConsumptionTax,
   type MarketSettlementBundle,
 } from "./marketSettlement";
-import { createTransactionId, type EconomicTransaction } from "./tickOrchestrator";
+import { createTransactionId, executeTick, composePhaseHandlers, type EconomicTransaction } from "./tickOrchestrator";
+import { createPhase6Handler, marketPriceKey, type Phase6PriceConfig } from "./phase6MarketPriceFormation";
+import { createPhase8Handler } from "./phase8MainMarketClearing";
 
 // Test ID creators using branded type casting
 const createTestRegionId = (key: string): RegionId => `r:${key}` as RegionId;
@@ -2148,6 +2154,141 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       for (const allocation of allocationsAtPrice2) {
         expect(allocation.sellerNetUnitPrice).toBe(price2);
         expect(allocation.sellerNetUnitPrice).not.toBe(price1);
+      }
+    });
+
+    it("the real composed Phase-6 -> Phase-8 dispatch pipeline reprices exactly once per tick, and Phase-8 clearing settles at exactly that tick's Phase-6 price", () => {
+      // Closes the once-per-tick orchestration-timing half left outstanding above: this
+      // drives the actual production dispatch (createPhase6Handler + createPhase8Handler,
+      // composed and run through the real executeTick() phase-0..15 loop), not a
+      // hand-rolled test loop calling repriceGoodInPhase6()/computeLocalClearing()
+      // directly. executeTick() visits each phase index exactly once per call, and both
+      // handlers self-guard on context.phase, so a fixture-intents call counter gated
+      // inside the Phase-6 handler structurally proves "at most once per tick" for the
+      // real dispatch path, not merely for an isolated function call.
+      const config = createDefaultSimulationConfig();
+      const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 2004);
+
+      const regionId = createTestRegionId("region-i5-dispatch");
+      const goodId = createTestGoodId("good-i5-dispatch");
+      const marketId = createTestMarketId("market-i5-dispatch");
+      const currencyId = createTestCurrencyId("currency-i5-dispatch");
+      const sellerClanId = createTestClanId("clan-seller-i5-dispatch");
+      const buyerClanId = createTestClanId("clan-buyer-i5-dispatch");
+      const key = marketPriceKey(marketId, goodId);
+
+      const priceConfig: Phase6PriceConfig = {
+        shortageSignalWeight: config.markets.shortageSignalWeight ?? 0.65,
+        inventorySignalWeight: config.markets.inventorySignalWeight ?? 0.35,
+        basePriceAdjustmentSpeed: config.markets.basePriceAdjustmentSpeed ?? 0.12,
+        maxAbsoluteLogPriceMovePerTick: config.markets.maxAbsoluteLogPriceMovePerTick ?? 0.18,
+        targetInventoryCoverageTicks: 1.0,
+        minimumPrice: 0.5,
+        maximumPrice: 10.0,
+      };
+      const maxAllowedStepRatio = Math.exp(priceConfig.maxAbsoluteLogPriceMovePerTick) + 1e-9;
+
+      // Sustained extreme excess demand against a much smaller sellable offer, so price
+      // climbs a real, non-trivial amount every tick rather than staying flat.
+      let currentPrice = 1.0;
+      let phase6InvocationCount = 0;
+
+      const buildIntents = (): MarketIntent[] => [
+        {
+          id: createMarketIntentId(`mi:seller-i5-dispatch`),
+          actor: { type: "CLAN", clanId: sellerClanId },
+          regionId,
+          goodId,
+          side: "SELL",
+          purpose: "INVENTORY_REBALANCE",
+          desiredQuantity: 10,
+          sourcePlanId: "plan-seller-i5-dispatch",
+          inventoryBucket: "GENERAL",
+        },
+        {
+          id: createMarketIntentId(`mi:buyer-i5-dispatch`),
+          actor: { type: "CLAN", clanId: buyerClanId },
+          regionId,
+          goodId,
+          side: "BUY",
+          purpose: "CONSUMPTION",
+          desiredQuantity: 1_000_000,
+          // Generous enough to afford the full desired quantity at any price this
+          // fixture's bounded repricing could produce, so clearing is never itself the
+          // binding constraint and every tick's allocation price is directly observable.
+          maxSpend: 1_000_000 * priceConfig.maximumPrice,
+          sourcePlanId: "plan-buyer-i5-dispatch",
+          inventoryBucket: "GENERAL",
+        },
+      ];
+
+      const getFixtureIntentsForPhase6 = (): MarketIntent[] => {
+        phase6InvocationCount += 1;
+        return buildIntents();
+      };
+      const getFixtureMarketIds = () => new Map([[regionId, marketId]]);
+
+      const phase6Handler = createPhase6Handler({
+        getFixtureIntents: getFixtureIntentsForPhase6,
+        getFixtureMarketIds,
+        getFixtureCurrentPrice: () => currentPrice,
+        priceConfig,
+      });
+      const phase8Handler = createPhase8Handler({
+        getFixtureIntents: buildIntents,
+        getFixtureMarketIds,
+        collectTelemetry: false,
+      });
+      const dispatchPipeline = composePhaseHandlers(phase6Handler, phase8Handler);
+
+      const priceHistory: number[] = [currentPrice];
+
+      for (let tick = 0; tick < 5; tick++) {
+        const result = executeTick(worldState, tick, worldState.pendingTransitions, dispatchPipeline);
+        expect(result.reconciliationErrors).toBeNull();
+
+        // Structural "at most once per tick" proof: the Phase-6 dispatch body (guarded on
+        // context.phase === 6 inside createPhase6Handler) has run exactly once more than
+        // before, for exactly this one executeTick() call -- not zero times, not twice.
+        expect(phase6InvocationCount).toBe(tick + 1);
+
+        const producedPrice = result.context.marketPrices.get(key);
+        expect(producedPrice).toBeDefined();
+        const previousPrice = priceHistory[priceHistory.length - 1]!;
+
+        // Bounded, directional repricing still holds through the real dispatch path.
+        expect(producedPrice! / previousPrice).toBeLessThanOrEqual(maxAllowedStepRatio);
+        expect(producedPrice!).toBeLessThanOrEqual(priceConfig.maximumPrice + 1e-9);
+        expect(producedPrice!).toBeGreaterThanOrEqual(priceConfig.minimumPrice - 1e-9);
+
+        // Phase-8 clearing (invoked via the SAME composed dispatch, SAME tick) settled
+        // every allocation at exactly the price Phase 6 just produced this tick -- not an
+        // independently re-read world price and not a stale prior-tick price.
+        expect(result.context.marketAllocations.length).toBeGreaterThan(0);
+        for (const allocation of result.context.marketAllocations) {
+          expect(allocation.sellerNetUnitPrice).toBe(producedPrice);
+        }
+
+        priceHistory.push(producedPrice!);
+        currentPrice = producedPrice!;
+      }
+
+      // The bound was a real, exercised constraint across the run, not a coincidence of
+      // one tick: price rose on every single tick under this fixture's sustained excess
+      // demand, and the multi-tick rise is well beyond one tick's own step size.
+      for (let i = 1; i < priceHistory.length; i++) {
+        expect(priceHistory[i]!).toBeGreaterThan(priceHistory[i - 1]!);
+      }
+      expect(priceHistory[priceHistory.length - 1]! / priceHistory[0]!).toBeGreaterThan(maxAllowedStepRatio);
+
+      // Negative control: running Phase-8 alone (no Phase-6 handler composed in, so
+      // context.marketPrices stays empty for this marketId/goodId) falls back to the
+      // world's default price instead of any Phase-6 output, proving the price-sharing
+      // assertions above are exercising real wiring rather than a coincidental match.
+      const phase8OnlyResult = executeTick(worldState, 99, worldState.pendingTransitions, phase8Handler);
+      expect(phase8OnlyResult.context.marketAllocations.length).toBeGreaterThan(0);
+      for (const allocation of phase8OnlyResult.context.marketAllocations) {
+        expect(allocation.sellerNetUnitPrice).not.toBe(priceHistory[priceHistory.length - 1]);
       }
     });
   });
