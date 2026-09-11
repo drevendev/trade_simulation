@@ -28,7 +28,7 @@
  *   documents this file's earlier local-numbering drift, where this case was
  *   previously labeled MTFX-I3)
  * - MTFX-I5: Price changes at most once per tick and stays within configured bounds
- *   (canonical Handoff/04 §38 numbering; not yet a dedicated slice in this file)
+ *   (canonical Handoff/04 §38 numbering)
  * - MTFX-I6: Market owns no cash or physical goods (canonical Handoff/04 §38
  *   numbering; this file's earlier local numbering called this case MTFX-I5)
  */
@@ -1711,6 +1711,189 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       expect(new Set(Object.keys(marketState))).toEqual(
         new Set(["marketId", "seed", "priceByGood", "expectationsByGood"]),
       );
+    });
+  });
+
+  // Canonical Handoff/04 §38 numbering (MTFX-I5: "Price changes at most once per tick
+  // and stays within configured bounds"). MTFX-T2 above already proves the bounded
+  // single-log-step half of this invariant across many isolated tick-by-tick calls to
+  // repriceGoodInPhase6(); this block adds the two things T2 does not cover: (a) the
+  // bound holds even when shortage pressure and inventory-gap pressure combine within
+  // one single repricing call, and (b) the "at most once per tick" half -- that
+  // Phase-8 local clearing settles at the exact single price Phase-6 already fixed for
+  // the tick and never independently re-derives a second price for the same tick.
+  describe("MTFX-I5: Price changes at most once per tick and stays within configured bounds", () => {
+    it("stays within configured bounds when shortage and inventory-gap pressure combine in one repricing call", () => {
+      // Unlike MTFX-T2's isolated demand-only / supply-only fixtures, this fixture
+      // drives both pressure terms (excess demand AND a wide inventory shortfall
+      // against a large target coverage) through a single repriceGoodInPhase6() call,
+      // proving the combined pressure is still clamped to one bounded log-step and to
+      // the configured price floor/ceiling, not just each term in isolation.
+      const config = createDefaultSimulationConfig();
+      const priceConfig = {
+        shortageSignalWeight: config.markets.shortageSignalWeight ?? 0.5,
+        inventorySignalWeight: config.markets.inventorySignalWeight ?? 0.5,
+        basePriceAdjustmentSpeed: config.markets.basePriceAdjustmentSpeed ?? 0.1,
+        maxAbsoluteLogPriceMovePerTick: config.markets.maxAbsoluteLogPriceMovePerTick ?? 0.1,
+        targetInventoryCoverageTicks: 10.0,
+        minimumPrice: 0.5,
+        maximumPrice: 2.0,
+      };
+      const maxAllowedStepRatio = Math.exp(priceConfig.maxAbsoluteLogPriceMovePerTick) + 1e-9;
+
+      let price = 1.0;
+      let expectation: MarketExpectationState = {
+        observationCount: 1,
+        expectedUseEma: 1_000_000,
+        shortageEma: 1,
+        surplusEma: 0,
+        lastEffectiveDemand: 1_000_000,
+        lastOfferedQuantity: 0,
+        lastClearedQuantity: 0,
+      };
+
+      for (let tick = 0; tick < 50; tick++) {
+        const previousPrice = price;
+        // Zero market-facing stock against a 10-tick target coverage keeps
+        // inventoryGap pressure pinned at its own +1 ceiling too, stacking with the
+        // excess-demand pressure below rather than the two terms only isolated.
+        price = repriceGoodInPhase6(
+          price,
+          /* effectiveDemand */ 1_000_000,
+          /* sellableSupply */ 0,
+          /* marketFacingStock */ 0,
+          expectation,
+          quantityEpsilon,
+          priceConfig,
+        );
+
+        expect(price / previousPrice).toBeLessThanOrEqual(maxAllowedStepRatio);
+        expect(price).toBeLessThanOrEqual(priceConfig.maximumPrice + 1e-9);
+        expect(price).toBeGreaterThanOrEqual(priceConfig.minimumPrice - 1e-9);
+
+        expectation = { ...expectation, observationCount: expectation.observationCount + 1 };
+      }
+
+      // Combined pressure still reaches (not just approaches) the ceiling, proving the
+      // bound is a real, exercised constraint rather than trivially unreachable.
+      expect(price).toBeCloseTo(priceConfig.maximumPrice, 6);
+    });
+
+    it("settles Phase-8 local clearing at the single fixed Phase-6 price and never re-derives a second price for the same tick", () => {
+      // computeLocalClearing() (src/simulation/marketClearing.ts) takes marketPrice as
+      // a plain function parameter and writes it into every resulting allocation's
+      // sellerNetUnitPrice/buyerGrossUnitPrice completely unconditionally -- it never
+      // calls repriceGoodInPhase6() or otherwise recomputes price. This proves that
+      // property directly: it feeds one single Phase-6 price into clearing and shows
+      // every allocation settles at exactly that price, then proves the assertion is
+      // non-vacuous by re-running clearing with a second, deliberately different price
+      // (representing what a bug that re-priced during Phase-8 would produce) and
+      // showing the allocations track whichever price is actually passed in.
+      const config = createDefaultSimulationConfig();
+      const priceConfig = {
+        shortageSignalWeight: config.markets.shortageSignalWeight ?? 0.5,
+        inventorySignalWeight: config.markets.inventorySignalWeight ?? 0.5,
+        basePriceAdjustmentSpeed: config.markets.basePriceAdjustmentSpeed ?? 0.1,
+        maxAbsoluteLogPriceMovePerTick: config.markets.maxAbsoluteLogPriceMovePerTick ?? 0.1,
+        targetInventoryCoverageTicks: config.markets.targetInventoryCoverageTicks ?? 1.0,
+        minimumPrice: 0.1,
+        maximumPrice: 10.0,
+      };
+      const flatExpectation: MarketExpectationState = {
+        observationCount: 0,
+        expectedUseEma: 0,
+        shortageEma: 0,
+        surplusEma: 0,
+        lastEffectiveDemand: 0,
+        lastOfferedQuantity: 0,
+        lastClearedQuantity: 0,
+      };
+
+      // price1: the tick's one legitimate Phase-6 repricing, driven by mild shortage
+      // pressure from an opening price of 1.0.
+      const price1 = repriceGoodInPhase6(1.0, 100, 60, 60, flatExpectation, quantityEpsilon, priceConfig);
+
+      // price2: what a *second*, differently-pressured repricing call during the same
+      // tick would produce -- sustained extreme excess demand from the same opening
+      // price. Confirmed strictly greater than price1 below, so it is a real
+      // alternative price, not a coincidental match.
+      let price2 = 1.0;
+      let expectation = flatExpectation;
+      for (let i = 0; i < 5; i++) {
+        price2 = repriceGoodInPhase6(price2, 1_000_000, 0, 0, expectation, quantityEpsilon, priceConfig);
+        expectation = { ...expectation, observationCount: expectation.observationCount + 1, expectedUseEma: 1_000_000 };
+      }
+      expect(price2).toBeGreaterThan(price1 + 1e-6);
+
+      const regionId = createTestRegionId("region-i5-single-price");
+      const goodId = createTestGoodId("good-i5-single-price");
+      const marketId = createTestMarketId("market-i5-single-price");
+      const currencyId = createTestCurrencyId("currency-i5-single-price");
+      const sellerClanId = createTestClanId("clan-seller-i5-single-price");
+      const buyerClanId = createTestClanId("clan-buyer-i5-single-price");
+
+      const sellerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:seller-i5-single-price"),
+        actor: { type: "CLAN", clanId: sellerClanId },
+        regionId,
+        goodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: 40,
+        sourcePlanId: "plan-seller-i5-single-price",
+        inventoryBucket: "GENERAL",
+      };
+      const buyerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:buyer-i5-single-price"),
+        actor: { type: "CLAN", clanId: buyerClanId },
+        regionId,
+        goodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: 40,
+        maxSpend: 40 * price2, // affords the full 40 units at either candidate price
+        sourcePlanId: "plan-buyer-i5-single-price",
+        inventoryBucket: "GENERAL",
+      };
+
+      const buildInput = (): LocalClearingInput => ({
+        marketId,
+        regionId,
+        goodId,
+        pass: "MAIN",
+        marketCurrencyId: currencyId,
+        buyerIntents: [buyerIntent],
+        sellerIntents: [sellerIntent],
+        computeEffectiveDemand: (intent, grossPrice) => computeEffectiveDemand(intent, grossPrice, moneyEpsilon),
+        computeSellableQuantity: (intent) => computeSellableQuantity(intent, 40),
+        computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice,
+        getTaxationInfo: () => ({ destinationStateId: null, assessedTaxRate: 0, collectionEfficiency: 0 }),
+      });
+
+      // Clearing settled with the correct single Phase-6 price (price1): every
+      // allocation must settle at exactly price1, never at price2.
+      const idCounter1 = { value: 0 };
+      const allocationsAtPrice1 = computeLocalClearing(buildInput(), new Map(), price1, quantityEpsilon, idCounter1);
+      expect(allocationsAtPrice1.length).toBeGreaterThan(0);
+      for (const allocation of allocationsAtPrice1) {
+        expect(allocation.sellerNetUnitPrice).toBe(price1);
+        expect(allocation.buyerGrossUnitPrice).toBe(price1);
+      }
+
+      // Negative-control half: the assertion above is not vacuously true for any
+      // price. Feeding the *second*, would-be-buggy repriced value through the exact
+      // same clearing call settles at price2 instead, proving clearing faithfully
+      // reflects whichever single price it is given rather than ignoring price
+      // entirely -- so a regression that let Phase-8 re-derive a second per-tick price
+      // (instead of consuming the one fixed Phase-6 price) would move
+      // sellerNetUnitPrice away from price1 and be caught by the assertion above.
+      const idCounter2 = { value: 0 };
+      const allocationsAtPrice2 = computeLocalClearing(buildInput(), new Map(), price2, quantityEpsilon, idCounter2);
+      expect(allocationsAtPrice2.length).toBeGreaterThan(0);
+      for (const allocation of allocationsAtPrice2) {
+        expect(allocation.sellerNetUnitPrice).toBe(price2);
+        expect(allocation.sellerNetUnitPrice).not.toBe(price1);
+      }
     });
   });
 });
