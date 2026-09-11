@@ -16,6 +16,15 @@
  * context.marketAllocations directly between telemetry-on and telemetry-off runs
  * so a real allocation divergence would fail the test, not just an unrelated
  * transaction/hash counter.
+ *
+ * It also addresses issue #416: even after #412, nothing compared authoritative
+ * stock/ledger outcomes (only allocations, transaction count and computeTickHash()).
+ * Because Phase-8 does not yet call MarketSettlement.executeAllocation() against
+ * WorldState, the allocations are the only Phase-8-produced state today; the tests
+ * below settle both runs' realized allocations through the real executeMarketSettlement()
+ * transaction-construction path and compare the resulting wallet/inventory/treasury
+ * outcomes and context.currentLedger, with a negative control proving that comparison
+ * actually catches a stock divergence when allocations stay unchanged.
  */
 
 import { describe, it, expect } from "vitest";
@@ -28,6 +37,63 @@ import { executeTick, computeTickHash, type TickContext } from "./tickOrchestrat
 import { createPhase8Handler } from "./phase8MainMarketClearing";
 import type { MarketIntent } from "./marketIntent";
 import { createMarketIntentId } from "./marketIntent";
+import type { MarketAllocation } from "./marketClearing";
+import { executeMarketSettlement } from "./marketSettlement";
+
+/**
+ * Resolve the CLAN actor key a settlement snapshot indexes wallets/inventories by.
+ * The M3 fixtures in this file only ever use CLAN actors.
+ */
+function actorKey(actor: MarketAllocation["seller"]): string {
+  if (actor.type !== "CLAN") {
+    throw new Error(`REQ-MARKET-005 settlement fixture only supports CLAN actors, got ${actor.type}`);
+  }
+  return actor.clanId as string;
+}
+
+interface SettlementSnapshot {
+  readonly wallets: Record<string, number>;
+  readonly inventories: Record<string, number>;
+  readonly treasury: number;
+}
+
+/**
+ * Apply the canonical settlement path (executeMarketSettlement's transaction amounts)
+ * to fresh wallet/inventory maps, so two independently-produced allocation sets can be
+ * compared on authoritative stock outcomes, not only on the allocations themselves.
+ */
+function applyAllocationsToSettlementSnapshot(
+  allocations: readonly MarketAllocation[],
+  tick: number,
+  phase: number,
+): SettlementSnapshot {
+  const wallets = new Map<string, number>();
+  const inventories = new Map<string, number>();
+  let treasury = 0;
+  const transactionIdCounter = { value: 0 };
+
+  for (const allocation of allocations) {
+    const bundle = executeMarketSettlement(allocation, tick, phase, transactionIdCounter);
+    const sellerKey = actorKey(allocation.seller);
+    const buyerKey = actorKey(allocation.buyer);
+    const sellerNetReceipt = bundle.marketSaleTransaction.moneyAmount ?? 0;
+    const collectedTax = bundle.consumptionTaxTransaction?.moneyAmount ?? 0;
+    const buyerGrossDebit = allocation.quantity * allocation.buyerGrossUnitPrice;
+
+    wallets.set(sellerKey, (wallets.get(sellerKey) ?? 0) + sellerNetReceipt);
+    wallets.set(buyerKey, (wallets.get(buyerKey) ?? 0) - buyerGrossDebit);
+    treasury += collectedTax;
+
+    inventories.set(sellerKey, (inventories.get(sellerKey) ?? 0) - allocation.quantity);
+    inventories.set(buyerKey, (inventories.get(buyerKey) ?? 0) + allocation.quantity);
+  }
+
+  return {
+    wallets: Object.fromEntries(wallets),
+    inventories: Object.fromEntries(inventories),
+    treasury,
+  };
+}
 
 describe("acceptance-req-market-005-phase8-integration", () => {
   it("collects telemetry through real Phase-8 handler via orchestrator", () => {
@@ -479,4 +545,175 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     const expectedTotalTax = Math.max(0, telemetry.clearedQuantity * expectedTaxPerUnit);
     expect(Math.abs(telemetry.consumptionTaxCollected - expectedTotalTax)).toBeLessThan(tolerance);
   });
+
+  it(
+    "REQ-MARKET-005: telemetry on/off toggle produces identical authoritative wallet, " +
+      "inventory and ledger outcomes when the canonical settlement path is applied to the " +
+      "realized allocations",
+    () => {
+      // Issue #416: the merged toggle regression compared transaction count,
+      // computeTickHash() (which hashes only tick/config/seed/phaseTrace/transactionCount)
+      // and marketAllocations -- never wallets, inventories or context.currentLedger, so a
+      // stock/ledger divergence confined to those fields with allocations unchanged was
+      // undetectable. This settles both runs' realized allocations through the real
+      // executeMarketSettlement() transaction-construction path and compares the resulting
+      // wallet/inventory/treasury outcomes plus context.currentLedger directly.
+      const config = createDefaultSimulationConfig();
+      const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 42);
+
+      const getFixtureIntents = (): MarketIntent[] => {
+        const regionId = Array.from(worldState.regions.values())[0]?.regionId as RegionId;
+        const goodId = Object.keys(worldState.definitionRegistry.goods)[0] as GoodId;
+        const seller = Array.from(worldState.clans.values())[0]!;
+        const buyer = Array.from(worldState.clans.values())[1]!;
+
+        return [
+          {
+            id: createMarketIntentId("mi:seller-stock-neutrality"),
+            actor: { type: "CLAN" as const, clanId: seller.clanId },
+            regionId,
+            goodId,
+            side: "SELL" as const,
+            purpose: "INVENTORY_REBALANCE" as const,
+            desiredQuantity: 100,
+            minimumReserveQuantity: 0,
+            sourcePlanId: "plan:stock-neutrality-seller",
+          },
+          {
+            id: createMarketIntentId("mi:buyer-stock-neutrality"),
+            actor: { type: "CLAN" as const, clanId: buyer.clanId },
+            regionId,
+            goodId,
+            side: "BUY" as const,
+            purpose: "CONSUMPTION" as const,
+            desiredQuantity: 80,
+            maxSpend: 800,
+            sourcePlanId: "plan:stock-neutrality-buyer",
+          },
+        ];
+      };
+
+      const resultWithTelemetry = executeTick(
+        worldState,
+        1,
+        worldState.pendingTransitions,
+        createPhase8Handler({ getFixtureIntents, collectTelemetry: true }),
+      );
+      const resultNoTelemetry = executeTick(
+        worldState,
+        1,
+        worldState.pendingTransitions,
+        createPhase8Handler({ getFixtureIntents, collectTelemetry: false }),
+      );
+
+      // Precondition: allocations are non-empty and equal, so any downstream stock
+      // difference could only originate in settlement application, never in clearing.
+      expect(resultWithTelemetry.context.marketAllocations.length).toBeGreaterThan(0);
+      expect(resultNoTelemetry.context.marketAllocations).toEqual(
+        resultWithTelemetry.context.marketAllocations,
+      );
+
+      const snapshotWithTelemetry = applyAllocationsToSettlementSnapshot(
+        resultWithTelemetry.context.marketAllocations,
+        1,
+        8,
+      );
+      const snapshotNoTelemetry = applyAllocationsToSettlementSnapshot(
+        resultNoTelemetry.context.marketAllocations,
+        1,
+        8,
+      );
+
+      expect(snapshotNoTelemetry).toEqual(snapshotWithTelemetry);
+
+      // context.currentLedger is the authoritative persisted record; the toggle must not
+      // change it either.
+      expect(resultNoTelemetry.context.currentLedger).toEqual(resultWithTelemetry.context.currentLedger);
+    },
+  );
+
+  it(
+    "detects a stock divergence between telemetry on/off settlement outcomes when " +
+      "allocations stay unchanged (negative control)",
+    () => {
+      // Proves the comparison above is not vacuous: an equal-allocations, unequal-stock
+      // divergence -- the exact shape issue #416 found undetectable in PR #414 -- fails
+      // settlement snapshot equality.
+      const config = createDefaultSimulationConfig();
+      const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 42);
+
+      const getFixtureIntents = (): MarketIntent[] => {
+        const regionId = Array.from(worldState.regions.values())[0]?.regionId as RegionId;
+        const goodId = Object.keys(worldState.definitionRegistry.goods)[0] as GoodId;
+        const seller = Array.from(worldState.clans.values())[0]!;
+        const buyer = Array.from(worldState.clans.values())[1]!;
+
+        return [
+          {
+            id: createMarketIntentId("mi:seller-negative-control"),
+            actor: { type: "CLAN" as const, clanId: seller.clanId },
+            regionId,
+            goodId,
+            side: "SELL" as const,
+            purpose: "INVENTORY_REBALANCE" as const,
+            desiredQuantity: 100,
+            minimumReserveQuantity: 0,
+            sourcePlanId: "plan:negative-control-seller",
+          },
+          {
+            id: createMarketIntentId("mi:buyer-negative-control"),
+            actor: { type: "CLAN" as const, clanId: buyer.clanId },
+            regionId,
+            goodId,
+            side: "BUY" as const,
+            purpose: "CONSUMPTION" as const,
+            desiredQuantity: 80,
+            maxSpend: 800,
+            sourcePlanId: "plan:negative-control-buyer",
+          },
+        ];
+      };
+
+      const result = executeTick(
+        worldState,
+        1,
+        worldState.pendingTransitions,
+        createPhase8Handler({ getFixtureIntents, collectTelemetry: true }),
+      );
+      expect(result.context.marketAllocations.length).toBeGreaterThan(0);
+
+      const goodSnapshot = applyAllocationsToSettlementSnapshot(result.context.marketAllocations, 1, 8);
+
+      // Simulate the exact defect this test exists to catch: a settlement application that,
+      // for one of the two toggle states, fails to credit the seller's net receipt while the
+      // realized allocations (and therefore clearing) are byte-identical. The allocations
+      // themselves stay untouched and preflight-valid; only the settlement-application step
+      // (the part #416 found unobserved) is broken, exactly as a real regression there would
+      // leave clearing/allocations unaffected.
+      const transactionIdCounter = { value: 0 };
+      const wallets = new Map<string, number>();
+      const inventories = new Map<string, number>();
+      let treasury = 0;
+      for (const allocation of result.context.marketAllocations) {
+        const bundle = executeMarketSettlement(allocation, 1, 8, transactionIdCounter);
+        const sellerKey = actorKey(allocation.seller);
+        const buyerKey = actorKey(allocation.buyer);
+        const collectedTax = bundle.consumptionTaxTransaction?.moneyAmount ?? 0;
+        const buyerGrossDebit = allocation.quantity * allocation.buyerGrossUnitPrice;
+        // Bug: omit crediting the seller's net receipt (contrast with the correct helper's
+        // `wallets.set(sellerKey, (wallets.get(sellerKey) ?? 0) + sellerNetReceipt);`).
+        wallets.set(buyerKey, (wallets.get(buyerKey) ?? 0) - buyerGrossDebit);
+        treasury += collectedTax;
+        inventories.set(sellerKey, (inventories.get(sellerKey) ?? 0) - allocation.quantity);
+        inventories.set(buyerKey, (inventories.get(buyerKey) ?? 0) + allocation.quantity);
+      }
+      const buggySnapshot: SettlementSnapshot = {
+        wallets: Object.fromEntries(wallets),
+        inventories: Object.fromEntries(inventories),
+        treasury,
+      };
+
+      expect(buggySnapshot).not.toEqual(goodSnapshot);
+    },
+  );
 });
