@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createServer, type Server } from "node:http";
 import * as path from "node:path";
 import { JSDOM, type DOMWindow } from "jsdom";
+import { chromium, type Browser } from "playwright";
 import type { M1Preview } from "./m1Preview";
 import type { M2Preview } from "./m2Preview";
 
@@ -13,9 +14,10 @@ const docsDir = path.join(repoRoot, "docs");
 let server: Server;
 let port: number;
 let baseUrl: string;
+let browser: Browser;
 
-beforeAll(() => {
-  return new Promise<void>((resolve, reject) => {
+beforeAll(async () => {
+  await new Promise<void>((resolve, reject) => {
     server = createServer((req, res) => {
       const requestPath = req.url === "/" ? "/index.html" : (req.url ?? "/index.html");
       const filePath = path.join(docsDir, requestPath);
@@ -49,10 +51,13 @@ beforeAll(() => {
 
     server.on("error", reject);
   });
-});
 
-afterAll(() => {
-  return new Promise<void>((resolve, reject) => {
+  browser = await chromium.launch({ args: ["--no-sandbox"] });
+}, 60_000);
+
+afterAll(async () => {
+  await browser?.close();
+  await new Promise<void>((resolve, reject) => {
     if (server) {
       server.close((err) => (err ? reject(err) : resolve()));
     } else {
@@ -119,6 +124,35 @@ async function renderPage(options: { innerWidth?: number } = {}): Promise<DOMWin
     (text) => !text.includes("Loading tick orchestration data")
   );
   return window;
+}
+
+/**
+ * Loads the real Pages site in a real Chromium tab at the given viewport, optionally
+ * injecting a CSS rule after navigation. Unlike jsdom, Playwright performs actual layout,
+ * so `locator.isVisible()` reflects a non-empty bounding box and non-`visibility:hidden`
+ * computed style — it catches both hidden and clipped content, not just `display: none`.
+ */
+async function renderPageInBrowser(options: {
+  viewportWidth: number;
+  injectCss?: string;
+}): Promise<import("playwright").Page> {
+  const page = await browser.newPage();
+  await page.setViewportSize({ width: options.viewportWidth, height: 900 });
+  await page.goto(baseUrl);
+  if (options.injectCss) {
+    await page.addStyleTag({ content: options.injectCss });
+  }
+  await page.waitForFunction(
+    () => !(document.getElementById("m1-preview-body")?.textContent ?? "").includes(
+      "Loading world genesis data"
+    )
+  );
+  await page.waitForFunction(
+    () => !(document.getElementById("m2-preview-body")?.textContent ?? "").includes(
+      "Loading tick orchestration data"
+    )
+  );
+  return page;
 }
 
 /** Bypasses the M1 DOM-population write while leaving the milestone-tag update and the JSON fetch intact. */
@@ -252,45 +286,94 @@ describe("M1/M2 Pages render smoke test", () => {
     expect(bodyText).toContain(m2Json.phaseTrace.phaseSequence.join(", "));
   });
 
-  it("renders the required M1/M2 content at a desktop viewport (1280px)", async () => {
-    const window = await renderPage({ innerWidth: 1280 });
-    const document = window.document;
-    expect(window.innerWidth).toBe(1280);
+  it(
+    "renders the required M1/M2 content visibly at a desktop viewport (1280px)",
+    async () => {
+      const page = await renderPageInBrowser({ viewportWidth: 1280 });
+      try {
+        expect(await page.locator("#m1-preview").isVisible()).toBe(true);
+        expect(await page.locator("#m2-preview").isVisible()).toBe(true);
+        expect(await page.locator("#m1-preview-body").isVisible()).toBe(true);
+        expect(await page.locator("#m2-preview-body").isVisible()).toBe(true);
 
-    const m1Panel = document.getElementById("m1-preview");
-    const m2Panel = document.getElementById("m2-preview");
-    expect(m1Panel).not.toBeNull();
-    expect(m2Panel).not.toBeNull();
-    expect(window.getComputedStyle(m1Panel as Element).display).not.toBe("none");
-    expect(window.getComputedStyle(m2Panel as Element).display).not.toBe("none");
+        expect(await page.locator("#m1-preview-body").textContent()).not.toContain(
+          "Loading world genesis data"
+        );
+        expect(await page.locator("#m2-preview-body").textContent()).not.toContain(
+          "Loading tick orchestration data"
+        );
+      } finally {
+        await page.close();
+      }
+    },
+    30_000
+  );
 
-    expect(document.getElementById("m1-preview-body")?.textContent).not.toContain(
-      "Loading world genesis data"
-    );
-    expect(document.getElementById("m2-preview-body")?.textContent).not.toContain(
-      "Loading tick orchestration data"
-    );
-  });
+  it(
+    "renders the required M1/M2 content visibly at a narrow viewport (360px)",
+    async () => {
+      const page = await renderPageInBrowser({ viewportWidth: 360 });
+      try {
+        expect(await page.locator("#m1-preview").isVisible()).toBe(true);
+        expect(await page.locator("#m2-preview").isVisible()).toBe(true);
+        expect(await page.locator("#m1-preview-body").isVisible()).toBe(true);
+        expect(await page.locator("#m2-preview-body").isVisible()).toBe(true);
 
-  it("renders the required M1/M2 content at a narrow viewport (360px)", async () => {
-    const window = await renderPage({ innerWidth: 360 });
-    const document = window.document;
-    expect(window.innerWidth).toBe(360);
+        expect(await page.locator("#m1-preview-body").textContent()).not.toContain(
+          "Loading world genesis data"
+        );
+        expect(await page.locator("#m2-preview-body").textContent()).not.toContain(
+          "Loading tick orchestration data"
+        );
+      } finally {
+        await page.close();
+      }
+    },
+    30_000
+  );
 
-    const m1Panel = document.getElementById("m1-preview");
-    const m2Panel = document.getElementById("m2-preview");
-    expect(m1Panel).not.toBeNull();
-    expect(m2Panel).not.toBeNull();
-    expect(window.getComputedStyle(m1Panel as Element).display).not.toBe("none");
-    expect(window.getComputedStyle(m2Panel as Element).display).not.toBe("none");
+  it(
+    "detects a visibility:hidden regression on the populated M1 preview body",
+    async () => {
+      const page = await renderPageInBrowser({
+        viewportWidth: 1280,
+        injectCss: "#m1-preview-body { visibility: hidden; }",
+      });
+      try {
+        // DOM population and the JSON fetch still succeeded...
+        expect(await page.locator("#m1-preview-body").textContent()).not.toContain(
+          "Loading world genesis data"
+        );
+        // ...but the content a viewport smoke asserts on is genuinely not visible/readable,
+        // which the `display !== "none"` check this replaces could never detect.
+        expect(await page.locator("#m1-preview-body").isVisible()).toBe(false);
+      } finally {
+        await page.close();
+      }
+    },
+    30_000
+  );
 
-    expect(document.getElementById("m1-preview-body")?.textContent).not.toContain(
-      "Loading world genesis data"
-    );
-    expect(document.getElementById("m2-preview-body")?.textContent).not.toContain(
-      "Loading tick orchestration data"
-    );
-  });
+  it(
+    "detects a zero-height clipping regression on the populated M2 preview body",
+    async () => {
+      const page = await renderPageInBrowser({
+        viewportWidth: 1280,
+        injectCss: "#m2-preview-body { overflow: hidden; max-height: 0px; display: block; }",
+      });
+      try {
+        expect(await page.locator("#m2-preview-body").textContent()).not.toContain(
+          "Loading tick orchestration data"
+        );
+        // A real layout engine reports a zero-area clipped element as not visible; the
+        // jsdom-based check this replaces has no box geometry and cannot see this at all.
+        expect(await page.locator("#m2-preview-body").isVisible()).toBe(false);
+      } finally {
+        await page.close();
+      }
+    },
+    30_000
+  );
 
   it("detects a regression when the M1 DOM-population step is bypassed while the JSON artifact stays valid", async () => {
     const window = loadDom({ transformHtml: bypassM1Population });
