@@ -23,9 +23,14 @@
  * - MTFX-I3: Sum of seller fills equals sum of buyer fills equals cleared quantity
  *   (canonical Handoff/04 §38 numbering; see the inline note above the MTFX-I4 describe
  *   block for this file's earlier local-numbering drift on the maxSpend/sellable cases)
- * - MTFX-I4: Buyer gross debit = seller net receipt + collected consumption tax
- * - MTFX-I5: Market-owned stocks remain zero
- * - MTFX-I6: No overdraft/unavailable-goods transfers
+ * - MTFX-I4: No BUY intent settles above maxSpend; no SELL intent settles above
+ *   sellable quantity (canonical Handoff/04 §38 numbering; the describe block below
+ *   documents this file's earlier local-numbering drift, where this case was
+ *   previously labeled MTFX-I3)
+ * - MTFX-I5: Price changes at most once per tick and stays within configured bounds
+ *   (canonical Handoff/04 §38 numbering; not yet a dedicated slice in this file)
+ * - MTFX-I6: Market owns no cash or physical goods (canonical Handoff/04 §38
+ *   numbering; this file's earlier local numbering called this case MTFX-I5)
  */
 
 import { describe, it, expect } from "vitest";
@@ -43,7 +48,7 @@ import type { ClanId, GoodId, MarketId, RegionId, CurrencyId, StateId } from "..
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import { repriceGoodInPhase6 } from "./marketPricing";
-import type { MarketExpectationState } from "./worldState";
+import type { MarketExpectationState, LocalMarketState } from "./worldState";
 import type { TaxPolicyProvider } from "./marketSettlement";
 import {
   createMarketSaleTransaction,
@@ -53,6 +58,7 @@ import {
   computeConsumptionTax,
   type MarketSettlementBundle,
 } from "./marketSettlement";
+import { createTransactionId, type EconomicTransaction } from "./tickOrchestrator";
 
 // Test ID creators using branded type casting
 const createTestRegionId = (key: string): RegionId => `r:${key}` as RegionId;
@@ -1548,6 +1554,163 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
         expect(fill).toBeLessThanOrEqual(demandByIntent.get(id)! + quantityEpsilon);
         expect(spend).toBeLessThanOrEqual(maxSpend + moneyEpsilon);
       }
+    });
+  });
+
+  // Canonical Handoff/04 §38 numbering (MTFX-I6: "Market owns no cash or physical
+  // goods"). This file's earlier local numbering called this case MTFX-I5; see the
+  // header comment above for the reconciled canonical mapping.
+  describe("MTFX-I6: Market owns no cash or physical goods", () => {
+    // ActorRef (src/domain/genesisLedger.ts) is a closed union of CLAN, STATE,
+    // PRODUCTION_UNIT and MONETARY_AUTHORITY -- there is no MARKET variant. A
+    // transaction can only ever debit/credit one of those four actor kinds, so the
+    // market itself can never be a settlement endpoint. This helper checks that at
+    // runtime (defensively, in case a future caller bypasses the type system with a
+    // cast) rather than relying on the type system alone.
+    const isMarketOwnedActor = (actor: ActorRef | undefined): boolean =>
+      actor !== undefined && (actor as { readonly type: string }).type === "MARKET";
+
+    const assertNoMarketOwnedTransfer = (transactions: readonly { source?: ActorRef; destination?: ActorRef }[]): void => {
+      for (const transaction of transactions) {
+        if (isMarketOwnedActor(transaction.source) || isMarketOwnedActor(transaction.destination)) {
+          throw new Error("Transaction settles against a market-owned actor");
+        }
+      }
+    };
+
+    it("never settles a MARKET_SALE or CONSUMPTION_TAX transaction against the market itself", () => {
+      // Multi-party shortage fixture (two sellers, two buyers, non-zero tax) so the
+      // settlement bundle carries both MARKET_SALE and CONSUMPTION_TAX transactions
+      // across more than one distinct buyer/seller pair.
+      const regionId = createTestRegionId("region-i6-market-owns-nothing");
+      const goodId = createTestGoodId("good-i6-market-owns-nothing");
+      const marketId = createTestMarketId("market-i6-market-owns-nothing");
+      const currencyId = createTestCurrencyId("currency-i6-market-owns-nothing");
+      const stateId = "st:test-state-i6" as any;
+      const marketPrice = 2.0;
+
+      const sellerA = createMarketIntentId("mi:seller-a-i6");
+      const sellerB = createMarketIntentId("mi:seller-b-i6");
+      const buyerX = createMarketIntentId("mi:buyer-x-i6");
+      const buyerY = createMarketIntentId("mi:buyer-y-i6");
+
+      const sellableByIntent = new Map<MarketIntentId, number>([
+        [sellerA, 30],
+        [sellerB, 20],
+      ]);
+      const demandByIntent = new Map<MarketIntentId, number>([
+        [buyerX, 25],
+        [buyerY, 25],
+      ]);
+
+      const makeSellerIntent = (id: MarketIntentId, clanKey: string): MarketIntent => ({
+        id,
+        actor: { type: "CLAN", clanId: createTestClanId(clanKey) },
+        regionId,
+        goodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: sellableByIntent.get(id)!,
+        minimumReserveQuantity: 0,
+        sourcePlanId: "plan-seller-i6",
+        inventoryBucket: "GENERAL",
+      });
+      const makeBuyerIntent = (id: MarketIntentId, clanKey: string): MarketIntent => ({
+        id,
+        actor: { type: "CLAN", clanId: createTestClanId(clanKey) },
+        regionId,
+        goodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: demandByIntent.get(id)!,
+        maxSpend: demandByIntent.get(id)! * marketPrice * 1.5,
+        sourcePlanId: "plan-buyer-i6",
+        inventoryBucket: "GENERAL",
+      });
+
+      const sellerIntents = [makeSellerIntent(sellerA, "clan-seller-a-i6"), makeSellerIntent(sellerB, "clan-seller-b-i6")];
+      const buyerIntents = [makeBuyerIntent(buyerX, "clan-buyer-x-i6"), makeBuyerIntent(buyerY, "clan-buyer-y-i6")];
+
+      const input: LocalClearingInput = {
+        marketId,
+        regionId,
+        goodId,
+        pass: "MAIN",
+        marketCurrencyId: currencyId,
+        buyerIntents,
+        sellerIntents,
+        computeEffectiveDemand: (intent) => demandByIntent.get(intent.id)!,
+        computeSellableQuantity: (intent) => sellableByIntent.get(intent.id)!,
+        computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice * 1.2, // 20% tax
+        getTaxationInfo: () => ({
+          destinationStateId: stateId,
+          assessedTaxRate: 0.2,
+          collectionEfficiency: 1.0,
+        }),
+      };
+
+      const idCounter = { value: 0 };
+      const allocations = computeLocalClearing(input, new Map(), marketPrice, quantityEpsilon, idCounter);
+      expect(allocations.length).toBeGreaterThan(0);
+
+      // Execute the real settlement path for every allocation and collect every
+      // resulting transaction, exactly as the production Phase-8 handler would.
+      const txIdCounter = { value: 0 };
+      const transactions: EconomicTransaction[] = [];
+      let taxTransactionCount = 0;
+      for (const allocation of allocations) {
+        const preflightError = preflightMarketSettlement(allocation, 0, 8);
+        expect(preflightError).toBeNull();
+        const bundle = executeMarketSettlement(allocation, 0, 8, txIdCounter);
+        transactions.push(bundle.marketSaleTransaction);
+        if (bundle.consumptionTaxTransaction) {
+          transactions.push(bundle.consumptionTaxTransaction);
+          taxTransactionCount += 1;
+        }
+      }
+
+      // The fixture's non-zero tax rate must actually have produced tax transactions,
+      // so the negative-goods-owner check below is exercised on both transaction types.
+      expect(taxTransactionCount).toBeGreaterThan(0);
+      expect(transactions.length).toBeGreaterThan(taxTransactionCount);
+
+      // Positive path: every real settlement transaction settles only between
+      // CLAN/STATE actors -- the market is never a source or destination.
+      expect(() => assertNoMarketOwnedTransfer(transactions)).not.toThrow();
+      for (const transaction of transactions) {
+        expect(transaction.source && ["CLAN", "STATE", "PRODUCTION_UNIT", "MONETARY_AUTHORITY"].includes(transaction.source.type)).toBe(true);
+        expect(transaction.destination && ["CLAN", "STATE", "PRODUCTION_UNIT", "MONETARY_AUTHORITY"].includes(transaction.destination.type)).toBe(true);
+      }
+
+      // Negative control: the detector is not vacuous. A transaction fabricated with
+      // a market-shaped owner (bypassing ActorRef's closed union with a cast, the only
+      // way one could ever appear) is caught by the same assertion.
+      const realDestination: ActorRef = transactions[0]!.destination!;
+      const marketOwnedMutant: EconomicTransaction = {
+        tick: 0,
+        phase: 8,
+        type: "MARKET_SALE",
+        transactionId: createTransactionId("tx:i6-mutant"),
+        source: { type: "MARKET", marketId } as unknown as ActorRef,
+        destination: realDestination,
+        amount: 1,
+      };
+      expect(() => assertNoMarketOwnedTransfer([...transactions, marketOwnedMutant])).toThrow(
+        "Transaction settles against a market-owned actor",
+      );
+
+      // Structural proof: LocalMarketState (src/simulation/worldState.ts) carries no
+      // wallet or inventory field at all -- only identity, seed and the ephemeral
+      // price/expectation state that section 11 already designates non-authoritative.
+      const marketState: LocalMarketState = {
+        marketId,
+        seed: { regionKey: "test-region-i6", initialPriceByGood: { [goodId]: marketPrice } },
+        priceByGood: new Map([[goodId, marketPrice]]),
+        expectationsByGood: new Map(),
+      };
+      expect(new Set(Object.keys(marketState))).toEqual(
+        new Set(["marketId", "seed", "priceByGood", "expectationsByGood"]),
+      );
     });
   });
 });
