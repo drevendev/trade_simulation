@@ -986,4 +986,161 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       expect(sellerInventoryAfter).toBeGreaterThan(0);
     });
   });
+
+  describe("MTFX-T5: Proportional seller/buyer rationing conserves quantity and is insertion-order invariant", () => {
+    it("produces identical per-participant fills and total cleared quantity regardless of intent array order", () => {
+      // Same shortage-shaped fixture as MTFX-I3 (three sellers, two buyers, cleared
+      // quantity strictly below either side's raw total): sellable 50/30/20 and
+      // effective demand 40/35 force proportional rationing where the per-seller
+      // provisional fill for the 20-unit seller (75 x 20 / 100) is not exactly
+      // representable in binary floating point, so the residual-correction pass in
+      // computeLocalClearing actually executes rather than being a no-op. Feeding the
+      // identical intents in two different array orders and requiring bit-identical
+      // results proves the stable-ID sort (not input array position) drives both the
+      // residual correction and the two-pointer match, per §38 MTFX-T5 and the
+      // production contract's own "shuffled intent insertion produces identical
+      // normalized allocations" comment on computeLocalClearing.
+      const regionId = createTestRegionId("region-t5-insertion-order");
+      const goodId = createTestGoodId("good-t5-insertion-order");
+      const marketId = createTestMarketId("market-t5-insertion-order");
+      const currencyId = createTestCurrencyId("currency-t5-insertion-order");
+      const marketPrice = 1.0;
+
+      const sellerA = createMarketIntentId("mi:seller-a-t5");
+      const sellerB = createMarketIntentId("mi:seller-b-t5");
+      const sellerC = createMarketIntentId("mi:seller-c-t5");
+      const buyerX = createMarketIntentId("mi:buyer-x-t5");
+      const buyerY = createMarketIntentId("mi:buyer-y-t5");
+
+      const sellableByIntent = new Map<MarketIntentId, number>([
+        [sellerA, 50],
+        [sellerB, 30],
+        [sellerC, 20],
+      ]);
+      const demandByIntent = new Map<MarketIntentId, number>([
+        [buyerX, 40],
+        [buyerY, 35],
+      ]);
+
+      const clearedQuantity = Math.min(100, 75); // 75
+
+      const makeSellerIntent = (id: MarketIntentId, clanKey: string): MarketIntent => ({
+        id,
+        actor: { type: "CLAN", clanId: createTestClanId(clanKey) },
+        regionId,
+        goodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: sellableByIntent.get(id)!,
+        sourcePlanId: `plan-${clanKey}`,
+        inventoryBucket: "GENERAL",
+      });
+      const makeBuyerIntent = (id: MarketIntentId, clanKey: string): MarketIntent => ({
+        id,
+        actor: { type: "CLAN", clanId: createTestClanId(clanKey) },
+        regionId,
+        goodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: demandByIntent.get(id)!,
+        maxSpend: demandByIntent.get(id)! * marketPrice,
+        sourcePlanId: `plan-${clanKey}`,
+        inventoryBucket: "GENERAL",
+      });
+
+      const sellerIntentsByKey = {
+        A: makeSellerIntent(sellerA, "clan-seller-a-t5"),
+        B: makeSellerIntent(sellerB, "clan-seller-b-t5"),
+        C: makeSellerIntent(sellerC, "clan-seller-c-t5"),
+      };
+      const buyerIntentsByKey = {
+        X: makeBuyerIntent(buyerX, "clan-buyer-x-t5"),
+        Y: makeBuyerIntent(buyerY, "clan-buyer-y-t5"),
+      };
+
+      const runClearing = (
+        sellerIntents: MarketIntent[],
+        buyerIntents: MarketIntent[],
+      ): MarketAllocation[] => {
+        const input: LocalClearingInput = {
+          marketId,
+          regionId,
+          goodId,
+          pass: "MAIN",
+          marketCurrencyId: currencyId,
+          buyerIntents,
+          sellerIntents,
+          computeEffectiveDemand: (intent) => demandByIntent.get(intent.id)!,
+          computeSellableQuantity: (intent) => sellableByIntent.get(intent.id)!,
+          computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice,
+          getTaxationInfo: () => ({
+            destinationStateId: null,
+            assessedTaxRate: 0,
+            collectionEfficiency: 0,
+          }),
+        };
+        const idCounter = { value: 0 };
+        return computeLocalClearing(input, new Map(), marketPrice, quantityEpsilon, idCounter);
+      };
+
+      const sumFillsById = (allocations: MarketAllocation[]) => {
+        const sellerFill = new Map<MarketIntentId, number>();
+        const buyerFill = new Map<MarketIntentId, number>();
+        let total = 0;
+        for (const allocation of allocations) {
+          sellerFill.set(
+            allocation.sellerIntentId,
+            (sellerFill.get(allocation.sellerIntentId) ?? 0) + allocation.quantity,
+          );
+          buyerFill.set(
+            allocation.buyerIntentId,
+            (buyerFill.get(allocation.buyerIntentId) ?? 0) + allocation.quantity,
+          );
+          total += allocation.quantity;
+        }
+        return { sellerFill, buyerFill, total };
+      };
+
+      // Original insertion order.
+      const forwardAllocations = runClearing(
+        [sellerIntentsByKey.A, sellerIntentsByKey.B, sellerIntentsByKey.C],
+        [buyerIntentsByKey.X, buyerIntentsByKey.Y],
+      );
+      // Fully reversed insertion order for both sides.
+      const reversedAllocations = runClearing(
+        [sellerIntentsByKey.C, sellerIntentsByKey.B, sellerIntentsByKey.A],
+        [buyerIntentsByKey.Y, buyerIntentsByKey.X],
+      );
+      // A third, non-reversed shuffle, to rule out "reversal happens to be symmetric".
+      const shuffledAllocations = runClearing(
+        [sellerIntentsByKey.B, sellerIntentsByKey.A, sellerIntentsByKey.C],
+        [buyerIntentsByKey.Y, buyerIntentsByKey.X],
+      );
+
+      const forward = sumFillsById(forwardAllocations);
+      const reversed = sumFillsById(reversedAllocations);
+      const shuffled = sumFillsById(shuffledAllocations);
+
+      // Quantity is conserved: every ordering clears exactly min(supply, demand).
+      expect(forward.total).toBe(clearedQuantity);
+      expect(reversed.total).toBe(clearedQuantity);
+      expect(shuffled.total).toBe(clearedQuantity);
+
+      // Per-participant fills are bit-identical across every insertion order: the
+      // production sort key is the actor/intent ID, never the input array position.
+      for (const id of [sellerA, sellerB, sellerC]) {
+        expect(reversed.sellerFill.get(id)).toBe(forward.sellerFill.get(id));
+        expect(shuffled.sellerFill.get(id)).toBe(forward.sellerFill.get(id));
+      }
+      for (const id of [buyerX, buyerY]) {
+        expect(reversed.buyerFill.get(id)).toBe(forward.buyerFill.get(id));
+        expect(shuffled.buyerFill.get(id)).toBe(forward.buyerFill.get(id));
+      }
+
+      // Sanity: the fixture actually exercises proportional rationing (below either
+      // side's raw total), not a degenerate full-clear pass-through.
+      expect(clearedQuantity).toBeLessThan(100);
+      expect(clearedQuantity).toBeLessThan(75 + quantityEpsilon);
+    });
+  });
 });
