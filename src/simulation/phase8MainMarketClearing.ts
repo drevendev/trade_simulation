@@ -20,6 +20,7 @@ import type { PendingTransitions } from "./worldState";
 import type { MarketIntent } from "./marketIntent";
 import { LocalMarketTelemetryBuilder } from "./marketTelemetry";
 import { computeLocalClearing, type LocalClearingInput } from "./marketClearing";
+import { marketPriceKey } from "./phase6MarketPriceFormation";
 
 /**
  * Create a Phase-8 handler with optional telemetry collection.
@@ -110,9 +111,15 @@ export const createPhase8Handler = (options?: {
         continue;
       }
 
-      // Get market price for this good
+      // Use the price Phase 6 produced this tick when present (Handoff/04 section 9:
+      // "Phase 7 trade and Phase 8 clearing use the resulting Phase-6 price"), falling
+      // back to the world's current price so callers that only exercise Phase 8 in
+      // isolation (no Phase-6 handler run this tick) are unaffected.
       const market = world.markets.get(group.marketId);
-      const marketPrice = market?.priceByGood.get(group.goodId as GoodId) ?? 10;
+      const marketPrice =
+        context.marketPrices.get(marketPriceKey(group.marketId, group.goodId as GoodId)) ??
+        market?.priceByGood.get(group.goodId as GoodId) ??
+        10;
 
       // Create clearing input with production computations
       const clearingInput: LocalClearingInput = {

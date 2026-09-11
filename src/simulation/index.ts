@@ -31,6 +31,7 @@ export {
   executeTick,
   computeTickHash,
   noOpPhaseHandler,
+  composePhaseHandlers,
   validateTickInvariants,
   createTransactionId,
   createTransactionBundleId,
