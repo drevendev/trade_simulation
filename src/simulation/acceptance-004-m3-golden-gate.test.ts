@@ -624,22 +624,27 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
     });
   });
 
-  describe("MTFX-I3: No negative inventory or wallet balance", () => {
-    it("never drives seller inventory or buyer wallet negative when desired quantities vastly exceed owned stock and budget", () => {
-      // MTFX-I3: An extreme request (desiredQuantity far beyond what either side can
-      // actually fulfil) must still clear only up to the seller's real owned inventory
-      // and the buyer's real wallet-backed maxSpend. Applying the resulting settlement
-      // must never leave seller inventory or buyer wallet negative.
-      const regionId = createTestRegionId("region-i3");
-      const goodId = createTestGoodId("good-i3");
-      const marketId = createTestMarketId("market-i3");
-      const currencyId = createTestCurrencyId("currency-i3");
+  // Labeled MTFX-I4 per Handoff/04 canonical numbering ("no BUY settles above maxSpend;
+  // no SELL settles above sellable quantity"), not MTFX-I3 (fill conservation, still
+  // outstanding — see REQ-ACCEPTANCE-004 ledger evidence). An earlier revision of this
+  // file mislabeled these cases as I3; the ACCEPTOR and the researcher both flagged the
+  // mismatch against the canonical §38 invariant list on PR #417.
+  describe("MTFX-I4: No settlement above maxSpend or sellable quantity", () => {
+    it("never drives seller inventory or buyer wallet negative when the seller's owned stock is the binding constraint", () => {
+      // Seller-bound case: desiredQuantity far beyond what either side can actually
+      // fulfil, but the seller's real owned inventory (3) is tighter than the buyer's
+      // wallet-backed maxSpend (100). Clearing and settlement must never leave seller
+      // inventory or buyer wallet negative, and must exhaust the seller's stock exactly.
+      const regionId = createTestRegionId("region-i4-seller-bound");
+      const goodId = createTestGoodId("good-i4-seller-bound");
+      const marketId = createTestMarketId("market-i4-seller-bound");
+      const currencyId = createTestCurrencyId("currency-i4-seller-bound");
       const marketPrice = 1.0;
 
-      const sellerClanId = createTestClanId("clan-seller-i3");
-      const buyerClanId = createTestClanId("clan-buyer-i3");
+      const sellerClanId = createTestClanId("clan-seller-i4-seller-bound");
+      const buyerClanId = createTestClanId("clan-buyer-i4-seller-bound");
 
-      // Seller owns only 3 units; buyer wallet only affords 100 units at price 1.0.
+      // Seller owns only 3 units; buyer wallet affords 100 units at price 1.0.
       const sellerOwnedQuantity = 3;
       const buyerWalletBalance = 100;
 
@@ -648,18 +653,18 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
 
       // Both intents ask for far more than either side can actually deliver/afford.
       const sellerIntent: MarketIntent = {
-        id: createMarketIntentId("mi:seller-i3"),
+        id: createMarketIntentId("mi:seller-i4-seller-bound"),
         actor: { type: "CLAN", clanId: sellerClanId },
         regionId,
         goodId,
         side: "SELL",
         purpose: "INVENTORY_REBALANCE",
         desiredQuantity: 100_000,
-        sourcePlanId: "plan-seller-i3",
+        sourcePlanId: "plan-seller-i4-seller-bound",
         inventoryBucket: "GENERAL",
       };
       const buyerIntent: MarketIntent = {
-        id: createMarketIntentId("mi:buyer-i3"),
+        id: createMarketIntentId("mi:buyer-i4-seller-bound"),
         actor: { type: "CLAN", clanId: buyerClanId },
         regionId,
         goodId,
@@ -667,7 +672,7 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
         purpose: "CONSUMPTION",
         desiredQuantity: 100_000,
         maxSpend: buyerWalletBalance,
-        sourcePlanId: "plan-buyer-i3",
+        sourcePlanId: "plan-buyer-i4-seller-bound",
         inventoryBucket: "GENERAL",
       };
 
@@ -717,8 +722,8 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       const sellerInventoryAfter = sellerInventory.get(goodId) ?? 0;
       const buyerWalletAfter = buyerWallet.get(currencyId) ?? 0;
 
-      // The core MTFX-I3 assertion: neither authoritative stock ever goes negative,
-      // even though both intents requested 100,000 units.
+      // Neither authoritative stock ever goes negative, even though both intents
+      // requested 100,000 units.
       expect(sellerInventoryAfter).toBeGreaterThanOrEqual(-quantityEpsilon);
       expect(buyerWalletAfter).toBeGreaterThanOrEqual(-moneyEpsilon);
 
@@ -726,6 +731,109 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       // exhausted exactly (not overdrawn) while the buyer's wallet retains headroom.
       expect(sellerInventoryAfter).toBeCloseTo(0, 8);
       expect(buyerWalletAfter).toBeGreaterThan(0);
+    });
+
+    it("never drives seller inventory or buyer wallet negative when the buyer's wallet is the binding constraint", () => {
+      // Buyer-bound case: the complement of the seller-bound case above. The seller's
+      // owned stock (100_000) is ample; the buyer's wallet (3, at price 1.0) is the
+      // tighter constraint. This is the case flagged as missing on PR #417 — without it,
+      // a regression that deletes the wallet-affordability cap in computeEffectiveDemand
+      // would not be caught, because the seller-bound case alone never exercises that path.
+      const regionId = createTestRegionId("region-i4-buyer-bound");
+      const goodId = createTestGoodId("good-i4-buyer-bound");
+      const marketId = createTestMarketId("market-i4-buyer-bound");
+      const currencyId = createTestCurrencyId("currency-i4-buyer-bound");
+      const marketPrice = 1.0;
+
+      const sellerClanId = createTestClanId("clan-seller-i4-buyer-bound");
+      const buyerClanId = createTestClanId("clan-buyer-i4-buyer-bound");
+
+      // Seller owns 100,000 units; buyer wallet affords only 3 units at price 1.0.
+      const sellerOwnedQuantity = 100_000;
+      const buyerWalletBalance = 3;
+
+      const sellerInventory = new Map<GoodId, number>([[goodId, sellerOwnedQuantity]]);
+      const buyerWallet = new Map<CurrencyId, number>([[currencyId, buyerWalletBalance]]);
+
+      // Both intents ask for far more than either side can actually deliver/afford.
+      const sellerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:seller-i4-buyer-bound"),
+        actor: { type: "CLAN", clanId: sellerClanId },
+        regionId,
+        goodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: 100_000,
+        sourcePlanId: "plan-seller-i4-buyer-bound",
+        inventoryBucket: "GENERAL",
+      };
+      const buyerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:buyer-i4-buyer-bound"),
+        actor: { type: "CLAN", clanId: buyerClanId },
+        regionId,
+        goodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: 100_000,
+        maxSpend: buyerWalletBalance,
+        sourcePlanId: "plan-buyer-i4-buyer-bound",
+        inventoryBucket: "GENERAL",
+      };
+
+      const input: LocalClearingInput = {
+        marketId,
+        regionId,
+        goodId,
+        pass: "MAIN",
+        marketCurrencyId: currencyId,
+        buyerIntents: [buyerIntent],
+        sellerIntents: [sellerIntent],
+        computeEffectiveDemand: (intent, grossPrice) => computeEffectiveDemand(intent, grossPrice, moneyEpsilon),
+        computeSellableQuantity: (intent) => computeSellableQuantity(intent, sellerOwnedQuantity),
+        computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice,
+        getTaxationInfo: () => ({
+          destinationStateId: null,
+          assessedTaxRate: 0,
+          collectionEfficiency: 0,
+        }),
+      };
+
+      const idCounter = { value: 0 };
+      const allocations = computeLocalClearing(input, new Map(), marketPrice, quantityEpsilon, idCounter);
+
+      expect(allocations.length).toBeGreaterThan(0);
+      const allocation = allocations[0]!;
+
+      // Clearing must be bounded by the tighter of the two real limits (buyer's 3-unit
+      // affordability), never by either side's inflated desiredQuantity, and never by the
+      // seller's ample 100,000-unit stock.
+      expect(allocation.quantity).toBeLessThanOrEqual(buyerWalletBalance + quantityEpsilon);
+      expect(allocation.quantity).toBeLessThanOrEqual(sellerOwnedQuantity + quantityEpsilon);
+
+      const preflightError = preflightMarketSettlement(allocation, 0, 8);
+      expect(preflightError).toBeNull();
+
+      const sellerInventoryBefore = sellerInventory.get(goodId) ?? 0;
+      const buyerWalletBefore = buyerWallet.get(currencyId) ?? 0;
+
+      const tradeQuantity = allocation.quantity;
+      const buyerGrossDebit = allocation.quantity * allocation.buyerGrossUnitPrice;
+
+      sellerInventory.set(goodId, sellerInventoryBefore - tradeQuantity);
+      buyerWallet.set(currencyId, buyerWalletBefore - buyerGrossDebit);
+
+      const sellerInventoryAfter = sellerInventory.get(goodId) ?? 0;
+      const buyerWalletAfter = buyerWallet.get(currencyId) ?? 0;
+
+      // Neither authoritative stock ever goes negative, even though both intents
+      // requested 100,000 units.
+      expect(sellerInventoryAfter).toBeGreaterThanOrEqual(-quantityEpsilon);
+      expect(buyerWalletAfter).toBeGreaterThanOrEqual(-moneyEpsilon);
+
+      // The buyer's wallet is the binding constraint in this fixture, so it is exhausted
+      // exactly (not overdrawn) while the seller's ample stock retains headroom.
+      expect(buyerWalletAfter).toBeCloseTo(0, 6);
+      expect(sellerInventoryAfter).toBeGreaterThan(0);
     });
   });
 });
