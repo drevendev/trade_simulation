@@ -20,7 +20,9 @@
  * Core invariant suite (MTFX-I1..I6):
  * - MTFX-I1: Money conservation (inflows = outflows per currency/actor)
  * - MTFX-I2: Goods conservation (source inventory decrease = destination increase)
- * - MTFX-I3: No negative inventory or wallet balance
+ * - MTFX-I3: Sum of seller fills equals sum of buyer fills equals cleared quantity
+ *   (canonical Handoff/04 §38 numbering; see the inline note above the MTFX-I4 describe
+ *   block for this file's earlier local-numbering drift on the maxSpend/sellable cases)
  * - MTFX-I4: Buyer gross debit = seller net receipt + collected consumption tax
  * - MTFX-I5: Market-owned stocks remain zero
  * - MTFX-I6: No overdraft/unavailable-goods transfers
@@ -624,11 +626,159 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
     });
   });
 
+  // Canonical Handoff/04 §38 numbering (MTFX-I3: "Sum seller fills == sum buyer fills ==
+  // cleared quantity within tolerance"). This is the first block in this file to use the
+  // canonical §38 numbers directly; the MTFX-I4 block immediately below documents this
+  // file's separate historical numbering drift for the maxSpend/sellable-quantity cases.
+  describe("MTFX-I3: Sum of seller fills equals sum of buyer fills equals cleared quantity", () => {
+    it("reconciles per-seller and per-buyer fills against the cleared quantity across a multi-party proportional match", () => {
+      // Three sellers and two buyers with mismatched totals force both proportional
+      // rationing (Q = min(supply, demand) < either side's raw total) and multi-lot
+      // two-pointer matching (a seller's fill is split across more than one buyer, and
+      // vice versa). This is the shape that can hide a bug where per-participant fills
+      // sum incorrectly even though every individual allocation looks locally valid.
+      const regionId = createTestRegionId("region-i3-fill-conservation");
+      const goodId = createTestGoodId("good-i3-fill-conservation");
+      const marketId = createTestMarketId("market-i3-fill-conservation");
+      const currencyId = createTestCurrencyId("currency-i3-fill-conservation");
+      const marketPrice = 1.0;
+
+      const sellerA = createMarketIntentId("mi:seller-a-i3");
+      const sellerB = createMarketIntentId("mi:seller-b-i3");
+      const sellerC = createMarketIntentId("mi:seller-c-i3");
+      const buyerX = createMarketIntentId("mi:buyer-x-i3");
+      const buyerY = createMarketIntentId("mi:buyer-y-i3");
+
+      // Fixed sellable/demand quantities per intent, independent of desiredQuantity,
+      // mirroring the fixture pattern used by MTFX-I1 above.
+      const sellableByIntent = new Map<MarketIntentId, number>([
+        [sellerA, 50],
+        [sellerB, 30],
+        [sellerC, 20],
+      ]);
+      const demandByIntent = new Map<MarketIntentId, number>([
+        [buyerX, 40],
+        [buyerY, 35],
+      ]);
+
+      const totalSupply = 100; // 50 + 30 + 20
+      const totalDemand = 75; // 40 + 35
+      const clearedQuantity = Math.min(totalSupply, totalDemand); // 75
+
+      const makeSellerIntent = (id: MarketIntentId, clanKey: string): MarketIntent => ({
+        id,
+        actor: { type: "CLAN", clanId: createTestClanId(clanKey) },
+        regionId,
+        goodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: sellableByIntent.get(id)!,
+        sourcePlanId: `plan-${clanKey}`,
+        inventoryBucket: "GENERAL",
+      });
+      const makeBuyerIntent = (id: MarketIntentId, clanKey: string): MarketIntent => ({
+        id,
+        actor: { type: "CLAN", clanId: createTestClanId(clanKey) },
+        regionId,
+        goodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: demandByIntent.get(id)!,
+        maxSpend: demandByIntent.get(id)! * marketPrice,
+        sourcePlanId: `plan-${clanKey}`,
+        inventoryBucket: "GENERAL",
+      });
+
+      const sellerIntents = [
+        makeSellerIntent(sellerA, "clan-seller-a-i3"),
+        makeSellerIntent(sellerB, "clan-seller-b-i3"),
+        makeSellerIntent(sellerC, "clan-seller-c-i3"),
+      ];
+      const buyerIntents = [
+        makeBuyerIntent(buyerX, "clan-buyer-x-i3"),
+        makeBuyerIntent(buyerY, "clan-buyer-y-i3"),
+      ];
+
+      const input: LocalClearingInput = {
+        marketId,
+        regionId,
+        goodId,
+        pass: "MAIN",
+        marketCurrencyId: currencyId,
+        buyerIntents,
+        sellerIntents,
+        computeEffectiveDemand: (intent) => demandByIntent.get(intent.id)!,
+        computeSellableQuantity: (intent) => sellableByIntent.get(intent.id)!,
+        computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice,
+        getTaxationInfo: () => ({
+          destinationStateId: null,
+          assessedTaxRate: 0,
+          collectionEfficiency: 0,
+        }),
+      };
+
+      const idCounter = { value: 0 };
+      const allocations = computeLocalClearing(input, new Map(), marketPrice, quantityEpsilon, idCounter);
+
+      // Multi-party rationing with a binding cleared quantity below either side's raw
+      // total must produce more than one matched lot (proves this exercises two-pointer
+      // splitting, not a single seller-to-single-buyer passthrough).
+      expect(allocations.length).toBeGreaterThan(1);
+
+      // Independently expected per-participant fills from the documented proportional
+      // formula (sellerFill_i = Q x sellable_i / total supply), computed here from the
+      // fixture's own known inputs rather than read back from the allocations under test.
+      const expectedSellerFill = new Map<MarketIntentId, number>([
+        [sellerA, (clearedQuantity * 50) / totalSupply],
+        [sellerB, (clearedQuantity * 30) / totalSupply],
+        [sellerC, (clearedQuantity * 20) / totalSupply],
+      ]);
+      const expectedBuyerFill = new Map<MarketIntentId, number>([
+        [buyerX, (clearedQuantity * 40) / totalDemand],
+        [buyerY, (clearedQuantity * 35) / totalDemand],
+      ]);
+
+      const actualSellerFill = new Map<MarketIntentId, number>();
+      const actualBuyerFill = new Map<MarketIntentId, number>();
+      let grandTotal = 0;
+      for (const allocation of allocations) {
+        expect(allocation.quantity).toBeGreaterThan(0);
+        actualSellerFill.set(
+          allocation.sellerIntentId,
+          (actualSellerFill.get(allocation.sellerIntentId) ?? 0) + allocation.quantity,
+        );
+        actualBuyerFill.set(
+          allocation.buyerIntentId,
+          (actualBuyerFill.get(allocation.buyerIntentId) ?? 0) + allocation.quantity,
+        );
+        grandTotal += allocation.quantity;
+      }
+
+      // Per-seller and per-buyer summed fills match the independently computed
+      // proportional expectation exactly (within tolerance).
+      for (const [id, expected] of expectedSellerFill) {
+        expect(actualSellerFill.get(id) ?? 0).toBeCloseTo(expected, 6);
+      }
+      for (const [id, expected] of expectedBuyerFill) {
+        expect(actualBuyerFill.get(id) ?? 0).toBeCloseTo(expected, 6);
+      }
+
+      // MTFX-I3 core identity: sum(seller fills) == sum(buyer fills) == cleared quantity.
+      const sumSellerFills = [...actualSellerFill.values()].reduce((a, b) => a + b, 0);
+      const sumBuyerFills = [...actualBuyerFill.values()].reduce((a, b) => a + b, 0);
+
+      expect(sumSellerFills).toBeCloseTo(clearedQuantity, 6);
+      expect(sumBuyerFills).toBeCloseTo(clearedQuantity, 6);
+      expect(grandTotal).toBeCloseTo(clearedQuantity, 6);
+      expect(Math.abs(sumSellerFills - sumBuyerFills)).toBeLessThan(quantityEpsilon);
+    });
+  });
+
   // Labeled MTFX-I4 per Handoff/04 canonical numbering ("no BUY settles above maxSpend;
-  // no SELL settles above sellable quantity"), not MTFX-I3 (fill conservation, still
-  // outstanding — see REQ-ACCEPTANCE-004 ledger evidence). An earlier revision of this
-  // file mislabeled these cases as I3; the ACCEPTOR and the researcher both flagged the
-  // mismatch against the canonical §38 invariant list on PR #417.
+  // no SELL settles above sellable quantity"), not MTFX-I3 (fill conservation, proven
+  // above by this file's own MTFX-I3 block). An earlier revision of this file mislabeled
+  // these maxSpend/sellable-quantity cases as I3; the ACCEPTOR and the researcher both
+  // flagged the mismatch against the canonical §38 invariant list on PR #417.
   describe("MTFX-I4: No settlement above maxSpend or sellable quantity", () => {
     it("never drives seller inventory or buyer wallet negative when the seller's owned stock is the binding constraint", () => {
       // Seller-bound case: desiredQuantity far beyond what either side can actually
