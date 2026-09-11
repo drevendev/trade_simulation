@@ -755,21 +755,21 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       }
 
       // Per-seller and per-buyer summed fills match the independently computed
-      // proportional expectation exactly (within tolerance).
+      // proportional expectation exactly (within the canonical quantityEpsilon tolerance).
       for (const [id, expected] of expectedSellerFill) {
-        expect(actualSellerFill.get(id) ?? 0).toBeCloseTo(expected, 6);
+        expect(Math.abs((actualSellerFill.get(id) ?? 0) - expected)).toBeLessThan(quantityEpsilon);
       }
       for (const [id, expected] of expectedBuyerFill) {
-        expect(actualBuyerFill.get(id) ?? 0).toBeCloseTo(expected, 6);
+        expect(Math.abs((actualBuyerFill.get(id) ?? 0) - expected)).toBeLessThan(quantityEpsilon);
       }
 
       // MTFX-I3 core identity: sum(seller fills) == sum(buyer fills) == cleared quantity.
       const sumSellerFills = [...actualSellerFill.values()].reduce((a, b) => a + b, 0);
       const sumBuyerFills = [...actualBuyerFill.values()].reduce((a, b) => a + b, 0);
 
-      expect(sumSellerFills).toBeCloseTo(clearedQuantity, 6);
-      expect(sumBuyerFills).toBeCloseTo(clearedQuantity, 6);
-      expect(grandTotal).toBeCloseTo(clearedQuantity, 6);
+      expect(Math.abs(sumSellerFills - clearedQuantity)).toBeLessThan(quantityEpsilon);
+      expect(Math.abs(sumBuyerFills - clearedQuantity)).toBeLessThan(quantityEpsilon);
+      expect(Math.abs(grandTotal - clearedQuantity)).toBeLessThan(quantityEpsilon);
       expect(Math.abs(sumSellerFills - sumBuyerFills)).toBeLessThan(quantityEpsilon);
     });
   });
