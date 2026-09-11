@@ -720,6 +720,13 @@ M4 indexing exposed one executable-boundary contradiction. REQ-PRODUCTION-004 an
 Resolved in Drive with the smallest boundary clarification: until M6, M4 uses explicit deterministic read-only fixture/scenario values for the already-required wage-tax, collection-efficiency, minimum-wage and related legal queries. These inputs own no mutable fiscal state, treasury planning, transfers, debt or policy-review behavior. M6 later backs the same query semantics from canonical FiscalPolicyState without changing wage settlement. An uncontrolled Region collects zero State wage tax unless an explicit applicable rule is supplied. REQ-PRODUCTION-004 acceptance now proves this staging boundary. No wage-tax formula, employer/cohort/State cash identity, phase order, economic mechanism or v1 scope changed.
 
 No new implementation-package file was added; no mirror allowlist request is required. Normal synchronization should carry the existing Handoff/05, Handoff/11, registry, changelog and answer-file changes.  
-STATUS: RESOLVED — M4 PRE-M6 POLICY STAGING BOUNDARY  
+STATUS: RESOLVED — M4 PRE-M6 POLICY STAGING BOUNDARY
+
+2026-09-11 — R235 / CODE\_RUNTIME\_QA\_M3\_16 — Q-001 / PR \#443 — REQ-MARKET-005  
+Q-001 is answered without a specification change. Canonical Handoff/01 already defines ActorRef with a COHORT variant. PopulationCohortState owns the household wallet/inventory endpoint; ProductionUnitState owns its wallet and typed INPUT/OUTPUT/INVESTMENT inventories; ClanState has no generic physical-goods inventory. Therefore CLAN+GENERAL M3 settlement fixtures are implementation drift, not a missing product decision.  
+Smallest implementation repair: restore/use the canonical COHORT ActorRef in the runtime representation, re-author authoritative settlement/acceptance fixtures onto actor-owned endpoints (for example COHORT+GENERAL household consumption and appropriate PRODUCTION\_UNIT buckets), and wire MarketSettlement.executeAllocation through the production Phase-8 path. Do not invent Clan inventory and do not add a parallel stock layer. Existing arithmetic-only fixture tests may remain lower-level tests but cannot prove authoritative stock mutation.  
+Repository Q-001 should be marked ANSWERED/WITHDRAWN. REQ-MARKET-005 remains PARTIAL until the real Phase-8 settlement and telemetry-neutrality evidence merges. GitHub PR \#443 QA comment: 5634774609\.  
+No specification, economic mechanism, accounting identity, phase order, or v1 scope changed.  
+STATUS: Q-001 ANSWERED / IMPLEMENTATION\_SCHEMA\_FIX\_REQUIRED  
 D
 
