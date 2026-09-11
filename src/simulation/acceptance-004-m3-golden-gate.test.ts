@@ -30,7 +30,12 @@ import { describe, it, expect } from "vitest";
 import type { MarketIntent, MarketIntentId, BudgetCommitmentLedger } from "./marketIntent";
 import { createMarketIntentId, createEmptyBudgetCommitmentLedger } from "./marketIntent";
 import type { LocalClearingInput, MarketAllocation } from "./marketClearing";
-import { computeLocalClearing, createMarketAllocationId, computeEffectiveDemand } from "./marketClearing";
+import {
+  computeLocalClearing,
+  createMarketAllocationId,
+  computeEffectiveDemand,
+  computeSellableQuantity,
+} from "./marketClearing";
 import type { ActorRef } from "../domain/genesisLedger";
 import type { ClanId, GoodId, MarketId, RegionId, CurrencyId, StateId } from "../domain/id";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
@@ -506,6 +511,329 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       for (let i = 1; i < affordabilities.length; i++) {
         expect(affordabilities[i] ?? 0).toBeLessThan(affordabilities[i - 1] ?? 0);
       }
+    });
+  });
+
+  describe("MTFX-T2: Extreme excess demand/supply respects max log step and price bounds", () => {
+    it("bounds the per-tick log-price move under sustained extreme excess demand", () => {
+      // MTFX-T2 (excess-demand half): drive repriceGoodInPhase6() tick after tick with
+      // effectiveDemand vastly exceeding sellableSupply and prove that (a) no single tick
+      // ever moves price by more than exp(maxAbsoluteLogPriceMovePerTick), and (b) the
+      // price never exceeds the configured ceiling no matter how many ticks accumulate.
+      const config = createDefaultSimulationConfig();
+      const priceConfig = {
+        shortageSignalWeight: config.markets.shortageSignalWeight ?? 0.5,
+        inventorySignalWeight: config.markets.inventorySignalWeight ?? 0.5,
+        basePriceAdjustmentSpeed: config.markets.basePriceAdjustmentSpeed ?? 0.1,
+        maxAbsoluteLogPriceMovePerTick: config.markets.maxAbsoluteLogPriceMovePerTick ?? 0.1,
+        targetInventoryCoverageTicks: config.markets.targetInventoryCoverageTicks ?? 1.0,
+        minimumPrice: 0.5,
+        maximumPrice: 2.0,
+      };
+
+      let price = 1.0;
+      let expectation: MarketExpectationState = {
+        observationCount: 0,
+        expectedUseEma: 0,
+        shortageEma: 0,
+        surplusEma: 0,
+        lastEffectiveDemand: 0,
+        lastOfferedQuantity: 0,
+        lastClearedQuantity: 0,
+      };
+      const maxAllowedStepRatio = Math.exp(priceConfig.maxAbsoluteLogPriceMovePerTick) + 1e-9;
+
+      for (let tick = 0; tick < 50; tick++) {
+        const previousPrice = price;
+        price = repriceGoodInPhase6(
+          price,
+          /* effectiveDemand */ 1_000_000,
+          /* sellableSupply */ 0,
+          /* marketFacingStock */ 0,
+          expectation,
+          quantityEpsilon,
+          priceConfig,
+        );
+
+        // No single tick's move exceeds the configured max log step.
+        expect(price / previousPrice).toBeLessThanOrEqual(maxAllowedStepRatio);
+        // The ceiling is never exceeded, however many ticks of extreme demand accumulate.
+        expect(price).toBeLessThanOrEqual(priceConfig.maximumPrice + 1e-9);
+
+        expectation = {
+          ...expectation,
+          observationCount: expectation.observationCount + 1,
+          expectedUseEma: 1_000_000,
+        };
+      }
+
+      // Sustained extreme excess demand must actually push the price up against the ceiling,
+      // proving the bound is reached rather than trivially unreachable.
+      expect(price).toBeCloseTo(priceConfig.maximumPrice, 6);
+    });
+
+    it("bounds the per-tick log-price move under sustained extreme excess supply", () => {
+      // MTFX-T2 (excess-supply half): symmetric case with sellableSupply vastly exceeding
+      // effectiveDemand. Price must fall boundedly and never cross the configured floor.
+      const config = createDefaultSimulationConfig();
+      const priceConfig = {
+        shortageSignalWeight: config.markets.shortageSignalWeight ?? 0.5,
+        inventorySignalWeight: config.markets.inventorySignalWeight ?? 0.5,
+        basePriceAdjustmentSpeed: config.markets.basePriceAdjustmentSpeed ?? 0.1,
+        maxAbsoluteLogPriceMovePerTick: config.markets.maxAbsoluteLogPriceMovePerTick ?? 0.1,
+        targetInventoryCoverageTicks: config.markets.targetInventoryCoverageTicks ?? 1.0,
+        minimumPrice: 0.5,
+        maximumPrice: 2.0,
+      };
+
+      let price = 1.0;
+      let expectation: MarketExpectationState = {
+        observationCount: 0,
+        expectedUseEma: 0,
+        shortageEma: 0,
+        surplusEma: 0,
+        lastEffectiveDemand: 0,
+        lastOfferedQuantity: 0,
+        lastClearedQuantity: 0,
+      };
+      const maxAllowedStepRatio = Math.exp(priceConfig.maxAbsoluteLogPriceMovePerTick) + 1e-9;
+
+      for (let tick = 0; tick < 50; tick++) {
+        const previousPrice = price;
+        price = repriceGoodInPhase6(
+          price,
+          /* effectiveDemand */ 0,
+          /* sellableSupply */ 1_000_000,
+          /* marketFacingStock */ 1_000_000,
+          expectation,
+          quantityEpsilon,
+          priceConfig,
+        );
+
+        expect(previousPrice / price).toBeLessThanOrEqual(maxAllowedStepRatio);
+        expect(price).toBeGreaterThanOrEqual(priceConfig.minimumPrice - 1e-9);
+
+        expectation = {
+          ...expectation,
+          observationCount: expectation.observationCount + 1,
+          expectedUseEma: quantityEpsilon,
+        };
+      }
+
+      expect(price).toBeCloseTo(priceConfig.minimumPrice, 6);
+    });
+  });
+
+  // Labeled MTFX-I4 per Handoff/04 canonical numbering ("no BUY settles above maxSpend;
+  // no SELL settles above sellable quantity"), not MTFX-I3 (fill conservation, still
+  // outstanding — see REQ-ACCEPTANCE-004 ledger evidence). An earlier revision of this
+  // file mislabeled these cases as I3; the ACCEPTOR and the researcher both flagged the
+  // mismatch against the canonical §38 invariant list on PR #417.
+  describe("MTFX-I4: No settlement above maxSpend or sellable quantity", () => {
+    it("never drives seller inventory or buyer wallet negative when the seller's owned stock is the binding constraint", () => {
+      // Seller-bound case: desiredQuantity far beyond what either side can actually
+      // fulfil, but the seller's real owned inventory (3) is tighter than the buyer's
+      // wallet-backed maxSpend (100). Clearing and settlement must never leave seller
+      // inventory or buyer wallet negative, and must exhaust the seller's stock exactly.
+      const regionId = createTestRegionId("region-i4-seller-bound");
+      const goodId = createTestGoodId("good-i4-seller-bound");
+      const marketId = createTestMarketId("market-i4-seller-bound");
+      const currencyId = createTestCurrencyId("currency-i4-seller-bound");
+      const marketPrice = 1.0;
+
+      const sellerClanId = createTestClanId("clan-seller-i4-seller-bound");
+      const buyerClanId = createTestClanId("clan-buyer-i4-seller-bound");
+
+      // Seller owns only 3 units; buyer wallet affords 100 units at price 1.0.
+      const sellerOwnedQuantity = 3;
+      const buyerWalletBalance = 100;
+
+      const sellerInventory = new Map<GoodId, number>([[goodId, sellerOwnedQuantity]]);
+      const buyerWallet = new Map<CurrencyId, number>([[currencyId, buyerWalletBalance]]);
+
+      // Both intents ask for far more than either side can actually deliver/afford.
+      const sellerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:seller-i4-seller-bound"),
+        actor: { type: "CLAN", clanId: sellerClanId },
+        regionId,
+        goodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: 100_000,
+        sourcePlanId: "plan-seller-i4-seller-bound",
+        inventoryBucket: "GENERAL",
+      };
+      const buyerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:buyer-i4-seller-bound"),
+        actor: { type: "CLAN", clanId: buyerClanId },
+        regionId,
+        goodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: 100_000,
+        maxSpend: buyerWalletBalance,
+        sourcePlanId: "plan-buyer-i4-seller-bound",
+        inventoryBucket: "GENERAL",
+      };
+
+      const input: LocalClearingInput = {
+        marketId,
+        regionId,
+        goodId,
+        pass: "MAIN",
+        marketCurrencyId: currencyId,
+        buyerIntents: [buyerIntent],
+        sellerIntents: [sellerIntent],
+        // Real production primitives, not fixtures: sellable is capped at actual owned
+        // inventory, effective demand is capped at the actual wallet balance.
+        computeEffectiveDemand: (intent, grossPrice) => computeEffectiveDemand(intent, grossPrice, moneyEpsilon),
+        computeSellableQuantity: (intent) => computeSellableQuantity(intent, sellerOwnedQuantity),
+        computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice,
+        getTaxationInfo: () => ({
+          destinationStateId: null,
+          assessedTaxRate: 0,
+          collectionEfficiency: 0,
+        }),
+      };
+
+      const idCounter = { value: 0 };
+      const allocations = computeLocalClearing(input, new Map(), marketPrice, quantityEpsilon, idCounter);
+
+      expect(allocations.length).toBeGreaterThan(0);
+      const allocation = allocations[0]!;
+
+      // Clearing must be bounded by the tighter of the two real limits (seller's 3 units),
+      // never by either side's inflated desiredQuantity.
+      expect(allocation.quantity).toBeLessThanOrEqual(sellerOwnedQuantity + quantityEpsilon);
+      expect(allocation.quantity).toBeLessThanOrEqual(buyerWalletBalance + quantityEpsilon);
+
+      const preflightError = preflightMarketSettlement(allocation, 0, 8);
+      expect(preflightError).toBeNull();
+
+      const sellerInventoryBefore = sellerInventory.get(goodId) ?? 0;
+      const buyerWalletBefore = buyerWallet.get(currencyId) ?? 0;
+
+      const tradeQuantity = allocation.quantity;
+      const buyerGrossDebit = allocation.quantity * allocation.buyerGrossUnitPrice;
+
+      sellerInventory.set(goodId, sellerInventoryBefore - tradeQuantity);
+      buyerWallet.set(currencyId, buyerWalletBefore - buyerGrossDebit);
+
+      const sellerInventoryAfter = sellerInventory.get(goodId) ?? 0;
+      const buyerWalletAfter = buyerWallet.get(currencyId) ?? 0;
+
+      // Neither authoritative stock ever goes negative, even though both intents
+      // requested 100,000 units.
+      expect(sellerInventoryAfter).toBeGreaterThanOrEqual(-quantityEpsilon);
+      expect(buyerWalletAfter).toBeGreaterThanOrEqual(-moneyEpsilon);
+
+      // The seller's real stock is the binding constraint in this fixture, so it is
+      // exhausted exactly (not overdrawn) while the buyer's wallet retains headroom.
+      expect(sellerInventoryAfter).toBeCloseTo(0, 8);
+      expect(buyerWalletAfter).toBeGreaterThan(0);
+    });
+
+    it("never drives seller inventory or buyer wallet negative when the buyer's wallet is the binding constraint", () => {
+      // Buyer-bound case: the complement of the seller-bound case above. The seller's
+      // owned stock (100_000) is ample; the buyer's wallet (3, at price 1.0) is the
+      // tighter constraint. This is the case flagged as missing on PR #417 — without it,
+      // a regression that deletes the wallet-affordability cap in computeEffectiveDemand
+      // would not be caught, because the seller-bound case alone never exercises that path.
+      const regionId = createTestRegionId("region-i4-buyer-bound");
+      const goodId = createTestGoodId("good-i4-buyer-bound");
+      const marketId = createTestMarketId("market-i4-buyer-bound");
+      const currencyId = createTestCurrencyId("currency-i4-buyer-bound");
+      const marketPrice = 1.0;
+
+      const sellerClanId = createTestClanId("clan-seller-i4-buyer-bound");
+      const buyerClanId = createTestClanId("clan-buyer-i4-buyer-bound");
+
+      // Seller owns 100,000 units; buyer wallet affords only 3 units at price 1.0.
+      const sellerOwnedQuantity = 100_000;
+      const buyerWalletBalance = 3;
+
+      const sellerInventory = new Map<GoodId, number>([[goodId, sellerOwnedQuantity]]);
+      const buyerWallet = new Map<CurrencyId, number>([[currencyId, buyerWalletBalance]]);
+
+      // Both intents ask for far more than either side can actually deliver/afford.
+      const sellerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:seller-i4-buyer-bound"),
+        actor: { type: "CLAN", clanId: sellerClanId },
+        regionId,
+        goodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: 100_000,
+        sourcePlanId: "plan-seller-i4-buyer-bound",
+        inventoryBucket: "GENERAL",
+      };
+      const buyerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:buyer-i4-buyer-bound"),
+        actor: { type: "CLAN", clanId: buyerClanId },
+        regionId,
+        goodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: 100_000,
+        maxSpend: buyerWalletBalance,
+        sourcePlanId: "plan-buyer-i4-buyer-bound",
+        inventoryBucket: "GENERAL",
+      };
+
+      const input: LocalClearingInput = {
+        marketId,
+        regionId,
+        goodId,
+        pass: "MAIN",
+        marketCurrencyId: currencyId,
+        buyerIntents: [buyerIntent],
+        sellerIntents: [sellerIntent],
+        computeEffectiveDemand: (intent, grossPrice) => computeEffectiveDemand(intent, grossPrice, moneyEpsilon),
+        computeSellableQuantity: (intent) => computeSellableQuantity(intent, sellerOwnedQuantity),
+        computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice,
+        getTaxationInfo: () => ({
+          destinationStateId: null,
+          assessedTaxRate: 0,
+          collectionEfficiency: 0,
+        }),
+      };
+
+      const idCounter = { value: 0 };
+      const allocations = computeLocalClearing(input, new Map(), marketPrice, quantityEpsilon, idCounter);
+
+      expect(allocations.length).toBeGreaterThan(0);
+      const allocation = allocations[0]!;
+
+      // Clearing must be bounded by the tighter of the two real limits (buyer's 3-unit
+      // affordability), never by either side's inflated desiredQuantity, and never by the
+      // seller's ample 100,000-unit stock.
+      expect(allocation.quantity).toBeLessThanOrEqual(buyerWalletBalance + quantityEpsilon);
+      expect(allocation.quantity).toBeLessThanOrEqual(sellerOwnedQuantity + quantityEpsilon);
+
+      const preflightError = preflightMarketSettlement(allocation, 0, 8);
+      expect(preflightError).toBeNull();
+
+      const sellerInventoryBefore = sellerInventory.get(goodId) ?? 0;
+      const buyerWalletBefore = buyerWallet.get(currencyId) ?? 0;
+
+      const tradeQuantity = allocation.quantity;
+      const buyerGrossDebit = allocation.quantity * allocation.buyerGrossUnitPrice;
+
+      sellerInventory.set(goodId, sellerInventoryBefore - tradeQuantity);
+      buyerWallet.set(currencyId, buyerWalletBefore - buyerGrossDebit);
+
+      const sellerInventoryAfter = sellerInventory.get(goodId) ?? 0;
+      const buyerWalletAfter = buyerWallet.get(currencyId) ?? 0;
+
+      // Neither authoritative stock ever goes negative, even though both intents
+      // requested 100,000 units.
+      expect(sellerInventoryAfter).toBeGreaterThanOrEqual(-quantityEpsilon);
+      expect(buyerWalletAfter).toBeGreaterThanOrEqual(-moneyEpsilon);
+
+      // The buyer's wallet is the binding constraint in this fixture, so it is exhausted
+      // exactly (not overdrawn) while the seller's ample stock retains headroom.
+      expect(buyerWalletAfter).toBeCloseTo(0, 6);
+      expect(sellerInventoryAfter).toBeGreaterThan(0);
     });
   });
 });
