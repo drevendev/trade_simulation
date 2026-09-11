@@ -508,4 +508,219 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       }
     });
   });
+
+  describe("MTFX-T2: Extreme excess demand/supply respects max log step and price bounds", () => {
+    it("bounds the per-tick log-price move under sustained extreme excess demand", () => {
+      // MTFX-T2 (excess-demand half): drive repriceGoodInPhase6() tick after tick with
+      // effectiveDemand vastly exceeding sellableSupply and prove that (a) no single tick
+      // ever moves price by more than exp(maxAbsoluteLogPriceMovePerTick), and (b) the
+      // price never exceeds the configured ceiling no matter how many ticks accumulate.
+      const config = createDefaultSimulationConfig();
+      const priceConfig = {
+        shortageSignalWeight: config.markets.shortageSignalWeight ?? 0.5,
+        inventorySignalWeight: config.markets.inventorySignalWeight ?? 0.5,
+        basePriceAdjustmentSpeed: config.markets.basePriceAdjustmentSpeed ?? 0.1,
+        maxAbsoluteLogPriceMovePerTick: config.markets.maxAbsoluteLogPriceMovePerTick ?? 0.1,
+        targetInventoryCoverageTicks: config.markets.targetInventoryCoverageTicks ?? 1.0,
+        minimumPrice: 0.5,
+        maximumPrice: 2.0,
+      };
+
+      let price = 1.0;
+      let expectation: MarketExpectationState = {
+        observationCount: 0,
+        expectedUseEma: 0,
+        shortageEma: 0,
+        surplusEma: 0,
+        lastEffectiveDemand: 0,
+        lastOfferedQuantity: 0,
+        lastClearedQuantity: 0,
+      };
+      const maxAllowedStepRatio = Math.exp(priceConfig.maxAbsoluteLogPriceMovePerTick) + 1e-9;
+
+      for (let tick = 0; tick < 50; tick++) {
+        const previousPrice = price;
+        price = repriceGoodInPhase6(
+          price,
+          /* effectiveDemand */ 1_000_000,
+          /* sellableSupply */ 0,
+          /* marketFacingStock */ 0,
+          expectation,
+          quantityEpsilon,
+          priceConfig,
+        );
+
+        // No single tick's move exceeds the configured max log step.
+        expect(price / previousPrice).toBeLessThanOrEqual(maxAllowedStepRatio);
+        // The ceiling is never exceeded, however many ticks of extreme demand accumulate.
+        expect(price).toBeLessThanOrEqual(priceConfig.maximumPrice + 1e-9);
+
+        expectation = {
+          ...expectation,
+          observationCount: expectation.observationCount + 1,
+          expectedUseEma: 1_000_000,
+        };
+      }
+
+      // Sustained extreme excess demand must actually push the price up against the ceiling,
+      // proving the bound is reached rather than trivially unreachable.
+      expect(price).toBeCloseTo(priceConfig.maximumPrice, 6);
+    });
+
+    it("bounds the per-tick log-price move under sustained extreme excess supply", () => {
+      // MTFX-T2 (excess-supply half): symmetric case with sellableSupply vastly exceeding
+      // effectiveDemand. Price must fall boundedly and never cross the configured floor.
+      const config = createDefaultSimulationConfig();
+      const priceConfig = {
+        shortageSignalWeight: config.markets.shortageSignalWeight ?? 0.5,
+        inventorySignalWeight: config.markets.inventorySignalWeight ?? 0.5,
+        basePriceAdjustmentSpeed: config.markets.basePriceAdjustmentSpeed ?? 0.1,
+        maxAbsoluteLogPriceMovePerTick: config.markets.maxAbsoluteLogPriceMovePerTick ?? 0.1,
+        targetInventoryCoverageTicks: config.markets.targetInventoryCoverageTicks ?? 1.0,
+        minimumPrice: 0.5,
+        maximumPrice: 2.0,
+      };
+
+      let price = 1.0;
+      let expectation: MarketExpectationState = {
+        observationCount: 0,
+        expectedUseEma: 0,
+        shortageEma: 0,
+        surplusEma: 0,
+        lastEffectiveDemand: 0,
+        lastOfferedQuantity: 0,
+        lastClearedQuantity: 0,
+      };
+      const maxAllowedStepRatio = Math.exp(priceConfig.maxAbsoluteLogPriceMovePerTick) + 1e-9;
+
+      for (let tick = 0; tick < 50; tick++) {
+        const previousPrice = price;
+        price = repriceGoodInPhase6(
+          price,
+          /* effectiveDemand */ 0,
+          /* sellableSupply */ 1_000_000,
+          /* marketFacingStock */ 1_000_000,
+          expectation,
+          quantityEpsilon,
+          priceConfig,
+        );
+
+        expect(previousPrice / price).toBeLessThanOrEqual(maxAllowedStepRatio);
+        expect(price).toBeGreaterThanOrEqual(priceConfig.minimumPrice - 1e-9);
+
+        expectation = {
+          ...expectation,
+          observationCount: expectation.observationCount + 1,
+          expectedUseEma: quantityEpsilon,
+        };
+      }
+
+      expect(price).toBeCloseTo(priceConfig.minimumPrice, 6);
+    });
+  });
+
+  describe("MTFX-I3: No negative inventory or wallet balance", () => {
+    it("never drives seller inventory or buyer wallet negative when desired quantities vastly exceed owned stock and budget", () => {
+      // MTFX-I3: An extreme request (desiredQuantity far beyond what either side can
+      // actually fulfil) must still clear only up to the seller's real owned inventory
+      // and the buyer's real wallet-backed maxSpend. Applying the resulting settlement
+      // must never leave seller inventory or buyer wallet negative.
+      const regionId = createTestRegionId("region-i3");
+      const goodId = createTestGoodId("good-i3");
+      const marketId = createTestMarketId("market-i3");
+      const currencyId = createTestCurrencyId("currency-i3");
+      const marketPrice = 1.0;
+
+      const sellerClanId = createTestClanId("clan-seller-i3");
+      const buyerClanId = createTestClanId("clan-buyer-i3");
+
+      // Seller owns only 3 units; buyer wallet only affords 100 units at price 1.0.
+      const sellerOwnedQuantity = 3;
+      const buyerWalletBalance = 100;
+
+      const sellerInventory = new Map<GoodId, number>([[goodId, sellerOwnedQuantity]]);
+      const buyerWallet = new Map<CurrencyId, number>([[currencyId, buyerWalletBalance]]);
+
+      // Both intents ask for far more than either side can actually deliver/afford.
+      const sellerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:seller-i3"),
+        actor: { type: "CLAN", clanId: sellerClanId },
+        regionId,
+        goodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: 100_000,
+        sourcePlanId: "plan-seller-i3",
+        inventoryBucket: "GENERAL",
+      };
+      const buyerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:buyer-i3"),
+        actor: { type: "CLAN", clanId: buyerClanId },
+        regionId,
+        goodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: 100_000,
+        maxSpend: buyerWalletBalance,
+        sourcePlanId: "plan-buyer-i3",
+        inventoryBucket: "GENERAL",
+      };
+
+      const input: LocalClearingInput = {
+        marketId,
+        regionId,
+        goodId,
+        pass: "MAIN",
+        marketCurrencyId: currencyId,
+        buyerIntents: [buyerIntent],
+        sellerIntents: [sellerIntent],
+        // Real production primitives, not fixtures: sellable is capped at actual owned
+        // inventory, effective demand is capped at the actual wallet balance.
+        computeEffectiveDemand: (intent, grossPrice) => computeEffectiveDemand(intent, grossPrice, moneyEpsilon),
+        computeSellableQuantity: () => Math.min(sellerIntent.desiredQuantity, sellerOwnedQuantity),
+        computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice,
+        getTaxationInfo: () => ({
+          destinationStateId: null,
+          assessedTaxRate: 0,
+          collectionEfficiency: 0,
+        }),
+      };
+
+      const idCounter = { value: 0 };
+      const allocations = computeLocalClearing(input, new Map(), marketPrice, quantityEpsilon, idCounter);
+
+      expect(allocations.length).toBeGreaterThan(0);
+      const allocation = allocations[0]!;
+
+      // Clearing must be bounded by the tighter of the two real limits (seller's 3 units),
+      // never by either side's inflated desiredQuantity.
+      expect(allocation.quantity).toBeLessThanOrEqual(sellerOwnedQuantity + quantityEpsilon);
+      expect(allocation.quantity).toBeLessThanOrEqual(buyerWalletBalance + quantityEpsilon);
+
+      const preflightError = preflightMarketSettlement(allocation, 0, 8);
+      expect(preflightError).toBeNull();
+
+      const sellerInventoryBefore = sellerInventory.get(goodId) ?? 0;
+      const buyerWalletBefore = buyerWallet.get(currencyId) ?? 0;
+
+      const tradeQuantity = allocation.quantity;
+      const buyerGrossDebit = allocation.quantity * allocation.buyerGrossUnitPrice;
+
+      sellerInventory.set(goodId, sellerInventoryBefore - tradeQuantity);
+      buyerWallet.set(currencyId, buyerWalletBefore - buyerGrossDebit);
+
+      const sellerInventoryAfter = sellerInventory.get(goodId) ?? 0;
+      const buyerWalletAfter = buyerWallet.get(currencyId) ?? 0;
+
+      // The core MTFX-I3 assertion: neither authoritative stock ever goes negative,
+      // even though both intents requested 100,000 units.
+      expect(sellerInventoryAfter).toBeGreaterThanOrEqual(-quantityEpsilon);
+      expect(buyerWalletAfter).toBeGreaterThanOrEqual(-moneyEpsilon);
+
+      // The seller's real stock is the binding constraint in this fixture, so it is
+      // exhausted exactly (not overdrawn) while the buyer's wallet retains headroom.
+      expect(sellerInventoryAfter).toBeCloseTo(0, 8);
+      expect(buyerWalletAfter).toBeGreaterThan(0);
+    });
+  });
 });
