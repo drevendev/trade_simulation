@@ -45,7 +45,14 @@ import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import { repriceGoodInPhase6 } from "./marketPricing";
 import type { MarketExpectationState } from "./worldState";
 import type { TaxPolicyProvider } from "./marketSettlement";
-import { createMarketSaleTransaction, createConsumptionTaxTransaction, preflightMarketSettlement, type MarketSettlementBundle } from "./marketSettlement";
+import {
+  createMarketSaleTransaction,
+  createConsumptionTaxTransaction,
+  preflightMarketSettlement,
+  executeMarketSettlement,
+  computeConsumptionTax,
+  type MarketSettlementBundle,
+} from "./marketSettlement";
 
 // Test ID creators using branded type casting
 const createTestRegionId = (key: string): RegionId => `r:${key}` as RegionId;
@@ -513,6 +520,146 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       for (let i = 1; i < affordabilities.length; i++) {
         expect(affordabilities[i] ?? 0).toBeLessThan(affordabilities[i - 1] ?? 0);
       }
+    });
+  });
+
+  describe("MTFX-T4: Non-unit collectionEfficiency collects only collected tax", () => {
+    it("charges the buyer only the collected-tax gross price and leaves assessed-but-uncollected tax with the buyer as telemetry only", () => {
+      // MTFX-T4 (Handoff/04 section 1, section 39): with an injected taxPolicy fixture whose
+      // collectionEfficiency is strictly between 0 and 1, buyerGrossUnitPrice/consumptionTaxAmount
+      // must reflect only assessedTaxPerUnit * collectionEfficiency (collected tax), never the
+      // full assessedTaxPerUnit. This exercises the real production computeLocalClearing() path
+      // (not a hand-fixture), and additionally cross-checks the standalone computeConsumptionTax()
+      // settlement helper agrees with the clearing-layer split.
+      const regionId = createTestRegionId("region-t4");
+      const goodId = createTestGoodId("good-t4");
+      const marketId = createTestMarketId("market-t4");
+      const currencyId = createTestCurrencyId("currency-t4");
+      const stateId = "st:mtfx-t4-state" as StateId;
+      const marketPrice = 10.0;
+
+      const assessedTaxRate = 0.25;
+      const collectionEfficiency = 0.4; // strictly between 0 and 1
+
+      // assessedTaxPerUnit = 10 * 0.25 = 2.5; collectedTaxPerUnit = 2.5 * 0.4 = 1.0.
+      const assessedTaxPerUnit = marketPrice * assessedTaxRate;
+      const collectedTaxPerUnit = assessedTaxPerUnit * collectionEfficiency;
+      const collectedGrossUnitPrice = marketPrice + collectedTaxPerUnit; // 11.0
+      const fullTaxGrossUnitPrice = marketPrice + assessedTaxPerUnit; // 12.5, must NOT be used
+
+      const sellerClanId = createTestClanId("clan-seller-t4");
+      const buyerClanId = createTestClanId("clan-buyer-t4");
+
+      const sellerOwnedQuantity = 1000; // ample, never the binding constraint
+      const desiredQuantity = 50;
+      // maxSpend exactly affords desiredQuantity at the collected-tax price (550), but would
+      // only afford 44 at the full-assessed-tax price (550 / 12.5 = 44) -- a distinguishing
+      // fixture that fails if the implementation ever collects the full assessed tax.
+      const maxSpend = desiredQuantity * collectedGrossUnitPrice;
+      expect(maxSpend / fullTaxGrossUnitPrice).toBeLessThan(desiredQuantity - 1);
+
+      const sellerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:seller-t4"),
+        actor: { type: "CLAN", clanId: sellerClanId },
+        regionId,
+        goodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: sellerOwnedQuantity,
+        sourcePlanId: "plan-seller-t4",
+        inventoryBucket: "GENERAL",
+      };
+      const buyerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:buyer-t4"),
+        actor: { type: "CLAN", clanId: buyerClanId },
+        regionId,
+        goodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity,
+        maxSpend,
+        sourcePlanId: "plan-buyer-t4",
+        inventoryBucket: "GENERAL",
+      };
+
+      const input: LocalClearingInput = {
+        marketId,
+        regionId,
+        goodId,
+        pass: "MAIN",
+        marketCurrencyId: currencyId,
+        buyerIntents: [buyerIntent],
+        sellerIntents: [sellerIntent],
+        // Real production primitives, driven by the same collected-tax gross price the
+        // clearing layer's own twoPointerMatcher will independently compute below.
+        computeEffectiveDemand: (intent, grossPrice) => computeEffectiveDemand(intent, grossPrice, moneyEpsilon),
+        computeSellableQuantity: (intent) => computeSellableQuantity(intent, sellerOwnedQuantity),
+        computeGrossUnitPrice: (_intent, sellerNetPrice) =>
+          sellerNetPrice + sellerNetPrice * assessedTaxRate * collectionEfficiency,
+        getTaxationInfo: () => ({
+          destinationStateId: stateId,
+          assessedTaxRate,
+          collectionEfficiency,
+        }),
+      };
+
+      const idCounter = { value: 0 };
+      const allocations = computeLocalClearing(input, new Map(), marketPrice, quantityEpsilon, idCounter);
+
+      expect(allocations.length).toBeGreaterThan(0);
+      const allocation = allocations[0]!;
+
+      // The full desired quantity clears: affordability used the collected-tax price, not the
+      // full-assessed-tax price that would have rationed the buyer down to 44 units.
+      expect(allocation.quantity).toBeCloseTo(desiredQuantity, 6);
+
+      // buyerGrossUnitPrice reflects only collected tax, strictly less than the full-tax price.
+      expect(Math.abs(allocation.buyerGrossUnitPrice - collectedGrossUnitPrice)).toBeLessThan(moneyEpsilon);
+      expect(allocation.buyerGrossUnitPrice).toBeLessThan(fullTaxGrossUnitPrice);
+
+      // consumptionTaxAmount is quantity * collectedTaxPerUnit, not quantity * assessedTaxPerUnit.
+      const expectedCollectedTaxAmount = allocation.quantity * collectedTaxPerUnit;
+      const fullAssessedTaxAmount = allocation.quantity * assessedTaxPerUnit;
+      expect(Math.abs(allocation.consumptionTaxAmount - expectedCollectedTaxAmount)).toBeLessThan(moneyEpsilon);
+      expect(allocation.consumptionTaxAmount).toBeLessThan(fullAssessedTaxAmount);
+      expect(allocation.destinationStateId).toBe(stateId);
+
+      // Cross-check the standalone settlement-layer computeConsumptionTax() helper agrees:
+      // it independently derives the same collected-vs-assessed split from the same taxPolicy.
+      const sellerNetReceipt = allocation.quantity * allocation.sellerNetUnitPrice;
+      const taxPolicy: TaxPolicyProvider = {
+        getConsumptionTaxRate: () => assessedTaxRate,
+        getCollectionEfficiency: () => collectionEfficiency,
+      };
+      const taxBreakdown = computeConsumptionTax(stateId, goodId, sellerNetReceipt, taxPolicy);
+      expect(Math.abs(taxBreakdown.collectedTaxAmount - allocation.consumptionTaxAmount)).toBeLessThan(moneyEpsilon);
+      const uncollectedAmount = taxBreakdown.assessedTaxPerUnit - taxBreakdown.collectedTaxAmount;
+      expect(uncollectedAmount).toBeGreaterThan(moneyEpsilon); // non-zero: efficiency < 1 truly leaves tax uncollected
+
+      // Execute the real atomic settlement path and prove the uncollected amount appears in
+      // neither transaction: total transacted money equals seller net + collected tax only.
+      const preflightError = preflightMarketSettlement(allocation, 0, 8);
+      expect(preflightError).toBeNull();
+
+      const txIdCounter = { value: 0 };
+      const bundle = executeMarketSettlement(allocation, 0, 8, txIdCounter);
+
+      expect(bundle.marketSaleTransaction.type).toBe("MARKET_SALE");
+      expect(Math.abs((bundle.marketSaleTransaction.moneyAmount ?? 0) - sellerNetReceipt)).toBeLessThan(moneyEpsilon);
+
+      expect(bundle.consumptionTaxTransaction).not.toBeNull();
+      const taxTx = bundle.consumptionTaxTransaction!;
+      expect(taxTx.type).toBe("CONSUMPTION_TAX");
+      expect(Math.abs((taxTx.moneyAmount ?? 0) - expectedCollectedTaxAmount)).toBeLessThan(moneyEpsilon);
+      expect(taxTx.destination).toEqual({ type: "STATE", stateId });
+
+      const buyerGrossDebit = allocation.quantity * allocation.buyerGrossUnitPrice;
+      const totalTransacted = (bundle.marketSaleTransaction.moneyAmount ?? 0) + (taxTx.moneyAmount ?? 0);
+
+      // Buyer pays exactly seller net + collected tax -- the assessed-but-uncollected remainder
+      // is never debited from the buyer, never credited anywhere, and creates no arrears asset.
+      expect(Math.abs(totalTransacted - buyerGrossDebit)).toBeLessThan(moneyEpsilon);
+      expect(totalTransacted).toBeLessThan(sellerNetReceipt + fullAssessedTaxAmount);
     });
   });
 
