@@ -5,10 +5,12 @@
  * For M3, this handler:
  * 1. Executes clearing for seeded market scenarios with fixture intents
  * 2. Collects deterministic market telemetry (REQ-MARKET-005) from actual clearing results
- * 3. Returns updated TickContext with telemetry
+ * 3. Returns updated TickContext with telemetry and the realized allocations
  *
- * Telemetry is non-authoritative diagnostic output; enabled/disabled runs
- * produce identical canonical stocks, allocations, and replay hash.
+ * Telemetry is non-authoritative diagnostic output. collectTelemetry only gates whether
+ * telemetry is built and appended to context.marketTelemetry: clearing itself (and the
+ * resulting context.marketAllocations) executes identically either way, so enabled/disabled
+ * runs produce identical canonical stocks, allocations, and replay hash.
  */
 
 import type { MarketId, GoodId, RegionId, CurrencyId } from "../domain/id";
@@ -53,12 +55,12 @@ export const createPhase8Handler = (options?: {
       return context;
     }
 
-    // M3 Phase-8: Clearing with optional telemetry collection
-    // If fixture intents are provided (for testing), perform production clearing
-    // and collect telemetry from the actual results
+    // M3 Phase-8: Clearing always executes when fixture intents are provided;
+    // collectTelemetry only controls whether telemetry is additionally emitted,
+    // so enabling/disabling telemetry cannot change which allocations are produced.
     // Production clearing uses actual Phase-2/3 intents in later milestones
 
-    if (!collectTelemetry || !getFixtureIntents) {
+    if (!getFixtureIntents) {
       return context;
     }
 
@@ -100,6 +102,7 @@ export const createPhase8Handler = (options?: {
 
     // Process each market/good/pass combination through production clearing
     const newTelemetry: typeof context.marketTelemetry = [];
+    const newAllocations: typeof context.marketAllocations = [];
     const allocationIdCounter = { value: 0 };
 
     for (const group of intentsByMarketGoodPass.values()) {
@@ -146,7 +149,8 @@ export const createPhase8Handler = (options?: {
         },
       };
 
-      // Execute production clearing algorithm
+      // Execute production clearing algorithm. This runs identically regardless
+      // of collectTelemetry, so allocations never depend on the telemetry toggle.
       const allocations = computeLocalClearing(
         clearingInput,
         new Map(), // M3: no commitment ledger tracking yet
@@ -154,6 +158,11 @@ export const createPhase8Handler = (options?: {
         quantityEpsilon,
         allocationIdCounter,
       );
+      newAllocations.push(...allocations);
+
+      if (!collectTelemetry) {
+        continue;
+      }
 
       // Build telemetry from production clearing results
       const builder = new LocalMarketTelemetryBuilder(
@@ -196,6 +205,7 @@ export const createPhase8Handler = (options?: {
     return {
       ...context,
       marketTelemetry: [...context.marketTelemetry, ...newTelemetry],
+      marketAllocations: [...context.marketAllocations, ...newAllocations],
     };
   };
 };
