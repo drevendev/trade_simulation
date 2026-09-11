@@ -16,6 +16,32 @@
  * context.marketAllocations directly between telemetry-on and telemetry-off runs
  * so a real allocation divergence would fail the test, not just an unrelated
  * transaction/hash counter.
+ *
+ * It also addresses issue #416: even after #412, nothing compared authoritative
+ * stock/ledger outcomes (only allocations, transaction count and computeTickHash()).
+ * A prior revision of this fix tried to close that gap by feeding both runs'
+ * (already-asserted-equal) marketAllocations through executeMarketSettlement() and
+ * comparing the resulting synthetic wallet/inventory snapshots. The ACCEPTOR correctly
+ * rejected that as tautological: executeMarketSettlement() is a pure function of the
+ * allocation alone, so once marketAllocations are asserted equal, any deterministic
+ * post-processing of them is equal by construction -- no production code path that
+ * could actually diverge based on collectTelemetry was exercised, and
+ * context.currentLedger is never written by this fixture's Phase-8 handler either way.
+ *
+ * The honest fact at this boundary: canonical WorldState carries no live/mutable
+ * wallet or inventory representation yet -- ClanState/CohortState/ProductionUnitState
+ * hold only identity + immutable seed data, and WorldState's only stock ledger is the
+ * immutable opening `worldGenesisLedger`. The spec's own deterministic-API boundary
+ * (`MarketSettlement.executeAllocation(world, ctx, allocation)`, Handoff/04 section 35)
+ * that would mutate authoritative stock does not exist in this codebase, so there is no
+ * production path capable of producing a telemetry-dependent stock/ledger divergence to
+ * observe yet. The test below proves the property that IS true and checkable today --
+ * that Phase-8, under either telemetry setting, does not mutate WorldState itself (no
+ * backdoor mutation through the telemetry-collection code path) -- with a negative
+ * control proving the snapshot comparison actually detects a divergence when fed one.
+ * Full stock/ledger-application neutrality remains unproven until that settlement/
+ * WorldState wiring exists; see the new prerequisite Issue referenced on Issue #416 and
+ * the `REQ-MARKET-005` ledger row (returned to `PARTIAL`).
  */
 
 import { describe, it, expect } from "vitest";
@@ -28,6 +54,32 @@ import { executeTick, computeTickHash, type TickContext } from "./tickOrchestrat
 import { createPhase8Handler } from "./phase8MainMarketClearing";
 import type { MarketIntent } from "./marketIntent";
 import { createMarketIntentId } from "./marketIntent";
+
+/**
+ * Serialize a WorldState Map bucket (and any nested Maps, e.g. LocalMarketState's
+ * priceByGood/expectationsByGood) into a stable, JSON-comparable structure, keyed and
+ * sorted by canonical ID so two snapshots can be compared with a plain deep-equality
+ * check regardless of Map iteration/insertion order.
+ */
+function canonicalizeMapBucket(value: unknown): unknown {
+  if (value instanceof Map) {
+    return Array.from(value.entries())
+      .map(([key, entryValue]) => [String(key), canonicalizeMapBucket(entryValue)] as const)
+      .sort(([a], [b]) => a.localeCompare(b));
+  }
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeMapBucket);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entryValue]) => [
+        key,
+        canonicalizeMapBucket(entryValue),
+      ]),
+    );
+  }
+  return value;
+}
 
 describe("acceptance-req-market-005-phase8-integration", () => {
   it("collects telemetry through real Phase-8 handler via orchestrator", () => {
@@ -479,4 +531,111 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     const expectedTotalTax = Math.max(0, telemetry.clearedQuantity * expectedTaxPerUnit);
     expect(Math.abs(telemetry.consumptionTaxCollected - expectedTotalTax)).toBeLessThan(tolerance);
   });
+
+  it(
+    "REQ-MARKET-005: telemetry on/off toggle does not mutate canonical WorldState " +
+      "(clans, cohorts, production units, or markets) under either setting",
+    () => {
+      // Issue #416: the merged toggle regression compared transaction count,
+      // computeTickHash() and marketAllocations, but nothing observed authoritative
+      // stock. This test observes the actual production WorldState object directly:
+      // it snapshots every WorldState bucket that could plausibly carry live stock
+      // (clans/cohorts/productionUnits/markets -- the only candidates, since
+      // ClanState/CohortState/ProductionUnitState hold no live wallet/inventory field
+      // today) before either run, then proves neither the telemetry-on nor the
+      // telemetry-off run mutates any of them. Unlike the settlement-snapshot approach
+      // the ACCEPTOR rejected on the prior revision of this fix, this reads the real
+      // WorldState the production handler was actually given -- it does not derive its
+      // answer from a value (marketAllocations) already asserted equal beforehand.
+      const config = createDefaultSimulationConfig();
+      const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 42);
+
+      const pristine = {
+        clans: canonicalizeMapBucket(worldState.clans),
+        cohorts: canonicalizeMapBucket(worldState.cohorts),
+        productionUnits: canonicalizeMapBucket(worldState.productionUnits),
+        markets: canonicalizeMapBucket(worldState.markets),
+      };
+
+      const getFixtureIntents = (): MarketIntent[] => {
+        const regionId = Array.from(worldState.regions.values())[0]?.regionId as RegionId;
+        const goodId = Object.keys(worldState.definitionRegistry.goods)[0] as GoodId;
+        const seller = Array.from(worldState.clans.values())[0]!;
+        const buyer = Array.from(worldState.clans.values())[1]!;
+
+        return [
+          {
+            id: createMarketIntentId("mi:seller-stock-neutrality"),
+            actor: { type: "CLAN" as const, clanId: seller.clanId },
+            regionId,
+            goodId,
+            side: "SELL" as const,
+            purpose: "INVENTORY_REBALANCE" as const,
+            desiredQuantity: 100,
+            minimumReserveQuantity: 0,
+            sourcePlanId: "plan:stock-neutrality-seller",
+          },
+          {
+            id: createMarketIntentId("mi:buyer-stock-neutrality"),
+            actor: { type: "CLAN" as const, clanId: buyer.clanId },
+            regionId,
+            goodId,
+            side: "BUY" as const,
+            purpose: "CONSUMPTION" as const,
+            desiredQuantity: 80,
+            maxSpend: 800,
+            sourcePlanId: "plan:stock-neutrality-buyer",
+          },
+        ];
+      };
+
+      const resultWithTelemetry = executeTick(
+        worldState,
+        1,
+        worldState.pendingTransitions,
+        createPhase8Handler({ getFixtureIntents, collectTelemetry: true }),
+      );
+      expect(resultWithTelemetry.context.marketAllocations.length).toBeGreaterThan(0);
+      expect(canonicalizeMapBucket(worldState.clans)).toEqual(pristine.clans);
+      expect(canonicalizeMapBucket(worldState.cohorts)).toEqual(pristine.cohorts);
+      expect(canonicalizeMapBucket(worldState.productionUnits)).toEqual(pristine.productionUnits);
+      expect(canonicalizeMapBucket(worldState.markets)).toEqual(pristine.markets);
+
+      const resultNoTelemetry = executeTick(
+        worldState,
+        1,
+        worldState.pendingTransitions,
+        createPhase8Handler({ getFixtureIntents, collectTelemetry: false }),
+      );
+      expect(resultNoTelemetry.context.marketAllocations).toEqual(
+        resultWithTelemetry.context.marketAllocations,
+      );
+      expect(canonicalizeMapBucket(worldState.clans)).toEqual(pristine.clans);
+      expect(canonicalizeMapBucket(worldState.cohorts)).toEqual(pristine.cohorts);
+      expect(canonicalizeMapBucket(worldState.productionUnits)).toEqual(pristine.productionUnits);
+      expect(canonicalizeMapBucket(worldState.markets)).toEqual(pristine.markets);
+    },
+  );
+
+  it(
+    "canonicalizeMapBucket comparison detects a divergence injected into a real " +
+      "WorldState snapshot (negative control)",
+    () => {
+      // Proves the equality check above is not vacuous by construction: clone a real
+      // pristine snapshot of this fixture's actual worldState.clans, mutate one field
+      // on it the way an accidental stock mutation would, and confirm the same
+      // canonicalizeMapBucket + toEqual comparison used above rejects it.
+      const config = createDefaultSimulationConfig();
+      const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 42);
+
+      const pristineClans = canonicalizeMapBucket(worldState.clans);
+      expect(worldState.clans.size).toBeGreaterThan(0);
+
+      const mutatedClans = new Map(worldState.clans);
+      const [firstClanId, firstClanState] = Array.from(mutatedClans.entries())[0]!;
+      mutatedClans.set(firstClanId, { ...firstClanState, seed: { ...firstClanState.seed, key: "mutated-key" } });
+
+      expect(canonicalizeMapBucket(mutatedClans)).not.toEqual(pristineClans);
+    },
+  );
 });
