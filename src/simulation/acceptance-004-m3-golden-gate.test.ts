@@ -1290,4 +1290,264 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       expect(clearedQuantity).toBeLessThan(75 + quantityEpsilon);
     });
   });
+
+  describe("MTFX-T6: Buyer maxSpend and seller reserve are never violated after floating residual correction", () => {
+    // MTFX-T5's own three-seller/two-buyer fixture divides exactly in binary floating
+    // point (75 * 20 / 100 === 15 with no remainder), so applyResidualCorrection's
+    // `Math.abs(residualError) > quantityEpsilon` gate never actually fires there. To
+    // exercise the real correction path this test needs a residual that genuinely
+    // exceeds quantityEpsilon (1e-8), which only shows up once enough irregular-sized
+    // participants accumulate real per-term rounding error at realistic quantity scale.
+    // A shared irregular magnitude generator drives both sub-cases below.
+    const irregularMagnitude = (i: number): number => (1 / (i + 2)) * 1e7 + i * 0.37;
+
+    it("keeps every seller's realized fill within their real sellable reserve when seller-side residual correction actually executes across many participants", () => {
+      const regionId = createTestRegionId("region-t6-seller-correction");
+      const goodId = createTestGoodId("good-t6-seller-correction");
+      const marketId = createTestMarketId("market-t6-seller-correction");
+      const currencyId = createTestCurrencyId("currency-t6-seller-correction");
+      const marketPrice = 1.0;
+
+      const sellerCount = 200;
+      const sellerIds: MarketIntentId[] = [];
+      const sellableByIntent = new Map<MarketIntentId, number>();
+      let totalSupply = 0;
+      for (let i = 0; i < sellerCount; i++) {
+        const id = createMarketIntentId(`mi:seller-t6-${i}`);
+        const sellable = irregularMagnitude(i);
+        sellerIds.push(id);
+        sellableByIntent.set(id, sellable);
+        totalSupply += sellable;
+      }
+
+      // Buyers are undersupplied relative to totalSupply so every seller is rationed to
+      // the same ~0.6137 share of their real sellable reserve, matching the magnitude
+      // that produces a genuine > quantityEpsilon residual over 200 participants.
+      const totalDemand = totalSupply * 0.6137;
+      const buyerCount = 2;
+      const buyerIds: MarketIntentId[] = [];
+      const demandByIntent = new Map<MarketIntentId, number>();
+      for (let j = 0; j < buyerCount; j++) {
+        const id = createMarketIntentId(`mi:buyer-t6-seller-side-${j}`);
+        buyerIds.push(id);
+        demandByIntent.set(id, totalDemand / buyerCount);
+      }
+
+      // Confirm the fixture forces a real correction rather than a no-op, before
+      // trusting the post-clearing assertions below to mean anything.
+      let provisionalSum = 0;
+      for (const id of sellerIds) {
+        provisionalSum += (totalDemand * sellableByIntent.get(id)!) / totalSupply;
+      }
+      expect(Math.abs(totalDemand - provisionalSum)).toBeGreaterThan(quantityEpsilon);
+
+      const sellerIntents: MarketIntent[] = sellerIds.map((id, i) => ({
+        id,
+        actor: { type: "CLAN", clanId: createTestClanId(`clan-seller-t6-${i}`) },
+        regionId,
+        goodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: sellableByIntent.get(id)!,
+        sourcePlanId: `plan-seller-t6-${i}`,
+        inventoryBucket: "GENERAL",
+      }));
+      const buyerIntents: MarketIntent[] = buyerIds.map((id, j) => ({
+        id,
+        actor: { type: "CLAN", clanId: createTestClanId(`clan-buyer-t6-seller-side-${j}`) },
+        regionId,
+        goodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: demandByIntent.get(id)!,
+        maxSpend: demandByIntent.get(id)! * marketPrice,
+        sourcePlanId: `plan-buyer-t6-seller-side-${j}`,
+        inventoryBucket: "GENERAL",
+      }));
+
+      const input: LocalClearingInput = {
+        marketId,
+        regionId,
+        goodId,
+        pass: "MAIN",
+        marketCurrencyId: currencyId,
+        buyerIntents,
+        sellerIntents,
+        computeEffectiveDemand: (intent) => demandByIntent.get(intent.id)!,
+        computeSellableQuantity: (intent) => sellableByIntent.get(intent.id)!,
+        computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice,
+        getTaxationInfo: () => ({
+          destinationStateId: null,
+          assessedTaxRate: 0,
+          collectionEfficiency: 0,
+        }),
+      };
+
+      const idCounter = { value: 0 };
+      const allocations = computeLocalClearing(input, new Map(), marketPrice, quantityEpsilon, idCounter);
+
+      const sellerFill = new Map<MarketIntentId, number>();
+      const buyerFill = new Map<MarketIntentId, number>();
+      const buyerSpend = new Map<MarketIntentId, number>();
+      let totalCleared = 0;
+      for (const allocation of allocations) {
+        sellerFill.set(
+          allocation.sellerIntentId,
+          (sellerFill.get(allocation.sellerIntentId) ?? 0) + allocation.quantity,
+        );
+        buyerFill.set(
+          allocation.buyerIntentId,
+          (buyerFill.get(allocation.buyerIntentId) ?? 0) + allocation.quantity,
+        );
+        buyerSpend.set(
+          allocation.buyerIntentId,
+          (buyerSpend.get(allocation.buyerIntentId) ?? 0) + allocation.quantity * allocation.buyerGrossUnitPrice,
+        );
+        totalCleared += allocation.quantity;
+      }
+
+      // Total cleared quantity still equals the smaller (demand) side's total: the
+      // correction redistributes floating error, it does not create or destroy it.
+      expect(Math.abs(totalCleared - totalDemand)).toBeLessThan(quantityEpsilon * sellerCount);
+
+      // The property MTFX-T6 requires: no seller's realized fill -- after residual
+      // correction has run -- ever exceeds that seller's own real sellable reserve,
+      // and no buyer's realized spend ever exceeds their own real maxSpend.
+      for (const id of sellerIds) {
+        const fill = sellerFill.get(id) ?? 0;
+        expect(fill).toBeGreaterThanOrEqual(-quantityEpsilon);
+        expect(fill).toBeLessThanOrEqual(sellableByIntent.get(id)! + quantityEpsilon);
+      }
+      for (const id of buyerIds) {
+        const fill = buyerFill.get(id) ?? 0;
+        const spend = buyerSpend.get(id) ?? 0;
+        const maxSpend = demandByIntent.get(id)! * marketPrice;
+        expect(fill).toBeLessThanOrEqual(demandByIntent.get(id)! + quantityEpsilon);
+        expect(spend).toBeLessThanOrEqual(maxSpend + moneyEpsilon);
+      }
+    });
+
+    it("keeps every buyer's realized spend within their real maxSpend when buyer-side residual correction actually executes across many participants", () => {
+      const regionId = createTestRegionId("region-t6-buyer-correction");
+      const goodId = createTestGoodId("good-t6-buyer-correction");
+      const marketId = createTestMarketId("market-t6-buyer-correction");
+      const currencyId = createTestCurrencyId("currency-t6-buyer-correction");
+      const marketPrice = 1.0;
+
+      const buyerCount = 200;
+      const buyerIds: MarketIntentId[] = [];
+      const demandByIntent = new Map<MarketIntentId, number>();
+      let totalDemand = 0;
+      for (let j = 0; j < buyerCount; j++) {
+        const id = createMarketIntentId(`mi:buyer-t6-${j}`);
+        const demand = irregularMagnitude(j);
+        buyerIds.push(id);
+        demandByIntent.set(id, demand);
+        totalDemand += demand;
+      }
+
+      // Sellers collectively own less than total demand so every buyer is rationed to
+      // the same ~0.6137 share of their own real effective demand / maxSpend, the
+      // complement of the seller-side case above.
+      const totalSupply = totalDemand * 0.6137;
+      const sellerCount = 2;
+      const sellerIds: MarketIntentId[] = [];
+      const sellableByIntent = new Map<MarketIntentId, number>();
+      for (let i = 0; i < sellerCount; i++) {
+        const id = createMarketIntentId(`mi:seller-t6-buyer-side-${i}`);
+        sellerIds.push(id);
+        sellableByIntent.set(id, totalSupply / sellerCount);
+      }
+
+      let provisionalSum = 0;
+      for (const id of buyerIds) {
+        provisionalSum += (totalSupply * demandByIntent.get(id)!) / totalDemand;
+      }
+      expect(Math.abs(totalSupply - provisionalSum)).toBeGreaterThan(quantityEpsilon);
+
+      const sellerIntents: MarketIntent[] = sellerIds.map((id, i) => ({
+        id,
+        actor: { type: "CLAN", clanId: createTestClanId(`clan-seller-t6-buyer-side-${i}`) },
+        regionId,
+        goodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: sellableByIntent.get(id)!,
+        sourcePlanId: `plan-seller-t6-buyer-side-${i}`,
+        inventoryBucket: "GENERAL",
+      }));
+      const buyerIntents: MarketIntent[] = buyerIds.map((id, j) => ({
+        id,
+        actor: { type: "CLAN", clanId: createTestClanId(`clan-buyer-t6-${j}`) },
+        regionId,
+        goodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: demandByIntent.get(id)!,
+        maxSpend: demandByIntent.get(id)! * marketPrice,
+        sourcePlanId: `plan-buyer-t6-${j}`,
+        inventoryBucket: "GENERAL",
+      }));
+
+      const input: LocalClearingInput = {
+        marketId,
+        regionId,
+        goodId,
+        pass: "MAIN",
+        marketCurrencyId: currencyId,
+        buyerIntents,
+        sellerIntents,
+        computeEffectiveDemand: (intent) => demandByIntent.get(intent.id)!,
+        computeSellableQuantity: (intent) => sellableByIntent.get(intent.id)!,
+        computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice,
+        getTaxationInfo: () => ({
+          destinationStateId: null,
+          assessedTaxRate: 0,
+          collectionEfficiency: 0,
+        }),
+      };
+
+      const idCounter = { value: 0 };
+      const allocations = computeLocalClearing(input, new Map(), marketPrice, quantityEpsilon, idCounter);
+
+      const sellerFill = new Map<MarketIntentId, number>();
+      const buyerFill = new Map<MarketIntentId, number>();
+      const buyerSpend = new Map<MarketIntentId, number>();
+      let totalCleared = 0;
+      for (const allocation of allocations) {
+        sellerFill.set(
+          allocation.sellerIntentId,
+          (sellerFill.get(allocation.sellerIntentId) ?? 0) + allocation.quantity,
+        );
+        buyerFill.set(
+          allocation.buyerIntentId,
+          (buyerFill.get(allocation.buyerIntentId) ?? 0) + allocation.quantity,
+        );
+        buyerSpend.set(
+          allocation.buyerIntentId,
+          (buyerSpend.get(allocation.buyerIntentId) ?? 0) + allocation.quantity * allocation.buyerGrossUnitPrice,
+        );
+        totalCleared += allocation.quantity;
+      }
+
+      // Total cleared quantity still equals the smaller (supply) side's total.
+      expect(Math.abs(totalCleared - totalSupply)).toBeLessThan(quantityEpsilon * buyerCount);
+
+      for (const id of sellerIds) {
+        const fill = sellerFill.get(id) ?? 0;
+        expect(fill).toBeGreaterThanOrEqual(-quantityEpsilon);
+        expect(fill).toBeLessThanOrEqual(sellableByIntent.get(id)! + quantityEpsilon);
+      }
+      // The property MTFX-T6 requires: no buyer's realized spend -- after residual
+      // correction has run on the buyer array -- ever exceeds their own real maxSpend,
+      // and no buyer's realized fill ever exceeds their own real effective demand.
+      for (const id of buyerIds) {
+        const fill = buyerFill.get(id) ?? 0;
+        const spend = buyerSpend.get(id) ?? 0;
+        const maxSpend = demandByIntent.get(id)! * marketPrice;
+        expect(fill).toBeLessThanOrEqual(demandByIntent.get(id)! + quantityEpsilon);
+        expect(spend).toBeLessThanOrEqual(maxSpend + moneyEpsilon);
+      }
+    });
+  });
 });
