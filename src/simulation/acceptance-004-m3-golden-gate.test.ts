@@ -51,7 +51,7 @@ import type { ActorRef } from "../domain/genesisLedger";
 import type { ClanId, GoodId, MarketId, RegionId, CurrencyId, StateId } from "../domain/id";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
-import { repriceGoodInPhase6 } from "./marketPricing";
+import { repriceGoodInPhase6, updateMarketExpectations } from "./marketPricing";
 import type { MarketExpectationState, LocalMarketState } from "./worldState";
 import type { TaxPolicyProvider } from "./marketSettlement";
 import {
@@ -75,20 +75,264 @@ const quantityEpsilon = 1e-8;
 const moneyEpsilon = 1e-8;
 
 describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () => {
-  describe("Test setup and scenario construction", () => {
-    it("creates a local-shortage scenario with fixed money and supply shock", () => {
-      // Local shortage scenario: one region, fixed money, food supply shock
-      const regionId = createTestRegionId("test-region");
-      const currencyId = createTestCurrencyId("test-currency");
-      const foodGoodId = createTestGoodId("food");
-      const marketId = createTestMarketId("test-market");
-      const clanId = createTestClanId("test-clan");
+  describe("Local-shortage golden scenario (Handoff/04 §40 scenario A)", () => {
+    it("runs a multi-tick local-shortage market end-to-end: price rises boundedly, effective demand rations under budget pressure as fixed buyer money depletes, and total money/goods are exactly conserved", () => {
+      // One region, one market/good, fixed buyer money endowments (never replenished --
+      // only ever debited), and a shocked, fixed per-tick seller food offer (a reduced
+      // harvest/supply flow that never recovers within the run, well below combined
+      // buyer desire) drawn from an ample true regional stock. Each tick runs the real
+      // Phase-6 -> Phase-8 pipeline in sequence
+      // against the SAME evolving price/expectation/wallet/inventory/treasury state:
+      // repriceGoodInPhase6() -> computeLocalClearing() -> preflightMarketSettlement()
+      // -> executeMarketSettlement(), mutating authoritative wallets/inventories/treasury
+      // exactly as MTFX-I1/I2/T4 do per-allocation, then updateMarketExpectations() feeds
+      // the next tick's repricing. This composes the individually-proven MTFX primitives
+      // into the one coherent narrative Handoff/04 §40 scenario A and this Issue's own
+      // Scope section require, rather than proving each in isolation.
+      const regionId = createTestRegionId("region-golden-shortage");
+      const goodId = createTestGoodId("food-golden-shortage");
+      const marketId = createTestMarketId("market-golden-shortage");
+      const currencyId = createTestCurrencyId("currency-golden-shortage");
+      const stateId = "st:golden-shortage-state" as StateId;
 
-      expect(regionId).toBeDefined();
-      expect(currencyId).toBeDefined();
-      expect(foodGoodId).toBeDefined();
-      expect(marketId).toBeDefined();
-      expect(clanId).toBeDefined();
+      const sellerClanId = createTestClanId("clan-seller-golden-shortage");
+      const sellerActor: ActorRef = { type: "CLAN", clanId: sellerClanId };
+      const buyerClanIds = [
+        createTestClanId("clan-buyer-golden-shortage-a"),
+        createTestClanId("clan-buyer-golden-shortage-b"),
+        createTestClanId("clan-buyer-golden-shortage-c"),
+      ];
+      const buyerActors: ActorRef[] = buyerClanIds.map((clanId) => ({ type: "CLAN", clanId }));
+
+      const assessedTaxRate = 0.08;
+      const collectionEfficiency = 1.0; // fully collected: assessed tax == collected tax here
+
+      const config = createDefaultSimulationConfig();
+      const priceConfig = {
+        shortageSignalWeight: config.markets.shortageSignalWeight ?? 0.65,
+        inventorySignalWeight: config.markets.inventorySignalWeight ?? 0.35,
+        basePriceAdjustmentSpeed: config.markets.basePriceAdjustmentSpeed ?? 0.12,
+        maxAbsoluteLogPriceMovePerTick: config.markets.maxAbsoluteLogPriceMovePerTick ?? 0.18,
+        targetInventoryCoverageTicks: config.markets.targetInventoryCoverageTicks ?? 1.0,
+        minimumPrice: 0.5,
+        maximumPrice: 5.0,
+      };
+      const expectationAlpha = config.markets.expectationAlpha ?? 0.25;
+      const maxAllowedStepRatio = Math.exp(priceConfig.maxAbsoluteLogPriceMovePerTick) + 1e-9;
+
+      // === INITIAL STATE: fixed, scarce money endowments; ample regional food stock but
+      // a shocked (reduced) per-tick sell offer, so the shortage is a sustained supply-flow
+      // constraint, not a one-tick stock liquidation ===
+      const initialBuyerWallet = 60;
+      const buyerWallets = new Map<ClanId, number>(buyerClanIds.map((id) => [id, initialBuyerWallet]));
+      const buyerInventories = new Map<ClanId, number>(buyerClanIds.map((id) => [id, 0]));
+      let sellerWalletBalance = 0;
+      let stateTreasuryBalance = 0;
+      // Ample true regional stock, so it is never itself the binding constraint; tracked
+      // and decremented on every real sale for the goods-conservation check below.
+      let sellerOwnedQuantity = 1_000_000;
+      // Shocked per-tick sell offer, fixed and never replenished by ownership: well below
+      // the buyers' combined per-tick desire (45), so the physical shortage is sustained
+      // every tick rather than resolving after the first.
+      const sellerShockedOfferPerTick = 30;
+      const perBuyerDesiredQuantityPerTick = 15;
+
+      const initialTotalMoney = buyerClanIds.length * initialBuyerWallet + sellerWalletBalance + stateTreasuryBalance;
+      const initialTotalGoods = sellerOwnedQuantity + [...buyerInventories.values()].reduce((a, b) => a + b, 0);
+
+      let price = 1.0;
+      let expectation: MarketExpectationState = {
+        observationCount: 0,
+        expectedUseEma: 0,
+        shortageEma: 0,
+        surplusEma: 0,
+        lastEffectiveDemand: 0,
+        lastOfferedQuantity: 0,
+        lastClearedQuantity: 0,
+      };
+
+      const tickCount = 8;
+      const priceHistory: number[] = [price];
+      let observedRationing = false;
+      let observedBudgetBoundBuyer = false;
+
+      for (let tick = 0; tick < tickCount; tick++) {
+        const currentPrice = price;
+
+        const sellerIntent: MarketIntent = {
+          id: createMarketIntentId(`mi:golden-seller-t${tick}`),
+          actor: sellerActor,
+          regionId,
+          goodId,
+          side: "SELL",
+          purpose: "INVENTORY_REBALANCE",
+          desiredQuantity: sellerShockedOfferPerTick, // the shocked per-tick offer is the
+          // real constraint; sellerOwnedQuantity (ample) is never the binding factor.
+          sourcePlanId: "plan-golden-seller",
+          inventoryBucket: "GENERAL",
+        };
+        const buyerIntents: MarketIntent[] = buyerActors.map((actor, i) => ({
+          id: createMarketIntentId(`mi:golden-buyer-${i}-t${tick}`),
+          actor,
+          regionId,
+          goodId,
+          side: "BUY" as const,
+          purpose: "CONSUMPTION" as const,
+          desiredQuantity: perBuyerDesiredQuantityPerTick,
+          maxSpend: buyerWallets.get(buyerClanIds[i]!) ?? 0,
+          sourcePlanId: `plan-golden-buyer-${i}`,
+          inventoryBucket: "GENERAL" as const,
+        }));
+
+        // === PHASE 5 (assumed prior): this tick's aggregate D/S, computed at the price
+        // carried from the previous tick's Phase 6 (or the initial price for tick 0) --
+        // this is the input Phase 6 reprices from, per Handoff/04 §9. ===
+        const grossPriceForDemand = currentPrice * (1 + assessedTaxRate * collectionEfficiency);
+        const perBuyerEffectiveDemand = buyerIntents.map((intent) =>
+          computeEffectiveDemand(intent, grossPriceForDemand, moneyEpsilon),
+        );
+        const totalEffectiveDemand = perBuyerEffectiveDemand.reduce((a, b) => a + b, 0);
+        const totalSellableSupply = computeSellableQuantity(sellerIntent, sellerOwnedQuantity);
+
+        // === PHASE 6: reprice from this tick's own D/S and the expectation state carried
+        // from the previous tick, BEFORE this tick's clearing/settlement. ===
+        const nextPrice = repriceGoodInPhase6(
+          currentPrice,
+          totalEffectiveDemand,
+          totalSellableSupply,
+          // The market-facing stock is what the shocked offer actually makes available
+          // this tick, not the ample true regional ownership behind it.
+          /* marketFacingStock */ totalSellableSupply,
+          expectation,
+          quantityEpsilon,
+          priceConfig,
+        );
+
+        // No single tick's move exceeds the configured max log step, in either direction.
+        expect(nextPrice / currentPrice).toBeLessThanOrEqual(maxAllowedStepRatio);
+        expect(currentPrice / nextPrice).toBeLessThanOrEqual(maxAllowedStepRatio);
+        // The configured floor/ceiling are never crossed.
+        expect(nextPrice).toBeGreaterThanOrEqual(priceConfig.minimumPrice - 1e-9);
+        expect(nextPrice).toBeLessThanOrEqual(priceConfig.maximumPrice + 1e-9);
+
+        // === PHASE 7/8: clear and settle at the price Phase 6 just produced. ===
+        const input: LocalClearingInput = {
+          marketId,
+          regionId,
+          goodId,
+          pass: "MAIN",
+          marketCurrencyId: currencyId,
+          buyerIntents,
+          sellerIntents: [sellerIntent],
+          computeEffectiveDemand: (intent, grossPrice) => computeEffectiveDemand(intent, grossPrice, moneyEpsilon),
+          computeSellableQuantity: (intent) => computeSellableQuantity(intent, sellerOwnedQuantity),
+          computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice * (1 + assessedTaxRate * collectionEfficiency),
+          getTaxationInfo: () => ({
+            destinationStateId: stateId,
+            assessedTaxRate,
+            collectionEfficiency,
+          }),
+        };
+
+        const idCounter = { value: 0 };
+        const allocations = computeLocalClearing(input, new Map(), nextPrice, quantityEpsilon, idCounter);
+        const totalClearedQuantity = allocations.reduce((sum, a) => sum + a.quantity, 0);
+
+        if (totalClearedQuantity < totalEffectiveDemand - quantityEpsilon) {
+          observedRationing = true;
+        }
+        // A buyer is genuinely budget-bound (not merely caught by physical scarcity) when
+        // their own wallet caps their effective demand below what they want, while total
+        // sellable supply this tick would have covered that lower, budget-capped amount.
+        for (const demand of perBuyerEffectiveDemand) {
+          if (demand < perBuyerDesiredQuantityPerTick - quantityEpsilon && demand <= totalSellableSupply + quantityEpsilon) {
+            observedBudgetBoundBuyer = true;
+          }
+        }
+
+        // === APPLY REAL SETTLEMENT MUTATIONS FOR EVERY ALLOCATION THIS TICK ===
+        const txIdCounter = { value: 0 };
+        for (const allocation of allocations) {
+          const preflightError = preflightMarketSettlement(allocation, tick, 8);
+          expect(preflightError).toBeNull();
+
+          const bundle = executeMarketSettlement(allocation, tick, 8, txIdCounter);
+          const sellerNetReceipt = bundle.marketSaleTransaction.moneyAmount ?? 0;
+          const collectedTax = bundle.consumptionTaxTransaction?.moneyAmount ?? 0;
+          const buyerGrossDebit = allocation.quantity * allocation.buyerGrossUnitPrice;
+
+          expect(allocation.buyer.type).toBe("CLAN");
+          expect(allocation.seller.type).toBe("CLAN");
+          if (allocation.buyer.type !== "CLAN" || allocation.seller.type !== "CLAN") {
+            throw new Error("unreachable: fixture only uses CLAN actors");
+          }
+          const buyerClanId = allocation.buyer.clanId;
+          const buyerWalletBefore = buyerWallets.get(buyerClanId) ?? 0;
+
+          // Buyer is never asked to pay beyond their own fixed-money maxSpend -- the
+          // budget-pressure rationing bound this scenario claims.
+          expect(buyerGrossDebit).toBeLessThanOrEqual(buyerWalletBefore + moneyEpsilon);
+
+          buyerWallets.set(buyerClanId, buyerWalletBefore - buyerGrossDebit);
+          buyerInventories.set(buyerClanId, (buyerInventories.get(buyerClanId) ?? 0) + allocation.quantity);
+          sellerWalletBalance += sellerNetReceipt;
+          stateTreasuryBalance += collectedTax;
+          sellerOwnedQuantity -= allocation.quantity;
+
+          expect(buyerWallets.get(buyerClanId)!).toBeGreaterThanOrEqual(-moneyEpsilon);
+          expect(sellerOwnedQuantity).toBeGreaterThanOrEqual(-quantityEpsilon);
+        }
+
+        // === Phase 6/8 expectation state updates only after this tick's Phase-8 MAIN
+        // clearing, from this tick's own realized D/S/cleared aggregates, to feed the
+        // NEXT tick's Phase 6 (not this one -- already repriced above). ===
+        expectation = updateMarketExpectations(
+          expectation,
+          totalEffectiveDemand,
+          totalSellableSupply,
+          totalClearedQuantity,
+          quantityEpsilon,
+          expectationAlpha,
+        );
+
+        price = nextPrice;
+        priceHistory.push(price);
+      }
+
+      // === SCENARIO-LEVEL ASSERTIONS (Handoff/04 §40 scenario A) ===
+
+      // "Price rises boundedly": sustained excess demand pushes the price to a peak
+      // strictly above where it started. (The scenario's fixed, scarce buyer money
+      // endowments then correctly self-ration demand as the run continues, which can
+      // bring price back down again -- that is the budget-rationing claim below, not a
+      // contradiction of the price having risen.)
+      expect(Math.max(...priceHistory)).toBeGreaterThan(priceHistory[0]!);
+
+      // "Effective demand rations under budget pressure": at least one tick clears less
+      // than total desired demand (physical shortage and/or budget-bound rationing).
+      expect(observedRationing).toBe(true);
+      // The scenario actually reaches the budget-bound regime (not only physical
+      // shortage): as price rises and buyers' fixed money depletes, at least one
+      // under-fill is caused by the buyer's own wallet rather than seller scarcity alone.
+      expect(observedBudgetBoundBuyer).toBe(true);
+
+      // "No money/goods appear": total money and total goods across every actor plus the
+      // State treasury are exactly conserved across the entire multi-tick run.
+      const finalTotalMoney =
+        [...buyerWallets.values()].reduce((a, b) => a + b, 0) + sellerWalletBalance + stateTreasuryBalance;
+      const finalTotalGoods = sellerOwnedQuantity + [...buyerInventories.values()].reduce((a, b) => a + b, 0);
+
+      expect(Math.abs(finalTotalMoney - initialTotalMoney)).toBeLessThan(moneyEpsilon);
+      expect(Math.abs(finalTotalGoods - initialTotalGoods)).toBeLessThan(quantityEpsilon);
+
+      // No balance/inventory ever went negative across the whole run (checked above
+      // per-allocation); the final state reconfirms it.
+      for (const balance of buyerWallets.values()) {
+        expect(balance).toBeGreaterThanOrEqual(-moneyEpsilon);
+      }
+      expect(sellerWalletBalance).toBeGreaterThanOrEqual(-moneyEpsilon);
+      expect(stateTreasuryBalance).toBeGreaterThanOrEqual(-moneyEpsilon);
+      expect(sellerOwnedQuantity).toBeGreaterThanOrEqual(-quantityEpsilon);
     });
   });
 
