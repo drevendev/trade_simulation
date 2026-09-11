@@ -53,8 +53,9 @@ import type { ClanId, GoodId, MarketId, RegionId, CurrencyId, StateId } from "..
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import { repriceGoodInPhase6, updateMarketExpectations } from "./marketPricing";
-import type { MarketExpectationState, LocalMarketState } from "./worldState";
+import type { MarketExpectationState, LocalMarketState, WorldState } from "./worldState";
 import { buildInitialWorld } from "./worldState";
+import { applyMarketStateTransition } from "./marketStateTransition";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import type { TaxPolicyProvider } from "./marketSettlement";
@@ -2167,12 +2168,10 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       // inside the Phase-6 handler structurally proves "at most once per tick" for the
       // real dispatch path, not merely for an isolated function call.
       const config = createDefaultSimulationConfig();
-      const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 2004);
 
       const regionId = createTestRegionId("region-i5-dispatch");
       const goodId = createTestGoodId("good-i5-dispatch");
       const marketId = createTestMarketId("market-i5-dispatch");
-      const currencyId = createTestCurrencyId("currency-i5-dispatch");
       const sellerClanId = createTestClanId("clan-seller-i5-dispatch");
       const buyerClanId = createTestClanId("clan-buyer-i5-dispatch");
       const key = marketPriceKey(marketId, goodId);
@@ -2188,9 +2187,24 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       };
       const maxAllowedStepRatio = Math.exp(priceConfig.maxAbsoluteLogPriceMovePerTick) + 1e-9;
 
-      // Sustained extreme excess demand against a much smaller sellable offer, so price
-      // climbs a real, non-trivial amount every tick rather than staying flat.
-      let currentPrice = 1.0;
+      // No test-owned currentPrice/expectation memory: Phase 6 falls back to
+      // world.markets when getFixtureCurrentPrice/getFixtureExpectation are omitted, so
+      // this fixture seeds the market's starting price directly into world.markets and
+      // relies on applyMarketStateTransition() -- the real production boundary -- to
+      // persist each tick's Phase-6 price and post-Phase-8-MAIN expectation forward.
+      const initialPrice = 1.0;
+      const seededMarket: LocalMarketState = {
+        marketId,
+        seed: { regionKey: regionId, initialPriceByGood: { [goodId]: initialPrice } },
+        priceByGood: new Map([[goodId, initialPrice]]),
+        expectationsByGood: new Map(),
+      };
+      const initialWorldState: WorldState = {
+        ...buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 2004),
+        markets: new Map([[marketId, seededMarket]]),
+      };
+      let worldState = initialWorldState;
+
       let phase6InvocationCount = 0;
 
       const buildIntents = (): MarketIntent[] => [
@@ -2231,7 +2245,6 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       const phase6Handler = createPhase6Handler({
         getFixtureIntents: getFixtureIntentsForPhase6,
         getFixtureMarketIds,
-        getFixtureCurrentPrice: () => currentPrice,
         priceConfig,
       });
       const phase8Handler = createPhase8Handler({
@@ -2241,7 +2254,7 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       });
       const dispatchPipeline = composePhaseHandlers(phase6Handler, phase8Handler);
 
-      const priceHistory: number[] = [currentPrice];
+      const priceHistory: number[] = [initialPrice];
 
       for (let tick = 0; tick < 5; tick++) {
         const result = executeTick(worldState, tick, worldState.pendingTransitions, dispatchPipeline);
@@ -2269,8 +2282,14 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
           expect(allocation.sellerNetUnitPrice).toBe(producedPrice);
         }
 
+        // Production persistence boundary (Handoff/04 section 11): apply this tick's
+        // Phase-6 price and post-Phase-8-MAIN expectation into the next tick's
+        // authoritative WorldState.markets -- no test-owned cross-tick memory.
+        worldState = applyMarketStateTransition(worldState, result.context);
+        expect(worldState.markets.get(marketId)!.priceByGood.get(goodId)).toBe(producedPrice);
+        expect(worldState.markets.get(marketId)!.expectationsByGood.get(goodId)!.observationCount).toBe(tick + 1);
+
         priceHistory.push(producedPrice!);
-        currentPrice = producedPrice!;
       }
 
       // The bound was a real, exercised constraint across the run, not a coincidence of
@@ -2282,14 +2301,115 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       expect(priceHistory[priceHistory.length - 1]! / priceHistory[0]!).toBeGreaterThan(maxAllowedStepRatio);
 
       // Negative control: running Phase-8 alone (no Phase-6 handler composed in, so
-      // context.marketPrices stays empty for this marketId/goodId) falls back to the
-      // world's default price instead of any Phase-6 output, proving the price-sharing
-      // assertions above are exercising real wiring rather than a coincidental match.
-      const phase8OnlyResult = executeTick(worldState, 99, worldState.pendingTransitions, phase8Handler);
+      // context.marketPrices stays empty for this marketId/goodId) falls back to
+      // world.markets' own carried price instead of any Phase-6 output this call. Run
+      // against initialWorldState (the pre-loop, never-transitioned world) rather than
+      // the final persisted worldState: it settles at the original seeded price, not the
+      // final risen price, proving Phase-8's fallback genuinely reads whichever
+      // WorldState it is given rather than coincidentally reproducing the last Phase-6
+      // output.
+      const phase8OnlyResult = executeTick(initialWorldState, 99, initialWorldState.pendingTransitions, phase8Handler);
       expect(phase8OnlyResult.context.marketAllocations.length).toBeGreaterThan(0);
       for (const allocation of phase8OnlyResult.context.marketAllocations) {
+        expect(allocation.sellerNetUnitPrice).toBe(initialPrice);
         expect(allocation.sellerNetUnitPrice).not.toBe(priceHistory[priceHistory.length - 1]);
       }
+    });
+
+    it("without applying the production persistence boundary between ticks, Phase 6 repeats the same stale price/expectation instead of progressing", () => {
+      // Controlled negative variant for acceptance criterion 5: bypass
+      // applyMarketStateTransition() between executeTick() calls and show the focused
+      // multi-tick regression above would not hold -- price stays flat and the
+      // expectation observationCount never advances, because nothing carried this
+      // tick's Phase-6/Phase-8 output into the next tick's WorldState.
+      const config = createDefaultSimulationConfig();
+
+      const regionId = createTestRegionId("region-i5-no-persistence");
+      const goodId = createTestGoodId("good-i5-no-persistence");
+      const marketId = createTestMarketId("market-i5-no-persistence");
+      const sellerClanId = createTestClanId("clan-seller-i5-no-persistence");
+      const buyerClanId = createTestClanId("clan-buyer-i5-no-persistence");
+      const key = marketPriceKey(marketId, goodId);
+
+      const priceConfig: Phase6PriceConfig = {
+        shortageSignalWeight: config.markets.shortageSignalWeight ?? 0.65,
+        inventorySignalWeight: config.markets.inventorySignalWeight ?? 0.35,
+        basePriceAdjustmentSpeed: config.markets.basePriceAdjustmentSpeed ?? 0.12,
+        maxAbsoluteLogPriceMovePerTick: config.markets.maxAbsoluteLogPriceMovePerTick ?? 0.18,
+        targetInventoryCoverageTicks: 1.0,
+        minimumPrice: 0.5,
+        maximumPrice: 10.0,
+      };
+
+      const initialPrice = 1.0;
+      const seededMarket: LocalMarketState = {
+        marketId,
+        seed: { regionKey: regionId, initialPriceByGood: { [goodId]: initialPrice } },
+        priceByGood: new Map([[goodId, initialPrice]]),
+        expectationsByGood: new Map(),
+      };
+      const worldState: WorldState = {
+        ...buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 2005),
+        markets: new Map([[marketId, seededMarket]]),
+      };
+
+      const buildIntents = (): MarketIntent[] => [
+        {
+          id: createMarketIntentId(`mi:seller-i5-no-persistence`),
+          actor: { type: "CLAN", clanId: sellerClanId },
+          regionId,
+          goodId,
+          side: "SELL",
+          purpose: "INVENTORY_REBALANCE",
+          desiredQuantity: 10,
+          sourcePlanId: "plan-seller-i5-no-persistence",
+          inventoryBucket: "GENERAL",
+        },
+        {
+          id: createMarketIntentId(`mi:buyer-i5-no-persistence`),
+          actor: { type: "CLAN", clanId: buyerClanId },
+          regionId,
+          goodId,
+          side: "BUY",
+          purpose: "CONSUMPTION",
+          desiredQuantity: 1_000_000,
+          maxSpend: 1_000_000 * priceConfig.maximumPrice,
+          sourcePlanId: "plan-buyer-i5-no-persistence",
+          inventoryBucket: "GENERAL",
+        },
+      ];
+      const getFixtureMarketIds = () => new Map([[regionId, marketId]]);
+
+      const phase6Handler = createPhase6Handler({
+        getFixtureIntents: buildIntents,
+        getFixtureMarketIds,
+        priceConfig,
+      });
+      const phase8Handler = createPhase8Handler({
+        getFixtureIntents: buildIntents,
+        getFixtureMarketIds,
+        collectTelemetry: false,
+      });
+      const dispatchPipeline = composePhaseHandlers(phase6Handler, phase8Handler);
+
+      // Same worldState object fed into every executeTick() call -- applyMarketStateTransition
+      // is deliberately never invoked, so world.markets never advances between ticks.
+      const producedPrices: number[] = [];
+      for (let tick = 0; tick < 3; tick++) {
+        const result = executeTick(worldState, tick, worldState.pendingTransitions, dispatchPipeline);
+        expect(result.reconciliationErrors).toBeNull();
+        producedPrices.push(result.context.marketPrices.get(key)!);
+      }
+
+      // Every tick reproduces the exact same price from the exact same never-updated
+      // world.markets entry and the exact same ZERO_EXPECTATION (observationCount stays
+      // 0 every tick, so Phase 6 keeps using raw current demand instead of ever lagging
+      // to an EMA) -- the bug this Issue reports, and the opposite of the progressing,
+      // strictly-increasing price history the persisted test above proves.
+      for (const price of producedPrices) {
+        expect(price).toBe(producedPrices[0]);
+      }
+      expect(worldState.markets.get(marketId)!.expectationsByGood.get(goodId)).toBeUndefined();
     });
   });
 });
