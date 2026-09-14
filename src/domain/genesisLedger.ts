@@ -33,6 +33,15 @@ export type ActorRef =
   | { readonly type: "MONETARY_AUTHORITY"; readonly authorityId: MonetaryAuthorityId };
 
 /**
+ * The authoritative ProductionUnit inventory that receives an opening goods stock.
+ *
+ * Handoff/03 section 20 makes the bucket part of canonical stock identity: a
+ * ProductionUnit's INPUT, OUTPUT and INVESTMENT inventories are three distinct
+ * authoritative stocks, not three provenance labels on one aggregate.
+ */
+export type InventoryBucket = "INPUT" | "OUTPUT" | "INVESTMENT";
+
+/**
  * Genesis record types explaining opening balance-sheet stocks.
  * Each record type corresponds to a specific category of opening endowment.
  */
@@ -54,13 +63,40 @@ export type GenesisRecord =
    * is not region-bound — a State's public inventory, held by the State itself rather
    * than by any one of the regions it controls — leaves it absent rather than naming an
    * arbitrary region.
+   *
+   * `inventoryBucket` is split across the two members below rather than declared once as
+   * optional. Section 20 requires it for a ProductionUnit-owned stock and gives it no
+   * meaning for any other owner: a Cohort holds one `householdInventory` and a State one
+   * `publicInventory`, neither of which is an INPUT/OUTPUT/INVESTMENT container. Making
+   * the distinction structural means a ProductionUnit record cannot omit the bucket and a
+   * Cohort or State record cannot carry a fabricated one, both at compile time.
    */
   | {
       readonly type: "GOOD_ENDOWMENT";
-      readonly owner: ActorRef;
+      readonly owner: Exclude<ActorRef, { readonly type: "PRODUCTION_UNIT" }>;
       readonly regionId?: RegionId;
       readonly goodId: GoodId;
       readonly amount: number;
+      readonly inventoryBucket?: undefined;
+      readonly sourceSeedKey: string;
+    }
+  /**
+   * Opening goods inventory held by a ProductionUnit.
+   *
+   * Section 20: "For a ProductionUnit-owned GOOD_ENDOWMENT, inventoryBucket is required
+   * and must be exactly INPUT, OUTPUT, or INVESTMENT according to the authoritative
+   * inventory that receives the opening stock. The bucket is part of canonical stock
+   * identity: reconciliation must compare ProductionUnit + region + inventoryBucket +
+   * goodId, not a ProductionUnit-wide aggregate. sourceSeedKey is provenance only and
+   * must never substitute for typed stock identity."
+   */
+  | {
+      readonly type: "GOOD_ENDOWMENT";
+      readonly owner: { readonly type: "PRODUCTION_UNIT"; readonly productionUnitId: ProductionUnitId };
+      readonly regionId?: RegionId;
+      readonly goodId: GoodId;
+      readonly amount: number;
+      readonly inventoryBucket: InventoryBucket;
       readonly sourceSeedKey: string;
     }
   | {
