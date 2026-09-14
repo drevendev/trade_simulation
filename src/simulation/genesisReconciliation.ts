@@ -8,12 +8,13 @@
  * in addition to aggregate conservation:
  * - MONEY_ENDOWMENT and FX_POOL_OPENING are reconciled by (owner/poolKey, currencyId)
  * - GOOD_ENDOWMENT is reconciled by (owner, goodId)
- * - CAPITAL_ENDOWMENT is reconciled by owner (ProductionUnit)
+ * - CAPITAL_ENDOWMENT is reconciled by (owner (ProductionUnit), capital goodId)
  * - POPULATION_ENDOWMENT is reconciled by owner (Cohort)
  * - RESOURCE_ENDOWMENT is reconciled at its recorded region/deposit granularity
  */
 
 import type { WorldGenesisLedger, GenesisRecord, ActorRef } from "../domain/genesisLedger";
+import { resolveCapitalGoodsPerCapitalUnit } from "../domain/definitionRegistry";
 import type { SimulationConfig } from "../config/simulationConfig";
 import type { CurrencyId, GoodId } from "../domain/id";
 import type { WorldState } from "./worldState";
@@ -29,6 +30,18 @@ export interface ReconciliationResult {
     tolerance: number;
     residual: number;
   };
+}
+
+/**
+ * Key segment for capital that embodies no tradable good, i.e. a ProductionUnit whose
+ * recipe declares no investment good. Such capital carries no `goodId` (Handoff/03
+ * section 20 declares `goodId?: GoodId`), and this segment keeps it reconciled
+ * owner-bound instead of silently leaving it outside the comparison.
+ */
+const UNCONVERTED_CAPITAL_KEY = "UNCONVERTED";
+
+function serializeCapitalGood(goodId: GoodId | undefined): string {
+  return goodId === undefined ? UNCONVERTED_CAPITAL_KEY : String(goodId);
 }
 
 function serializeOwner(owner: ActorRef | undefined): string {
@@ -55,7 +68,7 @@ export function reconcileGenesisStocks(
   // Expected: owner-bound and location-granular stocks from ledger (REQ-CONFIG-004)
   const expectedMoneyByOwnerCurrency = new Map<string, number>();
   const expectedGoodsByOwnerGoodId = new Map<string, number>();
-  const expectedCapitalByOwner = new Map<string, number>();
+  const expectedCapitalByOwnerGood = new Map<string, number>();
   const expectedPopulationByGranularity = new Map<string, number>();
   const expectedResourcesByGranularity = new Map<string, number>();
 
@@ -94,8 +107,9 @@ export function reconcileGenesisStocks(
       case "CAPITAL_ENDOWMENT": {
         if (record.owner) {
           const ownerKey = serializeOwner(record.owner);
-          const current = expectedCapitalByOwner.get(ownerKey) ?? 0;
-          expectedCapitalByOwner.set(ownerKey, current + record.amount);
+          const key = `${ownerKey}:${serializeCapitalGood(record.goodId)}`;
+          const current = expectedCapitalByOwnerGood.get(key) ?? 0;
+          expectedCapitalByOwnerGood.set(key, current + record.amount);
         }
         break;
       }
@@ -117,7 +131,7 @@ export function reconcileGenesisStocks(
   // Actual: owner-bound and location-granular stocks from world state (REQ-CONFIG-004)
   const actualMoneyByOwnerCurrency = new Map<string, number>();
   const actualGoodsByOwnerGoodId = new Map<string, number>();
-  const actualCapitalByOwner = new Map<string, number>();
+  const actualCapitalByOwnerGood = new Map<string, number>();
   const actualPopulationByGranularity = new Map<string, number>();
   const actualResourcesByGranularity = new Map<string, number>();
 
@@ -283,11 +297,25 @@ export function reconcileGenesisStocks(
         actualGoodsByOwnerGoodId.set(key, current + amount);
       }
     });
-    // Capital by PU owner
+    // Capital by PU owner + capital good, through the documented recipe conversion
     if (pu.seed.installedCapital > 0) {
       const ownerKey = `PU:${pu.productionUnitId}`;
-      const current = actualCapitalByOwner.get(ownerKey) ?? 0;
-      actualCapitalByOwner.set(ownerKey, current + pu.seed.installedCapital);
+      const capitalGoods = resolveCapitalGoodsPerCapitalUnit(
+        worldState.definitionRegistry,
+        pu.seed.recipeId,
+      );
+
+      if (capitalGoods.length > 0) {
+        capitalGoods.forEach(([goodId, goodsPerCapitalUnit]) => {
+          const key = `${ownerKey}:${serializeCapitalGood(goodId)}`;
+          const current = actualCapitalByOwnerGood.get(key) ?? 0;
+          actualCapitalByOwnerGood.set(key, current + pu.seed.installedCapital * goodsPerCapitalUnit);
+        });
+      } else {
+        const key = `${ownerKey}:${UNCONVERTED_CAPITAL_KEY}`;
+        const current = actualCapitalByOwnerGood.get(key) ?? 0;
+        actualCapitalByOwnerGood.set(key, current + pu.seed.installedCapital);
+      }
     }
   });
 
@@ -350,10 +378,10 @@ export function reconcileGenesisStocks(
     return null;
   };
 
-  // Check owner-bound capital reconciliation
+  // Check owner-bound, per-capital-good capital reconciliation
   const checkCapitalReconciliation = (key: string) => {
-    const expected = expectedCapitalByOwner.get(key) ?? 0;
-    const actual = actualCapitalByOwner.get(key) ?? 0;
+    const expected = expectedCapitalByOwnerGood.get(key) ?? 0;
+    const actual = actualCapitalByOwnerGood.get(key) ?? 0;
     const residual = Math.abs(expected - actual);
     const relativeTolerance = tolerance * Math.max(Math.abs(expected), Math.abs(actual), 1);
 
@@ -398,13 +426,13 @@ export function reconcileGenesisStocks(
     }
   }
 
-  // Check owner for capital
-  for (const key of expectedCapitalByOwner.keys()) {
+  // Check owner-goodId combinations for capital
+  for (const key of expectedCapitalByOwnerGood.keys()) {
     const result = checkCapitalReconciliation(key);
     if (result) return result;
   }
-  for (const key of actualCapitalByOwner.keys()) {
-    if (!expectedCapitalByOwner.has(key)) {
+  for (const key of actualCapitalByOwnerGood.keys()) {
+    if (!expectedCapitalByOwnerGood.has(key)) {
       const result = checkCapitalReconciliation(key);
       if (result) return result;
     }

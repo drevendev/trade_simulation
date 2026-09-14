@@ -59,11 +59,21 @@ export type GenesisRecord =
       readonly amount: number;
       readonly sourceSeedKey: string;
     }
+  /**
+   * Opening installed capital, recorded per capital good.
+   *
+   * Section 20 requires opening inventories plus capital-converted goods to match
+   * genesis goods after the documented conversion, so `goodId` names the good the
+   * recorded capital embodies and `amount` is that good's converted quantity. The
+   * canonical GenesisRecord declares `goodId?: GoodId`: capital whose recipe declares
+   * no investment good embodies no tradable good and leaves `goodId` absent rather
+   * than naming a fabricated one.
+   */
   | {
       readonly type: "CAPITAL_ENDOWMENT";
       readonly owner: ActorRef;
       readonly regionId: RegionId;
-      readonly goodId: GoodId;
+      readonly goodId?: GoodId;
       readonly amount: number;
       readonly sourceSeedKey: string;
     }
