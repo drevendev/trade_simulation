@@ -122,13 +122,28 @@ export const createPhase8Handler = (options?: {
         market?.priceByGood.get(group.goodId as GoodId) ??
         10;
 
+      // Settlement facts belong to the region, not to this handler. An allocation is only
+      // settleable onto authoritative stock if it names the currency the buyer and seller
+      // actually hold and a treasury the collected tax can land in, so both are read from
+      // the canonical RegionState rather than assumed (Issue #427 acceptance criterion 2).
+      //
+      // An uncontrolled Region collects zero State consumption tax (HANDOFF-REPAIR-006):
+      // with no controller there is no treasury to credit, and charging the buyer anyway
+      // would destroy money inside a transfer, which `executeAllocation` refuses outright.
+      // The rate therefore follows the destination, and one rate feeds both the effective
+      // demand a buyer can afford and the gross price the allocation records.
+      const region = world.regions.get(group.regionId as RegionId);
+      const marketCurrencyId = region?.settlementCurrencyId ?? ("cur:reserve" as CurrencyId);
+      const destinationStateId = region?.controllerStateId ?? null;
+      const assessedTaxRate = destinationStateId === null ? 0 : taxRate;
+
       // Create clearing input with production computations
       const clearingInput: LocalClearingInput = {
         marketId: group.marketId,
         regionId: group.regionId as RegionId,
         goodId: group.goodId as GoodId,
         pass: "MAIN",
-        marketCurrencyId: "cur:reserve" as CurrencyId,
+        marketCurrencyId,
         buyerIntents: group.buyers,
         sellerIntents: group.sellers,
         computeEffectiveDemand: (intent, grossPrice) => {
@@ -146,12 +161,12 @@ export const createPhase8Handler = (options?: {
         },
         computeGrossUnitPrice: (_intent, sellerNetPrice) => {
           // Apply consumption tax to get household gross price
-          return sellerNetPrice * (1 + taxRate);
+          return sellerNetPrice * (1 + assessedTaxRate);
         },
         getTaxationInfo: (_buyer, _regionId, _good) => {
           return {
-            destinationStateId: null,
-            assessedTaxRate: taxRate,
+            destinationStateId,
+            assessedTaxRate,
             collectionEfficiency: 1.0,
           };
         },
@@ -174,7 +189,7 @@ export const createPhase8Handler = (options?: {
       // (Handoff/04 section 9) must not depend on the non-authoritative telemetry
       // toggle (REQ-MARKET-005).
       const totalSellerOffered = group.sellers.reduce((sum, i) => sum + i.desiredQuantity, 0);
-      const grossPrice = marketPrice * (1 + taxRate);
+      const grossPrice = marketPrice * (1 + assessedTaxRate);
       let totalBuyerEffective = 0;
       for (const buyer of group.buyers) {
         const buyerMaxSpend = (buyer as any).maxSpend ?? (buyer.desiredQuantity * grossPrice);

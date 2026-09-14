@@ -28,24 +28,31 @@
  * could actually diverge based on collectTelemetry was exercised, and
  * context.currentLedger is never written by this fixture's Phase-8 handler either way.
  *
- * The honest fact at this boundary: canonical WorldState carries no live/mutable
- * wallet or inventory representation yet -- ClanState/CohortState/ProductionUnitState
- * hold only identity + immutable seed data, and WorldState's only stock ledger is the
- * immutable opening `worldGenesisLedger`. The spec's own deterministic-API boundary
- * (`MarketSettlement.executeAllocation(world, ctx, allocation)`, Handoff/04 section 35)
- * that would mutate authoritative stock does not exist in this codebase, so there is no
- * production path capable of producing a telemetry-dependent stock/ledger divergence to
- * observe yet. The test below proves the property that IS true and checkable today --
- * that Phase-8, under either telemetry setting, does not mutate WorldState itself (no
- * backdoor mutation through the telemetry-collection code path) -- with a negative
- * control proving the snapshot comparison actually detects a divergence when fed one.
- * Full stock/ledger-application neutrality remains unproven until that settlement/
- * WorldState wiring exists; see the new prerequisite Issue referenced on Issue #416 and
- * the `REQ-MARKET-005` ledger row (returned to `PARTIAL`).
+ * That gap is now closed (Issue #427). When these tests were written, canonical
+ * WorldState carried no live wallet or inventory at all and
+ * `MarketSettlement.executeAllocation(world, ctx, allocation)` (Handoff/04 section 35)
+ * did not exist, so the strongest checkable property was that Phase-8 leaves WorldState
+ * alone under either telemetry setting -- true, but narrower than the acceptance clause,
+ * and R235 (`ANSWERS_TO_IMPLEMENTER.md`, `CODE_RUNTIME_QA_M3_16`) says it is not the
+ * required proof. PR #475 added the live stock and the settlement function; this file now
+ * also settles Phase-8's realized MAIN-pass allocations through
+ * `applyMarketSettlementTransition()` and compares the authoritative post-settlement
+ * wallets, inventories, treasuries and ledger across a telemetry-on and a telemetry-off
+ * run, with a negative control proving that comparison can fail. The earlier
+ * WorldState-untouched tests are kept: they still guard against a backdoor mutation from
+ * inside the telemetry-collection path itself.
+ *
+ * The fixtures below trade a `PRODUCTION_UNIT` seller debiting `OUTPUT` against a
+ * `COHORT` buyer crediting its household inventory. They used to trade `CLAN` against
+ * `CLAN` on a `GENERAL` bucket, which R235 calls implementation drift: a Clan owns a
+ * treasury and no physical goods, so such an allocation names a stock endpoint that does
+ * not exist and settlement refuses it.
  */
 
 import { describe, it, expect } from "vitest";
-import type { GoodId, MarketId, RegionId } from "../domain/id";
+import { applyMarketSettlementTransition } from "./marketSettlementTransition";
+import type { CohortId, CurrencyId, GoodId, MarketId, ProductionUnitId, RegionId, StateId } from "../domain/id";
+import type { WorldState } from "./worldState";
 import { buildInitialWorld } from "./worldState";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
@@ -81,6 +88,67 @@ function canonicalizeMapBucket(value: unknown): unknown {
   return value;
 }
 
+/** The one good every baseline ProductionUnit carries in its OUTPUT inventory. */
+const FOOD = "good:food" as GoodId;
+
+interface CanonicalCounterparties {
+  readonly regionId: RegionId;
+  readonly goodId: GoodId;
+  readonly currencyId: CurrencyId;
+  readonly stateId: StateId;
+  readonly sellerUnitIds: readonly ProductionUnitId[];
+  readonly buyerCohortIds: readonly CohortId[];
+}
+
+/**
+ * Pick canonical Phase-8 counterparties out of the real baseline world: ProductionUnit
+ * sellers debiting OUTPUT, and Cohort buyers crediting their single household inventory.
+ *
+ * The fixtures below used to trade `CLAN` against `CLAN` on a `GENERAL` bucket. R235
+ * (`ANSWERS_TO_IMPLEMENTER.md`, `CODE_RUNTIME_QA_M3_16`) calls that implementation drift:
+ * authoritative household stock belongs to `PopulationCohortState`, and a Clan owns a
+ * treasury and no physical goods at all, so a `CLAN`+`GENERAL` allocation names a stock
+ * endpoint that does not exist and `executeAllocation` refuses it outright. Converting the
+ * fixtures is what lets Phase-8's realized allocations reach authoritative stock at all
+ * (Issue #427 acceptance criterion 2).
+ *
+ * The region must have a controller, because the collected consumption tax has to land in
+ * some State treasury, and buyer, seller and treasury must all transact in the region's
+ * settlement currency: a cross-currency goods payment is M5 trade/FX, not M3 local clearing.
+ */
+function canonicalCounterparties(
+  world: WorldState,
+  sellerCount: number,
+  buyerCount: number,
+): CanonicalCounterparties {
+  for (const region of world.regions.values()) {
+    if (region.controllerStateId === null) continue;
+    const regionKey = region.seed.key;
+    const currencyId = region.settlementCurrencyId;
+
+    const sellers = Array.from(world.productionUnits.values()).filter(
+      (unit) => unit.seed.regionKey === regionKey && (unit.outputInventory.get(FOOD) ?? 0) > 0,
+    );
+    const buyers = Array.from(world.cohorts.values()).filter(
+      (cohort) => cohort.seed.regionKey === regionKey && (cohort.wallet.get(currencyId) ?? 0) > 0,
+    );
+    if (sellers.length < sellerCount || buyers.length < buyerCount) continue;
+
+    return {
+      regionId: region.regionId,
+      goodId: FOOD,
+      currencyId,
+      stateId: region.controllerStateId,
+      sellerUnitIds: sellers.slice(0, sellerCount).map((unit) => unit.productionUnitId),
+      buyerCohortIds: buyers.slice(0, buyerCount).map((cohort) => cohort.cohortId),
+    };
+  }
+  throw new Error(
+    `baseline scenario carries no controlled region with ${sellerCount} food-selling ` +
+      `ProductionUnit(s) and ${buyerCount} funded Cohort(s)`,
+  );
+}
+
 describe("acceptance-req-market-005-phase8-integration", () => {
   it("collects telemetry through real Phase-8 handler via orchestrator", () => {
     // Build seeded baseline scenario
@@ -88,40 +156,37 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 42);
 
     // Create fixture intents for Phase-8 to clear
-    const getFixtureIntents = (): MarketIntent[] => {
-      // Use first region and good from world state
-      const regionId = Array.from(worldState.regions.values())[0]?.regionId as RegionId;
-      const goodId = Object.keys(worldState.definitionRegistry.goods)[0] as GoodId;
-      const seller = Array.from(worldState.clans.values())[0]!;
-      const buyer = Array.from(worldState.clans.values())[1]!;
+    const { regionId, goodId, sellerUnitIds, buyerCohortIds } = canonicalCounterparties(
+      worldState,
+      1,
+      1,
+    );
 
-      if (!regionId || !goodId) throw new Error("Test fixture missing region or good");
-
-      return [
-        {
-          id: createMarketIntentId("mi:seller-fixture-1"),
-          actor: { type: "CLAN" as const, clanId: seller.clanId },
-          regionId,
-          goodId,
-          side: "SELL" as const,
-          purpose: "INVENTORY_REBALANCE" as const,
-          desiredQuantity: 100,
-          minimumReserveQuantity: 0,
-          sourcePlanId: "plan:test-1",
-        },
-        {
-          id: createMarketIntentId("mi:buyer-fixture-1"),
-          actor: { type: "CLAN" as const, clanId: buyer.clanId },
-          regionId,
-          goodId,
-          side: "BUY" as const,
-          purpose: "CONSUMPTION" as const,
-          desiredQuantity: 80,
-          maxSpend: 800,
-          sourcePlanId: "plan:test-2",
-        },
-      ];
-    };
+    const getFixtureIntents = (): MarketIntent[] => [
+      {
+        id: createMarketIntentId("mi:seller-fixture-1"),
+        actor: { type: "PRODUCTION_UNIT" as const, productionUnitId: sellerUnitIds[0]! },
+        regionId,
+        goodId,
+        side: "SELL" as const,
+        purpose: "INVENTORY_REBALANCE" as const,
+        desiredQuantity: 100,
+        minimumReserveQuantity: 0,
+        inventoryBucket: "OUTPUT" as const,
+        sourcePlanId: "plan:test-1",
+      },
+      {
+        id: createMarketIntentId("mi:buyer-fixture-1"),
+        actor: { type: "COHORT" as const, cohortId: buyerCohortIds[0]! },
+        regionId,
+        goodId,
+        side: "BUY" as const,
+        purpose: "CONSUMPTION" as const,
+        desiredQuantity: 80,
+        maxSpend: 800,
+        sourcePlanId: "plan:test-2",
+      },
+    ];
 
     // Create Phase-8 handler with telemetry collection enabled
     const phase8HandlerWithTelemetry = createPhase8Handler({
@@ -199,37 +264,37 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     const config = createDefaultSimulationConfig();
     const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 55);
 
-    const getFixtureIntents = (): MarketIntent[] => {
-      const regionId = Array.from(worldState.regions.values())[0]?.regionId as RegionId;
-      const goodId = Object.keys(worldState.definitionRegistry.goods)[0] as GoodId;
-      const seller = Array.from(worldState.clans.values())[0]!;
-      const buyer = Array.from(worldState.clans.values())[1]!;
+    const { regionId, goodId, sellerUnitIds, buyerCohortIds } = canonicalCounterparties(
+      worldState,
+      1,
+      1,
+    );
 
-      return [
-        {
-          id: createMarketIntentId("mi:seller-no-telemetry"),
-          actor: { type: "CLAN" as const, clanId: seller.clanId },
-          regionId,
-          goodId,
-          side: "SELL" as const,
-          purpose: "INVENTORY_REBALANCE" as const,
-          desiredQuantity: 60,
-          minimumReserveQuantity: 0,
-          sourcePlanId: "plan:no-telemetry-seller",
-        },
-        {
-          id: createMarketIntentId("mi:buyer-no-telemetry"),
-          actor: { type: "CLAN" as const, clanId: buyer.clanId },
-          regionId,
-          goodId,
-          side: "BUY" as const,
-          purpose: "CONSUMPTION" as const,
-          desiredQuantity: 40,
-          maxSpend: 400,
-          sourcePlanId: "plan:no-telemetry-buyer",
-        },
-      ];
-    };
+    const getFixtureIntents = (): MarketIntent[] => [
+      {
+        id: createMarketIntentId("mi:seller-no-telemetry"),
+        actor: { type: "PRODUCTION_UNIT" as const, productionUnitId: sellerUnitIds[0]! },
+        regionId,
+        goodId,
+        side: "SELL" as const,
+        purpose: "INVENTORY_REBALANCE" as const,
+        desiredQuantity: 60,
+        minimumReserveQuantity: 0,
+        inventoryBucket: "OUTPUT" as const,
+        sourcePlanId: "plan:no-telemetry-seller",
+      },
+      {
+        id: createMarketIntentId("mi:buyer-no-telemetry"),
+        actor: { type: "COHORT" as const, cohortId: buyerCohortIds[0]! },
+        regionId,
+        goodId,
+        side: "BUY" as const,
+        purpose: "CONSUMPTION" as const,
+        desiredQuantity: 40,
+        maxSpend: 400,
+        sourcePlanId: "plan:no-telemetry-buyer",
+      },
+    ];
 
     const phase8HandlerNoTelemetry = createPhase8Handler({
       getFixtureIntents,
@@ -274,25 +339,22 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 42);
 
     // Fixture intents
-    const getFixtureIntents = (): MarketIntent[] => {
-      const regionId = Array.from(worldState.regions.values())[0]?.regionId as RegionId;
-      const goodId = Object.keys(worldState.definitionRegistry.goods)[0] as GoodId;
-      const seller = Array.from(worldState.clans.values())[0]!;
+    const { regionId, goodId, sellerUnitIds } = canonicalCounterparties(worldState, 1, 1);
 
-      return [
-        {
-          id: createMarketIntentId("mi:seller-preserve-1"),
-          actor: { type: "CLAN" as const, clanId: seller.clanId },
-          regionId,
-          goodId,
-          side: "SELL" as const,
-          purpose: "INVENTORY_REBALANCE" as const,
-          desiredQuantity: 50,
-          minimumReserveQuantity: 0,
-          sourcePlanId: "plan:test-preserve",
-        },
-      ];
-    };
+    const getFixtureIntents = (): MarketIntent[] => [
+      {
+        id: createMarketIntentId("mi:seller-preserve-1"),
+        actor: { type: "PRODUCTION_UNIT" as const, productionUnitId: sellerUnitIds[0]! },
+        regionId,
+        goodId,
+        side: "SELL" as const,
+        purpose: "INVENTORY_REBALANCE" as const,
+        desiredQuantity: 50,
+        minimumReserveQuantity: 0,
+        inventoryBucket: "OUTPUT" as const,
+        sourcePlanId: "plan:test-preserve",
+      },
+    ];
 
     const phase8WithTelemetry = createPhase8Handler({
       getFixtureIntents,
@@ -323,59 +385,60 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 99);
 
     // Deterministic fixture with clear supply/demand imbalance
-    const getFixtureIntents = (): MarketIntent[] => {
-      const regionId = Array.from(worldState.regions.values())[0]?.regionId as RegionId;
-      const goodId = Object.keys(worldState.definitionRegistry.goods)[0] as GoodId;
-      const sellers = Array.from(worldState.clans.values()).slice(0, 2);
-      const buyers = Array.from(worldState.clans.values()).slice(2, 4);
+    const { regionId, goodId, sellerUnitIds, buyerCohortIds } = canonicalCounterparties(
+      worldState,
+      2,
+      2,
+    );
 
-      return [
-        {
-          id: createMarketIntentId("mi:seller-1"),
-          actor: { type: "CLAN" as const, clanId: sellers[0]!.clanId },
-          regionId,
-          goodId,
-          side: "SELL" as const,
-          purpose: "INVENTORY_REBALANCE" as const,
-          desiredQuantity: 100,
-          minimumReserveQuantity: 0,
-          sourcePlanId: "plan:sellers",
-        },
-        {
-          id: createMarketIntentId("mi:seller-2"),
-          actor: { type: "CLAN" as const, clanId: sellers[1]!.clanId },
-          regionId,
-          goodId,
-          side: "SELL" as const,
-          purpose: "INVENTORY_REBALANCE" as const,
-          desiredQuantity: 100,
-          minimumReserveQuantity: 0,
-          sourcePlanId: "plan:sellers",
-        },
-        {
-          id: createMarketIntentId("mi:buyer-1"),
-          actor: { type: "CLAN" as const, clanId: buyers[0]!.clanId },
-          regionId,
-          goodId,
-          side: "BUY" as const,
-          purpose: "CONSUMPTION" as const,
-          desiredQuantity: 150,
-          maxSpend: 1500,
-          sourcePlanId: "plan:buyers",
-        },
-        {
-          id: createMarketIntentId("mi:buyer-2"),
-          actor: { type: "CLAN" as const, clanId: buyers[1]!.clanId },
-          regionId,
-          goodId,
-          side: "BUY" as const,
-          purpose: "CONSUMPTION" as const,
-          desiredQuantity: 100,
-          maxSpend: 1000,
-          sourcePlanId: "plan:buyers",
-        },
-      ];
-    };
+    const getFixtureIntents = (): MarketIntent[] => [
+      {
+        id: createMarketIntentId("mi:seller-1"),
+        actor: { type: "PRODUCTION_UNIT" as const, productionUnitId: sellerUnitIds[0]! },
+        regionId,
+        goodId,
+        side: "SELL" as const,
+        purpose: "INVENTORY_REBALANCE" as const,
+        desiredQuantity: 100,
+        minimumReserveQuantity: 0,
+        inventoryBucket: "OUTPUT" as const,
+        sourcePlanId: "plan:sellers",
+      },
+      {
+        id: createMarketIntentId("mi:seller-2"),
+        actor: { type: "PRODUCTION_UNIT" as const, productionUnitId: sellerUnitIds[1]! },
+        regionId,
+        goodId,
+        side: "SELL" as const,
+        purpose: "INVENTORY_REBALANCE" as const,
+        desiredQuantity: 100,
+        minimumReserveQuantity: 0,
+        inventoryBucket: "OUTPUT" as const,
+        sourcePlanId: "plan:sellers",
+      },
+      {
+        id: createMarketIntentId("mi:buyer-1"),
+        actor: { type: "COHORT" as const, cohortId: buyerCohortIds[0]! },
+        regionId,
+        goodId,
+        side: "BUY" as const,
+        purpose: "CONSUMPTION" as const,
+        desiredQuantity: 150,
+        maxSpend: 1500,
+        sourcePlanId: "plan:buyers",
+      },
+      {
+        id: createMarketIntentId("mi:buyer-2"),
+        actor: { type: "COHORT" as const, cohortId: buyerCohortIds[1]! },
+        regionId,
+        goodId,
+        side: "BUY" as const,
+        purpose: "CONSUMPTION" as const,
+        desiredQuantity: 100,
+        maxSpend: 1000,
+        sourcePlanId: "plan:buyers",
+      },
+    ];
 
     const phase8Handler = createPhase8Handler({
       getFixtureIntents,
@@ -428,48 +491,48 @@ describe("acceptance-req-market-005-phase8-integration", () => {
 
     // Shortage scenario: high demand (200), limited supply (50)
     // Expected: clearedQuantity = 50 (supply-constrained)
-    const getFixtureIntents = (): MarketIntent[] => {
-      const regionId = Array.from(worldState.regions.values())[0]?.regionId as RegionId;
-      const goodId = Object.keys(worldState.definitionRegistry.goods)[0] as GoodId;
-      const sellers = Array.from(worldState.clans.values()).slice(0, 1);
-      const buyers = Array.from(worldState.clans.values()).slice(1, 3);
+    const { regionId, goodId, sellerUnitIds, buyerCohortIds } = canonicalCounterparties(
+      worldState,
+      1,
+      2,
+    );
 
-      return [
-        {
-          id: createMarketIntentId("mi:seller-shortage"),
-          actor: { type: "CLAN" as const, clanId: sellers[0]!.clanId },
-          regionId,
-          goodId,
-          side: "SELL" as const,
-          purpose: "INVENTORY_REBALANCE" as const,
-          desiredQuantity: 50, // Limited supply
-          minimumReserveQuantity: 0,
-          sourcePlanId: "plan:shortage-sellers",
-        },
-        {
-          id: createMarketIntentId("mi:buyer-shortage-1"),
-          actor: { type: "CLAN" as const, clanId: buyers[0]!.clanId },
-          regionId,
-          goodId,
-          side: "BUY" as const,
-          purpose: "CONSUMPTION" as const,
-          desiredQuantity: 100, // High demand
-          maxSpend: 2000,
-          sourcePlanId: "plan:shortage-buyers",
-        },
-        {
-          id: createMarketIntentId("mi:buyer-shortage-2"),
-          actor: { type: "CLAN" as const, clanId: buyers[1]!.clanId },
-          regionId,
-          goodId,
-          side: "BUY" as const,
-          purpose: "CONSUMPTION" as const,
-          desiredQuantity: 100,
-          maxSpend: 2000,
-          sourcePlanId: "plan:shortage-buyers",
-        },
-      ];
-    };
+    const getFixtureIntents = (): MarketIntent[] => [
+      {
+        id: createMarketIntentId("mi:seller-shortage"),
+        actor: { type: "PRODUCTION_UNIT" as const, productionUnitId: sellerUnitIds[0]! },
+        regionId,
+        goodId,
+        side: "SELL" as const,
+        purpose: "INVENTORY_REBALANCE" as const,
+        desiredQuantity: 50, // Limited supply
+        minimumReserveQuantity: 0,
+        inventoryBucket: "OUTPUT" as const,
+        sourcePlanId: "plan:shortage-sellers",
+      },
+      {
+        id: createMarketIntentId("mi:buyer-shortage-1"),
+        actor: { type: "COHORT" as const, cohortId: buyerCohortIds[0]! },
+        regionId,
+        goodId,
+        side: "BUY" as const,
+        purpose: "CONSUMPTION" as const,
+        desiredQuantity: 100, // High demand
+        maxSpend: 2000,
+        sourcePlanId: "plan:shortage-buyers",
+      },
+      {
+        id: createMarketIntentId("mi:buyer-shortage-2"),
+        actor: { type: "COHORT" as const, cohortId: buyerCohortIds[1]! },
+        regionId,
+        goodId,
+        side: "BUY" as const,
+        purpose: "CONSUMPTION" as const,
+        desiredQuantity: 100,
+        maxSpend: 2000,
+        sourcePlanId: "plan:shortage-buyers",
+      },
+    ];
 
     const phase8Handler = createPhase8Handler({
       getFixtureIntents,
@@ -557,37 +620,37 @@ describe("acceptance-req-market-005-phase8-integration", () => {
         markets: canonicalizeMapBucket(worldState.markets),
       };
 
-      const getFixtureIntents = (): MarketIntent[] => {
-        const regionId = Array.from(worldState.regions.values())[0]?.regionId as RegionId;
-        const goodId = Object.keys(worldState.definitionRegistry.goods)[0] as GoodId;
-        const seller = Array.from(worldState.clans.values())[0]!;
-        const buyer = Array.from(worldState.clans.values())[1]!;
+      const { regionId, goodId, sellerUnitIds, buyerCohortIds } = canonicalCounterparties(
+        worldState,
+        1,
+        1,
+      );
 
-        return [
-          {
-            id: createMarketIntentId("mi:seller-stock-neutrality"),
-            actor: { type: "CLAN" as const, clanId: seller.clanId },
-            regionId,
-            goodId,
-            side: "SELL" as const,
-            purpose: "INVENTORY_REBALANCE" as const,
-            desiredQuantity: 100,
-            minimumReserveQuantity: 0,
-            sourcePlanId: "plan:stock-neutrality-seller",
-          },
-          {
-            id: createMarketIntentId("mi:buyer-stock-neutrality"),
-            actor: { type: "CLAN" as const, clanId: buyer.clanId },
-            regionId,
-            goodId,
-            side: "BUY" as const,
-            purpose: "CONSUMPTION" as const,
-            desiredQuantity: 80,
-            maxSpend: 800,
-            sourcePlanId: "plan:stock-neutrality-buyer",
-          },
-        ];
-      };
+      const getFixtureIntents = (): MarketIntent[] => [
+        {
+          id: createMarketIntentId("mi:seller-stock-neutrality"),
+          actor: { type: "PRODUCTION_UNIT" as const, productionUnitId: sellerUnitIds[0]! },
+          regionId,
+          goodId,
+          side: "SELL" as const,
+          purpose: "INVENTORY_REBALANCE" as const,
+          desiredQuantity: 100,
+          minimumReserveQuantity: 0,
+          inventoryBucket: "OUTPUT" as const,
+          sourcePlanId: "plan:stock-neutrality-seller",
+        },
+        {
+          id: createMarketIntentId("mi:buyer-stock-neutrality"),
+          actor: { type: "COHORT" as const, cohortId: buyerCohortIds[0]! },
+          regionId,
+          goodId,
+          side: "BUY" as const,
+          purpose: "CONSUMPTION" as const,
+          desiredQuantity: 80,
+          maxSpend: 800,
+          sourcePlanId: "plan:stock-neutrality-buyer",
+        },
+      ];
 
       const resultWithTelemetry = executeTick(
         worldState,
@@ -638,4 +701,243 @@ describe("acceptance-req-market-005-phase8-integration", () => {
       expect(canonicalizeMapBucket(mutatedClans)).not.toEqual(pristineClans);
     },
   );
+
+  /**
+   * Issue #427 acceptance criteria 2-4: the realized MAIN-pass allocations Phase-8 produced
+   * are carried onto authoritative actor stock by `applyMarketSettlementTransition()`, the
+   * explicit settlement boundary over `executeAllocation()`.
+   *
+   * These are the first assertions in this file that observe stock *after* a production
+   * settlement path has run. Every earlier test in this file can only prove the narrower
+   * property that Phase-8 leaves `WorldState` alone, which R235 says is not the required
+   * proof for REQ-MARKET-005's canonical-stock clause.
+   */
+  describe("Phase-8 realized allocations settle onto authoritative actor stock", () => {
+    /** Every live money balance in one currency, summed across every actor that holds one. */
+    function totalMoney(world: WorldState, currencyId: CurrencyId): number {
+      let total = 0;
+      for (const clan of world.clans.values()) total += clan.treasury.get(currencyId) ?? 0;
+      for (const cohort of world.cohorts.values()) total += cohort.wallet.get(currencyId) ?? 0;
+      for (const unit of world.productionUnits.values()) total += unit.wallet.get(currencyId) ?? 0;
+      for (const state of world.states.values()) total += state.treasury.get(currencyId) ?? 0;
+      return total;
+    }
+
+    /** Every live quantity of one good, summed across every authoritative inventory. */
+    function totalGoods(world: WorldState, goodId: GoodId): number {
+      let total = 0;
+      for (const cohort of world.cohorts.values()) total += cohort.householdInventory.get(goodId) ?? 0;
+      for (const unit of world.productionUnits.values()) {
+        total += unit.inputInventory.get(goodId) ?? 0;
+        total += unit.outputInventory.get(goodId) ?? 0;
+        total += unit.investmentInventory.get(goodId) ?? 0;
+      }
+      for (const state of world.states.values()) total += state.publicInventory.get(goodId) ?? 0;
+      return total;
+    }
+
+    /**
+     * One Phase-8 fixture sized from the counterparties' real opening stock, so the trade is
+     * always affordable and always deliverable out of what they actually hold. A fixture that
+     * hard-coded quantities would be testing the scenario's endowment numbers rather than
+     * settlement.
+     */
+    function buildFixture(world: WorldState, collectTelemetry: boolean) {
+      const counterparties = canonicalCounterparties(world, 1, 1);
+      const { regionId, goodId, currencyId, sellerUnitIds, buyerCohortIds } = counterparties;
+      const sellerUnitId = sellerUnitIds[0]!;
+      const buyerCohortId = buyerCohortIds[0]!;
+
+      const buyerFunds = world.cohorts.get(buyerCohortId)!.wallet.get(currencyId) ?? 0;
+      const sellerStock = world.productionUnits.get(sellerUnitId)!.outputInventory.get(goodId) ?? 0;
+      expect(buyerFunds).toBeGreaterThan(0);
+      expect(sellerStock).toBeGreaterThan(0);
+
+      const getFixtureIntents = (): MarketIntent[] => [
+        {
+          id: createMarketIntentId("mi:seller-settlement"),
+          actor: { type: "PRODUCTION_UNIT" as const, productionUnitId: sellerUnitId },
+          regionId,
+          goodId,
+          side: "SELL" as const,
+          purpose: "INVENTORY_REBALANCE" as const,
+          // Half the stock on hand: the buyer's budget, not the seller's shelf, is the
+          // binding constraint, so the cleared quantity is a real clearing outcome.
+          desiredQuantity: sellerStock / 2,
+          minimumReserveQuantity: 0,
+          inventoryBucket: "OUTPUT" as const,
+          sourcePlanId: "plan:settlement-seller",
+        },
+        {
+          id: createMarketIntentId("mi:buyer-settlement"),
+          actor: { type: "COHORT" as const, cohortId: buyerCohortId },
+          regionId,
+          goodId,
+          side: "BUY" as const,
+          purpose: "CONSUMPTION" as const,
+          desiredQuantity: sellerStock,
+          maxSpend: buyerFunds / 2,
+          sourcePlanId: "plan:settlement-buyer",
+        },
+      ];
+
+      return {
+        ...counterparties,
+        sellerUnitId,
+        buyerCohortId,
+        handler: createPhase8Handler({ getFixtureIntents, collectTelemetry }),
+      };
+    }
+
+    it(
+      "criteria 2-3: every realized MAIN-pass allocation reaches the canonically-owned " +
+        "wallet and inventory, conserving money and goods against the real WorldState",
+      () => {
+        const config = createDefaultSimulationConfig();
+        const world = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 42);
+        const fixture = buildFixture(world, true);
+        const { goodId, currencyId, stateId, sellerUnitId, buyerCohortId } = fixture;
+
+        const result = executeTick(world, 1, world.pendingTransitions, fixture.handler);
+        const allocations = result.context.marketAllocations;
+        expect(allocations.length).toBeGreaterThan(0);
+        for (const allocation of allocations) {
+          expect(allocation.pass).toBe("MAIN");
+          // The endpoints settlement will resolve are the canonical owners, not a Clan and
+          // not an unspecified generic ProductionUnit bucket (R235).
+          expect(allocation.seller).toEqual({ type: "PRODUCTION_UNIT", productionUnitId: sellerUnitId });
+          expect(allocation.buyer).toEqual({ type: "COHORT", cohortId: buyerCohortId });
+          expect(allocation.sellerInventoryBucket).toBe("OUTPUT");
+          expect(allocation.buyerInventoryBucket).toBe("GENERAL");
+          // Phase-8 now reads both from the canonical RegionState rather than assuming them.
+          expect(allocation.marketCurrencyId).toBe(currencyId);
+          expect(allocation.destinationStateId).toBe(stateId);
+        }
+
+        const quantity = allocations.reduce((sum, a) => sum + a.quantity, 0);
+        const buyerGross = allocations.reduce((sum, a) => sum + a.quantity * a.buyerGrossUnitPrice, 0);
+        const sellerNet = allocations.reduce((sum, a) => sum + a.quantity * a.sellerNetUnitPrice, 0);
+        const collectedTax = allocations.reduce((sum, a) => sum + a.consumptionTaxAmount, 0);
+        expect(quantity).toBeGreaterThan(0);
+        expect(collectedTax).toBeGreaterThan(0);
+
+        const before = {
+          buyerWallet: world.cohorts.get(buyerCohortId)!.wallet.get(currencyId) ?? 0,
+          buyerGoods: world.cohorts.get(buyerCohortId)!.householdInventory.get(goodId) ?? 0,
+          sellerWallet: world.productionUnits.get(sellerUnitId)!.wallet.get(currencyId) ?? 0,
+          sellerGoods: world.productionUnits.get(sellerUnitId)!.outputInventory.get(goodId) ?? 0,
+          treasury: world.states.get(stateId)!.treasury.get(currencyId) ?? 0,
+          money: totalMoney(world, currencyId),
+          goods: totalGoods(world, goodId),
+        };
+
+        const settled = applyMarketSettlementTransition(world, result.context);
+
+        // The settlement actually happened: this is a different world, and the input one is
+        // untouched (WorldState stays immutable for the duration of a tick, ADR 0007).
+        expect(settled).not.toBe(world);
+        expect(world.cohorts.get(buyerCohortId)!.wallet.get(currencyId) ?? 0).toBe(before.buyerWallet);
+
+        const after = {
+          buyerWallet: settled.cohorts.get(buyerCohortId)!.wallet.get(currencyId) ?? 0,
+          buyerGoods: settled.cohorts.get(buyerCohortId)!.householdInventory.get(goodId) ?? 0,
+          sellerWallet: settled.productionUnits.get(sellerUnitId)!.wallet.get(currencyId) ?? 0,
+          sellerGoods: settled.productionUnits.get(sellerUnitId)!.outputInventory.get(goodId) ?? 0,
+          treasury: settled.states.get(stateId)!.treasury.get(currencyId) ?? 0,
+          money: totalMoney(settled, currencyId),
+          goods: totalGoods(settled, goodId),
+        };
+
+        // The six steps of the Handoff/04 section-10 atomic bundle, on the stock each
+        // actor canonically owns.
+        expect(after.sellerGoods).toBeCloseTo(before.sellerGoods - quantity, 9);
+        expect(after.buyerGoods).toBeCloseTo(before.buyerGoods + quantity, 9);
+        expect(after.buyerWallet).toBeCloseTo(before.buyerWallet - buyerGross, 9);
+        expect(after.sellerWallet).toBeCloseTo(before.sellerWallet + sellerNet, 9);
+        expect(after.treasury).toBeCloseTo(before.treasury + collectedTax, 9);
+
+        // Money conservation: the buyer's gross debit is exactly the seller's net receipt
+        // plus the tax the treasury collected, and no money is created or destroyed
+        // anywhere else in the world either.
+        expect(buyerGross).toBeCloseTo(sellerNet + collectedTax, 9);
+        expect(after.money).toBeCloseTo(before.money, 9);
+
+        // Goods conservation: settlement is a transfer, never a source or a sink.
+        expect(after.goods).toBeCloseTo(before.goods, 9);
+
+        // No live stock was driven negative by the settlement.
+        expect(after.buyerWallet).toBeGreaterThanOrEqual(0);
+        expect(after.sellerGoods).toBeGreaterThanOrEqual(0);
+      },
+    );
+
+    it(
+      "criterion 4: telemetry on and off produce an identical post-settlement WorldState",
+      () => {
+        const config = createDefaultSimulationConfig();
+        const world = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 42);
+
+        const withTelemetry = buildFixture(world, true);
+        const resultOn = executeTick(world, 1, world.pendingTransitions, withTelemetry.handler);
+        expect(resultOn.context.marketTelemetry.length).toBeGreaterThan(0);
+        const settledOn = applyMarketSettlementTransition(world, resultOn.context);
+
+        const withoutTelemetry = buildFixture(world, false);
+        const resultOff = executeTick(world, 1, world.pendingTransitions, withoutTelemetry.handler);
+        expect(resultOff.context.marketTelemetry.length).toBe(0);
+        const settledOff = applyMarketSettlementTransition(world, resultOff.context);
+
+        // Settlement really ran on both sides, so the comparison below is over mutated
+        // stock rather than over two copies of an untouched world.
+        expect(canonicalizeMapBucket(settledOn.cohorts)).not.toEqual(canonicalizeMapBucket(world.cohorts));
+
+        // This is the clause REQ-MARKET-005 asks for: canonical stocks do not change when
+        // the non-authoritative telemetry toggle changes.
+        for (const bucket of ["clans", "cohorts", "productionUnits", "states", "markets"] as const) {
+          expect(canonicalizeMapBucket(settledOff[bucket])).toEqual(canonicalizeMapBucket(settledOn[bucket]));
+        }
+        expect(canonicalizeMapBucket(resultOff.context.currentLedger)).toEqual(
+          canonicalizeMapBucket(resultOn.context.currentLedger),
+        );
+      },
+    );
+
+    it(
+      "criterion 4 negative control: a stock divergence with unchanged allocations fails " +
+        "the post-settlement comparison",
+      () => {
+        // The comparison above is only evidence if it can fail. Settle the same allocations
+        // twice, then perturb one wallet in one settled world by a single unit -- exactly
+        // the shape of a telemetry-dependent settlement divergence -- and confirm the
+        // allocations still compare equal while the settled stock does not.
+        const config = createDefaultSimulationConfig();
+        const world = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 42);
+
+        const fixture = buildFixture(world, true);
+        const resultOn = executeTick(world, 1, world.pendingTransitions, fixture.handler);
+        const resultOff = executeTick(
+          world,
+          1,
+          world.pendingTransitions,
+          buildFixture(world, false).handler,
+        );
+        expect(resultOff.context.marketAllocations).toEqual(resultOn.context.marketAllocations);
+
+        const settledOn = applyMarketSettlementTransition(world, resultOn.context);
+        const settledOff = applyMarketSettlementTransition(world, resultOff.context);
+
+        const { buyerCohortId, currencyId } = fixture;
+        const divergentCohorts = new Map(settledOff.cohorts);
+        const buyer = divergentCohorts.get(buyerCohortId)!;
+        divergentCohorts.set(buyerCohortId, {
+          ...buyer,
+          wallet: new Map(buyer.wallet).set(currencyId, (buyer.wallet.get(currencyId) ?? 0) + 1),
+        });
+
+        expect(canonicalizeMapBucket(divergentCohorts)).not.toEqual(
+          canonicalizeMapBucket(settledOn.cohorts),
+        );
+      },
+    );
+  });
 });
