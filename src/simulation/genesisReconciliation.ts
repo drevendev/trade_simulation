@@ -10,7 +10,11 @@
  * - GOOD_ENDOWMENT is reconciled by (owner, regionId, goodId)
  * - CAPITAL_ENDOWMENT is reconciled by (owner (ProductionUnit), capital goodId)
  * - POPULATION_ENDOWMENT is reconciled by owner (Cohort)
- * - RESOURCE_ENDOWMENT is reconciled at its recorded region/deposit granularity
+ * - RESOURCE_ENDOWMENT is reconciled by (regionId, goodId)
+ *
+ * Section 20 states that `sourceSeedKey` is provenance only and must never substitute
+ * for typed stock identity, so every key above is built from the typed fields the
+ * GenesisRecord carries rather than from a reconstructed descriptive seed string.
  */
 
 import type { WorldGenesisLedger, GenesisRecord, ActorRef } from "../domain/genesisLedger";
@@ -133,7 +137,10 @@ export function reconcileGenesisStocks(
         break;
       }
       case "RESOURCE_ENDOWMENT": {
-        const granularity = `RES:${record.sourceSeedKey}`;
+        // A resource deposit's canonical identity is the region it sits in plus the
+        // resource good it holds, both carried typed on the record. `sourceSeedKey`
+        // stays provenance only (section 20).
+        const granularity = `RES:${String(record.regionId)}:${String(record.goodId)}`;
         const current = expectedResourcesByGranularity.get(granularity) ?? 0;
         expectedResourcesByGranularity.set(granularity, current + record.amount);
         break;
@@ -335,11 +342,13 @@ export function reconcileGenesisStocks(
     }
   });
 
-  // Sum resources by region-deposit granularity (using region + resource key)
-  worldState.regions.forEach((region) => {
+  // Sum resources by the region they sit in plus the resource good they hold. The
+  // region is read as the registry's own RegionId, not reconstructed from the seed
+  // key, so a record naming the wrong region cannot match a correct deposit.
+  worldState.regions.forEach((region, regionId) => {
     (region.seed.deposits ?? []).forEach((deposit) => {
       if (deposit.initialQuantity > 0) {
-        const granularity = `RES:${region.seed.key}.deposit.${deposit.resourceId}`;
+        const granularity = `RES:${String(regionId)}:${String(deposit.resourceId)}`;
         const current = actualResourcesByGranularity.get(granularity) ?? 0;
         actualResourcesByGranularity.set(granularity, current + deposit.initialQuantity);
       }

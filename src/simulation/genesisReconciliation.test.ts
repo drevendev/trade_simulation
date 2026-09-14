@@ -48,6 +48,16 @@ function createTestConfig(): SimulationConfig {
   };
 }
 
+/**
+ * Total recorded resource quantity, used by the typed-identity negative controls to
+ * show they change only which stock a record names, never how much is recorded.
+ */
+function totalResourceQuantity(records: readonly GenesisRecord[]): number {
+  return records
+    .filter((r) => r.type === "RESOURCE_ENDOWMENT")
+    .reduce((sum, r) => sum + r.amount, 0);
+}
+
 describe("reconcileGenesisStocks", () => {
   describe("positive tests", () => {
     it("baseline-multistate-v1 scenario reconciles successfully", () => {
@@ -729,6 +739,78 @@ describe("reconcileGenesisStocks", () => {
       const result = reconcileGenesisStocks(worldState, { records: modifiedRecords }, config);
       expect(result.success).toBe(false);
       expect(result.details?.category).toBe("GOOD");
+    });
+
+    it("fails when a resource deposit is relabeled into another region while its source key and amount are unchanged", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      const resourceRecord = worldState.worldGenesisLedger.records.find(
+        (r) => r.type === "RESOURCE_ENDOWMENT" && r.amount > 0,
+      );
+      expect(resourceRecord).toBeDefined();
+      if (!resourceRecord || resourceRecord.type !== "RESOURCE_ENDOWMENT") return;
+
+      const otherRegionId = Array.from(worldState.regions.keys()).find((id) => id !== resourceRecord.regionId);
+      expect(otherRegionId).toBeDefined();
+      if (!otherRegionId) return;
+
+      // Only the typed regionId changes: the deposit's provenance string and its
+      // quantity are byte-identical, so nothing but canonical location identity can
+      // catch this.
+      const relabelled = { ...resourceRecord, regionId: otherRegionId };
+      expect(relabelled.sourceSeedKey).toBe(resourceRecord.sourceSeedKey);
+      expect(relabelled.amount).toBe(resourceRecord.amount);
+
+      const modifiedRecords = worldState.worldGenesisLedger.records.map((r) =>
+        r === resourceRecord ? relabelled : r,
+      );
+      expect(totalResourceQuantity(modifiedRecords)).toBeCloseTo(
+        totalResourceQuantity(worldState.worldGenesisLedger.records),
+        12,
+      );
+
+      const result = reconcileGenesisStocks(worldState, { records: modifiedRecords }, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("RESOURCE");
+    });
+
+    it("fails when a resource deposit is relabeled as another good while its source key and amount are unchanged", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      const resourceRecords = worldState.worldGenesisLedger.records.filter(
+        (r): r is Extract<GenesisRecord, { type: "RESOURCE_ENDOWMENT" }> =>
+          r.type === "RESOURCE_ENDOWMENT" && r.amount > 0,
+      );
+      const resourceRecord = resourceRecords[0];
+      const otherGoodId = resourceRecords.find((r) => r.goodId !== resourceRecord?.goodId)?.goodId;
+      expect(resourceRecord).toBeDefined();
+      expect(otherGoodId).toBeDefined();
+      if (!resourceRecord || !otherGoodId) return;
+
+      // Only the typed goodId changes; the deposit stays in its own region, keeps its
+      // provenance string and keeps its quantity.
+      const relabelled = { ...resourceRecord, goodId: otherGoodId };
+      expect(relabelled.sourceSeedKey).toBe(resourceRecord.sourceSeedKey);
+      expect(relabelled.amount).toBe(resourceRecord.amount);
+      expect(relabelled.regionId).toBe(resourceRecord.regionId);
+
+      const modifiedRecords = worldState.worldGenesisLedger.records.map((r) =>
+        r === resourceRecord ? relabelled : r,
+      );
+      expect(totalResourceQuantity(modifiedRecords)).toBeCloseTo(
+        totalResourceQuantity(worldState.worldGenesisLedger.records),
+        12,
+      );
+
+      const result = reconcileGenesisStocks(worldState, { records: modifiedRecords }, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("RESOURCE");
     });
 
     it("fails when a cohort's population is relabeled as owned by its Clan while the amount is unchanged", () => {
