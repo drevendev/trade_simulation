@@ -159,12 +159,28 @@ async function renderPageInBrowser(options: {
  * Playwright's `isVisible()` reflects a non-empty bounding box and non-`visibility:hidden`
  * computed style, but it does not check opacity: an `opacity: 0` element is "visible" by
  * that definition while being fully transparent and unreadable. This combines `isVisible()`
- * with an explicit computed-opacity check so "readable" also rules out that gap.
+ * with an explicit opacity check so "readable" also rules out that gap.
+ *
+ * The opacity check walks the ancestor chain rather than reading the target node alone.
+ * CSS `opacity` applies to an element *and all of its contents*, but it is not inherited,
+ * so a fully transparent ancestor leaves the target's own computed `opacity` at `"1"` while
+ * the target and everything inside it composite to nothing. Reading only the target node
+ * therefore reports a fully invisible preview body as readable — see Issue #423.
  */
+async function effectiveOpacity(locator: import("playwright").Locator): Promise<number> {
+  return locator.evaluate((el) => {
+    let product = 1;
+    for (let node: Element | null = el; node !== null; node = node.parentElement) {
+      const own = Number.parseFloat(window.getComputedStyle(node).opacity);
+      product *= Number.isFinite(own) ? own : 1;
+    }
+    return product;
+  });
+}
+
 async function isReadable(locator: import("playwright").Locator): Promise<boolean> {
   if (!(await locator.isVisible())) return false;
-  const opacity = await locator.evaluate((el) => window.getComputedStyle(el).opacity);
-  return opacity !== "0";
+  return (await effectiveOpacity(locator)) > 0;
 }
 
 /** Bypasses the M1 DOM-population write while leaving the milestone-tag update and the JSON fetch intact. */
@@ -404,6 +420,43 @@ describe("M1/M2 Pages render smoke test", () => {
         expect(await page.locator("#m1-preview-body").isVisible()).toBe(true);
         // ...which is exactly the gap `isReadable` closes.
         expect(await isReadable(page.locator("#m1-preview-body"))).toBe(false);
+      } finally {
+        await page.close();
+      }
+    },
+    30_000
+  );
+
+  it(
+    "detects an ancestor opacity:0 regression that leaves the M1 preview body's own opacity at 1",
+    async () => {
+      const page = await renderPageInBrowser({
+        viewportWidth: 1280,
+        // Applied to the *panel*, not the body. `#m1-preview-body` is nested inside
+        // `#m1-preview`, so this composites the populated content away without touching
+        // the JSON artifact, the fetch URL, or the render callback.
+        injectCss: "#m1-preview { opacity: 0; }",
+      });
+      try {
+        // DOM population and the JSON fetch still succeeded...
+        expect(await page.locator("#m1-preview-body").textContent()).not.toContain(
+          "Loading world genesis data"
+        );
+        // ...Playwright still calls the body visible, because opacity does not affect
+        // the bounding box or `visibility`...
+        expect(await page.locator("#m1-preview-body").isVisible()).toBe(true);
+        // ...and the body's *own* computed opacity is still "1", because `opacity` is
+        // not inherited. A check reading only the target node therefore passes here,
+        // which is the false positive this control pins...
+        expect(
+          await page.locator("#m1-preview-body").evaluate((el) => window.getComputedStyle(el).opacity)
+        ).toBe("1");
+        // ...while the ancestor chain composites it to nothing.
+        expect(await effectiveOpacity(page.locator("#m1-preview-body"))).toBe(0);
+        expect(await isReadable(page.locator("#m1-preview-body"))).toBe(false);
+        // The untouched M2 panel stays readable, so this proves a targeted regression
+        // rather than a page-wide failure.
+        expect(await isReadable(page.locator("#m2-preview-body"))).toBe(true);
       } finally {
         await page.close();
       }
