@@ -13,7 +13,7 @@
     "descriptor in the tag message, and every telemetry record carries {id, digest} so",
     "a measurement window can be sliced by scheme without knowing any dates."
   ],
-  "active": "scheme/5",
+  "active": "scheme/6",
   "schemes": [
     {
       "id": "scheme/1",
@@ -105,6 +105,26 @@
       "rework_limit": 3,
       "cadence_minutes": 25,
       "note": "The experiment decided on 2026-09-09: does a stronger model need fewer rework rounds per requirement, so that the cost of a landed requirement grows by less than the 2x per-token price? Measured against the scheme/4 day of 2026-09-08 21:24Z to 2026-09-09 21:24Z: $27.47 per day, author mean $0.445 and max $1.30, acceptor mean $0.128 and max $0.59, 22 merges, one pull request closed by the rework bound. Forecast at equal volume about $55 per day. Ceilings unchanged on purpose: the costliest runs reached 26% and 20% of them. Effort is the CLI's default; no effort flag is passed. Activated by the two model variables (ZENDEV_AUTHOR_MODEL, ZENDEV_ACCEPTOR_MODEL) after this descriptor is active and the tag is cut, so `in_force_from` and `commit` are filled after activation, which does not change the digest. The queue at activation is the M3 tail: four PARTIAL rows under rework and one blocked, with M4's fifteen rows indexed and waiting on the M3 gate."
+    },
+    {
+      "id": "scheme/6",
+      "in_force_from": "",
+      "commit": "",
+      "summary": "Both roles move from Sonnet 5 to Opus 5, and the per-run ceilings scale with the 2.5x token price; everything else exactly as scheme/5.",
+      "roles": {
+        "author": {"identity": "zendev-author[bot]", "model": "claude-opus-5", "max_budget_usd": 12.5},
+        "acceptor": {"identity": "zendev-acceptor[bot]", "model": "claude-opus-5", "max_budget_usd": 7.5},
+        "machine": {"identity": "zendev-machine[bot]", "model": null}
+      },
+      "verdict_owner": "zendev-acceptor",
+      "voices": [
+        "EndlessZen as drevendev, owns the specification",
+        "SLOPSTER as andy-zen-dev, read-only: comments and Issues, never a formal review"
+      ],
+      "required_checks": ["build-and-test", "typescript", "policy-guard", "mergeability"],
+      "rework_limit": 3,
+      "cadence_minutes": 25,
+      "note": "The same question as scheme/5, one tier up: does the strongest model need so much less rework that a landed requirement costs less than the 2.5x per-token price would say? What scheme/5 measured, in its 20 live hours (2026-09-10 17:41Z to 09-11 13:40Z, after which every AUTHOR run failed on its first turn and the loop stood still until 09-14): $97.86 per day extrapolated against $27.47 on Haiku, author mean $1.336 and max $4.31, acceptor mean $0.362 and max $1.12, 18 author pull requests merged against 12, 0.44 refusals per merged pull request against 1.0, 11 of 18 accepted on the first verdict against 3 of 12, and $4.53 per merged pull request against $2.29, exactly 2.0x. Forecast at equal volume about $245 per day. Ceilings scaled 2.5x on purpose this time: the costliest Sonnet run reached 86% of its $5.00 ceiling, and a run cut by the ceiling is money spent on nothing. Effort is the CLI's default; no effort flag is passed. Activated by the four role variables (ZENDEV_{AUTHOR,ACCEPTOR}_{MODEL,BUDGET_USD}) after this descriptor is active and the tag is cut, so `in_force_from` and `commit` are filled after activation, which does not change the digest. The queue at activation: the M3 tail (REQ-MARKET-005 and REQ-VISUALIZATION-007 PARTIAL, REQ-VISUALIZATION-006 blocked) plus ten ready bug Issues from the specification owner filed while the loop stood still, with M4's fifteen rows waiting on the M3 gate. Decided 2026-09-14 as the last model experiment for now."
     }
   ]
 }
