@@ -621,6 +621,116 @@ describe("reconcileGenesisStocks", () => {
       expect(result.details?.category).toBe("GOOD");
     });
 
+    it("records cohort and ProductionUnit good endowments at the owning entity's own region", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+      const regionIdByKey = new Map(
+        Array.from(worldState.regions.entries(), ([regionId, region]) => [region.seed.key, regionId]),
+      );
+
+      let sawCohortGood = false;
+      let sawProductionUnitGood = false;
+      worldState.worldGenesisLedger.records.forEach((r) => {
+        if (r.type !== "GOOD_ENDOWMENT") return;
+        if (r.owner.type === "COHORT") {
+          const cohort = worldState.cohorts.get(r.owner.cohortId);
+          expect(cohort).toBeDefined();
+          expect(r.regionId).toBe(regionIdByKey.get(cohort!.seed.regionKey));
+          sawCohortGood = true;
+        }
+        if (r.owner.type === "PRODUCTION_UNIT") {
+          const pu = worldState.productionUnits.get(r.owner.productionUnitId);
+          expect(pu).toBeDefined();
+          expect(r.regionId).toBe(regionIdByKey.get(pu!.seed.regionKey));
+          sawProductionUnitGood = true;
+        }
+      });
+
+      expect(sawCohortGood).toBe(true);
+      expect(sawProductionUnitGood).toBe(true);
+    });
+
+    it("fails when a cohort's household inventory is relocated to another region while the owner+good total is unchanged", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      const cohortGoodRecord = worldState.worldGenesisLedger.records.find(
+        (r) => r.type === "GOOD_ENDOWMENT" && r.owner.type === "COHORT" && r.amount > 0,
+      );
+      expect(cohortGoodRecord).toBeDefined();
+      if (!cohortGoodRecord || cohortGoodRecord.type !== "GOOD_ENDOWMENT") return;
+
+      const otherRegionId = Array.from(worldState.regions.keys()).find((id) => id !== cohortGoodRecord.regionId);
+      expect(otherRegionId).toBeDefined();
+      if (!otherRegionId) return;
+
+      // Move half of this cohort's opening stock of this good into a region the cohort
+      // does not live in, leaving the owner+good aggregate exactly as it was.
+      const movedAmount = cohortGoodRecord.amount / 2;
+      const modifiedRecords = worldState.worldGenesisLedger.records.flatMap((r) =>
+        r === cohortGoodRecord
+          ? [
+              { ...cohortGoodRecord, amount: cohortGoodRecord.amount - movedAmount },
+              { ...cohortGoodRecord, regionId: otherRegionId, amount: movedAmount },
+            ]
+          : [r],
+      );
+      const modifiedLedger = { records: modifiedRecords };
+
+      const aggregateOf = (records: readonly GenesisRecord[]) =>
+        records
+          .filter(
+            (r) =>
+              r.type === "GOOD_ENDOWMENT" &&
+              JSON.stringify(r.owner) === JSON.stringify(cohortGoodRecord.owner) &&
+              r.goodId === cohortGoodRecord.goodId,
+          )
+          .reduce((sum, r) => sum + r.amount, 0);
+      expect(aggregateOf(modifiedLedger.records)).toBeCloseTo(
+        aggregateOf(worldState.worldGenesisLedger.records),
+        12,
+      );
+
+      const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("GOOD");
+    });
+
+    it("fails when a ProductionUnit's inventory is relocated to another region while the owner+good total is unchanged", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      const puGoodRecord = worldState.worldGenesisLedger.records.find(
+        (r) => r.type === "GOOD_ENDOWMENT" && r.owner.type === "PRODUCTION_UNIT" && r.amount > 0,
+      );
+      expect(puGoodRecord).toBeDefined();
+      if (!puGoodRecord || puGoodRecord.type !== "GOOD_ENDOWMENT") return;
+
+      const otherRegionId = Array.from(worldState.regions.keys()).find((id) => id !== puGoodRecord.regionId);
+      expect(otherRegionId).toBeDefined();
+      if (!otherRegionId) return;
+
+      const movedAmount = puGoodRecord.amount / 2;
+      const modifiedRecords = worldState.worldGenesisLedger.records.flatMap((r) =>
+        r === puGoodRecord
+          ? [
+              { ...puGoodRecord, amount: puGoodRecord.amount - movedAmount },
+              { ...puGoodRecord, regionId: otherRegionId, amount: movedAmount },
+            ]
+          : [r],
+      );
+
+      const result = reconcileGenesisStocks(worldState, { records: modifiedRecords }, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("GOOD");
+    });
+
     it("fails when a cohort's population is relabeled as owned by its Clan while the amount is unchanged", () => {
       const scenario = baselineScenario;
       const config = createTestConfig();

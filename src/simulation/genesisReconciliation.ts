@@ -7,7 +7,7 @@
  * Per Handoff/03 section 20, reconciliation must validate owner-bound identity
  * in addition to aggregate conservation:
  * - MONEY_ENDOWMENT and FX_POOL_OPENING are reconciled by (owner/poolKey, currencyId)
- * - GOOD_ENDOWMENT is reconciled by (owner, goodId)
+ * - GOOD_ENDOWMENT is reconciled by (owner, regionId, goodId)
  * - CAPITAL_ENDOWMENT is reconciled by (owner (ProductionUnit), capital goodId)
  * - POPULATION_ENDOWMENT is reconciled by owner (Cohort)
  * - RESOURCE_ENDOWMENT is reconciled at its recorded region/deposit granularity
@@ -16,7 +16,7 @@
 import type { WorldGenesisLedger, GenesisRecord, ActorRef } from "../domain/genesisLedger";
 import { resolveCapitalGoodsPerCapitalUnit } from "../domain/definitionRegistry";
 import type { SimulationConfig } from "../config/simulationConfig";
-import type { CurrencyId, GoodId } from "../domain/id";
+import type { CurrencyId, GoodId, RegionId } from "../domain/id";
 import type { WorldState } from "./worldState";
 
 export interface ReconciliationResult {
@@ -44,6 +44,19 @@ function serializeCapitalGood(goodId: GoodId | undefined): string {
   return goodId === undefined ? UNCONVERTED_CAPITAL_KEY : String(goodId);
 }
 
+/**
+ * Key segment for a good stock whose owner is not region-bound, i.e. a State's public
+ * inventory, which the State holds itself rather than in any one region it controls.
+ * Such a record carries no `regionId` (Handoff/03 section 20 declares `regionId?`), and
+ * this segment keeps it reconciled owner-bound instead of leaving it outside the
+ * comparison or colliding with a region-bound stock of the same owner and good.
+ */
+const UNLOCATED_STOCK_KEY = "NO_REGION";
+
+function serializeRegion(regionId: RegionId | undefined): string {
+  return regionId === undefined ? UNLOCATED_STOCK_KEY : String(regionId);
+}
+
 function serializeOwner(owner: ActorRef | undefined): string {
   if (!owner) return "NONE";
   if (owner.type === "STATE") return `STATE:${owner.stateId}`;
@@ -67,7 +80,7 @@ export function reconcileGenesisStocks(
 
   // Expected: owner-bound and location-granular stocks from ledger (REQ-CONFIG-004)
   const expectedMoneyByOwnerCurrency = new Map<string, number>();
-  const expectedGoodsByOwnerGoodId = new Map<string, number>();
+  const expectedGoodsByOwnerRegionGoodId = new Map<string, number>();
   const expectedCapitalByOwnerGood = new Map<string, number>();
   const expectedPopulationByGranularity = new Map<string, number>();
   const expectedResourcesByGranularity = new Map<string, number>();
@@ -98,9 +111,9 @@ export function reconcileGenesisStocks(
         if (record.owner) {
           const ownerKey = serializeOwner(record.owner);
           const goodKey = String(record.goodId);
-          const key = `${ownerKey}:${goodKey}`;
-          const current = expectedGoodsByOwnerGoodId.get(key) ?? 0;
-          expectedGoodsByOwnerGoodId.set(key, current + record.amount);
+          const key = `${ownerKey}:${serializeRegion(record.regionId)}:${goodKey}`;
+          const current = expectedGoodsByOwnerRegionGoodId.get(key) ?? 0;
+          expectedGoodsByOwnerRegionGoodId.set(key, current + record.amount);
         }
         break;
       }
@@ -130,10 +143,18 @@ export function reconcileGenesisStocks(
 
   // Actual: owner-bound and location-granular stocks from world state (REQ-CONFIG-004)
   const actualMoneyByOwnerCurrency = new Map<string, number>();
-  const actualGoodsByOwnerGoodId = new Map<string, number>();
+  const actualGoodsByOwnerRegionGoodId = new Map<string, number>();
   const actualCapitalByOwnerGood = new Map<string, number>();
   const actualPopulationByGranularity = new Map<string, number>();
   const actualResourcesByGranularity = new Map<string, number>();
+
+  // Canonical location of a region-bound stock is read from its owning entity's own
+  // region, resolved through the region registry rather than from any aggregate
+  // container that happens to hold the good.
+  const regionIdByRegionKey = new Map<string, RegionId>();
+  worldState.regions.forEach((region, regionId) => {
+    regionIdByRegionKey.set(region.seed.key, regionId);
+  });
 
   // Sum money by state owner + currency
   worldState.states.forEach((state) => {
@@ -150,13 +171,14 @@ export function reconcileGenesisStocks(
         }
       }
     });
-    // Sum goods by state owner + goodId
+    // Sum goods by state owner + goodId. A State's public inventory is not region-bound,
+    // so it carries the unlocated segment on both sides of the comparison.
     Object.entries(state.seed.publicInventory ?? {}).forEach(([goodKey, amount]) => {
       if (typeof amount === "number") {
         const ownerKey = `STATE:${state.stateId}`;
-        const key = `${ownerKey}:${goodKey}`;
-        const current = actualGoodsByOwnerGoodId.get(key) ?? 0;
-        actualGoodsByOwnerGoodId.set(key, current + amount);
+        const key = `${ownerKey}:${UNLOCATED_STOCK_KEY}:${goodKey}`;
+        const current = actualGoodsByOwnerRegionGoodId.get(key) ?? 0;
+        actualGoodsByOwnerRegionGoodId.set(key, current + amount);
       }
     });
   });
@@ -246,12 +268,13 @@ export function reconcileGenesisStocks(
         }
       }
     });
-    // Goods by cohort owner + goodId
+    // Goods by cohort owner + the cohort's own region + goodId
+    const cohortRegionId = regionIdByRegionKey.get(cohort.seed.regionKey);
     Object.entries(cohort.seed.householdInventory ?? {}).forEach(([goodKey, amount]) => {
       if (typeof amount === "number") {
-        const key = `${serializeOwner(cohortOwner)}:${goodKey}`;
-        const current = actualGoodsByOwnerGoodId.get(key) ?? 0;
-        actualGoodsByOwnerGoodId.set(key, current + amount);
+        const key = `${serializeOwner(cohortOwner)}:${serializeRegion(cohortRegionId)}:${goodKey}`;
+        const current = actualGoodsByOwnerRegionGoodId.get(key) ?? 0;
+        actualGoodsByOwnerRegionGoodId.set(key, current + amount);
       }
     });
   });
@@ -272,31 +295,24 @@ export function reconcileGenesisStocks(
         }
       }
     });
-    // Goods by PU owner + goodId
-    Object.entries(pu.seed.inputInventory ?? {}).forEach(([goodKey, amount]) => {
-      if (typeof amount === "number") {
-        const ownerKey = `PU:${pu.productionUnitId}`;
-        const key = `${ownerKey}:${goodKey}`;
-        const current = actualGoodsByOwnerGoodId.get(key) ?? 0;
-        actualGoodsByOwnerGoodId.set(key, current + amount);
-      }
-    });
-    Object.entries(pu.seed.outputInventory ?? {}).forEach(([goodKey, amount]) => {
-      if (typeof amount === "number") {
-        const ownerKey = `PU:${pu.productionUnitId}`;
-        const key = `${ownerKey}:${goodKey}`;
-        const current = actualGoodsByOwnerGoodId.get(key) ?? 0;
-        actualGoodsByOwnerGoodId.set(key, current + amount);
-      }
-    });
-    Object.entries(pu.seed.investmentInventory ?? {}).forEach(([goodKey, amount]) => {
-      if (typeof amount === "number") {
-        const ownerKey = `PU:${pu.productionUnitId}`;
-        const key = `${ownerKey}:${goodKey}`;
-        const current = actualGoodsByOwnerGoodId.get(key) ?? 0;
-        actualGoodsByOwnerGoodId.set(key, current + amount);
-      }
-    });
+    // Goods by PU owner + the unit's own region + goodId. The three inventory buckets
+    // still aggregate together here; typed bucket identity is Issue #455.
+    const puOwnerRegionPrefix = `${serializeOwner({
+      type: "PRODUCTION_UNIT",
+      productionUnitId: pu.productionUnitId,
+    })}:${serializeRegion(regionIdByRegionKey.get(pu.seed.regionKey))}`;
+    const addPuGoods = (inventory: Record<string, unknown> | undefined) => {
+      Object.entries(inventory ?? {}).forEach(([goodKey, amount]) => {
+        if (typeof amount === "number") {
+          const key = `${puOwnerRegionPrefix}:${goodKey}`;
+          const current = actualGoodsByOwnerRegionGoodId.get(key) ?? 0;
+          actualGoodsByOwnerRegionGoodId.set(key, current + amount);
+        }
+      });
+    };
+    addPuGoods(pu.seed.inputInventory);
+    addPuGoods(pu.seed.outputInventory);
+    addPuGoods(pu.seed.investmentInventory);
     // Capital by PU owner + capital good, through the documented recipe conversion
     if (pu.seed.installedCapital > 0) {
       const ownerKey = `PU:${pu.productionUnitId}`;
@@ -354,10 +370,10 @@ export function reconcileGenesisStocks(
     return null;
   };
 
-  // Check owner-bound goods reconciliation
+  // Check owner-bound, location-granular goods reconciliation
   const checkGoodReconciliation = (key: string) => {
-    const expected = expectedGoodsByOwnerGoodId.get(key) ?? 0;
-    const actual = actualGoodsByOwnerGoodId.get(key) ?? 0;
+    const expected = expectedGoodsByOwnerRegionGoodId.get(key) ?? 0;
+    const actual = actualGoodsByOwnerRegionGoodId.get(key) ?? 0;
     const residual = Math.abs(expected - actual);
     const relativeTolerance = tolerance * Math.max(Math.abs(expected), Math.abs(actual), 1);
 
@@ -414,13 +430,13 @@ export function reconcileGenesisStocks(
     }
   }
 
-  // Check owner-goodId combinations for goods
-  for (const key of expectedGoodsByOwnerGoodId.keys()) {
+  // Check owner-region-goodId combinations for goods
+  for (const key of expectedGoodsByOwnerRegionGoodId.keys()) {
     const result = checkGoodReconciliation(key);
     if (result) return result;
   }
-  for (const key of actualGoodsByOwnerGoodId.keys()) {
-    if (!expectedGoodsByOwnerGoodId.has(key)) {
+  for (const key of actualGoodsByOwnerRegionGoodId.keys()) {
+    if (!expectedGoodsByOwnerRegionGoodId.has(key)) {
       const result = checkGoodReconciliation(key);
       if (result) return result;
     }
