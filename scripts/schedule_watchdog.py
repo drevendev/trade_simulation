@@ -2,7 +2,9 @@
 
 Only the repository this runs in, its master branch and three existing workflows are
 allowed. No model runs here. A successful dispatch is not a successful unit of product
-work.
+work. A run that GitHub lists as queued but never starts is abandoned after
+STALE_QUEUE, so a role frozen by the forge thaws on its own instead of waiting for
+an operator.
 """
 
 from __future__ import annotations
@@ -29,6 +31,17 @@ BRANCH = "master"
 MODEL_TARGETS = ("zendev-author.yml", "zendev-acceptor.yml")
 TARGETS = ("spec-sync.yml",) + MODEL_TARGETS
 ACTIVE_STATUSES = ("queued", "in_progress", "waiting", "pending", "requested")
+# A run listed as queued, pending or requested that has not started after this long
+# is not going to. No job on this repository legitimately waits an hour for a
+# runner, and the longest a run can wait behind its own concurrency group is the
+# 45-minute job timeout of its predecessor. On 2026-09-13 the AUTHOR run dispatched
+# inside a GitHub incident (09:16Z-10:44Z, Actions degraded) stayed `queued` with no
+# jobs for days, and because every nonterminal status counted as activity the AUTHOR
+# was never dispatched again: a frozen role, reported as a busy one. `waiting` (an
+# approval gate, a human decision) and `in_progress` (bounded by the job timeout)
+# are deliberately not on this list.
+STALE_STATUSES = ("queued", "pending", "requested")
+STALE_QUEUE = timedelta(minutes=60)
 
 # Minimum gap between two dispatches of the same workflow. This is the only ceiling
 # on how often paid model runs start: an external timer may poke this dispatcher as
@@ -89,7 +102,35 @@ def read_runs(endpoint: str, **filters) -> list[dict]:
     raise RuntimeError("Incomplete workflow history; refusing to dispatch")
 
 
-def inspect_target(target: str, now: datetime, interval: timedelta = INTERVAL) -> dict:
+def stale_runs(runs: list[dict], now: datetime) -> list[dict]:
+    """Runs GitHub lists as not yet started for longer than STALE_QUEUE."""
+    return [run for run in runs
+            if run["status"] in STALE_STATUSES
+            and now - timestamp(run["created_at"]) >= STALE_QUEUE]
+
+
+def abandon_run(run_id: int) -> str:
+    """Ask GitHub to end a run that never started, and say what happened either way.
+
+    A plain cancel is refused for a run GitHub already considers finished while it
+    still lists it as queued (the 2026-09-13 ghost answered "Cannot cancel a workflow
+    run that is completed"); force-cancel exists for exactly that state. Neither
+    refusal is a reason to keep the role frozen: the outcome is reported and the run
+    is left out of the picture regardless. The target's own concurrency group
+    serialises a duplicate, so dispatching next to a ghost can at worst wait, never
+    run twice at once.
+    """
+    for verb in ("cancel", "force-cancel"):
+        try:
+            api(f"repos/{REPOSITORY}/actions/runs/{run_id}/{verb}", payload={})
+        except RuntimeError:
+            continue
+        return f"{verb} requested"
+    return "GitHub refused both cancel and force-cancel; left out of the picture"
+
+
+def inspect_target(target: str, now: datetime, interval: timedelta = INTERVAL,
+                   *, recover: bool = False) -> dict:
     if target not in TARGETS:
         raise ValueError("Workflow is not allowlisted")
     endpoint = f"repos/{REPOSITORY}/actions/workflows/{target}"
@@ -105,8 +146,30 @@ def inspect_target(target: str, now: datetime, interval: timedelta = INTERVAL) -
     for run in active:
         if run["head_branch"] != BRANCH or run["workflow_id"] != workflow["id"]:
             raise ValueError("Workflow history is outside the requested target")
+
+    # A run stuck in the queue is not activity. A dry run reports it; a recovery
+    # pass abandons it, so the target is judged on the runs that can still happen.
+    stale = stale_runs(active, now)
+    abandoned = []
+    if stale and recover:
+        for run in stale:
+            outcome = abandon_run(run["id"])
+            abandoned.append({"run_id": run["id"], "outcome": outcome})
+            print(f"::warning::{target}: run {run['id']} has been {run['status']} since "
+                  f"{run['created_at']} without starting; {outcome}", flush=True)
+        left_out = {entry["run_id"] for entry in abandoned}
+        active = [run for run in active if run["id"] not in left_out]
+
+    def done(result: dict) -> dict:
+        if abandoned:
+            result["abandoned"] = abandoned
+        return result
+
     if active:
-        return {"workflow": target, "decision": "active", "run_ids": [r["id"] for r in active]}
+        result = {"workflow": target, "decision": "active", "run_ids": [r["id"] for r in active]}
+        if stale and not recover:
+            result["stale_run_ids"] = [r["id"] for r in stale]
+        return done(result)
 
     # Failed/cancelled attempts count too: do not turn a permanent failure into
     # a paid retry storm. No historic catch-up; at most one dispatch per target.
@@ -114,13 +177,16 @@ def inspect_target(target: str, now: datetime, interval: timedelta = INTERVAL) -
     for run in recent:
         if run["head_branch"] != BRANCH or run["workflow_id"] != workflow["id"]:
             raise ValueError("Workflow history is outside the requested target")
+    left_out = {entry["run_id"] for entry in abandoned}
+    recent = [run for run in recent if run["id"] not in left_out]
+    for run in recent:
         if run["status"] != "completed":
-            return {"workflow": target, "decision": "active", "run_ids": [run["id"]]}
+            return done({"workflow": target, "decision": "active", "run_ids": [run["id"]]})
     latest = max(recent, key=lambda r: timestamp(r["created_at"]), default=None)
     if latest is not None and now - timestamp(latest["created_at"]) < interval:
-        return {"workflow": target, "decision": "recent", "run_id": latest["id"],
-                "created_at": latest["created_at"], "conclusion": latest["conclusion"]}
-    return {"workflow": target, "decision": "due"}
+        return done({"workflow": target, "decision": "recent", "run_id": latest["id"],
+                     "created_at": latest["created_at"], "conclusion": latest["conclusion"]})
+    return done({"workflow": target, "decision": "due"})
 
 
 def last_run_time(target: str) -> datetime | None:
@@ -223,7 +289,8 @@ def run(*, dispatch: bool = False, now: datetime | None = None,
     if not is_enabled():
         return [{"decision": "disabled", "reason": "ZENDEV_ENABLED is not true"}]
     when = now or datetime.now(timezone.utc)
-    results = {target: inspect_target(target, when, interval) for target in TARGETS}
+    # Only a recovery pass may abandon a stale run; diagnostics never touch the forge.
+    results = {target: inspect_target(target, when, interval, recover=dispatch) for target in TARGETS}
 
     if dispatch:
         # At most one model target dispatches per pass. When both are simultaneously
@@ -250,7 +317,7 @@ def run(*, dispatch: bool = False, now: datetime | None = None,
                 result = {"workflow": target, "decision": "disabled"}
                 ordered.append(result)
                 break
-            result = inspect_target(target, when, interval)
+            result = inspect_target(target, when, interval, recover=dispatch)
             if result["decision"] == "due":
                 api(f"repos/{REPOSITORY}/actions/workflows/{target}/dispatches",
                     payload={"ref": BRANCH})

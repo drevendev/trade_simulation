@@ -142,7 +142,7 @@ class DispatchTests(unittest.TestCase):
         # Only one model target is simultaneously due here, so alternation never
         # kicks in and every due target -- spec-sync plus the one model target --
         # dispatches. See AlternationDispatchTests for the both-due case.
-        with patch.object(watchdog, "inspect_target", side_effect=lambda target, now, interval=None: {
+        with patch.object(watchdog, "inspect_target", side_effect=lambda target, now, interval=None, **_: {
             "workflow": target, "decision": "due" if target != "zendev-acceptor.yml" else "recent"}), \
                 patch.object(watchdog, "api") as api:
             watchdog.run(dispatch=True, now=NOW)
@@ -173,7 +173,7 @@ class DispatchTests(unittest.TestCase):
     def test_uncertain_dispatch_is_not_retried(self):
         # Only spec-sync is due, so this exercises the POST failure itself rather
         # than the (separately tested) alternation tie-break lookup.
-        with patch.object(watchdog, "inspect_target", side_effect=lambda target, now, interval=None: (
+        with patch.object(watchdog, "inspect_target", side_effect=lambda target, now, interval=None, **_: (
                 {"decision": "due"} if target == "spec-sync.yml" else {"decision": "recent"})), \
                 patch.object(watchdog, "api", side_effect=RuntimeError("network")) as api, \
                 self.assertRaises(RuntimeError):
@@ -310,7 +310,7 @@ class AlternationDispatchTests(unittest.TestCase):
         self.addCleanup(self.enabled.stop)
 
     def decide(self, decisions):
-        return lambda target, now, interval=None: {"workflow": target, "decision": decisions[target]}
+        return lambda target, now, interval=None, **_: {"workflow": target, "decision": decisions[target]}
 
     def test_both_due_dispatches_only_the_target_run_less_recently(self):
         decisions = {"spec-sync.yml": "recent", "zendev-author.yml": "due", "zendev-acceptor.yml": "due"}
@@ -394,6 +394,118 @@ class AlternationDispatchTests(unittest.TestCase):
         second_by = {r.get("workflow"): r["decision"] for r in second}
         self.assertEqual(second_by["zendev-acceptor.yml"], "dispatched")
         self.assertEqual(second_by["zendev-author.yml"], "deferred")
+
+
+class StaleQueueTests(unittest.TestCase):
+    """A run GitHub never starts must not freeze its role.
+
+    On 2026-09-13 run 34749651376 was dispatched inside a GitHub incident and stayed
+    `queued` with no jobs; every pass reported the AUTHOR as active for a day and a
+    half, and GitHub refused a plain cancel because it considered the run finished.
+    """
+
+    def inspect(self, runs, recover, refuse=(), recent=()):
+        posts = []
+
+        def fake_api(path, *, payload=None):
+            if payload is None:
+                return {"state": "active", "id": 1}
+            posts.append(path)
+            if any(path.endswith("/" + verb) for verb in refuse):
+                raise RuntimeError("GitHub API request failed (gh exit 1)")
+            return None
+
+        def history(endpoint, **filters):
+            if "status" not in filters:
+                return list(recent)
+            return [run for run in runs if run["status"] == filters["status"]]
+
+        with patch.object(watchdog, "api", side_effect=fake_api), \
+                patch.object(watchdog, "read_runs", side_effect=history):
+            result = watchdog.inspect_target(watchdog.MODEL_TARGETS[0], NOW, recover=recover)
+        return result, [path.rsplit("/", 1)[1] for path in posts], posts
+
+    def stale(self, status="queued", age=61, **fields):
+        return attempt(age=age, status=status, conclusion=None, **fields)
+
+    def test_a_run_inside_the_threshold_is_activity_whatever_its_status(self):
+        for status in watchdog.STALE_STATUSES:
+            with self.subTest(status=status):
+                result, verbs, _ = self.inspect([self.stale(status, age=59.99)], recover=True)
+                self.assertEqual(result["decision"], "active")
+                self.assertEqual(verbs, [])
+
+    def test_a_dry_run_reports_a_stale_run_and_touches_nothing(self):
+        result, verbs, _ = self.inspect([self.stale()], recover=False)
+        self.assertEqual(result["decision"], "active")
+        self.assertEqual(result["stale_run_ids"], [123])
+        self.assertEqual(verbs, [])
+
+    def test_a_recovery_pass_cancels_a_stale_run_and_the_target_is_due(self):
+        result, verbs, posts = self.inspect([self.stale()], recover=True)
+        self.assertEqual(result["decision"], "due")
+        self.assertEqual(posts, [f"repos/{watchdog.REPOSITORY}/actions/runs/123/cancel"])
+        self.assertEqual(result["abandoned"], [{"run_id": 123, "outcome": "cancel requested"}])
+        self.assertNotIn("stale_run_ids", result)
+
+    def test_every_stale_status_is_abandoned_at_the_threshold(self):
+        for status in watchdog.STALE_STATUSES:
+            with self.subTest(status=status):
+                result, verbs, _ = self.inspect([self.stale(status, age=60)], recover=True)
+                self.assertEqual(result["decision"], "due")
+                self.assertEqual(verbs, ["cancel"])
+
+    def test_force_cancel_follows_a_refused_cancel(self):
+        result, verbs, _ = self.inspect([self.stale()], recover=True, refuse=("cancel",))
+        self.assertEqual(result["decision"], "due")
+        self.assertEqual(verbs, ["cancel", "force-cancel"])
+        self.assertEqual(result["abandoned"][0]["outcome"], "force-cancel requested")
+
+    def test_a_ghost_nobody_can_cancel_still_does_not_freeze_the_role(self):
+        result, verbs, _ = self.inspect([self.stale()], recover=True, refuse=("cancel", "force-cancel"))
+        self.assertEqual(result["decision"], "due")
+        self.assertEqual(verbs, ["cancel", "force-cancel"])
+        self.assertIn("refused both", result["abandoned"][0]["outcome"])
+
+    def test_approval_gates_and_running_jobs_are_never_abandoned(self):
+        for status in ("waiting", "in_progress"):
+            with self.subTest(status=status):
+                result, verbs, _ = self.inspect([self.stale(status, age=6000)], recover=True)
+                self.assertEqual(result["decision"], "active")
+                self.assertEqual(verbs, [])
+                self.assertNotIn("stale_run_ids", result)
+
+    def test_a_live_run_next_to_a_ghost_keeps_the_target_active(self):
+        runs = [self.stale(), self.stale("in_progress", age=5, id=124)]
+        result, verbs, _ = self.inspect(runs, recover=True)
+        self.assertEqual(result["decision"], "active")
+        self.assertEqual(result["run_ids"], [124])
+        self.assertEqual(verbs, ["cancel"])
+
+    def test_an_abandoned_run_is_not_recent_activity_either(self):
+        # With a cadence longer than the threshold the ghost also sits inside the
+        # recent window; it must not count there as an unfinished attempt.
+        ghost = self.stale()
+        result, verbs, _ = self.inspect([ghost], recover=True, recent=[ghost])
+        self.assertEqual(result["decision"], "due")
+        self.assertEqual(verbs, ["cancel"])
+
+    def test_run_recovers_only_when_dispatching(self):
+        seen = []
+
+        def spy(target, now, interval=None, **kwargs):
+            seen.append(kwargs.get("recover"))
+            return {"workflow": target, "decision": "recent"}
+
+        with patch.object(watchdog, "is_enabled", return_value=True), \
+                patch.object(watchdog, "inspect_target", side_effect=spy), \
+                patch.object(watchdog, "api") as api:
+            watchdog.run(now=NOW)
+            self.assertEqual(set(seen), {False})
+            seen.clear()
+            watchdog.run(dispatch=True, now=NOW)
+            self.assertEqual(set(seen), {True})
+            api.assert_not_called()
 
 
 class WiringTests(unittest.TestCase):
