@@ -6,7 +6,7 @@
  */
 
 import type { DefinitionRegistry } from "../domain/definitionRegistry";
-import { buildDefinitionRegistry } from "../domain/definitionRegistry";
+import { buildDefinitionRegistry, resolveCapitalGoodsPerCapitalUnit } from "../domain/definitionRegistry";
 import { createIdAllocator, allocateInCreationKeyOrder } from "../domain/id";
 import type {
   ClanId,
@@ -506,20 +506,37 @@ export function buildInitialWorld(
       }
     });
 
-    // Track PU installed capital (capital endowment, owned by PU itself)
-    // Note: installedCapital represents existing capital goods converted; need GoodId from recipe
+    // Track PU installed capital (capital endowment, owned by PU itself).
+    // Section 20 requires capital-converted goods to match genesis goods after the
+    // documented conversion; that conversion is the unit's recipe
+    // investmentGoodsPerCapitalUnit, so capital is recorded per capital good.
     if (puSeed.installedCapital > 0) {
-      // For now, use a placeholder; will be resolved with recipe
-      const capitalGoodId = "capital" as any;
-      const record: GenesisRecord = {
-        type: "CAPITAL_ENDOWMENT",
-        owner: puOwner,
-        regionId,
-        goodId: capitalGoodId,
-        amount: puSeed.installedCapital,
-        sourceSeedKey: `${puSeed.key}.installedCapital`,
-      };
-      worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+      const capitalGoods = resolveCapitalGoodsPerCapitalUnit(definitionPack, puSeed.recipeId);
+
+      if (capitalGoods.length > 0) {
+        capitalGoods.forEach(([goodId, goodsPerCapitalUnit]) => {
+          const record: GenesisRecord = {
+            type: "CAPITAL_ENDOWMENT",
+            owner: puOwner,
+            regionId,
+            goodId,
+            amount: puSeed.installedCapital * goodsPerCapitalUnit,
+            sourceSeedKey: `${puSeed.key}.installedCapital.${goodId}`,
+          };
+          worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+        });
+      } else {
+        // The recipe declares no investment good, so this capital embodies no
+        // tradable good: record it without a goodId rather than fabricating one.
+        const record: GenesisRecord = {
+          type: "CAPITAL_ENDOWMENT",
+          owner: puOwner,
+          regionId,
+          amount: puSeed.installedCapital,
+          sourceSeedKey: `${puSeed.key}.installedCapital`,
+        };
+        worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
+      }
     }
   });
 

@@ -5,6 +5,7 @@ import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPac
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import type { SimulationConfig } from "../config/simulationConfig";
 import { addGenesisRecord, createEmptyWorldGenesisLedger, type GenesisRecord } from "../domain/genesisLedger";
+import type { GoodId } from "../domain/id";
 
 function createTestConfig(): SimulationConfig {
   return {
@@ -687,6 +688,125 @@ describe("reconcileGenesisStocks", () => {
       const modifiedLedger = { records: modifiedRecords };
 
       // Reconciliation should fail because we've relocated capital between different owners
+      const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("CAPITAL");
+    });
+
+    it("records capital per capital good through the documented recipe conversion", () => {
+      const config = createTestConfig();
+      const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 42);
+
+      const capitalRecords = worldState.worldGenesisLedger.records.filter(
+        (r) => r.type === "CAPITAL_ENDOWMENT",
+      );
+      expect(capitalRecords.length).toBeGreaterThan(0);
+
+      // `recipe:tools-craft` declares 100 good:tools per capital unit, so every
+      // capital record for one of its units names that good and carries the
+      // converted quantity rather than a fabricated good and a raw capital total.
+      const craftUnit = Array.from(worldState.productionUnits.values()).find(
+        (pu) => pu.seed.recipeId === "recipe:tools-craft" && pu.seed.installedCapital > 0,
+      );
+      expect(craftUnit).toBeDefined();
+
+      const craftRecords = capitalRecords.filter(
+        (r) =>
+          r.type === "CAPITAL_ENDOWMENT" &&
+          r.owner?.type === "PRODUCTION_UNIT" &&
+          r.owner.productionUnitId === craftUnit!.productionUnitId,
+      );
+      expect(craftRecords).toHaveLength(1);
+      expect(craftRecords[0]).toMatchObject({
+        goodId: "good:tools",
+        amount: craftUnit!.seed.installedCapital * 100,
+      });
+
+      // `recipe:food-harvest` declares no investment good, so its capital embodies
+      // no tradable good and is recorded without a goodId instead of a placeholder.
+      const harvestUnit = Array.from(worldState.productionUnits.values()).find(
+        (pu) => pu.seed.recipeId === "recipe:food-harvest" && pu.seed.installedCapital > 0,
+      );
+      expect(harvestUnit).toBeDefined();
+
+      const harvestRecords = capitalRecords.filter(
+        (r) =>
+          r.type === "CAPITAL_ENDOWMENT" &&
+          r.owner?.type === "PRODUCTION_UNIT" &&
+          r.owner.productionUnitId === harvestUnit!.productionUnitId,
+      );
+      expect(harvestRecords).toHaveLength(1);
+      expect(harvestRecords[0]).toMatchObject({ amount: harvestUnit!.seed.installedCapital });
+      expect(
+        harvestRecords[0]!.type === "CAPITAL_ENDOWMENT" && harvestRecords[0]!.goodId,
+      ).toBeUndefined();
+
+      // No record names the pre-repair placeholder good.
+      expect(
+        capitalRecords.some((r) => r.type === "CAPITAL_ENDOWMENT" && r.goodId === ("capital" as never)),
+      ).toBe(false);
+    });
+
+    it("fails when capital is relocated between capital goods of one ProductionUnit while the unit's total is unchanged", () => {
+      const config = createTestConfig();
+      const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 42);
+
+      // One ProductionUnit's capital record, for a recipe with a declared capital good.
+      const capitalRecord = worldState.worldGenesisLedger.records.find(
+        (r) => r.type === "CAPITAL_ENDOWMENT" && r.owner?.type === "PRODUCTION_UNIT" && r.goodId,
+      );
+      expect(capitalRecord).toBeDefined();
+      if (capitalRecord?.type !== "CAPITAL_ENDOWMENT") return;
+
+      // Move half of it onto a different capital good of the *same* owner.
+      const movedAmount = capitalRecord.amount * 0.5;
+      const relocated: GenesisRecord = {
+        ...capitalRecord,
+        goodId: "good:iron" as GoodId,
+        amount: movedAmount,
+        sourceSeedKey: `${capitalRecord.sourceSeedKey}.relocated`,
+      };
+      const modifiedRecords = worldState.worldGenesisLedger.records
+        .map((r) => (r === capitalRecord ? { ...r, amount: r.amount - movedAmount } : r))
+        .concat(relocated);
+      const modifiedLedger = { records: modifiedRecords };
+
+      // The owner's total capital across goods is unchanged, so an owner-only
+      // reconciliation could not see this relocation.
+      const totalFor = (records: readonly GenesisRecord[]) =>
+        records
+          .filter(
+            (r) =>
+              r.type === "CAPITAL_ENDOWMENT" &&
+              r.owner?.type === "PRODUCTION_UNIT" &&
+              capitalRecord.owner.type === "PRODUCTION_UNIT" &&
+              r.owner.productionUnitId === capitalRecord.owner.productionUnitId,
+          )
+          .reduce((sum, r) => sum + r.amount, 0);
+      expect(totalFor(modifiedRecords)).toBeCloseTo(totalFor(worldState.worldGenesisLedger.records), 9);
+
+      const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("CAPITAL");
+    });
+
+    it("fails when good-less ProductionUnit capital is perturbed", () => {
+      const config = createTestConfig();
+      const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 42);
+
+      // A recipe with no declared capital good still reconciles owner-bound, so the
+      // repair does not drop that capital out of the comparison.
+      const unconvertedRecord = worldState.worldGenesisLedger.records.find(
+        (r) => r.type === "CAPITAL_ENDOWMENT" && r.owner?.type === "PRODUCTION_UNIT" && !r.goodId,
+      );
+      expect(unconvertedRecord).toBeDefined();
+
+      const modifiedLedger = {
+        records: worldState.worldGenesisLedger.records.map((r) =>
+          r === unconvertedRecord ? { ...r, amount: r.amount + 25 } : r,
+        ),
+      };
+
       const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
       expect(result.success).toBe(false);
       expect(result.details?.category).toBe("CAPITAL");
