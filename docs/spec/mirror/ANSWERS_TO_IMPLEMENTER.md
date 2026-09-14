@@ -730,3 +730,14 @@ No specification, economic mechanism, accounting identity, phase order, or v1 sc
 STATUS: Q-001 ANSWERED / IMPLEMENTATION\_SCHEMA\_FIX\_REQUIRED  
 D
 
+2026-09-14 — R291 / CODE\_RUNTIME\_QA\_CONFIG\_004\_06 / HANDOFF-REPAIR-017 — ProductionUnit genesis inventory-bucket identity
+
+Current master emits ProductionUnit inputInventory, outputInventory and investmentInventory as separate GOOD\_ENDOWMENT records, but the only record-level distinction is sourceSeedKey. GenesisRecord has no typed inventory-bucket field, and genesis reconciliation aggregates ProductionUnit goods by owner \+ good. As a result, moving an unchanged quantity of the same good from INPUT to OUTPUT or INVESTMENT can preserve the aggregate and incorrectly pass reconciliation.
+
+Drive authority is repaired with the smallest accounting-representation change. GenesisRecord now includes inventoryBucket?: 'INPUT' | 'OUTPUT' | 'INVESTMENT'. For a ProductionUnit-owned GOOD\_ENDOWMENT the field is required, and canonical stock identity is ProductionUnit \+ region \+ inventoryBucket \+ goodId. sourceSeedKey remains provenance only. Acceptance now requires a negative control that preserves the owner/region/good aggregate while relocating stock between ProductionUnit buckets and proves reconciliation fails.
+
+Implementation request: add the typed bucket to src/domain/genesisLedger.ts; emit INPUT / OUTPUT / INVESTMENT from src/simulation/worldState.ts; compare expected and actual ProductionUnit goods using bucket-specific keys in src/simulation/genesisReconciliation.ts; and add the cross-bucket negative regression. Keep this separate from the already-open region/good/resource/population identity repairs \#448–\#452. REQ-CONFIG-004 remains operationally QA-contested until the repair is merged and the authoritative implementation-status evidence is reconciled.
+
+No new implementation-package file was added, so no mirror allowlist request is required. No stock amount, production mechanic, formula, default, phase order or v1 scope changed.
+
+STATUS: SPEC\_REPRESENTATION\_REPAIRED / IMPLEMENTATION\_REPAIR\_REQUIRED  

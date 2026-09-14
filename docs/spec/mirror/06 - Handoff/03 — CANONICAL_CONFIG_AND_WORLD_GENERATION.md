@@ -585,10 +585,13 @@ interface GenesisRecord {
   currencyId?: CurrencyId;  
   goodId?: GoodId;  
   amount: number;  
+  inventoryBucket?: 'INPUT' | 'OUTPUT' | 'INVESTMENT';  
   sourceSeedKey: string;  
 }
 
 For MONEY\_ENDOWMENT, GOOD\_ENDOWMENT and CAPITAL\_ENDOWMENT, owner identifies the authoritative holder of the recorded stock. For GenesisRecord.owner specifically, the genesis owner-reference vocabulary must support ProductionUnit { productionUnitId: ProductionUnitId } and MonetaryAuthority { authorityId: MonetaryAuthorityId } in addition to the existing actor kinds. A MonetaryAuthoritySeed.wallet entry is MonetaryAuthority-owned MONEY\_ENDOWMENT and must reconcile by that authority \+ currency; it is not an FX-pool reserve. This is a genesis-accounting reference extension only: it does not make MonetaryAuthority an eligible MarketIntent, MarketAllocation, ordinary EconomicTransaction, or other actor role unless that subsystem separately authorizes it. Implementations should use a genesis-specific owner-reference type or equivalent narrowing rather than widening unrelated actor surfaces. A ProductionUnit wallet and its input/output/investment inventories are ProductionUnit-owned stocks even when the unit's equity/public owner is a Clan or State; genesis records must reference the ProductionUnit itself and must never reattribute those balances to its owner. This preserves one-stock/one-owner and prevents double counting.
+
+For a ProductionUnit-owned GOOD\_ENDOWMENT, inventoryBucket is required and must be exactly INPUT, OUTPUT, or INVESTMENT according to the authoritative inventory that receives the opening stock. The bucket is part of canonical stock identity: reconciliation must compare ProductionUnit \+ region \+ inventoryBucket \+ goodId, not a ProductionUnit-wide aggregate. sourceSeedKey is provenance only and must never substitute for typed stock identity. A test must move an unchanged quantity of the same good between two ProductionUnit inventory buckets while preserving the owner/region/good aggregate and prove that genesis reconciliation fails.
 
 FX\_POOL\_OPENING records one explicit FxPoolSeed cash side: currencyId identifies the side currency, amount is that side's opening cash, and sourceSeedKey identifies the owning FxPoolSeed pair. It has no ActorRef because pool reserves are distinct from every actor wallet, including MonetaryAuthoritySeed.wallet, and must be counted exactly once. Genesis records explain opening balance-sheet stocks but do not pretend that a historical counterparty transaction occurred before tick 0\. For every currency, sum actor/pool opening balances must exactly equal opening transaction money reported by the monetary diagnostic. For every good, opening inventories \+ capital-converted goods already represented as capital \+ shipments(0) must match genesis goods after documented conversion. Resource deposits are natural endowments and are not market inventory.
 
@@ -708,7 +711,7 @@ Unit tests:
 \- rejects duplicate State membership across authorities or membership mismatched to the Currency issuer;  
 \- foreign-legal-tender successor-compatible scenario validation;  
 \- \[REQ-CONFIG-004\] genesis money reconciliation;  
-\- \[REQ-CONFIG-004\] genesis good reconciliation;  
+\- \[REQ-CONFIG-004\] genesis good reconciliation, including a negative control that preserves a ProductionUnit owner/region/good total while moving quantity between INPUT/OUTPUT/INVESTMENT buckets and must fail;  
 \- keyed variation independence from array order;  
 \- canonical scenario/config/definition-pack hashes are declaration-order independent for schema-defined unordered keyed collections;  
 \- changing any material ScenarioDefinition field changes scenarioHash even if id/version is accidentally unchanged;  
