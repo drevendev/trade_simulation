@@ -473,6 +473,7 @@ export function buildInitialWorld(
           regionId,
           goodId,
           amount,
+          inventoryBucket: "INPUT",
           sourceSeedKey: `${puSeed.key}.inputInventory.${goodKey}`,
         };
         worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
@@ -489,6 +490,7 @@ export function buildInitialWorld(
           regionId,
           goodId,
           amount,
+          inventoryBucket: "OUTPUT",
           sourceSeedKey: `${puSeed.key}.outputInventory.${goodKey}`,
         };
         worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
@@ -505,6 +507,7 @@ export function buildInitialWorld(
           regionId,
           goodId,
           amount,
+          inventoryBucket: "INVESTMENT",
           sourceSeedKey: `${puSeed.key}.investmentInventory.${goodKey}`,
         };
         worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);

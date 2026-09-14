@@ -4,7 +4,12 @@ import { reconcileGenesisStocks } from "./genesisReconciliation";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import type { SimulationConfig } from "../config/simulationConfig";
-import { addGenesisRecord, createEmptyWorldGenesisLedger, type GenesisRecord } from "../domain/genesisLedger";
+import {
+  addGenesisRecord,
+  createEmptyWorldGenesisLedger,
+  type GenesisRecord,
+  type InventoryBucket,
+} from "../domain/genesisLedger";
 import type { GoodId } from "../domain/id";
 
 function createTestConfig(): SimulationConfig {
@@ -47,6 +52,29 @@ function createTestConfig(): SimulationConfig {
     performance: {},
   };
 }
+
+/**
+ * A ProductionUnit-owned opening goods stock. This is the only GenesisRecord member that
+ * carries a required `inventoryBucket`, so extracting on that field selects it exactly.
+ */
+type ProductionUnitGoodEndowment = Extract<
+  GenesisRecord,
+  { type: "GOOD_ENDOWMENT"; inventoryBucket: InventoryBucket }
+>;
+
+function isProductionUnitGoodEndowment(record: GenesisRecord): record is ProductionUnitGoodEndowment {
+  return record.type === "GOOD_ENDOWMENT" && record.owner.type === "PRODUCTION_UNIT";
+}
+
+/**
+ * An opening goods stock held in an inventory that is not a ProductionUnit bucket — a
+ * Cohort's household inventory or a State's public inventory. These carry no
+ * `inventoryBucket`, which is what distinguishes the member.
+ */
+type UnbucketedGoodEndowment = Extract<
+  GenesisRecord,
+  { type: "GOOD_ENDOWMENT"; inventoryBucket?: undefined }
+>;
 
 /**
  * Total recorded resource quantity, used by the typed-identity negative controls to
@@ -622,18 +650,23 @@ describe("reconcileGenesisStocks", () => {
       const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
 
       const cohortGoodRecord = worldState.worldGenesisLedger.records.find(
-        (r) => r.type === "GOOD_ENDOWMENT" && r.owner.type === "COHORT",
+        (r): r is UnbucketedGoodEndowment => r.type === "GOOD_ENDOWMENT" && r.owner.type === "COHORT",
       );
       expect(cohortGoodRecord).toBeDefined();
-      if (!cohortGoodRecord || cohortGoodRecord.type !== "GOOD_ENDOWMENT" || cohortGoodRecord.owner.type !== "COHORT") {
+      if (!cohortGoodRecord || cohortGoodRecord.owner.type !== "COHORT") {
         return;
       }
       const cohort = worldState.cohorts.get(cohortGoodRecord.owner.cohortId);
       expect(cohort).toBeDefined();
       if (!cohort) return;
 
+      // Spread the narrowed cohort-owned record rather than the un-narrowed union element:
+      // a ProductionUnit-owned GOOD_ENDOWMENT must carry an inventoryBucket that a
+      // Clan-owned one may not, so only the narrowed value has the right shape.
       const modifiedRecords = worldState.worldGenesisLedger.records.map((r) =>
-        r === cohortGoodRecord ? { ...r, owner: { type: "CLAN" as const, clanId: cohort.clanId } } : r,
+        r === cohortGoodRecord
+          ? { ...cohortGoodRecord, owner: { type: "CLAN" as const, clanId: cohort.clanId } }
+          : r,
       );
       const modifiedLedger = { records: modifiedRecords };
 
@@ -745,6 +778,119 @@ describe("reconcileGenesisStocks", () => {
               { ...puGoodRecord, regionId: otherRegionId, amount: movedAmount },
             ]
           : [r],
+      );
+
+      const result = reconcileGenesisStocks(worldState, { records: modifiedRecords }, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("GOOD");
+    });
+
+    it("records each ProductionUnit opening inventory under its own typed bucket", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      const bucketBySeedSegment: ReadonlyArray<[string, InventoryBucket]> = [
+        [".inputInventory.", "INPUT"],
+        [".outputInventory.", "OUTPUT"],
+        [".investmentInventory.", "INVESTMENT"],
+      ];
+      const seenBuckets = new Set<InventoryBucket>();
+
+      worldState.worldGenesisLedger.records.forEach((r) => {
+        if (!isProductionUnitGoodEndowment(r)) return;
+        const expectedBucket = bucketBySeedSegment.find(([segment]) =>
+          r.sourceSeedKey.includes(segment),
+        )?.[1];
+        expect(expectedBucket).toBeDefined();
+        expect(r.inventoryBucket).toBe(expectedBucket);
+        seenBuckets.add(r.inventoryBucket);
+      });
+
+      // All three buckets are exercised by the baseline scenario, so the assertion above
+      // is not vacuously satisfied by a single bucket.
+      expect(Array.from(seenBuckets).sort()).toEqual(["INPUT", "INVESTMENT", "OUTPUT"]);
+    });
+
+    it("fails when a ProductionUnit's goods move between two inventory buckets while the owner+region+good total is unchanged", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // Section 20 requires reconciliation to compare ProductionUnit + region +
+      // inventoryBucket + goodId. This control moves opening stock out of one bucket into
+      // another for the same unit, region and good, so every coarser aggregate — the
+      // unit's total for that good, the region's total, the world total — is untouched.
+      const sourceRecord = worldState.worldGenesisLedger.records.find(
+        (r): r is ProductionUnitGoodEndowment => isProductionUnitGoodEndowment(r) && r.amount > 0,
+      );
+      expect(sourceRecord).toBeDefined();
+      if (!sourceRecord) return;
+
+      const otherBucket: InventoryBucket = sourceRecord.inventoryBucket === "INPUT" ? "OUTPUT" : "INPUT";
+      const movedAmount = sourceRecord.amount / 2;
+      const modifiedRecords = worldState.worldGenesisLedger.records.flatMap((r) =>
+        r === sourceRecord
+          ? [
+              { ...sourceRecord, amount: sourceRecord.amount - movedAmount },
+              { ...sourceRecord, inventoryBucket: otherBucket, amount: movedAmount },
+            ]
+          : [r],
+      );
+
+      // Prove the relocation really is aggregate-preserving: without typed bucket
+      // identity there is nothing here for reconciliation to catch.
+      const aggregateOf = (records: readonly GenesisRecord[]) =>
+        records
+          .filter(
+            (r) =>
+              r.type === "GOOD_ENDOWMENT" &&
+              JSON.stringify(r.owner) === JSON.stringify(sourceRecord.owner) &&
+              r.regionId === sourceRecord.regionId &&
+              r.goodId === sourceRecord.goodId,
+          )
+          .reduce((sum, r) => sum + r.amount, 0);
+      expect(aggregateOf(modifiedRecords)).toBeCloseTo(
+        aggregateOf(worldState.worldGenesisLedger.records),
+        12,
+      );
+
+      const result = reconcileGenesisStocks(worldState, { records: modifiedRecords }, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("GOOD");
+      // The diagnostic must distinguish which bucket diverged, not merely which unit.
+      expect(result.details?.key).toContain(sourceRecord.inventoryBucket);
+    });
+
+    it("fails when a ProductionUnit good endowment is relabelled into another bucket without splitting it", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // The baseline iron mine holds `good:iron` as both INPUT (80) and OUTPUT (300).
+      // Swapping the bucket label on one of those records leaves the unit's total for
+      // that good exactly unchanged, so only typed bucket identity can reject it.
+      const inputRecord = worldState.worldGenesisLedger.records.find(
+        (r): r is ProductionUnitGoodEndowment =>
+          isProductionUnitGoodEndowment(r) &&
+          r.inventoryBucket === "INPUT" &&
+          r.amount > 0 &&
+          worldState.worldGenesisLedger.records.some(
+            (other) =>
+              isProductionUnitGoodEndowment(other) &&
+              other.owner.productionUnitId === r.owner.productionUnitId &&
+              other.goodId === r.goodId &&
+              other.inventoryBucket === "OUTPUT",
+          ),
+      );
+      expect(inputRecord).toBeDefined();
+      if (!inputRecord) return;
+
+      const modifiedRecords = worldState.worldGenesisLedger.records.map((r) =>
+        r === inputRecord ? { ...inputRecord, inventoryBucket: "OUTPUT" as const } : r,
       );
 
       const result = reconcileGenesisStocks(worldState, { records: modifiedRecords }, config);

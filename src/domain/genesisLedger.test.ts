@@ -161,7 +161,7 @@ describe("WorldGenesisLedger", () => {
     expect(updated.records[0]).toEqual(record);
   });
 
-  it("accepts good endowment records with ProductionUnit owner", () => {
+  it("accepts good endowment records with ProductionUnit owner and a typed inventory bucket", () => {
     const ledger = createEmptyWorldGenesisLedger();
     const allocator = createIdAllocator();
     const productionUnitId = allocator.allocate("ProductionUnit", "test-pu");
@@ -172,12 +172,49 @@ describe("WorldGenesisLedger", () => {
       regionId: allocator.allocate("Region", "test-region"),
       goodId: allocator.allocate("Good", "test-good"),
       amount: 500,
+      inventoryBucket: "INPUT",
       sourceSeedKey: "test-seed",
     };
 
     const updated = addGenesisRecord(ledger, record);
     expect(updated.records).toHaveLength(1);
     expect(updated.records[0]).toEqual(record);
+  });
+
+  it("records the same ProductionUnit good in two buckets as two distinct stocks", () => {
+    const ledger = createEmptyWorldGenesisLedger();
+    const allocator = createIdAllocator();
+    const productionUnitId = allocator.allocate("ProductionUnit", "test-pu");
+    const regionId = allocator.allocate("Region", "test-region");
+    const goodId = allocator.allocate("Good", "test-good");
+    const owner = { type: "PRODUCTION_UNIT" as const, productionUnitId };
+
+    // Section 20: a unit's INPUT and OUTPUT inventories of the same good are two
+    // authoritative stocks, so both records stand and neither replaces the other.
+    const asInput: GenesisRecord = {
+      type: "GOOD_ENDOWMENT",
+      owner,
+      regionId,
+      goodId,
+      amount: 80,
+      inventoryBucket: "INPUT",
+      sourceSeedKey: "test-pu.inputInventory.test-good",
+    };
+    const asOutput: GenesisRecord = {
+      type: "GOOD_ENDOWMENT",
+      owner,
+      regionId,
+      goodId,
+      amount: 300,
+      inventoryBucket: "OUTPUT",
+      sourceSeedKey: "test-pu.outputInventory.test-good",
+    };
+
+    const updated = addGenesisRecord(addGenesisRecord(ledger, asInput), asOutput);
+    expect(updated.records).toHaveLength(2);
+    expect(
+      updated.records.map((r) => (r.type === "GOOD_ENDOWMENT" ? r.inventoryBucket : undefined)),
+    ).toEqual(["INPUT", "OUTPUT"]);
   });
 
   it("accepts capital endowment records with ProductionUnit owner", () => {
