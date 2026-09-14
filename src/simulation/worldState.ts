@@ -12,6 +12,7 @@ import type {
   ClanId,
   CohortId,
   CurrencyId,
+  GoodId,
   IdAllocator,
   MarketId,
   MonetaryAuthorityId,
@@ -256,7 +257,10 @@ export function buildInitialWorld(
       // Track resource endowments (REQ-CONFIG-004)
       (regionSeed.deposits ?? []).forEach((deposit) => {
         if (deposit.initialQuantity > 0) {
-          const goodId = deposit.resourceId as any; // Simplified; would need GoodId lookup
+          // Goods carry no allocated id: a good is identified by its definition key
+          // everywhere in genesis accounting, as GOOD_ENDOWMENT does, so the deposit's
+          // resource key is the typed good identity reconciliation compares.
+          const goodId = deposit.resourceId as unknown as GoodId;
           const record: GenesisRecord = {
             type: "RESOURCE_ENDOWMENT",
             regionId,
