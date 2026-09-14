@@ -70,6 +70,16 @@ function buildWorld(): WorldState {
 }
 
 /**
+ * First element of a genesis collection the baseline scenario is required to populate.
+ * Throws rather than returning `undefined`, so an empty collection fails as the scenario
+ * defect it is instead of as a confusing assertion further down.
+ */
+function first<T>(values: Iterable<T>, what: string): T {
+  for (const value of values) return value;
+  throw new Error(`baseline scenario carries no ${what}`);
+}
+
+/**
  * A canonical M3 counterparty triple drawn from the real baseline world: a food-producing
  * ProductionUnit selling from its OUTPUT inventory, a Cohort in the same region buying into
  * its household inventory, and that region's controlling State as the tax destination. All
@@ -199,7 +209,7 @@ describe("executeAllocation — live actor stock settlement (Issue #427)", () =>
 
     it("a Clan carries a live treasury and no goods inventory field at all", () => {
       const world = buildWorld();
-      const clan = Array.from(world.clans.values())[0];
+      const clan = first(world.clans.values(), "Clan");
 
       expect(clan.treasury.size).toBeGreaterThan(0);
       expect(Object.keys(clan)).toEqual(expect.not.arrayContaining(["householdInventory", "inventory"]));
@@ -343,7 +353,7 @@ describe("executeAllocation — live actor stock settlement (Issue #427)", () =>
     it("refuses a Clan goods endpoint: a Clan owns a treasury and no physical inventory", () => {
       const world = buildWorld();
       const { buyerCohortId, stateId, currencyId } = pickCounterparties(world);
-      const clanId = Array.from(world.clans.keys())[0];
+      const clanId = first(world.clans.keys(), "Clan");
 
       expectRefusal(
         world,
@@ -401,7 +411,7 @@ describe("executeAllocation — live actor stock settlement (Issue #427)", () =>
     it("refuses a MonetaryAuthority counterparty, which is a genesis-accounting owner only", () => {
       const world = buildWorld();
       const { buyerCohortId, stateId, currencyId } = pickCounterparties(world);
-      const authorityId = Array.from(world.monetaryAuthorities.keys())[0];
+      const authorityId = first(world.monetaryAuthorities.keys(), "MonetaryAuthority");
 
       expectRefusal(
         world,
