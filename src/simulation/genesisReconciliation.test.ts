@@ -58,6 +58,17 @@ function totalResourceQuantity(records: readonly GenesisRecord[]): number {
     .reduce((sum, r) => sum + r.amount, 0);
 }
 
+/**
+ * Total recorded population, used by the typed-region negative control to show it
+ * changes only which Region a cohort's population is recorded in, never how many people
+ * are recorded.
+ */
+function totalPopulation(records: readonly GenesisRecord[]): number {
+  return records
+    .filter((r) => r.type === "POPULATION_ENDOWMENT")
+    .reduce((sum, r) => sum + r.amount, 0);
+}
+
 describe("reconcileGenesisStocks", () => {
   describe("positive tests", () => {
     it("baseline-multistate-v1 scenario reconciles successfully", () => {
@@ -840,6 +851,51 @@ describe("reconcileGenesisStocks", () => {
       const modifiedLedger = { records: modifiedRecords };
 
       const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("POPULATION");
+    });
+
+    it("fails when a cohort's population record names another region while owner, source key and total are unchanged", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      // The unmodified genesis reconciles, so the failure below is caused by the single
+      // typed-region edit rather than by a pre-existing mismatch.
+      expect(reconcileGenesisStocks(worldState, worldState.worldGenesisLedger, config).success).toBe(
+        true,
+      );
+
+      const populationRecord = worldState.worldGenesisLedger.records.find(
+        (r): r is Extract<GenesisRecord, { type: "POPULATION_ENDOWMENT" }> =>
+          r.type === "POPULATION_ENDOWMENT" && r.amount > 0,
+      );
+      expect(populationRecord).toBeDefined();
+      if (!populationRecord) return;
+
+      const otherRegionId = Array.from(worldState.regions.keys()).find(
+        (regionId) => regionId !== populationRecord.regionId,
+      );
+      expect(otherRegionId).toBeDefined();
+      if (!otherRegionId) return;
+
+      // Only the typed regionId changes: the same cohort still owns the stock, the
+      // provenance string is untouched, and the amount is untouched.
+      const relocated = { ...populationRecord, regionId: otherRegionId };
+      expect(relocated.owner).toEqual(populationRecord.owner);
+      expect(relocated.sourceSeedKey).toBe(populationRecord.sourceSeedKey);
+      expect(relocated.amount).toBe(populationRecord.amount);
+
+      const modifiedRecords = worldState.worldGenesisLedger.records.map((r) =>
+        r === populationRecord ? relocated : r,
+      );
+      expect(totalPopulation(modifiedRecords)).toBeCloseTo(
+        totalPopulation(worldState.worldGenesisLedger.records),
+        12,
+      );
+
+      const result = reconcileGenesisStocks(worldState, { records: modifiedRecords }, config);
       expect(result.success).toBe(false);
       expect(result.details?.category).toBe("POPULATION");
     });

@@ -9,7 +9,7 @@
  * - MONEY_ENDOWMENT and FX_POOL_OPENING are reconciled by (owner/poolKey, currencyId)
  * - GOOD_ENDOWMENT is reconciled by (owner, regionId, goodId)
  * - CAPITAL_ENDOWMENT is reconciled by (owner (ProductionUnit), capital goodId)
- * - POPULATION_ENDOWMENT is reconciled by owner (Cohort)
+ * - POPULATION_ENDOWMENT is reconciled by (owner (Cohort), regionId)
  * - RESOURCE_ENDOWMENT is reconciled by (regionId, goodId)
  *
  * Section 20 states that `sourceSeedKey` is provenance only and must never substitute
@@ -131,7 +131,10 @@ export function reconcileGenesisStocks(
         break;
       }
       case "POPULATION_ENDOWMENT": {
-        const granularity = `POP:${serializeOwner(record.owner)}`;
+        // A cohort's population sits in exactly one Region, and the record carries that
+        // Region typed, so the Region is part of the stock's identity rather than a
+        // descriptive detail. `sourceSeedKey` stays provenance only (section 20).
+        const granularity = `POP:${serializeOwner(record.owner)}:${serializeRegion(record.regionId)}`;
         const current = expectedPopulationByGranularity.get(granularity) ?? 0;
         expectedPopulationByGranularity.set(granularity, current + record.amount);
         break;
@@ -256,9 +259,12 @@ export function reconcileGenesisStocks(
   // household inventory and population stock — never its Clan; Handoff/01 5.3/5.4/7)
   worldState.cohorts.forEach((cohort) => {
     const cohortOwner = { type: "COHORT" as const, cohortId: cohort.cohortId };
-    // Population by cohort owner
+    // The cohort's own Region, resolved through the region registry from the canonical
+    // cohort/region relation rather than reconstructed from any seed-key text.
+    const cohortRegionId = regionIdByRegionKey.get(cohort.seed.regionKey);
+    // Population by cohort owner + the cohort's own region
     if (cohort.seed.population > 0) {
-      const granularity = `POP:${serializeOwner(cohortOwner)}`;
+      const granularity = `POP:${serializeOwner(cohortOwner)}:${serializeRegion(cohortRegionId)}`;
       const current = actualPopulationByGranularity.get(granularity) ?? 0;
       actualPopulationByGranularity.set(granularity, current + cohort.seed.population);
     }
@@ -276,7 +282,6 @@ export function reconcileGenesisStocks(
       }
     });
     // Goods by cohort owner + the cohort's own region + goodId
-    const cohortRegionId = regionIdByRegionKey.get(cohort.seed.regionKey);
     Object.entries(cohort.seed.householdInventory ?? {}).forEach(([goodKey, amount]) => {
       if (typeof amount === "number") {
         const key = `${serializeOwner(cohortOwner)}:${serializeRegion(cohortRegionId)}:${goodKey}`;
