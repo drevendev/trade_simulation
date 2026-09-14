@@ -8,14 +8,25 @@
  * See section 20 of docs/spec/mirror/06 - Handoff/03 — CANONICAL_CONFIG_AND_WORLD_GENERATION.md
  */
 
-import type { ClanId, CurrencyId, GoodId, MonetaryAuthorityId, ProductionUnitId, RegionId, StateId } from "./id";
+import type {
+  ClanId,
+  CohortId,
+  CurrencyId,
+  GoodId,
+  MonetaryAuthorityId,
+  ProductionUnitId,
+  RegionId,
+  StateId,
+} from "./id";
 
 /**
- * Actor reference: Clan, State, ProductionUnit, or MonetaryAuthority (owner of opening balances/inventories).
- * ProductionUnit wallets and inventories are recorded under the ProductionUnit itself,
- * never under its equity owner, to preserve one-stock/one-owner semantics.
+ * Actor reference: Cohort, Clan, State, ProductionUnit, or MonetaryAuthority (owner of opening
+ * balances/inventories). Cohort and ProductionUnit wallets/inventories are recorded under the
+ * cohort/ProductionUnit itself, never under an equity or institutional owner (Clan/State), to
+ * preserve one-stock/one-owner semantics (Handoff/01 section 5.3/5.4/7).
  */
 export type ActorRef =
+  | { readonly type: "COHORT"; readonly cohortId: CohortId }
   | { readonly type: "CLAN"; readonly clanId: ClanId }
   | { readonly type: "STATE"; readonly stateId: StateId }
   | { readonly type: "PRODUCTION_UNIT"; readonly productionUnitId: ProductionUnitId }

@@ -366,11 +366,16 @@ export function buildInitialWorld(
 
     cohortRegistry.set(cohortId, { cohortId, clanId, seed: cohortSeed } as CohortState);
 
+    // Cohort is its own owner for opening-stock records (Handoff/01 5.3/5.4/7): Clan derives
+    // population from cohorts and owns a treasury only, never a duplicate population, wallet
+    // or household inventory stock.
+    const cohortOwner = { type: "COHORT" as const, cohortId };
+
     // Track cohort population endowment
     if (cohortSeed.population > 0) {
       const record: GenesisRecord = {
         type: "POPULATION_ENDOWMENT",
-        owner: { type: "CLAN", clanId },
+        owner: cohortOwner,
         regionId,
         amount: cohortSeed.population,
         sourceSeedKey: `${cohortSeed.key}.population`,
@@ -378,14 +383,14 @@ export function buildInitialWorld(
       worldGenesisLedger = addGenesisRecord(worldGenesisLedger, record);
     }
 
-    // Track cohort wallet (money endowment)
+    // Track cohort wallet (money endowment, owned by the cohort itself)
     Object.entries(cohortSeed.wallet ?? {}).forEach(([currencyKey, amount]) => {
       if (typeof amount === "number" && amount > 0) {
         const currencyId = idMap.currencyIds.get(currencyKey);
         if (currencyId) {
           const record: GenesisRecord = {
             type: "MONEY_ENDOWMENT",
-            owner: { type: "CLAN", clanId },
+            owner: cohortOwner,
             currencyId,
             amount,
             sourceSeedKey: `${cohortSeed.key}.wallet.${currencyKey}`,
@@ -395,13 +400,13 @@ export function buildInitialWorld(
       }
     });
 
-    // Track cohort household inventory (good endowment)
+    // Track cohort household inventory (good endowment, owned by the cohort itself)
     Object.entries(cohortSeed.householdInventory ?? {}).forEach(([goodKey, amount]) => {
       if (typeof amount === "number" && amount > 0) {
         const goodId = goodKey as any; // Simplified; would need GoodId lookup
         const record: GenesisRecord = {
           type: "GOOD_ENDOWMENT",
-          owner: { type: "CLAN", clanId },
+          owner: cohortOwner,
           regionId,
           goodId,
           amount,

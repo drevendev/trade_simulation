@@ -199,6 +199,61 @@ describe("WorldGenesisLedger", () => {
     expect(updated.records[0]).toEqual(record);
   });
 
+  it("accepts money endowment records with Cohort owner", () => {
+    const ledger = createEmptyWorldGenesisLedger();
+    const allocator = createIdAllocator();
+    const cohortId = allocator.allocate("Cohort", "test-cohort");
+
+    const record: GenesisRecord = {
+      type: "MONEY_ENDOWMENT",
+      owner: { type: "COHORT", cohortId },
+      currencyId: allocator.allocate("Currency", "test-currency"),
+      amount: 1000,
+      sourceSeedKey: "test-seed",
+    };
+
+    const updated = addGenesisRecord(ledger, record);
+    expect(updated.records).toHaveLength(1);
+    expect(updated.records[0]).toEqual(record);
+  });
+
+  it("accepts good endowment records with Cohort owner", () => {
+    const ledger = createEmptyWorldGenesisLedger();
+    const allocator = createIdAllocator();
+    const cohortId = allocator.allocate("Cohort", "test-cohort");
+
+    const record: GenesisRecord = {
+      type: "GOOD_ENDOWMENT",
+      owner: { type: "COHORT", cohortId },
+      regionId: allocator.allocate("Region", "test-region"),
+      goodId: allocator.allocate("Good", "test-good"),
+      amount: 500,
+      sourceSeedKey: "test-seed",
+    };
+
+    const updated = addGenesisRecord(ledger, record);
+    expect(updated.records).toHaveLength(1);
+    expect(updated.records[0]).toEqual(record);
+  });
+
+  it("accepts population endowment records with Cohort owner", () => {
+    const ledger = createEmptyWorldGenesisLedger();
+    const allocator = createIdAllocator();
+    const cohortId = allocator.allocate("Cohort", "test-cohort");
+
+    const record: GenesisRecord = {
+      type: "POPULATION_ENDOWMENT",
+      owner: { type: "COHORT", cohortId },
+      regionId: allocator.allocate("Region", "test-region"),
+      amount: 100,
+      sourceSeedKey: "test-seed",
+    };
+
+    const updated = addGenesisRecord(ledger, record);
+    expect(updated.records).toHaveLength(1);
+    expect(updated.records[0]).toEqual(record);
+  });
+
   it("maintains immutability: original ledger unchanged after add", () => {
     const ledger = createEmptyWorldGenesisLedger();
     const allocator = createIdAllocator();

@@ -9,7 +9,8 @@
  * - MONEY_ENDOWMENT and FX_POOL_OPENING are reconciled by (owner/poolKey, currencyId)
  * - GOOD_ENDOWMENT is reconciled by (owner, goodId)
  * - CAPITAL_ENDOWMENT is reconciled by owner (ProductionUnit)
- * - POPULATION_ENDOWMENT and RESOURCE_ENDOWMENT are reconciled at their recorded granularity
+ * - POPULATION_ENDOWMENT is reconciled by owner (Cohort)
+ * - RESOURCE_ENDOWMENT is reconciled at its recorded region/deposit granularity
  */
 
 import type { WorldGenesisLedger, GenesisRecord, ActorRef } from "../domain/genesisLedger";
@@ -34,6 +35,7 @@ function serializeOwner(owner: ActorRef | undefined): string {
   if (!owner) return "NONE";
   if (owner.type === "STATE") return `STATE:${owner.stateId}`;
   if (owner.type === "CLAN") return `CLAN:${owner.clanId}`;
+  if (owner.type === "COHORT") return `COHORT:${owner.cohortId}`;
   if (owner.type === "PRODUCTION_UNIT") return `PU:${owner.productionUnitId}`;
   if (owner.type === "MONETARY_AUTHORITY") return `AUTHORITY:${owner.authorityId}`;
   return "UNKNOWN";
@@ -98,7 +100,7 @@ export function reconcileGenesisStocks(
         break;
       }
       case "POPULATION_ENDOWMENT": {
-        const granularity = `POP:${record.sourceSeedKey}`;
+        const granularity = `POP:${serializeOwner(record.owner)}`;
         const current = expectedPopulationByGranularity.get(granularity) ?? 0;
         expectedPopulationByGranularity.set(granularity, current + record.amount);
         break;
@@ -207,11 +209,13 @@ export function reconcileGenesisStocks(
     });
   });
 
-  // Sum money and goods by cohort (population owner) + currency/goodId
+  // Sum money, goods, and population by cohort (the canonical owner of its own wallet,
+  // household inventory and population stock — never its Clan; Handoff/01 5.3/5.4/7)
   worldState.cohorts.forEach((cohort) => {
-    // Population by cohort granularity (using cohort seed key and source key format)
+    const cohortOwner = { type: "COHORT" as const, cohortId: cohort.cohortId };
+    // Population by cohort owner
     if (cohort.seed.population > 0) {
-      const granularity = `POP:${cohort.seed.key}.population`;
+      const granularity = `POP:${serializeOwner(cohortOwner)}`;
       const current = actualPopulationByGranularity.get(granularity) ?? 0;
       actualPopulationByGranularity.set(granularity, current + cohort.seed.population);
     }
@@ -222,7 +226,7 @@ export function reconcileGenesisStocks(
           ([_, cs]) => cs.seed.key === currencyKey,
         )?.[0];
         if (currencyId) {
-          const key = `${serializeOwner({ type: "CLAN", clanId: cohort.clanId })}:${currencyId}`;
+          const key = `${serializeOwner(cohortOwner)}:${currencyId}`;
           const current = actualMoneyByOwnerCurrency.get(key) ?? 0;
           actualMoneyByOwnerCurrency.set(key, current + amount);
         }
@@ -231,7 +235,7 @@ export function reconcileGenesisStocks(
     // Goods by cohort owner + goodId
     Object.entries(cohort.seed.householdInventory ?? {}).forEach(([goodKey, amount]) => {
       if (typeof amount === "number") {
-        const key = `${serializeOwner({ type: "CLAN", clanId: cohort.clanId })}:${goodKey}`;
+        const key = `${serializeOwner(cohortOwner)}:${goodKey}`;
         const current = actualGoodsByOwnerGoodId.get(key) ?? 0;
         actualGoodsByOwnerGoodId.set(key, current + amount);
       }
