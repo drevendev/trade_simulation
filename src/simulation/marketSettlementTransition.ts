@@ -421,6 +421,39 @@ export function executeAllocation(
 }
 
 /**
+ * Apply every realized MAIN-pass allocation Phase-8 produced this tick to authoritative
+ * actor stock, returning the settled `WorldState` (Issue #427 acceptance criterion 2).
+ *
+ * This is the wiring half of the criterion, and it sits where `applyMarketStateTransition`
+ * already sits rather than inside `createPhase8Handler`. The reason is structural, not
+ * stylistic: a `PhaseHandler` is `(world, context, pendingTransitions) => TickContext`, and
+ * `executeTick()` holds one `WorldState` immutable for the whole 16-phase loop (REQ-CORE-004),
+ * so a phase handler has no way to hand a mutated world back. Phase-8 remains the only
+ * producer of these allocations and the only thing that decides which of them are realized;
+ * this function is the explicit settlement boundary that carries them onto stock, exactly as
+ * section 35 asks ("Pure planning/allocation functions should return plans/deltas. Mutation
+ * belongs in explicit settlement/delivery functions"). See
+ * docs/adr/0007-live-actor-stock-as-world-transition.md.
+ *
+ * Ordering is Phase-8's own. `computeLocalClearing` emits allocations from seller and buyer
+ * lists already sorted by `actorKey|intentId` — the section-36 stable order — so iterating
+ * `context.marketAllocations` in place preserves it. Re-sorting here would invent a second
+ * ordering rule that could silently disagree with the one clearing used.
+ *
+ * Settlement is all-or-nothing across the tick: `executeAllocation` refuses before it
+ * rebuilds anything, and each refusal propagates, so a `SettlementRefusedError` leaves the
+ * caller holding the unsettled world it passed in rather than a half-applied one.
+ */
+export function applyMarketSettlementTransition(world: WorldState, context: TickContext): WorldState {
+  let settled = world;
+  for (const allocation of context.marketAllocations) {
+    if (allocation.pass !== "MAIN") continue;
+    settled = executeAllocation(settled, context, allocation);
+  }
+  return settled;
+}
+
+/**
  * Preflight the debits: no live wallet or inventory may end below zero.
  *
  * Deltas are netted per stock first, so an actor appearing on both sides of one allocation
