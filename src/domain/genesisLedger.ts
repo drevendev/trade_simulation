@@ -146,6 +146,35 @@ export type GenesisRecord =
     };
 
 /**
+ * The canonical stable key of a stock owner.
+ *
+ * This is the single owner representation shared by genesis accounting and live actor
+ * stock. Opening-stock reconciliation (`genesisReconciliation.ts`) and the live
+ * wallet/inventory endpoints settlement writes (`marketSettlementTransition.ts`) both
+ * address an owner through this function, so a cohort's opening stock and that same
+ * cohort's live stock are compared through one mapping rather than two conventions that
+ * happen to agree. Handoff/01 sections 5.3/5.4/7 fix one stock to one owner; two owner
+ * vocabularies would make that invariant true only by coincidence.
+ *
+ * The parameter is the full `ActorRef` union, so a new actor kind cannot be added
+ * without this function failing to compile.
+ */
+export function actorRefKey(owner: ActorRef): string {
+  switch (owner.type) {
+    case "STATE":
+      return `STATE:${owner.stateId}`;
+    case "CLAN":
+      return `CLAN:${owner.clanId}`;
+    case "COHORT":
+      return `COHORT:${owner.cohortId}`;
+    case "PRODUCTION_UNIT":
+      return `PU:${owner.productionUnitId}`;
+    case "MONETARY_AUTHORITY":
+      return `AUTHORITY:${owner.authorityId}`;
+  }
+}
+
+/**
  * Immutable ledger of opening stocks recorded during world genesis.
  * All records are collected during buildInitialWorld() initialization steps
  * and made available for REQ-CONFIG-004 opening-stock reconciliation.
