@@ -18,6 +18,7 @@
  */
 
 import type { WorldGenesisLedger, GenesisRecord, ActorRef, InventoryBucket } from "../domain/genesisLedger";
+import { actorRefKey } from "../domain/genesisLedger";
 import { resolveCapitalGoodsPerCapitalUnit } from "../domain/definitionRegistry";
 import type { SimulationConfig } from "../config/simulationConfig";
 import type { CurrencyId, GoodId, RegionId } from "../domain/id";
@@ -89,14 +90,14 @@ function goodStockKey(
   return `${ownerKey}:${serializeRegion(regionId)}:${serializeInventoryBucket(inventoryBucket)}:${goodKey}`;
 }
 
+/**
+ * Ownerless records (RESOURCE_ENDOWMENT, FX_POOL_OPENING) reconcile under a reserved key.
+ * Every owned record delegates to the shared canonical `actorRefKey`, so reconciliation and
+ * live actor stock address an owner through exactly one mapping (Issue #427 criterion 5).
+ */
 function serializeOwner(owner: ActorRef | undefined): string {
   if (!owner) return "NONE";
-  if (owner.type === "STATE") return `STATE:${owner.stateId}`;
-  if (owner.type === "CLAN") return `CLAN:${owner.clanId}`;
-  if (owner.type === "COHORT") return `COHORT:${owner.cohortId}`;
-  if (owner.type === "PRODUCTION_UNIT") return `PU:${owner.productionUnitId}`;
-  if (owner.type === "MONETARY_AUTHORITY") return `AUTHORITY:${owner.authorityId}`;
-  return "UNKNOWN";
+  return actorRefKey(owner);
 }
 
 /**

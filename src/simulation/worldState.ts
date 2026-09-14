@@ -30,6 +30,7 @@ import {
   type GenesisRecord,
 } from "../domain/genesisLedger";
 import { reconcileGenesisStocks } from "./genesisReconciliation";
+import { seedLiveActorStocks } from "./liveActorStock";
 import type {
   ClanSeed,
   CohortSeed,
@@ -102,11 +103,31 @@ export interface RegionState {
   readonly settlementCurrencyId: CurrencyId;
 }
 
+/**
+ * Live money balances by currency, owned by one actor.
+ *
+ * "Live" is the contrast with `worldGenesisLedger`, which records the *opening* stock once
+ * and is never rewritten. A live stock is seeded from those opening records and then
+ * carried forward by explicit transition functions (`executeAllocation`), in the same way
+ * `LocalMarketState.priceByGood` is carried forward by `applyMarketStateTransition`.
+ * The map is read-only because `WorldState` stays immutable for the duration of one tick
+ * (see `tickOrchestrator.ts`); settlement returns a new `WorldState` rather than writing
+ * through a shared reference. See docs/adr/0007-live-actor-stock-as-world-transition.md.
+ */
+export type LiveWallet = ReadonlyMap<CurrencyId, number>;
+
+/** Live physical goods quantities by good, held in one authoritative inventory. */
+export type LiveInventory = ReadonlyMap<GoodId, number>;
+
 export interface StateState {
   readonly stateId: StateId;
   readonly seed: StateSeed;
   readonly effectiveCurrencyId: CurrencyId;
   readonly memberAuthorityId: MonetaryAuthorityId | null;
+  /** Live treasury. Receives collected consumption tax at settlement (Handoff/04 §10). */
+  readonly treasury: LiveWallet;
+  /** Live public inventory: the State's own goods, held by the State rather than a region. */
+  readonly publicInventory: LiveInventory;
 }
 
 export interface CurrencyState {
@@ -122,20 +143,40 @@ export interface MonetaryAuthorityState {
   readonly memberStateIds: readonly StateId[];
 }
 
+/**
+ * A Clan owns a treasury and deliberately owns **no** physical inventory: Handoff/01
+ * sections 5.3/5.4/7 forbid a Clan duplicating the household consumption inventory its
+ * cohorts hold. Settlement therefore refuses a Clan goods endpoint rather than inventing
+ * one (see `resolveGoodsEndpoint` in marketSettlementTransition.ts).
+ */
 export interface ClanState {
   readonly clanId: ClanId;
   readonly seed: ClanSeed;
+  readonly treasury: LiveWallet;
 }
 
 export interface CohortState {
   readonly cohortId: CohortId;
   readonly clanId: ClanId;
   readonly seed: CohortSeed;
+  readonly wallet: LiveWallet;
+  /** The authoritative household goods stock. A cohort holds exactly one, not buckets. */
+  readonly householdInventory: LiveInventory;
 }
 
+/**
+ * A ProductionUnit's INPUT, OUTPUT and INVESTMENT inventories are three distinct
+ * authoritative stocks, not three labels on one aggregate (Handoff/03 §20, Handoff/04
+ * §11 and MTFX-I25). Settlement must be told which one an allocation means and must
+ * never guess from actor type alone.
+ */
 export interface ProductionUnitState {
   readonly productionUnitId: ProductionUnitId;
   readonly seed: ProductionUnitSeed;
+  readonly wallet: LiveWallet;
+  readonly inputInventory: LiveInventory;
+  readonly outputInventory: LiveInventory;
+  readonly investmentInventory: LiveInventory;
 }
 
 export interface MarketExpectationState {
@@ -285,7 +326,7 @@ export function buildInitialWorld(
   );
 
   // Step 6: Instantiate States and apply jurisdiction
-  const stateRegistry = new Map();
+  const stateRegistry = new Map<StateId, StateState>();
   (scenarioDefinition.states ?? []).forEach((stateSeed) => {
     const stateId = idMap.stateIds.get(stateSeed.key)!;
     const stateState = buildStateState(stateSeed, idMap);
@@ -339,10 +380,12 @@ export function buildInitialWorld(
   });
 
   // Step 7: Instantiate Clans and state relations
-  const clanRegistry = new Map();
+  const clanRegistry = new Map<ClanId, ClanState>();
   (scenarioDefinition.clans ?? []).forEach((clanSeed) => {
     const clanId = idMap.clanIds.get(clanSeed.key ?? "")!;
-    clanRegistry.set(clanId, { clanId, seed: clanSeed } as ClanState);
+    // Live stock starts empty here and is seeded from the completed genesis ledger below,
+    // so there is exactly one place that turns an opening record into a live balance.
+    clanRegistry.set(clanId, { clanId, seed: clanSeed, treasury: new Map() });
 
     // Track clan treasury (money endowment)
     Object.entries(clanSeed.treasury ?? {}).forEach(([currencyKey, amount]) => {
@@ -363,13 +406,19 @@ export function buildInitialWorld(
   });
 
   // Step 8: Instantiate Cohorts with bounded keyed variation
-  const cohortRegistry = new Map();
+  const cohortRegistry = new Map<CohortId, CohortState>();
   (scenarioDefinition.cohorts ?? []).forEach((cohortSeed) => {
     const cohortId = idMap.cohortIds.get(cohortSeed.key ?? "")!;
     const regionId = idMap.regionIds.get(cohortSeed.regionKey)!;
     const clanId = idMap.clanIds.get(cohortSeed.clanKey ?? "")!;
 
-    cohortRegistry.set(cohortId, { cohortId, clanId, seed: cohortSeed } as CohortState);
+    cohortRegistry.set(cohortId, {
+      cohortId,
+      clanId,
+      seed: cohortSeed,
+      wallet: new Map(),
+      householdInventory: new Map(),
+    });
 
     // Cohort is its own owner for opening-stock records (Handoff/01 5.3/5.4/7): Clan derives
     // population from cohorts and owns a treasury only, never a duplicate population, wallet
@@ -434,14 +483,18 @@ export function buildInitialWorld(
   );
 
   // Step 10: Instantiate ProductionUnits with capacity derivation
-  const productionUnitRegistry = new Map();
+  const productionUnitRegistry = new Map<ProductionUnitId, ProductionUnitState>();
   (scenarioDefinition.productionUnits ?? []).forEach((puSeed) => {
     const productionUnitId = idMap.productionUnitIds.get(puSeed.key ?? "")!;
     const regionId = idMap.regionIds.get(puSeed.regionKey)!;
-    productionUnitRegistry.set(
+    productionUnitRegistry.set(productionUnitId, {
       productionUnitId,
-      { productionUnitId, seed: puSeed } as ProductionUnitState,
-    );
+      seed: puSeed,
+      wallet: new Map(),
+      inputInventory: new Map(),
+      outputInventory: new Map(),
+      investmentInventory: new Map(),
+    });
 
     // ProductionUnit is its own owner for opening-stock records (REQ-CONFIG-004 Part 2)
     const puOwner = { type: "PRODUCTION_UNIT" as const, productionUnitId };
@@ -574,6 +627,15 @@ export function buildInitialWorld(
     marketRegistry,
     transportLinkRegistry,
   );
+
+  // Issue #427: seed every actor's live wallet/inventory from the now-complete opening
+  // ledger, so live stock and genesis accounting start equal and share one owner key.
+  seedLiveActorStocks(worldGenesisLedger, {
+    clans: clanRegistry,
+    cohorts: cohortRegistry,
+    productionUnits: productionUnitRegistry,
+    states: stateRegistry,
+  });
 
   // REQ-CONFIG-004: Reconcile opening stocks before returning WorldState
   // Build a temporary WorldState for reconciliation (without freeze)
@@ -741,6 +803,8 @@ function buildStateState(seed: StateSeed, idMap: IdMaps): StateState {
     seed,
     effectiveCurrencyId: currencyId,
     memberAuthorityId: authorityKey ? (idMap.authorityIds.get(authorityKey) ?? null) : null,
+    treasury: new Map(),
+    publicInventory: new Map(),
   };
 }
 
