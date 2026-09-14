@@ -44,10 +44,21 @@ export type GenesisRecord =
       readonly amount: number;
       readonly sourceSeedKey: string;
     }
+  /**
+   * Opening goods inventory.
+   *
+   * `regionId` is the canonical location of the stock and is part of its identity:
+   * section 20 requires reconciliation to compare owner + region + good rather than an
+   * owner-wide aggregate, so the same owner's same good in two regions is two stocks.
+   * The canonical GenesisRecord declares `regionId?: RegionId`, and a stock whose owner
+   * is not region-bound — a State's public inventory, held by the State itself rather
+   * than by any one of the regions it controls — leaves it absent rather than naming an
+   * arbitrary region.
+   */
   | {
       readonly type: "GOOD_ENDOWMENT";
       readonly owner: ActorRef;
-      readonly regionId: RegionId;
+      readonly regionId?: RegionId;
       readonly goodId: GoodId;
       readonly amount: number;
       readonly sourceSeedKey: string;

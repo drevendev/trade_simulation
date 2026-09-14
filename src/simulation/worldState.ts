@@ -308,11 +308,12 @@ export function buildInitialWorld(
     Object.entries(stateSeed.publicInventory ?? {}).forEach(([goodKey, amount]) => {
       if (typeof amount === "number" && amount > 0) {
         const goodId = goodKey as any; // Simplified; would need GoodId lookup
-        const regionId = scenarioDefinition.geography?.find((r) => r.key === stateSeed.key)?.key as any; // Placeholder
+        // A State's public inventory is held by the State itself, not by any one of the
+        // regions it controls, so it carries no canonical location and `regionId` stays
+        // absent (Handoff/03 section 20 declares it optional).
         const record: GenesisRecord = {
           type: "GOOD_ENDOWMENT",
           owner: { type: "STATE", stateId },
-          regionId,
           goodId,
           amount,
           sourceSeedKey: `${stateSeed.key}.publicInventory.${goodKey}`,
