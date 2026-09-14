@@ -58,6 +58,39 @@ describe("reconcileGenesisStocks", () => {
       expect(worldState).toBeDefined();
       expect(worldState.worldGenesisLedger.records.length).toBeGreaterThan(0);
     });
+
+    it("attributes cohort opening money/goods/population to the cohort itself, not its Clan", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      const cohortSeedKeys = new Set(Array.from(worldState.cohorts.values(), (c) => c.seed.key));
+
+      let sawCohortOwnedMoney = false;
+      let sawCohortOwnedGoods = false;
+      let sawCohortOwnedPopulation = false;
+      worldState.worldGenesisLedger.records.forEach((r) => {
+        const belongsToACohort = Array.from(cohortSeedKeys).some((key) => r.sourceSeedKey.startsWith(`${key}.`));
+        if (!belongsToACohort) return;
+
+        if (r.type === "MONEY_ENDOWMENT" && r.sourceSeedKey.includes(".wallet.")) {
+          expect(r.owner.type).toBe("COHORT");
+          sawCohortOwnedMoney = true;
+        }
+        if (r.type === "GOOD_ENDOWMENT" && r.sourceSeedKey.includes(".householdInventory.")) {
+          expect(r.owner.type).toBe("COHORT");
+          sawCohortOwnedGoods = true;
+        }
+        if (r.type === "POPULATION_ENDOWMENT" && r.sourceSeedKey.includes(".population")) {
+          expect(r.owner.type).toBe("COHORT");
+          sawCohortOwnedPopulation = true;
+        }
+      });
+      expect(sawCohortOwnedMoney).toBe(true);
+      expect(sawCohortOwnedGoods).toBe(true);
+      expect(sawCohortOwnedPopulation).toBe(true);
+    });
   });
 
   describe("negative tests", () => {
@@ -529,6 +562,93 @@ describe("reconcileGenesisStocks", () => {
       const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
       expect(result.success).toBe(false);
       expect(result.details?.category).toBe("GOOD");
+    });
+
+    it("fails when a cohort's wallet balance is relabeled as owned by its Clan while the amount is unchanged", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      const cohortMoneyRecord = worldState.worldGenesisLedger.records.find(
+        (r) => r.type === "MONEY_ENDOWMENT" && r.owner.type === "COHORT",
+      );
+      expect(cohortMoneyRecord).toBeDefined();
+      if (!cohortMoneyRecord || cohortMoneyRecord.type !== "MONEY_ENDOWMENT" || cohortMoneyRecord.owner.type !== "COHORT") {
+        return;
+      }
+      const cohort = worldState.cohorts.get(cohortMoneyRecord.owner.cohortId);
+      expect(cohort).toBeDefined();
+      if (!cohort) return;
+
+      // Relabel the ledger's owner from the cohort to its Clan without changing the amount:
+      // aggregate money for the currency is preserved, but owner-bound identity is not.
+      const modifiedRecords = worldState.worldGenesisLedger.records.map((r) =>
+        r === cohortMoneyRecord ? { ...r, owner: { type: "CLAN" as const, clanId: cohort.clanId } } : r,
+      );
+      const modifiedLedger = { records: modifiedRecords };
+
+      const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("MONEY");
+    });
+
+    it("fails when a cohort's household inventory is relabeled as owned by its Clan while the amount is unchanged", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      const cohortGoodRecord = worldState.worldGenesisLedger.records.find(
+        (r) => r.type === "GOOD_ENDOWMENT" && r.owner.type === "COHORT",
+      );
+      expect(cohortGoodRecord).toBeDefined();
+      if (!cohortGoodRecord || cohortGoodRecord.type !== "GOOD_ENDOWMENT" || cohortGoodRecord.owner.type !== "COHORT") {
+        return;
+      }
+      const cohort = worldState.cohorts.get(cohortGoodRecord.owner.cohortId);
+      expect(cohort).toBeDefined();
+      if (!cohort) return;
+
+      const modifiedRecords = worldState.worldGenesisLedger.records.map((r) =>
+        r === cohortGoodRecord ? { ...r, owner: { type: "CLAN" as const, clanId: cohort.clanId } } : r,
+      );
+      const modifiedLedger = { records: modifiedRecords };
+
+      const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("GOOD");
+    });
+
+    it("fails when a cohort's population is relabeled as owned by its Clan while the amount is unchanged", () => {
+      const scenario = baselineScenario;
+      const config = createTestConfig();
+
+      const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
+
+      const cohortPopulationRecord = worldState.worldGenesisLedger.records.find(
+        (r) => r.type === "POPULATION_ENDOWMENT" && r.owner.type === "COHORT",
+      );
+      expect(cohortPopulationRecord).toBeDefined();
+      if (
+        !cohortPopulationRecord ||
+        cohortPopulationRecord.type !== "POPULATION_ENDOWMENT" ||
+        cohortPopulationRecord.owner.type !== "COHORT"
+      ) {
+        return;
+      }
+      const cohort = worldState.cohorts.get(cohortPopulationRecord.owner.cohortId);
+      expect(cohort).toBeDefined();
+      if (!cohort) return;
+
+      const modifiedRecords = worldState.worldGenesisLedger.records.map((r) =>
+        r === cohortPopulationRecord ? { ...r, owner: { type: "CLAN" as const, clanId: cohort.clanId } } : r,
+      );
+      const modifiedLedger = { records: modifiedRecords };
+
+      const result = reconcileGenesisStocks(worldState, modifiedLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.details?.category).toBe("POPULATION");
     });
 
     it("fails when capital is relocated between ProductionUnits while keeping total unchanged", () => {
