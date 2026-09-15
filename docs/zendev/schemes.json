@@ -128,8 +128,8 @@
     },
     {
       "id": "scheme/7",
-      "in_force_from": null,
-      "commit": null,
+      "in_force_from": "2026-09-15T20:36:16Z",
+      "commit": "08f76a2",
       "summary": "The AUTHOR role runs no model: the researcher (EndlessZen) writes the code under the drevendev account, and the dispatcher, reading this descriptor, never starts zendev-author.yml. The ACCEPTOR stays exactly as in scheme/6, Opus 5 with a $7.50 ceiling, so every pull request is judged by the same judge as the autonomous days it is compared with.",
       "roles": {
         "author": {"identity": "drevendev (EndlessZen)", "model": null},
