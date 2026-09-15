@@ -77,6 +77,7 @@ class ClassifyTests(unittest.TestCase):
             (True, "clean", UP_TO_DATE),
             (True, "clean", 1234),
             (True, "clean", None),
+            (True, "behind", UP_TO_DATE),
         ]
         for mergeable, api_state, behind in cases:
             with self.subTest(mergeable=mergeable, behind=behind):
@@ -84,6 +85,18 @@ class ClassifyTests(unittest.TestCase):
                     mergeable, api_state, behind, long_ref
                 )
                 self.assertLessEqual(len(description), mergeability.MAX_DESCRIPTION)
+
+    def test_a_corroborated_behind_at_distance_zero_reports_no_count(self):
+        # GitHub volunteering `behind` while the comparison measures nothing is a
+        # disagreement, and the refusal stands — but "behind master by 0 commits" is
+        # the sentence that made the old arm read as a broken check. No count is
+        # printed for a distance that was not found.
+        state, description = mergeability.classify(True, "behind", UP_TO_DATE, "master")
+        self.assertEqual(state, "failure")
+        self.assertIn("master", description)
+        self.assertIn("update the branch", description)
+        self.assertNotIn("0 commits", description)
+        self.assertNotIn("by 0", description)
 
     def test_a_long_base_name_gives_way_before_the_sentence_does(self):
         # Which half of the message survives the limit matters. A clamped sentence
@@ -163,7 +176,16 @@ class BehindIsMeasuredNotAskedFor(unittest.TestCase):
             mergeability.classify(True, "clean")
 
 
-class BehindCountTests(unittest.TestCase):
+def _comparison(behind_by, base_tip="M0"):
+    """The two fields of a compare response this script reads, as the API sends them."""
+    return (
+        '{"behind_by": %d, "ahead_by": 1, "status": "diverged",'
+        ' "base_commit": {"sha": "%s"},'
+        ' "merge_base_commit": {"sha": "mergebase"}}' % (behind_by, base_tip)
+    )
+
+
+class CompareToBaseTests(unittest.TestCase):
     """The measurement itself, over the forge's comparison endpoint."""
 
     def _with_gh(self, fake):
@@ -176,42 +198,73 @@ class BehindCountTests(unittest.TestCase):
 
         def fake(args):
             seen.append(args)
-            return '{"behind_by": 2, "ahead_by": 1, "status": "diverged"}'
+            return _comparison(2, "87281ff")
 
         self._with_gh(fake)
-        self.assertEqual(mergeability.behind_count("o/r", "master", "deadbeef"), 2)
+        self.assertEqual(
+            mergeability.compare_to_base("o/r", "master", "deadbeef"),
+            mergeability.Comparison(2, "87281ff"),
+        )
         self.assertEqual(seen, [["api", "repos/o/r/compare/master...deadbeef"]])
+
+    def test_the_tip_it_reports_is_the_base_tip_not_the_merge_base(self):
+        # `base_commit` is the revision the count is about; `merge_base_commit` is the
+        # fork point, which is the same before and after the base moves and would
+        # therefore confirm a stale success as current.
+        self._with_gh(lambda args: _comparison(2, "87281ff"))
+        self.assertEqual(
+            mergeability.compare_to_base("o/r", "master", "deadbeef").base_tip,
+            "87281ff",
+        )
 
     def test_a_failed_comparison_is_unknown_rather_than_zero(self):
         def fake(args):
             raise mergeability.subprocess.CalledProcessError(1, "gh")
 
         self._with_gh(fake)
-        self.assertIsNone(mergeability.behind_count("o/r", "master", "deadbeef"))
+        self.assertEqual(
+            mergeability.compare_to_base("o/r", "master", "deadbeef"),
+            mergeability.UNMEASURED,
+        )
 
     def test_a_malformed_comparison_is_unknown_rather_than_zero(self):
         def fake(args):
             return '{"ahead_by": 1}'
 
         self._with_gh(fake)
-        self.assertIsNone(mergeability.behind_count("o/r", "master", "deadbeef"))
+        self.assertIsNone(
+            mergeability.compare_to_base("o/r", "master", "deadbeef").behind_by
+        )
+
+    def test_a_comparison_without_a_base_commit_is_unknown(self):
+        # A count with no subject cannot be confirmed later, so it is not a measurement.
+        self._with_gh(lambda args: '{"behind_by": 0}')
+        self.assertEqual(
+            mergeability.compare_to_base("o/r", "master", "deadbeef"),
+            mergeability.UNMEASURED,
+        )
 
 
-class MeasureTests(unittest.TestCase):
-    """`measure` is the seam the live script goes through, so it is where the
-    reachability actually has to hold: `classify` being correct proved nothing for the
-    whole time the caller never handed it a measurement."""
+class _Wired(unittest.TestCase):
+    """Wire `read_pull` and the comparison endpoint without touching the network."""
 
-    def _wire(self, pull, comparison=None):
-        def refuse(args):
-            # `AssertionError` on purpose: `behind_count` catches the four exception
-            # types a real failed comparison raises, so anything it catches would be
-            # swallowed into `None` and the test would pass without proving anything.
-            raise AssertionError(f"no comparison expected, got {args}")
+    def _wire(self, pull, comparisons=None):
+        responses = list(comparisons or [])
+        self.seen = []
+
+        def fake_gh(args):
+            self.seen.append(args)
+            if not responses:
+                # `AssertionError` on purpose: `compare_to_base` catches the four
+                # exception types a real failed comparison raises, so anything it
+                # catches would be swallowed into `UNMEASURED` and the test would pass
+                # without proving anything.
+                raise AssertionError(f"no comparison expected, got {args}")
+            return responses.pop(0)
 
         original_read, original_gh = mergeability.read_pull, mergeability._gh
         mergeability.read_pull = lambda repo, number: pull
-        mergeability._gh = (lambda args: comparison) if comparison else refuse
+        mergeability._gh = fake_gh
         self.addCleanup(
             lambda: (
                 setattr(mergeability, "read_pull", original_read),
@@ -219,27 +272,179 @@ class MeasureTests(unittest.TestCase):
             )
         )
 
+
+class MeasureTests(_Wired):
+    """`measure` is the seam the live script goes through, so it is where the
+    reachability actually has to hold: `classify` being correct proved nothing for the
+    whole time the caller never handed it a measurement."""
+
     def test_a_clean_but_stale_pull_request_is_measured_red_end_to_end(self):
         # The #479 reproduction through the real call path: nothing in this input
         # contains the word "behind".
-        self._wire(("fd61cae", True, "clean", "master"), '{"behind_by": 2}')
-        head, state, description = mergeability.measure("o/r", 479, attempts=1, delay=0)
-        self.assertEqual(head, "fd61cae")
-        self.assertEqual(state, "failure")
-        self.assertIn("behind master by 2 commits", description)
+        self._wire(("fd61cae", True, "clean", "master"), [_comparison(2)])
+        verdict = mergeability.measure("o/r", 479, attempts=1, delay=0)
+        self.assertEqual(verdict.head_sha, "fd61cae")
+        self.assertEqual(verdict.state, "failure")
+        self.assertIn("behind master by 2 commits", verdict.description)
 
     def test_a_current_pull_request_is_still_green_end_to_end(self):
-        self._wire(("cafe", True, "clean", "master"), '{"behind_by": 0}')
-        _, state, _ = mergeability.measure("o/r", 1, attempts=1, delay=0)
-        self.assertEqual(state, "success")
+        self._wire(("cafe", True, "clean", "master"), [_comparison(0)])
+        self.assertEqual(
+            mergeability.measure("o/r", 1, attempts=1, delay=0).state, "success"
+        )
+
+    def test_a_verdict_carries_the_base_revision_it_was_measured_against(self):
+        # Without this the verdict is uncheckable, which is what let a `success`
+        # measured against an old tip be written over a newer `failure`.
+        self._wire(("cafe", True, "clean", "master"), [_comparison(0, "M0")])
+        verdict = mergeability.measure("o/r", 1, attempts=1, delay=0)
+        self.assertEqual(verdict.base_ref, "master")
+        self.assertEqual(verdict.base_tip, "M0")
 
     def test_a_conflict_is_not_compared_at_all(self):
         # No comparison is wired: reaching for one would raise. A branch that cannot
         # merge does not need its distance, and the verdict must not turn on it.
         self._wire(("cafe", False, "dirty", "master"))
-        _, state, description = mergeability.measure("o/r", 2, attempts=1, delay=0)
-        self.assertEqual(state, "failure")
-        self.assertIn("conflicts", description)
+        verdict = mergeability.measure("o/r", 2, attempts=1, delay=0)
+        self.assertEqual(verdict.state, "failure")
+        self.assertIn("conflicts", verdict.description)
+
+
+class SettleConfirmsBeforeItCommits(_Wired):
+    """The window between measuring `success` and writing it.
+
+    Raised on #493 by @andy-zen-dev and confirmed by the ACCEPTOR. A `pull_request` run
+    and a `push`-to-base run are in different workflow concurrency groups — the key is
+    `mergeability-${{ github.ref }}` and their refs differ — so nothing serializes their
+    writes. Run A measures `behind_by == 0` against tip `M0`; the base advances to `M1`;
+    run B measures the real distance and posts `failure`; run A then posts the `success`
+    it computed against `M0` and it lands last. The required check is green on a head
+    that is genuinely behind — the exact state Issue #482 exists to make impossible.
+
+    Serializing the writers is a workflow change and ships alone. What lives here is the
+    other half of the repair: a `success` is confirmed against the tip it names,
+    immediately before it is returned to be written.
+    """
+
+    def test_a_base_that_moved_under_the_measurement_is_measured_again(self):
+        # The interleaving, forced: first comparison says current at `M0`, the
+        # confirmation finds `M1` in its place, and the re-measurement against `M1`
+        # finds the two commits that were really there. Red, not green.
+        self._wire(
+            ("cafe", True, "clean", "master"),
+            [_comparison(0, "M0"), _comparison(0, "M1"), _comparison(2, "M1")],
+        )
+        verdict = mergeability.settle("o/r", 7, attempts=1, delay=0)
+        self.assertEqual(verdict.state, "failure")
+        self.assertNotEqual(verdict.state, "success")
+        self.assertIn("behind master by 2 commits", verdict.description)
+
+    def test_a_confirmed_success_is_still_a_success(self):
+        # The ordinary case must stay green, and must cost exactly one confirmation.
+        self._wire(
+            ("cafe", True, "clean", "master"),
+            [_comparison(0, "M0"), _comparison(0, "M0")],
+        )
+        verdict = mergeability.settle("o/r", 7, attempts=1, delay=0)
+        self.assertEqual(verdict.state, "success")
+        self.assertEqual(len(self.seen), 2)
+
+    def test_a_base_that_keeps_moving_ends_pending_and_never_success(self):
+        # Bounded: this is a check, not a wait loop. `pending` blocks the merge just as
+        # `failure` does while claiming less, and the push doing the moving will write
+        # its own verdict.
+        self._wire(
+            ("cafe", True, "clean", "master"),
+            [
+                _comparison(0, "M0"),
+                _comparison(0, "M1"),
+                _comparison(0, "M1"),
+                _comparison(0, "M2"),
+            ],
+        )
+        verdict = mergeability.settle("o/r", 7, attempts=1, delay=0)
+        self.assertEqual(verdict.state, "pending")
+        self.assertNotEqual(verdict.state, "success")
+        self.assertIn("moved", verdict.description)
+        self.assertLessEqual(len(verdict.description), mergeability.MAX_DESCRIPTION)
+
+    def test_a_confirmation_that_does_not_come_back_is_pending_not_success(self):
+        # "Did not look" must not render as "looks fine" here either.
+        self._wire(
+            ("cafe", True, "clean", "master"),
+            [_comparison(0, "M0"), '{"behind_by": 0}'],
+        )
+        verdict = mergeability.settle("o/r", 7, attempts=1, delay=0)
+        self.assertEqual(verdict.state, "pending")
+        self.assertIn("could not confirm", verdict.description)
+        self.assertLessEqual(len(verdict.description), mergeability.MAX_DESCRIPTION)
+
+    def test_a_failure_is_returned_without_a_second_look(self):
+        # Only `success` is a claim that expires. Re-confirming a conflict would spend a
+        # request to learn nothing, and a `failure` is never the write that needs
+        # defending against a concurrent one.
+        self._wire(("cafe", True, "clean", "master"), [_comparison(3, "M0")])
+        verdict = mergeability.settle("o/r", 7, attempts=1, delay=0)
+        self.assertEqual(verdict.state, "failure")
+        self.assertEqual(len(self.seen), 1)
+
+    def test_a_pending_is_returned_without_a_second_look(self):
+        self._wire(("cafe", None, "unknown", "master"))
+        verdict = mergeability.settle("o/r", 7, attempts=1, delay=0)
+        self.assertEqual(verdict.state, "pending")
+        self.assertEqual(len(self.seen), 0)
+
+
+class PostedVerdictTests(_Wired):
+    """What `main` writes, which is the only thing a reviewer ever sees."""
+
+    def _run(self, pull, comparisons):
+        self._wire(pull, comparisons)
+        posted = []
+        original_post, original_argv = mergeability.post_status, sys.argv
+        mergeability.post_status = lambda repo, sha, state, description: posted.append(
+            (sha, state, description)
+        )
+        sys.argv = [
+            "mergeability.py",
+            "--repo",
+            "o/r",
+            "--pull",
+            "7",
+            "--attempts",
+            "1",
+            "--delay",
+            "0",
+            "--recheck-attempts",
+            "1",
+            "--recheck-delay",
+            "0",
+        ]
+        self.addCleanup(
+            lambda: (
+                setattr(mergeability, "post_status", original_post),
+                setattr(sys, "argv", original_argv),
+            )
+        )
+        self.assertEqual(mergeability.main(), 0)
+        return posted
+
+    def test_main_does_not_write_a_success_whose_base_moved_since_it_was_measured(self):
+        # End to end through `main`: the status actually written is the red one, so a
+        # concurrent push-triggered `failure` cannot be overwritten with a stale green.
+        posted = self._run(
+            ("cafe", True, "clean", "master"),
+            [_comparison(0, "M0"), _comparison(0, "M1"), _comparison(2, "M1")],
+        )
+        self.assertEqual([state for _, state, _ in posted], ["failure"])
+
+    def test_main_writes_the_confirmed_success_once(self):
+        posted = self._run(
+            ("cafe", True, "clean", "master"),
+            [_comparison(0, "M0"), _comparison(0, "M0")],
+        )
+        self.assertEqual(posted, [("cafe", "success", posted[0][2])])
+        self.assertIn("merges cleanly", posted[0][2])
 
 
 class ResolveTests(unittest.TestCase):
