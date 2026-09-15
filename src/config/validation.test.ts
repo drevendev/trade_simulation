@@ -679,6 +679,53 @@ describe("validateDefinitionPack", () => {
     expect(() => validateDefinitionPack(pack)).not.toThrow();
   });
 
+  // REQ-CONFIG-005, Issue #509: `outputGoodId` was the recipe's one scalar Good reference
+  // and was checked nowhere — not here, and not downstream, because no canonical reader
+  // consumes it yet. An undeclared output Good therefore reached the constructed world.
+  describe("outputGoodId good reference (REQ-CONFIG-005)", () => {
+    it("rejects an output good the pack does not declare", () => {
+      const pack = minimalPack({
+        "recipe-1": minimalRecipe({
+          outputGoodId: "good:unobtainium" as unknown as GoodId,
+        }),
+      });
+      expect(() => validateDefinitionPack(pack)).toThrow(
+        /RecipeDefinition "recipe-1": outputGoodId "good:unobtainium" references a Good the DefinitionPack does not declare/,
+      );
+    });
+
+    it("rejects an undeclared output good even when every other recipe field is well-formed", () => {
+      const pack = minimalPack({
+        "recipe-1": minimalRecipe({
+          outputGoodId: "good:unobtainium" as unknown as GoodId,
+          outputPerBatch: 10,
+          inputsPerBatch: { "good-2": 2 } as unknown as Record<GoodId, number>,
+          investmentGoodsPerCapitalUnit: {},
+        }),
+      });
+      expect(() => validateDefinitionPack(pack)).toThrow(
+        /outputGoodId "good:unobtainium" references a Good the DefinitionPack does not declare/,
+      );
+    });
+
+    it("names the offending recipe when only one of several recipes is invalid", () => {
+      const pack = minimalPack({
+        "recipe-1": minimalRecipe(),
+        "recipe-2": minimalRecipe({ outputGoodId: "good:unobtainium" as unknown as GoodId }),
+      });
+      expect(() => validateDefinitionPack(pack)).toThrow(
+        /RecipeDefinition "recipe-2": outputGoodId "good:unobtainium"/,
+      );
+    });
+
+    it("accepts an output good the pack declares", () => {
+      const pack = minimalPack({
+        "recipe-1": minimalRecipe({ outputGoodId: "good-2" as unknown as GoodId }),
+      });
+      expect(() => validateDefinitionPack(pack)).not.toThrow();
+    });
+  });
+
   it("rejects outputPerBatch <= 0", () => {
     const pack = minimalPack({
       "recipe-1": minimalRecipe({ outputPerBatch: 0 }),

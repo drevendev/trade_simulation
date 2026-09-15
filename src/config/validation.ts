@@ -115,6 +115,7 @@ export function validateScenarioContent(scenario: ScenarioDefinition): void {
 /**
  * Throws unless the DefinitionPack recipes satisfy REQ-CONFIG-003 bounds validation
  * (section 16A of CANONICAL_CONFIG_AND_WORLD_GENERATION.md):
+ * - outputGoodId must name a good the pack declares (REQ-CONFIG-005, Issue #509)
  * - outputPerBatch must be positive
  * - every declared inputsPerBatch coefficient must be strictly positive and keyed by a
  *   good the pack declares (REQ-CONFIG-005, Issue #508)
@@ -135,6 +136,18 @@ export function validateDefinitionPack(definitionPack: DefinitionPack): void {
   const declaredGoodKeys = new Set(Object.keys(definitionPack.goods ?? {}));
 
   Object.entries(definitionPack.recipes ?? {}).forEach(([recipeId, recipe]) => {
+    // outputGoodId: a good the pack declares. Section 21 fails configuration validation
+    // fast on unknown Good IDs and invariant 24.3 requires every ID to be
+    // reference-valid, but this reference was checked nowhere: unlike the two good-keyed
+    // maps below, no canonical reader consumes `outputGoodId` yet — production is M4 — so
+    // an undeclared output Good survived step 1 and reached the constructed world with
+    // nothing downstream to reject it (Issue #509).
+    if (!declaredGoodKeys.has(recipe.outputGoodId as unknown as string)) {
+      throw new Error(
+        `RecipeDefinition "${recipeId}": outputGoodId "${recipe.outputGoodId}" references a Good the DefinitionPack does not declare`,
+      );
+    }
+
     // outputPerBatch: positive (> 0)
     if (!isFiniteCanonicalNumber(recipe.outputPerBatch) || recipe.outputPerBatch <= 0) {
       throw new Error(
