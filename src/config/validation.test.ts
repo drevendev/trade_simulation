@@ -639,11 +639,35 @@ describe("validateDefinitionPack", () => {
     };
   }
 
+  function goodDefinition(id: string): GoodDefinition {
+    return {
+      id: id as unknown as GoodId,
+      name: id,
+      unitLabel: "unit",
+      spoilageRatePerTick: 0,
+      consumerNeedCategory: null,
+      referencePrice: 1,
+      tradable: true,
+    };
+  }
+
+  /**
+   * Declares the goods `minimalRecipe()` references, so a pack built from it is
+   * well-formed under the REQ-CONFIG-005 reference checks rather than accidentally
+   * exercising them.
+   */
+  function minimalGoods(): Record<GoodId, GoodDefinition> {
+    return {
+      "good-1": goodDefinition("good-1"),
+      "good-2": goodDefinition("good-2"),
+    } as unknown as Record<GoodId, GoodDefinition>;
+  }
+
   function minimalPack(recipes?: Record<string, RecipeDefinition>): DefinitionPack {
     return {
       id: "test-pack",
       version: "1.0.0",
-      goods: {},
+      goods: minimalGoods(),
       recipes: recipes ?? { "recipe-1": minimalRecipe() },
       eventDefinitions: {},
       metricDefinitions: {},
@@ -692,6 +716,42 @@ describe("validateDefinitionPack", () => {
       "recipe-1": minimalRecipe({ inputsPerBatch: {} }),
     });
     expect(() => validateDefinitionPack(pack)).not.toThrow();
+  });
+
+  // REQ-CONFIG-005, Issue #508: `inputsPerBatch` used to be the one good-keyed recipe map
+  // whose keys were never checked against `DefinitionPack.goods`, so an undeclared input
+  // Good reached world construction instead of failing fast in step 1.
+  describe("inputsPerBatch good references (REQ-CONFIG-005)", () => {
+    it("rejects an input keyed by a good the pack does not declare", () => {
+      const pack = minimalPack({
+        "recipe-1": minimalRecipe({
+          inputsPerBatch: { "good-2": 2, "good:unobtainium": 1 } as unknown as Record<GoodId, number>,
+        }),
+      });
+      expect(() => validateDefinitionPack(pack)).toThrow(
+        /RecipeDefinition "recipe-1": inputsPerBatch\["good:unobtainium"\] references a Good the DefinitionPack does not declare/,
+      );
+    });
+
+    it("rejects an undeclared input good even when its coefficient is well-formed", () => {
+      const pack = minimalPack({
+        "recipe-1": minimalRecipe({
+          inputsPerBatch: { "good:unobtainium": 1 } as unknown as Record<GoodId, number>,
+        }),
+      });
+      expect(() => validateDefinitionPack(pack)).toThrow(
+        /inputsPerBatch\["good:unobtainium"\] references a Good the DefinitionPack does not declare/,
+      );
+    });
+
+    it("accepts a strictly positive coefficient keyed by a declared good", () => {
+      const pack = minimalPack({
+        "recipe-1": minimalRecipe({
+          inputsPerBatch: { "good-1": 3, "good-2": 2 } as unknown as Record<GoodId, number>,
+        }),
+      });
+      expect(() => validateDefinitionPack(pack)).not.toThrow();
+    });
   });
 
   it("rejects laborPerBatch < 0", () => {
@@ -849,18 +909,6 @@ describe("validateDefinitionPack", () => {
   // to survive validation and be dropped downstream by resolveCapitalGoodsPerCapitalUnit(),
   // where it became indistinguishable from a recipe declaring no investment good.
   describe("investmentGoodsPerCapitalUnit (REQ-CONFIG-005)", () => {
-    function goodDefinition(id: string): GoodDefinition {
-      return {
-        id: id as unknown as GoodId,
-        name: id,
-        unitLabel: "unit",
-        spoilageRatePerTick: 0,
-        consumerNeedCategory: null,
-        referencePrice: 1,
-        tradable: true,
-      };
-    }
-
     /** A pack declaring `good:tools`, so an investment coefficient can name a real good. */
     function packWithTools(investment: Record<string, number>): DefinitionPack {
       return {
@@ -869,7 +917,10 @@ describe("validateDefinitionPack", () => {
             investmentGoodsPerCapitalUnit: investment as unknown as Record<GoodId, number>,
           }),
         }),
-        goods: { "good:tools": goodDefinition("good:tools") } as unknown as Record<GoodId, GoodDefinition>,
+        goods: {
+          ...minimalGoods(),
+          "good:tools": goodDefinition("good:tools"),
+        } as unknown as Record<GoodId, GoodDefinition>,
       };
     }
 

@@ -116,7 +116,8 @@ export function validateScenarioContent(scenario: ScenarioDefinition): void {
  * Throws unless the DefinitionPack recipes satisfy REQ-CONFIG-003 bounds validation
  * (section 16A of CANONICAL_CONFIG_AND_WORLD_GENERATION.md):
  * - outputPerBatch must be positive
- * - every declared inputsPerBatch coefficient must be strictly positive
+ * - every declared inputsPerBatch coefficient must be strictly positive and keyed by a
+ *   good the pack declares (REQ-CONFIG-005, Issue #508)
  * - laborPerBatch must be non-negative
  * - batchesPerCapitalUnit must be positive
  * - minimumStartupCapital must be non-negative
@@ -141,9 +142,19 @@ export function validateDefinitionPack(definitionPack: DefinitionPack): void {
       );
     }
 
-    // Every declared inputsPerBatch coefficient: strictly positive (> 0)
+    // inputsPerBatch: every key a declared good, every coefficient strictly positive
+    // (> 0). An empty map is a real "no material input" declaration and stays valid.
+    // Section 21 fails configuration validation fast on unknown Good IDs, and the
+    // sibling investmentGoodsPerCapitalUnit check below already enforced that for the
+    // other good-keyed recipe map (Issue #508).
     if (recipe.inputsPerBatch) {
       Object.entries(recipe.inputsPerBatch).forEach(([goodKey, coefficient]) => {
+        if (!declaredGoodKeys.has(goodKey)) {
+          throw new Error(
+            `RecipeDefinition "${recipeId}": inputsPerBatch["${goodKey}"] references a Good the DefinitionPack does not declare`,
+          );
+        }
+
         if (!isFiniteCanonicalNumber(coefficient) || coefficient <= 0) {
           throw new Error(
             `RecipeDefinition "${recipeId}": inputsPerBatch["${goodKey}"] must be a strictly positive finite number, got ${describeValue(coefficient)}`,
