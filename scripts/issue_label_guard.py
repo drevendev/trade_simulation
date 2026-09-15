@@ -85,9 +85,25 @@ HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 # GitHub links the `Closes #N`, the guard never resolves the Issue, and its labels go
 # unchecked. `[^`\n]*` is the whole repair, and it is deliberately not mirrored onto the
 # tilde side, where it would refuse openers GFM allows. Reported as Issue #521.
+#
+# A fence — opening or closing — may be indented *no more than three spaces* (GFM 4.5); at
+# four it is an indented code line instead and opens nothing (example 104). `[ \t]*` here
+# accepted any indentation at all, which is the same fail-open direction a third time: a
+# four-space ``` line was taken as an opener, an ordinary unindented ``` further down
+# "closed" it, and the real `Closes #N` between them was stripped before `LINK` ran.
+# GitHub links that keyword; the guard resolved nothing and the axis gate reported green
+# over an Issue it never inspected. Reported as Issue #523.
+#
+# `{0,3}` counts *spaces* and no tabs, which is the whole of the tab rule rather than an
+# omission of it: indentation is measured in columns against four-column tab stops, so a
+# tab appearing anywhere in columns 0-3 advances to column 4 and already exceeds the
+# allowance. There is no leading tab a fence may carry, so there is none to spell.
+#
+# Trailing whitespace after a closer stays `[ \t]*`: GFM restricts what may *precede* a
+# fence, and permits spaces or tabs after it.
 FENCED_CODE = re.compile(
-    r"^[ \t]*(?:(`{3,})[^`\n]*\n.*?(?:^[ \t]*\1`*[ \t]*$|\Z)"
-    r"|(~{3,})[^\n]*\n.*?(?:^[ \t]*\2~*[ \t]*$|\Z))",
+    r"^ {0,3}(?:(`{3,})[^`\n]*\n.*?(?:^ {0,3}\1`*[ \t]*$|\Z)"
+    r"|(~{3,})[^\n]*\n.*?(?:^ {0,3}\2~*[ \t]*$|\Z))",
     re.DOTALL | re.MULTILINE,
 )
 # A code span may not contain a blank line, so an unclosed backtick swallows a
