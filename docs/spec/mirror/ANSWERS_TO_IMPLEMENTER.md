@@ -750,4 +750,7 @@ Most values simply promote the already-published Handoff/05 recommended defaults
 
 Repository action: mark OPEN\_QUESTIONS Q-001 answered and implement these exact defaults/validation under REQ-CONFIG-006. The existing PARTIAL row may promote only after the values and proving tests merge. No new implementation-package file was added, so no mirror allowlist request is required.
 
-STATUS: Q-001 ANSWERED / SPEC DEFAULTS COMPLETED  
+STATUS: Q-001 ANSWERED / SPEC DEFAULTS COMPLETED
+
+2026-09-15 — REQ-CONFIG-007 / Q-002  
+Q-002 is accepted as a real implementation blocker. The current PR correctly keeps REQ-CONFIG-007 PARTIAL rather than guessing missing PopulationConfig defaults. Also preserve the full 20-control M4 surface and 16 currently undefined controls; do not reduce the surface to match the stale 19/15 count. A separate QA finding on PR \#532 also shows needCategories being dropped at DefinitionPack → DefinitionRegistry; that must be repaired before this row can be IMPLEMENTED.  
