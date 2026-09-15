@@ -13,8 +13,23 @@ This performs the merge through the forge's own endpoint, for the loop's branche
 * the branch must be the loop's (``claude/**``); an operator's branch is left alone;
 * it must not be a machine class: a merge commit committed by anyone but the producing
   workflow fails that class's committer gate, so updating one would refuse it;
-* GitHub must already report ``behind``. ``dirty``, ``clean``, ``blocked`` and an
-  uncomputed answer are all left exactly as they are.
+* the branch must merge. A conflict is not this sweep's to resolve, and an answer
+  GitHub has not computed yet is not an answer;
+* the branch must be *measurably* behind. That distance is measured against the
+  repository, by ``mergeability.compare_to_base``, not read off ``mergeable_state``.
+
+That last point is the repair in #492. This asked GitHub for ``mergeable_state ==
+"behind"``, and GitHub emits that string only when the base branch's protection rule
+has *"Require branches to be up to date before merging"* switched on. With it off — as
+the #479 observation says it is here — a branch two commits behind comes back
+``"clean"``, so the condition was never satisfied for the case it targets and the sweep
+updated nothing. It is the same defect #482 repaired in ``mergeability``, and the same
+fix: measure, and keep the API's word only as corroboration.
+
+``clean``, ``blocked``, ``unstable`` and ``has_hooks`` therefore no longer decide
+anything. They describe review and check state, which is orthogonal to whether the base
+has moved; a branch in any of them that is measurably behind is updated, matching the
+`failure` ``mergeability`` now writes on it.
 
 The credential matters. A push made with the workflow's own token starts no workflows,
 so the updated branch would carry the stale checks it had before, and the pull request
@@ -34,13 +49,25 @@ import subprocess
 import sys
 
 import machine_pr_guard
+import mergeability
 
 LOOP_PREFIX = "claude/"
 BEHIND = "behind"
 
 
-def should_update(pull):
-    """(bool, reason). Pure: decides from one pull request object as the API returns it."""
+def should_update(pull, behind_by):
+    """(bool, reason). Pure: decides from one pull request object and one measurement.
+
+    `behind_by` is how many commits the base branch holds that this head does not, as
+    `mergeability.compare_to_base` measured it, or `None` when that measurement did not
+    come back. It is a parameter rather than something read here because this function
+    performs no network call and its whole test suite depends on that.
+
+    `behind_by` has no default, for the reason `mergeability.classify` gives for the
+    same parameter: a default is how this arm goes unreachable a third time. A caller
+    that never measured would get the old always-`False` answer silently; without one
+    it gets a `TypeError` at the call site.
+    """
     head = pull.get("head") or {}
     base = pull.get("base") or {}
     ref = head.get("ref") or ""
@@ -60,9 +87,25 @@ def should_update(pull):
     if pull.get("mergeable") is None:
         return False, "mergeability not yet computed"
     state = pull.get("mergeable_state")
-    if state != BEHIND:
-        return False, f"mergeable_state is {state!r}, not {BEHIND!r}"
-    return True, BEHIND
+    if pull.get("mergeable") is False:
+        return False, f"conflicts with the base branch ({state}); not this sweep's to resolve"
+    # It merges. The only remaining question is whether the base has moved under it.
+    if behind_by is None:
+        # Distinct from "mergeability not yet computed" on purpose. That one is GitHub
+        # not having decided whether the branch merges; this one is the compare endpoint
+        # not answering at all. A comparison that did not happen is not a measurement of
+        # zero, and treating it as one is exactly how this sweep went quiet before.
+        return False, "could not measure this branch's distance from its base"
+    if behind_by > 0:
+        commits = "commit" if behind_by == 1 else "commits"
+        return True, f"behind its base by {behind_by} {commits}"
+    if state == BEHIND:
+        # The two disagree: the comparison found no distance and the API volunteered
+        # `behind` anyway. Updated anyway — corroboration from the forge about its own
+        # base is not something to overrule — but described without the measured zero,
+        # which would read as a broken sweep. Same rule as `mergeability.classify`.
+        return True, "GitHub reports this branch behind its base, though the comparison measured no distance"
+    return False, "already contains the tip of its base"
 
 
 def failure_detail(stderr: str, returncode: int) -> str:
@@ -115,6 +158,23 @@ def update(repo: str, number: int, head_sha: str):
     return False, failure_detail(result.stderr, result.returncode)
 
 
+def measure(repo: str, pull) -> mergeability.Comparison:
+    """How far this head is behind its base. The impure half of the decision.
+
+    Measured for every pull request the sweep reads, including ones the pure guards will
+    reject anyway. Gating the request on a cheap precondition would mean writing the
+    guard chain a second time, and a second copy that drifts is how this arm became
+    unreachable in the first place: a branch that should have been updated would come
+    back "could not measure" and nobody would look again. One compare request per open
+    pull request per sweep is the cheaper mistake.
+    """
+    head_sha = (pull.get("head") or {}).get("sha")
+    base_ref = (pull.get("base") or {}).get("ref")
+    if not head_sha or not base_ref:
+        return mergeability.UNMEASURED
+    return mergeability.compare_to_base(repo, base_ref, head_sha)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, help="owner/name")
@@ -137,7 +197,7 @@ def main() -> int:
             print(f"::warning::update-branches: {error}")
             continue
         ref = (pull.get("head") or {}).get("ref") or "?"
-        ok, reason = should_update(pull)
+        ok, reason = should_update(pull, measure(args.repo, pull).behind_by)
         if not ok:
             print(f"update-branches: #{number} {ref} left alone: {reason}")
             continue
