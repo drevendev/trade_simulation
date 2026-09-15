@@ -116,8 +116,9 @@ is generated from that file and is presentation only. The summary below follows 
 **Closed:**
 - Milestone 3. A milestone is released only once every one of its ledger rows reads IMPLEMENTED
   *and* carries the merge commit that landed it, and `release-tag.yml` makes that judgement
-  mechanically from the ledger rather than by hand. All nine M3 rows now meet it, and the tagger
-  cut `v0.3.0 — M3` on that evidence.
+  mechanically from the ledger rather than by hand. All nine M3 rows met it, and the tagger cut
+  `v0.3.0 — M3` on that evidence. A row whose merge commit is blank is one a pull request is
+  still carrying: `scripts/backfill_merge_commits.py` records it once that pull request lands.
 
 **Not implemented yet (later milestones M4–M8):**
 - Production, labor allocation, household consumption and population cohorts in a one-region closed economy (M4)
