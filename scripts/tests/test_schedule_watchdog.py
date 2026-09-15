@@ -13,6 +13,16 @@ import schedule_watchdog as watchdog
 
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
 
+# Scheme stand-ins. The dispatcher reads the repository's own descriptor, and from
+# scheme/7 that descriptor runs no AUTHOR; tests about dispatch mechanics pin a scheme
+# with both roles on, so they keep testing the mechanics and not today's setup.
+BOTH_ON = {"id": "scheme/test", "roles": {
+    "author": {"identity": "a[bot]", "model": "claude-x"},
+    "acceptor": {"identity": "b[bot]", "model": "claude-x"}}}
+AUTHOR_OFF = {"id": "scheme/test", "roles": {
+    "author": {"identity": "drevendev (EndlessZen)", "model": None},
+    "acceptor": {"identity": "b[bot]", "model": "claude-x"}}}
+
 
 def attempt(age=30, status="completed", conclusion="success", **fields):
     return {"id": 123, "workflow_id": 1, "head_branch": "master", "status": status,
@@ -131,6 +141,9 @@ class DispatchTests(unittest.TestCase):
         self.enabled = patch.object(watchdog, "is_enabled", return_value=True)
         self.enabled.start()
         self.addCleanup(self.enabled.stop)
+        self.scheme = patch.object(watchdog, "active_scheme", return_value=BOTH_ON)
+        self.scheme.start()
+        self.addCleanup(self.scheme.stop)
 
     def test_dry_run_never_posts(self):
         with patch.object(watchdog, "inspect_target", return_value={"decision": "due"}), \
@@ -308,6 +321,9 @@ class AlternationDispatchTests(unittest.TestCase):
         self.enabled = patch.object(watchdog, "is_enabled", return_value=True)
         self.enabled.start()
         self.addCleanup(self.enabled.stop)
+        self.scheme = patch.object(watchdog, "active_scheme", return_value=BOTH_ON)
+        self.scheme.start()
+        self.addCleanup(self.scheme.stop)
 
     def decide(self, decisions):
         return lambda target, now, interval=None, **_: {"workflow": target, "decision": decisions[target]}
@@ -498,6 +514,7 @@ class StaleQueueTests(unittest.TestCase):
             return {"workflow": target, "decision": "recent"}
 
         with patch.object(watchdog, "is_enabled", return_value=True), \
+                patch.object(watchdog, "active_scheme", return_value=BOTH_ON), \
                 patch.object(watchdog, "inspect_target", side_effect=spy), \
                 patch.object(watchdog, "api") as api:
             watchdog.run(now=NOW)
@@ -506,6 +523,88 @@ class StaleQueueTests(unittest.TestCase):
             watchdog.run(dispatch=True, now=NOW)
             self.assertEqual(set(seen), {True})
             api.assert_not_called()
+
+
+class RoleSwitchTests(unittest.TestCase):
+    """The active scheme decides which model roles run; a role without a model never does."""
+
+    def setUp(self):
+        self.enabled = patch.object(watchdog, "is_enabled", return_value=True)
+        self.enabled.start()
+        self.addCleanup(self.enabled.stop)
+
+    @staticmethod
+    def due(target, now, interval=None, **_):
+        return {"workflow": target, "decision": "due"}
+
+    def test_a_role_without_a_model_is_off_and_never_inspected_or_dispatched(self):
+        inspected = []
+
+        def spy(target, now, interval=None, **_):
+            inspected.append(target)
+            return {"workflow": target, "decision": "due"}
+
+        with patch.object(watchdog, "active_scheme", return_value=AUTHOR_OFF), \
+                patch.object(watchdog, "inspect_target", side_effect=spy), \
+                patch.object(watchdog, "api") as api:
+            results = watchdog.run(dispatch=True, now=NOW)
+        by_workflow = {r["workflow"]: r for r in results}
+        self.assertEqual(by_workflow["zendev-author.yml"]["decision"], "off")
+        self.assertIn("runs no model for the author", by_workflow["zendev-author.yml"]["reason"])
+        self.assertIn("scheme/test", by_workflow["zendev-author.yml"]["reason"])
+        self.assertEqual(by_workflow["zendev-acceptor.yml"]["decision"], "dispatched")
+        self.assertEqual(by_workflow["spec-sync.yml"]["decision"], "dispatched")
+        self.assertNotIn("zendev-author.yml", inspected)
+        dispatched = [call.args[0] for call in api.call_args_list]
+        self.assertEqual(len(dispatched), 2)
+        self.assertFalse(any("zendev-author.yml" in path for path in dispatched))
+
+    def test_the_remaining_role_dispatches_without_consulting_alternation(self):
+        # With the author off there is never a second due model target, so the
+        # alternation lookup, an API call, must not run.
+        with patch.object(watchdog, "active_scheme", return_value=AUTHOR_OFF), \
+                patch.object(watchdog, "inspect_target", side_effect=self.due), \
+                patch.object(watchdog, "select_model_target") as select, \
+                patch.object(watchdog, "api"):
+            results = watchdog.run(dispatch=True, now=NOW)
+        select.assert_not_called()
+        decisions = {r["workflow"]: r["decision"] for r in results}
+        self.assertEqual(decisions["zendev-acceptor.yml"], "dispatched")
+
+    def test_a_scheme_with_a_model_for_every_role_switches_nothing_off(self):
+        self.assertEqual(watchdog.model_targets_off(BOTH_ON), {})
+
+    def test_an_unreadable_scheme_switches_every_model_role_off_and_leaves_spec_sync(self):
+        self.assertEqual(set(watchdog.model_targets_off(None)), set(watchdog.MODEL_TARGETS))
+        with patch.object(watchdog, "active_scheme", return_value=None), \
+                patch.object(watchdog, "inspect_target", side_effect=self.due), \
+                patch.object(watchdog, "api") as api:
+            results = watchdog.run(dispatch=True, now=NOW)
+        decisions = {r["workflow"]: r["decision"] for r in results}
+        self.assertEqual(decisions, {"spec-sync.yml": "dispatched",
+                                     "zendev-author.yml": "off", "zendev-acceptor.yml": "off"})
+        self.assertEqual(api.call_count, 1)
+
+    def test_a_role_the_scheme_does_not_name_is_off(self):
+        nameless = {"id": "scheme/test", "roles": {"acceptor": {"model": "claude-x"}}}
+        off = watchdog.model_targets_off(nameless)
+        self.assertEqual(set(off), {"zendev-author.yml"})
+        self.assertIn("names no author role", off["zendev-author.yml"])
+
+    def test_a_dry_run_reports_the_switch_the_same_way(self):
+        with patch.object(watchdog, "active_scheme", return_value=AUTHOR_OFF), \
+                patch.object(watchdog, "inspect_target", side_effect=self.due), \
+                patch.object(watchdog, "api") as api:
+            results = watchdog.run(now=NOW)
+        decisions = {r["workflow"]: r["decision"] for r in results}
+        self.assertEqual(decisions["zendev-author.yml"], "off")
+        api.assert_not_called()
+
+    def test_every_model_target_has_a_role_and_the_repository_scheme_is_readable(self):
+        self.assertEqual(set(watchdog.ROLE_OF), set(watchdog.MODEL_TARGETS))
+        scheme = watchdog.active_scheme()
+        self.assertIsNotNone(scheme, "the dispatcher must be able to read docs/zendev/schemes.json")
+        self.assertTrue(scheme["id"].startswith("scheme/"))
 
 
 class WiringTests(unittest.TestCase):
