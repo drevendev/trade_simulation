@@ -120,6 +120,48 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(guard.linked_issues(None), [])
 
 
+class QuotedTextTests(unittest.TestCase):
+    """PR #518 refused itself: its handoff quoted `Closes #999999` and the guard obeyed it.
+
+    GitHub links a closing keyword in ordinary prose and ignores one inside a code span,
+    a fenced block or an HTML comment. The guard now agrees, so a handoff can describe a
+    link without making one.
+    """
+
+    def test_a_backticked_closing_keyword_is_not_a_link(self):
+        self.assertEqual(guard.linked_issues("A body reading `Closes #999999` is refused."), [])
+
+    def test_a_fenced_block_does_not_link(self):
+        body = "Closes #462\n\n```\nCloses #999999\n```\n"
+        self.assertEqual(guard.linked_issues(body), [462])
+
+    def test_a_tilde_fence_does_not_link(self):
+        self.assertEqual(guard.linked_issues("~~~\nFixes #1\n~~~\n"), [])
+
+    def test_an_html_comment_does_not_link(self):
+        # The pull request template ships its guidance in exactly these.
+        self.assertEqual(guard.linked_issues("<!-- Closes #1 -->\nCloses #2"), [2])
+
+    def test_the_real_link_still_survives_a_body_full_of_quoted_ones(self):
+        body = (
+            "Closes #462\n\n"
+            "| `Closes #999999` | exit 1 |\n"
+            "| `Closes #463` | exit 0 |\n"
+            "<!-- Fixes #1 -->\n"
+            "```\nResolves #2\n```\n"
+        )
+        self.assertEqual(guard.linked_issues(body), [462])
+
+    def test_an_unclosed_backtick_swallows_a_paragraph_at_most(self):
+        # A code span cannot contain a blank line, so a stray backtick must not blind the
+        # guard to a link further down the body.
+        self.assertEqual(guard.linked_issues("a stray ` tick\n\nCloses #462"), [462])
+
+    def test_stripping_leaves_ordinary_prose_alone(self):
+        self.assertEqual(guard.strip_code("plain text"), "plain text")
+        self.assertEqual(guard.strip_code(None), "")
+
+
 class CheckTests(unittest.TestCase):
     def test_a_linked_issue_missing_an_axis_refuses_the_pull_request(self):
         violations = guard.check("Closes #448", "claude/issue-448-x", resolver({448: LABELS_448}))

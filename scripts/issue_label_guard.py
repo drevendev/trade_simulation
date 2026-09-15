@@ -25,6 +25,9 @@ What it deliberately does not do:
   pull request with nothing linked passes here and is judged there.
 * **It does not apply the missing label.** Auto-labelling decides the work's area on the
   author's behalf and destroys the signal the axis exists to carry. It refuses and names.
+* **It does not read a link out of quoted text.** A closing keyword inside a code span,
+  a fenced block or an HTML comment does not link an Issue on GitHub, so it does not link
+  one here either. A handoff has to be able to write down what a link looks like.
 * **It does not read `status:*`.** That axis is the loop's own bookkeeping, it changes
   several times over an Issue's life, and it is not one of the three the contract names.
   It is not counted toward any axis and its presence never changes the result.
@@ -59,6 +62,30 @@ LINK = re.compile(
     re.IGNORECASE,
 )
 
+# GitHub does not link a closing keyword it finds inside a code span, a fenced block or
+# an HTML comment, and neither does this. The first pull request to carry this guard
+# refused itself on exactly that: its handoff documented a live run against a body
+# reading `Closes #999999`, in backticks, and the guard went and asked the forge about
+# Issue 999999. A handoff must be able to quote a link without creating one — otherwise
+# the record of what a guard does cannot be written down without tripping it.
+HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+FENCED_CODE = re.compile(r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ \t]*$|\Z)", re.DOTALL | re.MULTILINE)
+# A code span may not contain a blank line, so an unclosed backtick swallows a
+# paragraph at most rather than the rest of the body.
+INLINE_CODE = re.compile(r"(`+)(?:(?!\1)[^\n]|\n(?!\s*\n))+?\1")
+
+
+def strip_code(text):
+    """The body with code spans, fenced blocks and HTML comments removed. Pure.
+
+    Removed, not blanked to spaces: nothing downstream reads an offset, and the
+    surrounding text keeps its own line structure because the fenced pattern is anchored
+    to whole lines.
+    """
+    without = HTML_COMMENT.sub("", text or "")
+    without = FENCED_CODE.sub("", without)
+    return INLINE_CODE.sub("", without)
+
 # The three axes the working contract names, and how many labels each admits.
 # `status:*` is absent on purpose — see the module docstring.
 AXES = (
@@ -71,7 +98,7 @@ AXES = (
 def linked_issues(body):
     """Issue numbers the body links with a closing keyword, in order, deduplicated. Pure."""
     seen = []
-    for match in LINK.finditer(body or ""):
+    for match in LINK.finditer(strip_code(body)):
         number = int(match.group(1))
         if number not in seen:
             seen.append(number)
