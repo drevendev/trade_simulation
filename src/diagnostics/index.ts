@@ -9,3 +9,11 @@ export const DIAGNOSTICS_MODULE_AREA = "diagnostics" as const;
 
 export { generateM1Preview, type M1Preview } from "./m1Preview";
 export { generateM2Preview, type M2Preview } from "./m2Preview";
+export {
+  generateM3Preview,
+  m3GoldenRunFixture,
+  type M3Preview,
+  type M3PreviewMarket,
+  type M3PreviewTick,
+  type M3GoldenRunFixture,
+} from "./m3Preview";

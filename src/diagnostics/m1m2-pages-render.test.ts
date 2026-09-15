@@ -131,6 +131,14 @@ async function renderPage(options: { innerWidth?: number } = {}): Promise<DOMWin
  * injecting a CSS rule after navigation. Unlike jsdom, Playwright performs actual layout,
  * so `locator.isVisible()` reflects a non-empty bounding box and non-`visibility:hidden`
  * computed style — it catches both hidden and clipped content, not just `display: none`.
+ *
+ * REQ-VISUALIZATION-006 consolidated the page around the current M3 LocalMarket
+ * experience, so the M0–M2 diagnostic panels now live inside the collapsed
+ * `#earlier-milestones` disclosure instead of standing as peer panels beside it. The
+ * disclosure is opened here before any visibility assertion: collapsed content genuinely
+ * has no box, and the question these tests ask — does the M1/M2 render path produce
+ * readable content — is about the render path, not about the disclosure's default state.
+ * That default is pinned separately by `m3-pages-render.test.ts`.
  */
 async function renderPageInBrowser(options: {
   viewportWidth: number;
@@ -139,6 +147,9 @@ async function renderPageInBrowser(options: {
   const page = await browser.newPage();
   await page.setViewportSize({ width: options.viewportWidth, height: 900 });
   await page.goto(baseUrl);
+  await page.locator("#earlier-milestones").evaluate((node) => {
+    (node as HTMLDetailsElement).open = true;
+  });
   if (options.injectCss) {
     await page.addStyleTag({ content: options.injectCss });
   }
