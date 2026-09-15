@@ -18,8 +18,9 @@ is static, one-way milestone output, not the canonical engine executing in the b
 - Normalized accounting spine: typed MONEY and GOOD signed deltas plus PHYSICAL_LOSS attribution,
   reconciled at phase and tick boundaries
 
-**Milestone 3:** Local markets and transaction settlement. Per-requirement evidence lives in the
-[implementation ledger](docs/spec/implementation_status.csv); see
+**Milestone 3:** Complete, and released as `v0.3.0` once every one of its ledger rows carried the
+merge commit that landed it. Local markets and transaction settlement. Per-requirement evidence
+lives in the [implementation ledger](docs/spec/implementation_status.csv); see
 [Known scope boundaries](#known-scope-boundaries) for what that ledger currently records. Local
 market implementation adds:
 - Ephemeral MarketIntent contracts and the budget commitments that back them
@@ -112,10 +113,11 @@ is generated from that file and is presentation only. The summary below follows 
   README and public project text (REQ-VISUALIZATION-007), and the two public explainer articles
   (REQ-VISUALIZATION-008)
 
-**Not closed:**
-- Milestone 3 itself. A milestone is released only once every one of its ledger rows reads
-  IMPLEMENTED *and* carries the merge commit that landed it, and `release-tag.yml` makes that
-  judgement mechanically from the ledger. This README does not claim M3 has closed.
+**Closed:**
+- Milestone 3. A milestone is released only once every one of its ledger rows reads IMPLEMENTED
+  *and* carries the merge commit that landed it, and `release-tag.yml` makes that judgement
+  mechanically from the ledger rather than by hand. All nine M3 rows now meet it, and the tagger
+  cut `v0.3.0 — M3` on that evidence.
 
 **Not implemented yet (later milestones M4–M8):**
 - Production, labor allocation, household consumption and population cohorts in a one-region closed economy (M4)
