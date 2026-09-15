@@ -107,6 +107,31 @@ jobs:
             --head-ref "${HEAD_REF}" \
             --body-file "${RUNNER_TEMP}/pull-request-body.md"
 
+      # The three label axes on the linked Issue. This was the ACCEPTOR's gate until a
+      # run failed it: Issue #448 carried no `area:*` label at all, was claimed,
+      # implemented and carried to PR #459, and a review run discovered the missing label
+      # there — costing an AUTHOR run, an ACCEPTOR run and a rework round to report one
+      # label. Here it costs a re-run (#462). It refuses and names; it never applies the
+      # label, which would decide the work's area on the author's behalf.
+      #
+      # A pull request that links no Issue passes this step: that gate stays whole in
+      # ACCEPTOR_RUNBOOK.md section 2, beside Issue completeness.
+      #
+      # The body arrives through the environment, never through an expression, for the
+      # same reason as the step above.
+      - name: Guard the label axes of the linked Issue
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "${PR_BODY}" > "${RUNNER_TEMP}/issue-label-guard-body.md"
+          python scripts/issue_label_guard.py \
+            --repo "${{ github.repository }}" \
+            --head-ref "${HEAD_REF}" \
+            --body-file "${RUNNER_TEMP}/issue-label-guard-body.md"
+
       # Offline and unconditional. The rendered table is a function of the ledger and
       # the mirrored registry, so regenerating and comparing catches both a hand-edited
       # table and a ledger row whose author forgot to regenerate. Staleness is a
