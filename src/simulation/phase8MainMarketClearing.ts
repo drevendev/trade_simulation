@@ -13,14 +13,60 @@
  * runs produce identical canonical stocks, allocations, and replay hash.
  */
 
-import type { MarketId, GoodId, RegionId, CurrencyId } from "../domain/id";
+import type { MarketId, GoodId, RegionId, CurrencyId, StateId } from "../domain/id";
 import type { WorldState } from "./worldState";
 import type { TickContext, PhaseHandler } from "./tickOrchestrator";
 import type { PendingTransitions } from "./worldState";
 import type { MarketIntent } from "./marketIntent";
 import { LocalMarketTelemetryBuilder } from "./marketTelemetry";
 import { computeLocalClearing, type LocalClearingInput } from "./marketClearing";
+import type { TaxPolicyProvider } from "./marketSettlement";
 import { marketPriceKey } from "./phase6MarketPriceFormation";
+
+/**
+ * Resolve the two side-effect-free tax-policy reads Handoff/04 section 2 allows market
+ * clearing to make, for one destination jurisdiction and good.
+ *
+ * An uncontrolled Region is decided here rather than delegated: section 2 pins both reads
+ * to zero when `destinationStateId == null`, so a provider that would answer for an absent
+ * State cannot reintroduce a treasury credit with nowhere to land.
+ *
+ * The bounds are the contract's own (`collectionEfficiency in [0,1]`, and the same range
+ * for a statutory rate as `computeConsumptionTax` enforces at settlement). Rejecting here
+ * means an out-of-range fixture fails at the boundary that read it, instead of surfacing
+ * later as a settlement error about a number Phase 8 chose.
+ */
+const resolveTaxPolicy = (
+  taxPolicy: TaxPolicyProvider,
+  destinationStateId: StateId | null,
+  goodId: GoodId,
+): { assessedTaxRate: number; collectionEfficiency: number } => {
+  if (destinationStateId === null) {
+    return { assessedTaxRate: 0, collectionEfficiency: 0 };
+  }
+
+  const assessedTaxRate = taxPolicy.getConsumptionTaxRate(destinationStateId, goodId);
+  const collectionEfficiency = taxPolicy.getCollectionEfficiency(destinationStateId);
+
+  if (!Number.isFinite(assessedTaxRate) || assessedTaxRate < 0 || assessedTaxRate > 1) {
+    throw new Error(
+      `Phase-8 taxPolicy.getConsumptionTaxRate(${destinationStateId}, ${goodId}) must be a ` +
+        `finite number in [0, 1], got ${assessedTaxRate}`,
+    );
+  }
+  if (
+    !Number.isFinite(collectionEfficiency) ||
+    collectionEfficiency < 0 ||
+    collectionEfficiency > 1
+  ) {
+    throw new Error(
+      `Phase-8 taxPolicy.getCollectionEfficiency(${destinationStateId}) must be a finite ` +
+        `number in [0, 1], got ${collectionEfficiency}`,
+    );
+  }
+
+  return { assessedTaxRate, collectionEfficiency };
+};
 
 /**
  * Create a Phase-8 handler with optional telemetry collection.
@@ -31,20 +77,38 @@ import { marketPriceKey } from "./phase6MarketPriceFormation";
  * - getFixtureMarketIds: optional function to provide market IDs for telemetry
  *   (maps region to market; in production, derived from world state markets)
  * - collectTelemetry: whether to populate telemetry (default true)
+ * - taxPolicy: the immutable read-only consumption-tax provider clearing consumes.
+ *   Required whenever getFixtureIntents is supplied, because that is when clearing runs.
  *
  * Returns a PhaseHandler that can be injected into the orchestrator.
  *
  * M3 note: This establishes the integration boundary. Production intents and
  * multi-market clearing will be wired in later milestones.
+ *
+ * There is deliberately no fallback rate or collection efficiency. Handoff/04 section 2
+ * requires M3 fixtures to *inject* explicit finite values and states that those values are
+ * scenario inputs, not canonical defaults; a fallback here would be exactly such a default,
+ * and until 2026-09-15 the pinned pair (10% / 100%) silently overrode whatever a scenario
+ * meant to say. A fixture that clears without a policy is a defect, so it raises.
  */
 export const createPhase8Handler = (options?: {
   getFixtureIntents?: (world: WorldState, context: TickContext) => MarketIntent[];
   getFixtureMarketIds?: (world: WorldState) => Map<string, MarketId>;
   collectTelemetry?: boolean;
+  taxPolicy?: TaxPolicyProvider;
 }): PhaseHandler => {
   const collectTelemetry = options?.collectTelemetry !== false;
   const getFixtureIntents = options?.getFixtureIntents;
   const getFixtureMarketIds = options?.getFixtureMarketIds;
+  const taxPolicy = options?.taxPolicy;
+
+  if (getFixtureIntents !== undefined && taxPolicy === undefined) {
+    throw new Error(
+      "createPhase8Handler: getFixtureIntents requires an explicit taxPolicy. M3 local-market " +
+        "fixtures must inject an immutable tax-policy provider with explicit finite rate and " +
+        "collectionEfficiency values (Handoff/04 section 2, REQ-MARKET-004).",
+    );
+  }
 
   return (
     world: WorldState,
@@ -61,14 +125,13 @@ export const createPhase8Handler = (options?: {
     // so enabling/disabling telemetry cannot change which allocations are produced.
     // Production clearing uses actual Phase-2/3 intents in later milestones
 
-    if (!getFixtureIntents) {
+    if (!getFixtureIntents || !taxPolicy) {
       return context;
     }
 
     const intents = getFixtureIntents(world, context);
     const marketIds = getFixtureMarketIds?.(world) ?? new Map();
     const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon ?? 1e-9;
-    const taxRate = 0.1; // M3 fixture tax rate
 
     // Group intents by market/good/pass
     const intentsByMarketGoodPass = new Map<string, {
@@ -130,12 +193,23 @@ export const createPhase8Handler = (options?: {
       // An uncontrolled Region collects zero State consumption tax (HANDOFF-REPAIR-006):
       // with no controller there is no treasury to credit, and charging the buyer anyway
       // would destroy money inside a transfer, which `executeAllocation` refuses outright.
-      // The rate therefore follows the destination, and one rate feeds both the effective
-      // demand a buyer can afford and the gross price the allocation records.
+      // The rate therefore follows the destination, and one policy read feeds both the
+      // effective demand a buyer can afford and the gross price the allocation records.
       const region = world.regions.get(group.regionId as RegionId);
       const marketCurrencyId = region?.settlementCurrencyId ?? ("cur:reserve" as CurrencyId);
       const destinationStateId = region?.controllerStateId ?? null;
-      const assessedTaxRate = destinationStateId === null ? 0 : taxRate;
+      const { assessedTaxRate, collectionEfficiency } = resolveTaxPolicy(
+        taxPolicy,
+        destinationStateId,
+        group.goodId as GoodId,
+      );
+
+      // Handoff/04 section 2: buyerGrossUnitPrice = sellerNet + collectedTaxPerUnit, and
+      // collectedTaxPerUnit = sellerNet x rate x collectionEfficiency. Only *collected* tax
+      // is ever debited; assessed-but-uncollected tax stays with the buyer and is telemetry
+      // only. Dropping the efficiency factor here would overcharge the buyer by exactly the
+      // uncollected part and break MTFX-I2, which `preflightMarketSettlement` checks.
+      const grossPriceFactor = 1 + assessedTaxRate * collectionEfficiency;
 
       // Create clearing input with production computations
       const clearingInput: LocalClearingInput = {
@@ -160,14 +234,14 @@ export const createPhase8Handler = (options?: {
           return intent.desiredQuantity;
         },
         computeGrossUnitPrice: (_intent, sellerNetPrice) => {
-          // Apply consumption tax to get household gross price
-          return sellerNetPrice * (1 + assessedTaxRate);
+          // Apply collected consumption tax to get the household gross price
+          return sellerNetPrice * grossPriceFactor;
         },
         getTaxationInfo: (_buyer, _regionId, _good) => {
           return {
             destinationStateId,
             assessedTaxRate,
-            collectionEfficiency: 1.0,
+            collectionEfficiency,
           };
         },
       };
@@ -189,7 +263,7 @@ export const createPhase8Handler = (options?: {
       // (Handoff/04 section 9) must not depend on the non-authoritative telemetry
       // toggle (REQ-MARKET-005).
       const totalSellerOffered = group.sellers.reduce((sum, i) => sum + i.desiredQuantity, 0);
-      const grossPrice = marketPrice * (1 + assessedTaxRate);
+      const grossPrice = marketPrice * grossPriceFactor;
       let totalBuyerEffective = 0;
       for (const buyer of group.buyers) {
         const buyerMaxSpend = (buyer as any).maxSpend ?? (buyer.desiredQuantity * grossPrice);
