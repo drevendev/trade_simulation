@@ -161,7 +161,18 @@ ProductionConfig baseline:
 \- mothballAfterNonviableReviews \= 3  
 \- reactivateAfterViableReviews \= 2  
 \- closeAfterMothballedReviews \= 8  
-\- minimumLifecycleScale \= 1e-6
+\- minimumLifecycleScale \= 1e-6  
+\- investmentReviewCadenceTicks \= 3  
+\- investmentUtilizationThreshold \= 0.75  
+\- minimumInvestmentMargin \= 0.05  
+\- investmentPropensity \= 0.35  
+\- maxInvestmentShareOfExcessCash \= 0.50  
+\- maxCapitalGrowthPerReview \= 0.25  
+\- lifecycleReviewCadenceTicks \= 3  
+\- mothballMarginThreshold \= \-0.10  
+\- mothballUtilizationThreshold \= 0.25  
+\- reactivateMarginThreshold \= 0.05  
+\- closingGraceReviews \= 4
 
 Routine ProductionNoise from the current repository is dropped. Stochastic physical/economic disturbances belong to Events. SpecializationBonus and CapitalBonus are also dropped as generic multipliers: specialization must emerge from deposits, infrastructure, recipes, prices, labor and ownership decisions.
 
@@ -175,7 +186,9 @@ LaborConfig baseline:
 \- minWageWeight \= 0.50  
 \- maxWageWeight \= 2.00  
 \- wageAdjustmentSpeed \= 0.10  
-\- maxWageMoveSharePerTick \= 0.10  
+\- maxLogWageStep \= ln(1.05)  
+\- unitVacancyResponse \= 0.02  
+\- maxTightnessSignal \= 2.0  
 \- startingReferenceWage \= 10 currency units per worker-equivalent per tick unless ScenarioDefinition supplies a region-specific reference  
 \- unemploymentWagePressure \= 0.40  
 \- vacancyWagePressure \= 0.40  
