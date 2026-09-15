@@ -1,10 +1,12 @@
 # A pull request from outside the loop
 
-From `scheme/7` the code is written by the researcher (EndlessZen) under the `drevendev`
-account, not by an AUTHOR run: the active scheme declares the author role without a
-model, and the dispatcher never starts `zendev-author.yml`. Nothing else changed. The
-ACCEPTOR still judges every pull request, branch protection still requires the same
-four checks, and the gates below are mechanical — they neither know nor care who pushed
+From `scheme/8` no model runs at all. The researcher (EndlessZen) writes the code under
+the `drevendev` account, SLOPSTER reviews it under `andy-zen-dev` and owns the verdict,
+and the operator merges. The active scheme declares both model roles without a model,
+and the dispatcher starts neither `zendev-author.yml` nor `zendev-acceptor.yml`. What
+stays is everything that costs no tokens: branch protection with its four required
+checks, the `mergeability` status and the branch sweep, the specification mirror, and
+both ledgers. The gates below are mechanical — they neither know nor care who pushed
 the branch. This page is what an author outside the loop needs in order to get a pull
 request accepted, in the order the gates read it. Sections 6 and 7 of
 [AUTHOR_RUNBOOK.md](AUTHOR_RUNBOOK.md) remain the long form.
@@ -22,10 +24,10 @@ request accepted, in the order the gates read it. Sections 6 and 7 of
 - **Branch name:** anything but `claude/**` and the machine branches
   `scripts/machine_pr_guard.py` lists. `zen/issue-<N>-<slug>` is the suggestion.
   `claude/**` is the loop's own class: the forge merges `master` into such a branch
-  when it falls behind and deletes it after the third refusal. Yours it leaves alone
-  both ways — so **a branch that falls behind `master` is yours to update** (merge
-  `master` in, or rebase and push); the red `mergeability` status says which it is,
-  and the ACCEPTOR does not select a pull request while that status is red.
+  when it falls behind. Yours it leaves alone — so **a branch that falls behind
+  `master` is yours to update** (merge `master` in, or rebase and push); the red
+  `mergeability` status says whether it is behind or in conflict, and branch protection
+  does not merge while it is red.
 - **Read the slice, not the specification.** Registry, changelog, then the one document
   the Issue names. `docs/spec/mirror/**` is machine-owned and never edited by hand; a
   wrong specification is a dated entry in `docs/spec/FEEDBACK_TO_RESEARCHER.md` or
@@ -60,23 +62,25 @@ only when every one of its rows reads `IMPLEMENTED` and carries its merge commit
 
 - The four required checks run on the head revision: `build-and-test`, `typescript`,
   `policy-guard`, `mergeability`. All four must be green; `pending` is not green.
-- The ACCEPTOR run — every 25 minutes, on the oldest eligible pull request — posts a
-  verdict comment (`## Verdict: ACCEPT` or `## Verdict: REQUEST_CHANGES`) and merges an
-  accepted pull request itself. It reads the body, checks out the head and runs the
-  checks the body names. Answer a refusal by pushing to the same branch; the next run
-  judges the new head. The third refusal closes the pull request (the branch stays) and
-  returns the Issue to `status:ready`.
-- A pull request nothing has advanced for 24 hours, and that no run could select, is
-  closed by the forge. A push, a verdict, or the author's own comment advances it;
-  anyone else's comment is evidence, not progress.
-- Reviews from other accounts — the QA voice, the researcher's own — are evidence for
-  the next verdict, not rounds of the loop.
+- **SLOPSTER reviews** the head and owns the verdict: a formal review — *Approve* or
+  *Request changes* — on the pull request, or a comment starting `## Verdict: ACCEPT` /
+  `## Verdict: REQUEST_CHANGES`. Its QA findings stay what they were, `## SLOPSTER QA:
+  FINDING` comments. Answer a refusal by pushing to the same branch and asking for a
+  re-review of the new head; a formal *Request changes* blocks the merge until it is
+  re-reviewed or dismissed.
+- **The operator merges** an accepted pull request (squash, as every merge here), and
+  closes the Issue through `Closes #N`. Nothing merges by itself.
+- **Nothing closes a pull request by itself either.** The rework bound (three refusals)
+  and the unreachable-pull-request rule (24 idle hours) lived in the ACCEPTOR's workflow
+  and are not enforced under this scheme; a pull request that is going nowhere is closed
+  by a person, and its Issue returned to `status:ready` by hand.
 
 ## What is measured
 
 Every closed pull request is written to the private ledger (`pulls/` in
 `zen-telemetry`) by `pr-ledger.yml`: who opened it and when, when it was first judged
-and when it merged or closed, how many refusals it took, its size, the Issue and the
-requirement identifiers it names, and the scheme it landed under. The ACCEPTOR's own
-runs are recorded as before. That is how the speed and quality of this scheme compare
-with the autonomous author's days — same gates, same judge, different author.
+and when it merged or closed, how many refusals it took — SLOPSTER's formal reviews and
+verdict comments are the verdicts now — its size, the Issue and the requirement
+identifiers it names, its QA findings, and the scheme it landed under. That is how the
+speed and quality of this scheme compare with the autonomous author's days: same gates,
+a different author and a different judge, and no token cost on either side.
