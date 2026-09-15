@@ -75,8 +75,18 @@ HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 # made this guard fail open, and that is the dangerous direction — a body closing ``` with
 # ```` left the opener unmatched, the `|\Z` fallback ate the rest of the body, and the real
 # `Closes #N` below it vanished before `LINK` ever ran. Reported against PR #518.
+#
+# The two alternatives differ in one more place, and only one of them may be relaxed: a
+# *backtick* fence's info string may not contain a backtick (GFM 4.5, example 115), while a
+# tilde fence's may contain anything, backticks included (example 118). Accepting `[^\n]*`
+# on the backtick side read `` ``` aa ``` `` as an opener — which GitHub does not — and the
+# same `|\Z` fallback then swallowed the body below it, hiding a real link again. That is
+# the identical fail-open direction as the defect above, reached through a different door:
+# GitHub links the `Closes #N`, the guard never resolves the Issue, and its labels go
+# unchecked. `[^`\n]*` is the whole repair, and it is deliberately not mirrored onto the
+# tilde side, where it would refuse openers GFM allows. Reported as Issue #521.
 FENCED_CODE = re.compile(
-    r"^[ \t]*(?:(`{3,})[^\n]*\n.*?(?:^[ \t]*\1`*[ \t]*$|\Z)"
+    r"^[ \t]*(?:(`{3,})[^`\n]*\n.*?(?:^[ \t]*\1`*[ \t]*$|\Z)"
     r"|(~{3,})[^\n]*\n.*?(?:^[ \t]*\2~*[ \t]*$|\Z))",
     re.DOTALL | re.MULTILINE,
 )
