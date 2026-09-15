@@ -16,6 +16,7 @@ import { isFiniteCanonicalNumber } from "../domain/numeric";
 import type { CohortSeed, MarketSeed, ProductionUnitSeed, RegionSeed, ScenarioDefinition, TransportLinkSeed } from "./scenarioDefinition";
 import type { DefinitionPack } from "./definitionPack";
 import { SIMULATION_CONFIG_BEHAVIORAL_KEYS } from "./simulationConfig";
+import type { LaborConfig, ProductionConfig } from "./simulationConfig";
 import { SCENARIO_DEFINITION_KEYS } from "./scenarioDefinition";
 
 const BEHAVIORAL_KEY_SET: ReadonlySet<string> = new Set(SIMULATION_CONFIG_BEHAVIORAL_KEYS);
@@ -577,6 +578,266 @@ function validateScenarioVariation(variation: unknown): void {
         );
       }
     }
+  }
+}
+
+/**
+ * Maximum labor categories a v1 definition pack may declare. Handoff/03 section 7:
+ * "Core baseline has exactly one labor category GENERAL. Definition packs may add at
+ * most three broad categories in v1; adding recipe-specific professions requires a
+ * later design change."
+ */
+const MAX_LABOR_CATEGORIES = 3;
+
+/**
+ * The numeric controls of a config block. `LaborConfig.allowedLaborCategories` is the
+ * one non-numeric field, and it has its own validator, so this keeps the scalar-range
+ * field lists below from naming it by mistake.
+ */
+type NumericControl<T> = {
+  [K in keyof T]-?: NonNullable<T[K]> extends number ? K : never;
+}[keyof T];
+
+/**
+ * Throws unless every `ProductionConfig` control present is finite and inside its
+ * declared range (REQ-CONFIG-006).
+ *
+ * The field list is section 37 of `06 - Handoff/05 — PRODUCTION_CAPITAL_LABOR_CONTRACTS.md`.
+ * Ranges are structural — what the quantity is, not what a good value would be: a
+ * utilization or a share is a fraction in [0,1], a cadence in ticks or a review count
+ * is a positive integer, a coverage in ticks is non-negative. Controls whose sign is
+ * genuinely open, such as a margin threshold, are checked for finiteness only.
+ *
+ * Every field is optional, so absence is never an error here: section 6 of Handoff/03
+ * states no value for eleven of them and `createDefaultSimulationConfig` does not
+ * invent one. Presence is what gets checked.
+ *
+ * Produces useful diagnostics identifying the field, value and reason for every
+ * validation failure. Does not silently coerce or substitute defaults.
+ */
+export function validateProductionConfig(production: ProductionConfig): void {
+  const unitInterval: readonly NumericControl<ProductionConfig>[] = [
+    "baseTargetUtilization",
+    "minTargetUtilization",
+    "maxTargetUtilization",
+    "targetSellThrough",
+    "liquidityBufferShare",
+    "investmentUtilizationThreshold",
+    "investmentPropensity",
+    "maxInvestmentShareOfExcessCash",
+    "productionSignalAlpha",
+    "mothballUtilizationThreshold",
+  ];
+  for (const field of unitInterval) {
+    assertInClosedUnitInterval("ProductionConfig", field, production[field]);
+  }
+
+  const nonNegative: readonly NumericControl<ProductionConfig>[] = [
+    "marginResponse",
+    "sellThroughResponse",
+    "inventoryResponse",
+    "outputCoverageTicks",
+    "inputCoverageTicks",
+    "inputSafetyCoverageTicks",
+    "minOperatingCash",
+    "maxCapitalGrowthPerReview",
+  ];
+  for (const field of nonNegative) {
+    assertNonNegative("ProductionConfig", field, production[field]);
+  }
+
+  const positive: readonly NumericControl<ProductionConfig>[] = ["maxInputCriticality", "minimumLifecycleScale"];
+  for (const field of positive) {
+    assertPositive("ProductionConfig", field, production[field]);
+  }
+
+  // A cadence of zero ticks has no meaning: the review would never be scheduled.
+  const positiveInteger: readonly NumericControl<ProductionConfig>[] = [
+    "investmentReviewCadenceTicks",
+    "lifecycleReviewCadenceTicks",
+    "mothballAfterReviews",
+    "reactivateAfterReviews",
+    "closeAfterReviews",
+  ];
+  for (const field of positiveInteger) {
+    assertPositiveInteger("ProductionConfig", field, production[field]);
+  }
+
+  // A grace period of zero reviews is meaningful: close on the next review.
+  assertNonNegativeInteger("ProductionConfig", "closingGraceReviews", production.closingGraceReviews);
+
+  // A unit may plan against a negative margin, so only finiteness is structural here.
+  const finiteOnly: readonly NumericControl<ProductionConfig>[] = [
+    "minimumInvestmentMargin",
+    "mothballMarginThreshold",
+    "reactivateMarginThreshold",
+  ];
+  for (const field of finiteOnly) {
+    assertFiniteControl("ProductionConfig", field, production[field]);
+  }
+
+  assertOrderedBounds(
+    "ProductionConfig",
+    "minTargetUtilization",
+    production.minTargetUtilization,
+    "maxTargetUtilization",
+    production.maxTargetUtilization,
+  );
+
+  if (
+    isFiniteCanonicalNumber(production.mothballMarginThreshold) &&
+    isFiniteCanonicalNumber(production.reactivateMarginThreshold) &&
+    production.mothballMarginThreshold > production.reactivateMarginThreshold
+  ) {
+    throw new Error(
+      `ProductionConfig.mothballMarginThreshold (${production.mothballMarginThreshold}) must not exceed ` +
+        `reactivateMarginThreshold (${production.reactivateMarginThreshold}), or a unit would mothball and ` +
+        `reactivate on the same margin`,
+    );
+  }
+}
+
+/**
+ * Throws unless every `LaborConfig` control present is finite and inside its declared
+ * range (REQ-CONFIG-006).
+ *
+ * Field list from section 37 of Handoff/05, ranges structural as in
+ * `validateProductionConfig`. `laborEpsilon` is absent by decision: labor is a
+ * quantity and `NumericConfig.quantityEpsilon` owns that tolerance.
+ *
+ * Produces useful diagnostics identifying the field, value and reason for every
+ * validation failure. Does not silently coerce or substitute defaults.
+ */
+export function validateLaborConfig(labor: LaborConfig): void {
+  const unitInterval: readonly NumericControl<LaborConfig>[] = ["baselineParticipationRate", "wageAdjustmentSpeed"];
+  for (const field of unitInterval) {
+    assertInClosedUnitInterval("LaborConfig", field, labor[field]);
+  }
+
+  const nonNegative: readonly NumericControl<LaborConfig>[] = [
+    "laborWageAttractivenessElasticity",
+    "unemploymentWagePressure",
+    "vacancyWagePressure",
+    "unitVacancyResponse",
+    "minimumWorkingHealthFactor",
+    "maximumWorkingHealthFactor",
+  ];
+  for (const field of nonNegative) {
+    assertNonNegative("LaborConfig", field, labor[field]);
+  }
+
+  const positive: readonly NumericControl<LaborConfig>[] = [
+    "minWageWeight",
+    "maxWageWeight",
+    "startingReferenceWage",
+    "maxLogWageStep",
+    "maxTightnessSignal",
+  ];
+  for (const field of positive) {
+    assertPositive("LaborConfig", field, labor[field]);
+  }
+
+  assertOrderedBounds("LaborConfig", "minWageWeight", labor.minWageWeight, "maxWageWeight", labor.maxWageWeight);
+  assertOrderedBounds(
+    "LaborConfig",
+    "minimumWorkingHealthFactor",
+    labor.minimumWorkingHealthFactor,
+    "maximumWorkingHealthFactor",
+    labor.maximumWorkingHealthFactor,
+  );
+
+  validateAllowedLaborCategories(labor.allowedLaborCategories);
+}
+
+function validateAllowedLaborCategories(categories: readonly string[] | undefined): void {
+  if (categories === undefined) {
+    return;
+  }
+
+  if (!Array.isArray(categories)) {
+    throw new Error(
+      `LaborConfig.allowedLaborCategories must be an array of category names when present, got ${describeValue(categories)}`,
+    );
+  }
+
+  if (categories.length === 0) {
+    throw new Error("LaborConfig.allowedLaborCategories must declare at least one category, got an empty array");
+  }
+
+  if (categories.length > MAX_LABOR_CATEGORIES) {
+    throw new Error(
+      `LaborConfig.allowedLaborCategories must declare at most ${MAX_LABOR_CATEGORIES} categories in v1, got ${categories.length}`,
+    );
+  }
+
+  const seen = new Set<string>();
+  for (const category of categories) {
+    if (typeof category !== "string" || category.length === 0) {
+      throw new Error(
+        `LaborConfig.allowedLaborCategories must contain non-empty category names, got ${describeValue(category)}`,
+      );
+    }
+    if (seen.has(category)) {
+      throw new Error(`LaborConfig.allowedLaborCategories declares "${category}" more than once`);
+    }
+    seen.add(category);
+  }
+}
+
+function assertFiniteControl(owner: string, field: string, value: number | undefined): void {
+  if (value === undefined) return;
+  if (!isFiniteCanonicalNumber(value)) {
+    throw new Error(`${owner}.${field} must be a finite number, got ${describeValue(value)}`);
+  }
+}
+
+function assertInClosedUnitInterval(owner: string, field: string, value: number | undefined): void {
+  if (value === undefined) return;
+  if (!isFiniteCanonicalNumber(value) || value < 0 || value > 1) {
+    throw new Error(`${owner}.${field} must be a finite number in [0, 1], got ${describeValue(value)}`);
+  }
+}
+
+function assertNonNegative(owner: string, field: string, value: number | undefined): void {
+  if (value === undefined) return;
+  if (!isFiniteCanonicalNumber(value) || value < 0) {
+    throw new Error(`${owner}.${field} must be a non-negative finite number, got ${describeValue(value)}`);
+  }
+}
+
+function assertPositive(owner: string, field: string, value: number | undefined): void {
+  if (value === undefined) return;
+  if (!isFiniteCanonicalNumber(value) || value <= 0) {
+    throw new Error(`${owner}.${field} must be a positive finite number, got ${describeValue(value)}`);
+  }
+}
+
+function assertPositiveInteger(owner: string, field: string, value: number | undefined): void {
+  if (value === undefined) return;
+  if (!isFiniteCanonicalNumber(value) || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${owner}.${field} must be a positive integer, got ${describeValue(value)}`);
+  }
+}
+
+function assertNonNegativeInteger(owner: string, field: string, value: number | undefined): void {
+  if (value === undefined) return;
+  if (!isFiniteCanonicalNumber(value) || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${owner}.${field} must be a non-negative integer, got ${describeValue(value)}`);
+  }
+}
+
+function assertOrderedBounds(
+  owner: string,
+  lowerField: string,
+  lower: number | undefined,
+  upperField: string,
+  upper: number | undefined,
+): void {
+  if (!isFiniteCanonicalNumber(lower) || !isFiniteCanonicalNumber(upper)) {
+    return;
+  }
+  if (lower > upper) {
+    throw new Error(`${owner}.${lowerField} (${lower}) must not exceed ${upperField} (${upper})`);
   }
 }
 

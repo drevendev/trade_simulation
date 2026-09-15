@@ -740,4 +740,17 @@ Implementation request: add the typed bucket to src/domain/genesisLedger.ts; emi
 
 No new implementation-package file was added, so no mirror allowlist request is required. No stock amount, production mechanic, formula, default, phase order or v1 scope changed.
 
-STATUS: SPEC\_REPRESENTATION\_REPAIRED / IMPLEMENTATION\_REPAIR\_REQUIRED  
+STATUS: SPEC\_REPRESENTATION\_REPAIRED / IMPLEMENTATION\_REPAIR\_REQUIRED
+
+2026-09-15 — R314 / HANDOFF-REPAIR-M4-002 — Q-001 / REQ-CONFIG-006
+
+Q-001 is answered by completing the canonical ProductionConfig/LaborConfig baseline in CANONICAL\_CONFIG\_AND\_WORLD\_GENERATION section 6–7 and Handoff/03. The fourteen previously unvalued section-37 controls now have explicit defaults: investmentReviewCadenceTicks=3, investmentUtilizationThreshold=0.75, minimumInvestmentMargin=0.05, investmentPropensity=0.35, maxInvestmentShareOfExcessCash=0.50, maxCapitalGrowthPerReview=0.25, lifecycleReviewCadenceTicks=3, mothballMarginThreshold=-0.10, mothballUtilizationThreshold=0.25, reactivateMarginThreshold=0.05, closingGraceReviews=4, maxLogWageStep=ln(1.05), unitVacancyResponse=0.02, maxTightnessSignal=2.0.
+
+Most values simply promote the already-published Handoff/05 recommended defaults into the sole config-default owner. The four choices that previously had only ranges/semantics use conservative baselines: maxCapitalGrowthPerReview=0.25 is inside the documented 0.20–0.35 range; reactivateMarginThreshold=0.05 creates hysteresis above the \-0.10 mothball threshold; closingGraceReviews=4 gives a 12-month grace at the 3-tick lifecycle cadence before zero-value physical retirement can be considered; maxTightnessSignal=2.0 bounds the log labor-demand/supply signal while maxLogWageStep remains the actual per-review wage-move cap. The stale maxWageMoveSharePerTick alias is replaced by the exact Handoff/05 maxLogWageStep field. No new mechanism, actor, phase, or v1 scope is added.
+
+Repository action: mark OPEN\_QUESTIONS Q-001 answered and implement these exact defaults/validation under REQ-CONFIG-006. The existing PARTIAL row may promote only after the values and proving tests merge. No new implementation-package file was added, so no mirror allowlist request is required.
+
+STATUS: Q-001 ANSWERED / SPEC DEFAULTS COMPLETED
+
+2026-09-15 — REQ-CONFIG-007 / Q-002  
+Q-002 is accepted as a real implementation blocker. The current PR correctly keeps REQ-CONFIG-007 PARTIAL rather than guessing missing PopulationConfig defaults. Also preserve the full 20-control M4 surface and 16 currently undefined controls; do not reduce the surface to match the stale 19/15 count. A separate QA finding on PR \#532 also shows needCategories being dropped at DefinitionPack → DefinitionRegistry; that must be repaired before this row can be IMPLEMENTED.  
