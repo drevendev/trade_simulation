@@ -1,6 +1,9 @@
+<!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TradeCraftSimulation — 300 turns of a toy economy</title>
+<title>Trade simulation — M3 local markets and settlement</title>
 
 <style>
   :root {
@@ -16,6 +19,12 @@
     --plain: #4b8b3b;
     --forest: #9a6b3f;
     --mountains: #3f6f9a;
+    --net: #3f6f9a;
+    --gross: #8a4f9e;
+    --demand: #9a6b3f;
+    --offer: #3f6f9a;
+    --cleared: #4b8b3b;
+    --tax: #a6453b;
   }
 
   @media (prefers-color-scheme: dark) {
@@ -32,6 +41,12 @@
       --plain: #7bc264;
       --forest: #c99a63;
       --mountains: #6ea6d9;
+      --net: #6ea6d9;
+      --gross: #bf85d4;
+      --demand: #c99a63;
+      --offer: #6ea6d9;
+      --cleared: #7bc264;
+      --tax: #e08a7f;
     }
   }
 
@@ -48,7 +63,9 @@
   main { max-width: 1040px; margin: 0 auto; }
 
   h1 { font-size: 1.6rem; margin: 0 0 .4rem; letter-spacing: -.01em; }
-  h2 { font-size: 1.05rem; margin: 2.5rem 0 .3rem; letter-spacing: -.01em; }
+  h2 { font-size: 1.15rem; margin: 2.5rem 0 .3rem; letter-spacing: -.01em; }
+  h3 { font-size: .95rem; margin: 1.6rem 0 .2rem; letter-spacing: -.01em; }
+  h4 { font-size: .9rem; margin: 0 0 .1rem; letter-spacing: -.01em; }
   p  { margin: .3rem 0 1rem; color: var(--muted); max-width: 68ch; }
 
   .panel {
@@ -63,6 +80,7 @@
   .legend { display: flex; flex-wrap: wrap; gap: .5rem 1.1rem; margin: .1rem 0 1rem; font-size: .85rem; color: var(--muted); }
   .legend span { display: inline-flex; align-items: center; gap: .4rem; }
   .swatch { width: 12px; height: 3px; border-radius: 2px; }
+  .swatch.block { height: 10px; width: 10px; border-radius: 2px; }
 
   .chart-title { font-size: .9rem; font-weight: 600; margin-bottom: .1rem; }
   .chart-note  { font-size: .78rem; color: var(--muted); margin-bottom: .5rem; }
@@ -71,106 +89,598 @@
   .axis { stroke: var(--line); stroke-width: 1; }
   .tick { fill: var(--muted); font-size: 9px; }
   .grid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 4; }
+  .marker { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
 
   .player { display: flex; align-items: center; gap: .8rem; margin: .2rem 0 1rem; flex-wrap: wrap; }
+  .player label { font-size: .85rem; color: var(--muted); }
   button {
     font: inherit; color: var(--ink); background: var(--panel);
     border: 1px solid var(--line); border-radius: 7px;
     padding: .3rem .9rem; cursor: pointer; min-width: 5.5rem;
   }
   button:hover { border-color: var(--muted); }
-  input[type=range] { flex: 1; min-width: 200px; accent-color: var(--capital); }
+  input[type=range] { flex: 1; min-width: 180px; accent-color: var(--capital); }
   .turn-readout { font-variant-numeric: tabular-nums; color: var(--muted); font-size: .85rem; min-width: 8.5rem; }
+
+  :focus-visible { outline: 2px solid var(--capital); outline-offset: 2px; }
 
   .board { display: grid; grid-template-columns: minmax(300px, 1.25fr) minmax(260px, 1fr); gap: .9rem; align-items: start; }
   @media (max-width: 760px) { .board { grid-template-columns: 1fr; } }
 
   table { border-collapse: collapse; width: 100%; font-size: .84rem; font-variant-numeric: tabular-nums; }
+  caption { text-align: left; font-size: .82rem; color: var(--muted); padding-bottom: .4rem; }
   th, td { text-align: right; padding: .28rem .4rem; border-bottom: 1px solid var(--line); }
   th:first-child, td:first-child { text-align: left; }
   th { color: var(--muted); font-weight: 600; }
+  tbody th { color: var(--ink); font-weight: 500; }
   .city-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: .45rem; vertical-align: 1px; }
+  .scroll-x { overflow-x: auto; }
 
   .bar { height: 5px; border-radius: 3px; background: var(--line); position: relative; overflow: hidden; }
   .bar > i { display: block; height: 100%; background: var(--food); }
+  .needs { display: flex; align-items: center; gap: .45rem; justify-content: flex-end; }
+  .needs .bar { width: 46px; flex: none; }
 
   footer { margin-top: 3rem; font-size: .82rem; color: var(--muted); }
   code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: .85em; }
   a { color: inherit; }
   .loading { color: var(--muted); padding: 2rem 0; }
+  .state-note { color: var(--muted); }
 
-  .m0-preview dl { margin: 0; }
-  .m0-preview dt { color: var(--muted); margin: .6rem 0 0; }
-  .m0-preview dt:first-child { margin-top: 0; }
-  .m0-preview dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .m0-preview dl, .m1-preview dl, .m2-preview dl { margin: 0; }
+  .m0-preview dt, .m1-preview dt, .m2-preview dt { color: var(--muted); margin: .6rem 0 0; }
+  .m0-preview dt:first-child, .m1-preview dt:first-child, .m2-preview dt:first-child { margin-top: 0; }
+  .m0-preview dd, .m1-preview dd, .m2-preview dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .m0-hash { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; word-break: break-all; overflow-wrap: anywhere; }
-  .m0-tag { display: inline-block; border-radius: 999px; padding: .05rem .55rem; font-size: .78rem; border: 1px solid var(--line); }
-</style>
+  .m0-tag, .m1-tag, .m2-tag, .m3-tag {
+    display: inline-block; border-radius: 999px; padding: .05rem .55rem;
+    font-size: .78rem; border: 1px solid var(--line); color: var(--muted);
+  }
 
+  /* --- M3 consolidated LocalMarket experience ------------------------------ */
+
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .6rem; margin: .2rem 0 1rem; }
+  .metric { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .6rem .75rem; }
+  .metric dt { font-size: .78rem; color: var(--muted); margin: 0; }
+  .metric dd { margin: .15rem 0 0; font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+  .metric .unit { font-size: .76rem; color: var(--muted); margin-left: .25rem; }
+
+  .balance-row { display: grid; grid-template-columns: 9.5rem 1fr 7.5rem; gap: .5rem; align-items: center; margin: .35rem 0; font-size: .84rem; }
+  .balance-row .name { color: var(--muted); }
+  .balance-row .value { text-align: right; font-variant-numeric: tabular-nums; }
+  .balance-track { height: 12px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  .balance-track > i { display: block; height: 100%; }
+  @media (max-width: 560px) {
+    .balance-row { grid-template-columns: 1fr 6.5rem; }
+    .balance-row .balance-track { grid-column: 1 / -1; }
+  }
+
+  .split { display: flex; height: 16px; border-radius: 4px; overflow: hidden; border: 1px solid var(--line); margin: .3rem 0 .5rem; }
+  .split > i { display: block; height: 100%; }
+
+  details#earlier-milestones { margin-top: 3rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+  details#earlier-milestones > summary { cursor: pointer; font-weight: 600; font-size: 1.05rem; }
+  details#earlier-milestones > summary::marker { color: var(--muted); }
+</style>
+</head>
+
+<body>
 <main>
-  <h1>Four cities, one toy economy</h1>
+  <h1>One local market, settled tick by tick</h1>
   <p>
-    Nobody sets these prices. Each city has its own market, prices follow local supply and
-    demand, and merchants make a living carrying goods to wherever they are dear. This is one
-    run of 300 turns, seed 42 — the whole thing replays identically from the same seed.
+    This is the canonical TypeScript simulation at milestone <strong>M3</strong>: local markets,
+    price formation and transaction settlement. Nobody sets the price below — it is formed each
+    tick from what the market faces on that same tick: the gap between the effective demand and
+    the sellable supply stated for this tick, and how far this tick's market-facing stock falls
+    short of the coverage the market wants to hold. Only that coverage target consults memory,
+    through the expected use the market has learned from its earlier observations. Everything on
+    this page is a one-way export of a deterministic run; it never feeds back into the
+    simulation.
   </p>
 
-  <section class="panel m0-preview" id="m0-preview" aria-label="M0 milestone preview">
-    <div class="chart-title">Migration status — <span class="m0-tag" id="m0-milestone">M0</span></div>
-    <div class="chart-note">
-      A one-way, static diagnostic snapshot of migration progress. It does not read or affect
-      the run below, and it does not consume simulation randomness.
-    </div>
-    <div id="m0-preview-body">Loading migration status…</div>
+  <section id="m3-preview" aria-labelledby="m3-heading">
+    <h2 id="m3-heading">M3 — local market clearing and settlement <span class="m3-tag" id="m3-milestone">M3</span></h2>
+    <p>
+      Each tick runs the canonical sixteen phases. <strong>Phase&nbsp;6</strong> forms one price for
+      the good. <strong>Phase&nbsp;8</strong> then clears the main pass: buyers state what they want
+      and what they can spend, sellers state what they will part with, and the two are rationed
+      proportionally into matched lots. Each lot is settled — goods leave the seller's inventory,
+      money leaves the buyer's wallet, the seller is paid the <em>net</em> price and the consumption
+      tax is credited to the controlling State's treasury.
+    </p>
+    <p>
+      Two prices therefore exist at once and they are not interchangeable: the <strong>seller-net
+      price</strong> the seller receives per unit, and the higher <strong>buyer-gross price</strong>
+      the buyer pays per unit. The gap between them is the consumption tax. Buyers hold a fixed
+      amount of cash — M3 has no production, wages or income yet, so nothing refills it — which is
+      why a market that starts short of goods ends up short of money.
+    </p>
+    <div id="m3-preview-body">Loading the M3 local market…</div>
   </section>
 
-  <!-- M1 Milestone Preview (REQ-VISUALIZATION-004): m1-preview.json -->
-  <section class="panel m1-preview" id="m1-preview" aria-label="M1 milestone preview">
-    <div class="chart-title">World Genesis — <span class="m1-tag" id="m1-milestone">M1</span></div>
-    <div class="chart-note">
-      A one-way, static diagnostic snapshot of M1 canonical world generation. It does not read or affect
-      the run below, and it does not consume simulation randomness.
-    </div>
-    <div id="m1-preview-body">Loading world genesis data…</div>
-  </section>
+  <details id="earlier-milestones">
+    <summary>Earlier milestones (M0–M2) and the legacy run viewer</summary>
+    <p>
+      Kept for history and for the migration tests. M0–M2 are diagnostic status snapshots, and the
+      run viewer at the end is the frozen legacy C# toy economy — a reference oracle, not the
+      current architecture.
+    </p>
 
-  <!-- M2 Milestone Preview (REQ-VISUALIZATION-005): m2-preview.json -->
-  <section class="panel m2-preview" id="m2-preview" aria-label="M2 milestone preview">
-    <div class="chart-title">Tick Orchestration & Reconciliation — <span class="m2-tag" id="m2-milestone">M2</span></div>
-    <div class="chart-note">
-      A one-way, static diagnostic snapshot of M2 canonical tick orchestration and zero-flow reconciliation.
-      It does not read or affect the run below, and it does not consume simulation randomness.
-    </div>
-    <div id="m2-preview-body">Loading tick orchestration data…</div>
-  </section>
+    <section class="panel m0-preview" id="m0-preview" aria-labelledby="m0-title">
+      <h3 id="m0-title" class="chart-title">Migration status — <span class="m0-tag" id="m0-milestone">M0</span></h3>
+      <div class="chart-note">
+        A one-way, static diagnostic snapshot of migration progress. It does not read or affect
+        the run below, and it does not consume simulation randomness.
+      </div>
+      <div id="m0-preview-body">Loading migration status…</div>
+    </section>
 
-  <div id="app" class="loading">Loading the run…</div>
+    <!-- M1 Milestone Preview (REQ-VISUALIZATION-004): m1-preview.json -->
+    <section class="panel m1-preview" id="m1-preview" aria-labelledby="m1-title">
+      <h3 id="m1-title" class="chart-title">World Genesis — <span class="m1-tag" id="m1-milestone">M1</span></h3>
+      <div class="chart-note">
+        A one-way, static diagnostic snapshot of M1 canonical world generation. It does not read or affect
+        the run below, and it does not consume simulation randomness.
+      </div>
+      <div id="m1-preview-body">Loading world genesis data…</div>
+    </section>
+
+    <!-- M2 Milestone Preview (REQ-VISUALIZATION-005): m2-preview.json -->
+    <section class="panel m2-preview" id="m2-preview" aria-labelledby="m2-title">
+      <h3 id="m2-title" class="chart-title">Tick Orchestration &amp; Reconciliation — <span class="m2-tag" id="m2-milestone">M2</span></h3>
+      <div class="chart-note">
+        A one-way, static diagnostic snapshot of M2 canonical tick orchestration and zero-flow reconciliation.
+        It does not read or affect the run below, and it does not consume simulation randomness.
+      </div>
+      <div id="m2-preview-body">Loading tick orchestration data…</div>
+    </section>
+
+    <div id="app" class="loading">Loading the run…</div>
+  </details>
+
+  <footer>
+    The M3 view is generated by the canonical TypeScript engine into <code>docs/m3-preview.json</code>
+    by <code>npm test</code>. The legacy run viewer reads the CSV the legacy simulator writes:
+    <br><code>dotnet run --project TradeCraftSimulation -- --turns 300 --seed 42 --quiet --csv docs/run.csv</code>
+  </footer>
 </main>
 
 <template id="content">
-  <h2>Prices find their own level</h2>
-  <p>
-    Every good ends up cheapest in the city that specialises in it — that is the result the
-    model was built to produce, and nothing in the code puts it there.
-  </p>
-  <div class="legend" id="city-legend"></div>
-  <div class="charts" id="price-charts"></div>
+    <h3>Prices find their own level</h3>
+    <p>
+      Every good ends up cheapest in the city that specialises in it — that is the result the
+      model was built to produce, and nothing in the code puts it there.
+    </p>
+    <div class="legend" id="city-legend"></div>
+    <div class="charts" id="price-charts"></div>
 
-  <h2>Who ships what, and where</h2>
-  <p>
-    The provinces are only connected to the capital, so every shipment passes through it.
-    Arrows show the net flow of a good on that turn; thickness is the number of units.
-  </p>
-  <div class="player">
-    <button id="play">▶ Play</button>
-    <input type="range" id="scrub" min="1" value="1">
-    <span class="turn-readout" id="readout">turn 1</span>
-  </div>
-  <div class="board">
-    <div class="panel"><svg id="map" viewBox="0 0 520 400" role="img" aria-label="Trade flows between the four cities"></svg></div>
-    <div class="panel"><div id="snapshot"></div></div>
-  </div>
+    <h3>Who ships what, and where</h3>
+    <p>
+      The provinces are only connected to the capital, so every shipment passes through it.
+      Arrows show the net flow of a good on that turn; thickness is the number of units.
+    </p>
+    <div class="player">
+      <button id="play">▶ Play</button>
+      <label for="scrub">Selected turn</label>
+      <input type="range" id="scrub" min="1" value="1" aria-describedby="readout">
+      <span class="turn-readout" id="readout" role="status">turn 1</span>
+    </div>
+    <div class="board">
+      <div class="panel"><svg id="map" viewBox="0 0 520 400" role="img" aria-label="Trade flows between the four cities"></svg></div>
+      <div class="panel"><div id="snapshot"></div></div>
+    </div>
 </template>
+
+<script>
+(() => {
+  "use strict";
+
+  // The consolidated M3 LocalMarket experience (REQ-VISUALIZATION-006).
+  //
+  // A one-way read of a static JSON artifact generated by the canonical TypeScript engine
+  // from a deterministic golden run. It never mutates simulation state, never consumes
+  // economic RNG and is not a second source of economic truth: every number below is
+  // printed from the artifact exactly as the engine measured it.
+  //
+  // Charts are deliberately split by unit. Money per unit (seller-net and buyer-gross
+  // price) shares one plot because both series carry the same unit and time basis;
+  // quantities get their own plot rather than being overlaid on a money axis.
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const body = document.getElementById("m3-preview-body");
+
+  const escapeHtml = value => String(value).replace(/[&<>"']/g, char => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char]
+  ));
+
+  const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  const el = (tag, attrs = {}, parent = null) => {
+    const node = document.createElementNS(SVG_NS, tag);
+    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+    if (parent) parent.appendChild(node);
+    return node;
+  };
+
+  const num = (value, digits = 2) =>
+    Number(value).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const pct = value => `${(Number(value) * 100).toFixed(1)}%`;
+
+  /** Replaces the whole panel with one explicit lifecycle state. */
+  function showState(heading, detail) {
+    body.innerHTML =
+      `<div class="panel"><h3>${escapeHtml(heading)}</h3>` +
+      `<p class="state-note">${escapeHtml(detail)}</p></div>`;
+  }
+
+  /**
+   * Rejects an artifact that parsed as JSON but is not an M3 preview, so a malformed file
+   * reaches the error state instead of rendering a page full of `undefined`.
+   */
+  function validate(preview) {
+    if (preview === null || typeof preview !== "object") return "the artifact is not an object";
+    if (preview.requirement !== "REQ-VISUALIZATION-006") return "the artifact is not an M3 preview";
+    if (!Array.isArray(preview.ticks)) return "the artifact carries no tick series";
+    if (preview.market === null || typeof preview.market !== "object") return "the artifact names no market";
+    return null;
+  }
+
+  // ---- charts -------------------------------------------------------------
+
+  /**
+   * One aligned small multiple. `series` all share `unitLabel`; mixing units in a single
+   * plot is exactly what this shape exists to avoid.
+   */
+  function lineChart(options) {
+    const { title, note, series, ticks, unitLabel, selectedTick, forceZeroFloor } = options;
+    const width = 340, height = 200;
+    const pad = { top: 10, right: 10, bottom: 24, left: 46 };
+
+    const values = series.flatMap(line => line.values);
+    let max = Math.max(...values, 0);
+    let min = forceZeroFloor ? 0 : Math.min(...values, 0);
+    if (max === min) { max = max + 1; min = min - 1; }
+    const span = max - min;
+
+    // A single-observation run has no horizontal extent to interpolate across, so the sole
+    // point is centred rather than divided by a zero denominator.
+    const x = index => ticks.length === 1
+      ? pad.left + (width - pad.left - pad.right) / 2
+      : pad.left + (index / (ticks.length - 1)) * (width - pad.left - pad.right);
+    const y = value => height - pad.bottom - ((value - min) / span) * (height - pad.top - pad.bottom);
+
+    const wrap = document.createElement("div");
+    wrap.className = "panel";
+    wrap.innerHTML =
+      `<h4 class="chart-title">${escapeHtml(title)}</h4>` +
+      `<div class="chart-note">${escapeHtml(note)}</div>`;
+
+    const svg = el("svg", {
+      viewBox: `0 0 ${width} ${height}`,
+      role: "img",
+      "aria-label":
+        `${title}. ${series.map(line => line.label).join(" and ")}, in ${unitLabel}, ` +
+        `over ticks ${ticks[0]} to ${ticks[ticks.length - 1]}. ` +
+        `Exact values are listed in the table below this chart group.`,
+    });
+    wrap.appendChild(svg);
+
+    for (let step = 0; step <= 4; ++step) {
+      const value = min + (span / 4) * step;
+      el("line", { class: "grid", x1: pad.left, x2: width - pad.right, y1: y(value), y2: y(value) }, svg);
+      const label = el("text", { class: "tick", x: pad.left - 5, y: y(value) + 3, "text-anchor": "end" }, svg);
+      label.textContent = value.toFixed(span < 4 ? 2 : 0);
+    }
+    el("line", { class: "axis", x1: pad.left, x2: width - pad.right, y1: y(min), y2: y(min) }, svg);
+
+    for (const [index, anchor] of [[0, "start"], [ticks.length - 1, "end"]]) {
+      const label = el("text", { class: "tick", x: x(index), y: height - 12, "text-anchor": anchor }, svg);
+      label.textContent = String(ticks[index]);
+    }
+    const axisName = el("text", {
+      class: "tick", x: (pad.left + width - pad.right) / 2, y: height - 1, "text-anchor": "middle",
+    }, svg);
+    axisName.textContent = "tick";
+
+    const selectedIndex = ticks.indexOf(selectedTick);
+    if (selectedIndex >= 0) {
+      el("line", {
+        class: "marker", x1: x(selectedIndex), x2: x(selectedIndex), y1: pad.top, y2: y(min),
+      }, svg);
+    }
+
+    for (const line of series) {
+      const points = line.values.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`);
+      if (ticks.length === 1) {
+        el("circle", { cx: x(0), cy: y(line.values[0]), r: 3, fill: css(line.color) }, svg);
+        continue;
+      }
+      el("polyline", {
+        points: points.join(" "),
+        fill: "none",
+        stroke: css(line.color),
+        "stroke-width": 1.9,
+        "stroke-linejoin": "round",
+      }, svg);
+    }
+
+    return wrap;
+  }
+
+  function legend(entries) {
+    return `<div class="legend">` + entries.map(entry =>
+      `<span><i class="swatch" style="background:${css(entry.color)}"></i>${escapeHtml(entry.label)}</span>`
+    ).join("") + `</div>`;
+  }
+
+  // ---- panel sections -----------------------------------------------------
+
+  function headlineMetrics(preview, tick) {
+    const money = preview.market.currencyCode;
+    const units = preview.market.quantityUnitLabel;
+    const cells = [
+      ["Seller-net price", num(tick.sellerNetPrice), `${money} per ${units.replace(/s$/, "")}`],
+      ["Buyer-gross price", num(tick.householdGrossPrice), `${money} per ${units.replace(/s$/, "")}`],
+      ["Cleared (traded) quantity", num(tick.clearedQuantity), units],
+      ["Shortage rate", pct(tick.shortageRate), "of effective demand"],
+      ["Surplus rate", pct(tick.surplusRate), "of offered quantity"],
+      ["Seller-net receipt", num(tick.sellerNetReceipt), money],
+      ["Buyer-gross cost", num(tick.buyerGrossCost), money],
+      ["Consumption tax collected", num(tick.consumptionTaxCollected), money],
+    ];
+    return `<dl class="metrics">` + cells.map(([name, value, unit]) =>
+      `<div class="metric"><dt>${escapeHtml(name)}</dt>` +
+      `<dd>${escapeHtml(value)}<span class="unit">${escapeHtml(unit)}</span></dd></div>`
+    ).join("") + `</dl>`;
+  }
+
+  function balanceVisual(preview, tick) {
+    const units = preview.market.quantityUnitLabel;
+    const scale = Math.max(
+      tick.desiredDemandQuantity, tick.effectiveDemandQuantity, tick.offeredQuantity, 1e-12
+    );
+    const rows = [
+      ["Desired demand", tick.desiredDemandQuantity, "--demand"],
+      ["Effective demand (what buyers can afford)", tick.effectiveDemandQuantity, "--demand"],
+      ["Offered supply", tick.offeredQuantity, "--offer"],
+      ["Cleared", tick.clearedQuantity, "--cleared"],
+      ["Unmet demand", tick.unmetDemandQuantity, "--tax"],
+      ["Unsold offer", tick.unsoldOfferQuantity, "--tax"],
+    ];
+    return rows.map(([name, value, color]) =>
+      `<div class="balance-row">` +
+      `<span class="name">${escapeHtml(name)}</span>` +
+      `<span class="balance-track"><i style="width:${Math.min(100, (value / scale) * 100).toFixed(1)}%;background:${css(color)}"></i></span>` +
+      `<span class="value">${escapeHtml(num(value))} ${escapeHtml(units)}</span>` +
+      `</div>`
+    ).join("");
+  }
+
+  function settlementVisual(preview, tick) {
+    const money = preview.market.currencyCode;
+    const total = tick.buyerGrossCost;
+    const netShare = total > 0 ? (tick.sellerNetReceipt / total) * 100 : 0;
+    const taxShare = total > 0 ? (tick.consumptionTaxCollected / total) * 100 : 0;
+    const bar = total > 0
+      ? `<div class="split" role="img" aria-label="Of ${num(total)} ${money} paid by buyers, ` +
+        `${num(tick.sellerNetReceipt)} went to sellers and ${num(tick.consumptionTaxCollected)} to the treasury.">` +
+        `<i style="width:${netShare.toFixed(1)}%;background:${css("--cleared")}"></i>` +
+        `<i style="width:${taxShare.toFixed(1)}%;background:${css("--tax")}"></i></div>`
+      : `<p class="state-note">Nothing settled on this tick, so no money moved.</p>`;
+
+    return bar +
+      `<div class="balance-row"><span class="name">Buyers paid (gross)</span>` +
+      `<span></span><span class="value">${escapeHtml(num(tick.buyerGrossCost))} ${escapeHtml(money)}</span></div>` +
+      `<div class="balance-row"><span class="name">Sellers received (net)</span>` +
+      `<span></span><span class="value">${escapeHtml(num(tick.sellerNetReceipt))} ${escapeHtml(money)}</span></div>` +
+      `<div class="balance-row"><span class="name">${escapeHtml(preview.market.destinationStateName ?? "Treasury")} collected</span>` +
+      `<span></span><span class="value">${escapeHtml(num(tick.consumptionTaxCollected))} ${escapeHtml(money)}</span></div>`;
+  }
+
+  function exactValueTable(preview, selectedTick) {
+    const money = preview.market.currencyCode;
+    const units = preview.market.quantityUnitLabel;
+    const head = [
+      `Seller-net price (${money})`, `Buyer-gross price (${money})`,
+      `Effective demand (${units})`, `Offered (${units})`, `Cleared (${units})`,
+      "Shortage rate", "Surplus rate",
+      `Seller-net receipt (${money})`, `Buyer-gross cost (${money})`, `Tax collected (${money})`,
+    ];
+    const rows = preview.ticks.map(tick => {
+      const cells = [
+        num(tick.sellerNetPrice), num(tick.householdGrossPrice),
+        num(tick.effectiveDemandQuantity), num(tick.offeredQuantity), num(tick.clearedQuantity),
+        pct(tick.shortageRate), pct(tick.surplusRate),
+        num(tick.sellerNetReceipt), num(tick.buyerGrossCost), num(tick.consumptionTaxCollected),
+      ].map(value => `<td>${escapeHtml(value)}</td>`).join("");
+      const selected = tick.tick === selectedTick ? " aria-current=\"true\"" : "";
+      return `<tr${selected}><th scope="row">${tick.tick}</th>${cells}</tr>`;
+    }).join("");
+
+    return `<div class="scroll-x"><table>` +
+      `<caption>Exact values for every tick of the ${escapeHtml(preview.market.goodName)} market in ` +
+      `${escapeHtml(preview.market.regionName)}. Prices and money are in ${escapeHtml(money)}; ` +
+      `quantities are in ${escapeHtml(units)}. The selected tick is marked as current.</caption>` +
+      `<thead><tr><th scope="col">Tick</th>` +
+      head.map(name => `<th scope="col">${escapeHtml(name)}</th>`).join("") +
+      `</tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+
+  // ---- render -------------------------------------------------------------
+
+  function render(preview) {
+    if (preview.ticks.length === 0) {
+      showState(
+        "No ticks in this M3 run",
+        "The M3 preview artifact loaded and is well formed, but the golden run it describes " +
+        "recorded no market observations, so there is nothing to plot. This is an empty run, " +
+        "not a failed load."
+      );
+      return;
+    }
+
+    const market = preview.market;
+    const money = market.currencyCode;
+    const units = market.quantityUnitLabel;
+    const tickNumbers = preview.ticks.map(tick => tick.tick);
+    const lastTick = tickNumbers[tickNumbers.length - 1];
+
+    body.innerHTML = `
+      <div class="player">
+        <label for="m3-tick">Selected tick</label>
+        <input type="range" id="m3-tick" min="1" max="${preview.ticks.length}"
+               value="${preview.ticks.length}" step="1"
+               aria-describedby="m3-tick-readout">
+        <span class="turn-readout" id="m3-tick-readout" role="status">tick ${lastTick}</span>
+      </div>
+
+      <h3 id="m3-metrics-title">Headline metrics for the selected tick</h3>
+      <p>
+        ${escapeHtml(market.goodName)} in ${escapeHtml(market.regionName)}, main pass, settled in
+        ${escapeHtml(money)}. Scenario <code>${escapeHtml(preview.scenario.scenarioId)}</code>,
+        seed ${escapeHtml(preview.scenario.seed)}, ${escapeHtml(preview.scenario.ticksExecuted)} ticks,
+        ${escapeHtml(market.sellerCount)} sellers and ${escapeHtml(market.buyerCount)} buyers.
+      </p>
+      <div id="m3-metrics" aria-labelledby="m3-metrics-title"></div>
+
+      <h3 id="m3-trend-title">Price and traded quantity, tick by tick</h3>
+      <p>
+        Two plots rather than one: price is money per unit and quantity is units, so they do not
+        share an axis. The dashed line marks the selected tick.
+      </p>
+      <div id="m3-legends"></div>
+      <div class="charts" id="m3-charts" aria-labelledby="m3-trend-title"></div>
+
+      <div class="board">
+        <div class="panel">
+          <h3 id="m3-balance-title" style="margin-top:0">Market balance on the selected tick</h3>
+          <div class="chart-note">
+            What buyers wanted, what they could afford, what was offered, and what actually cleared.
+          </div>
+          <div id="m3-balance" aria-labelledby="m3-balance-title"></div>
+        </div>
+        <div class="panel">
+          <h3 id="m3-settlement-title" style="margin-top:0">Where the money went</h3>
+          <div class="chart-note">
+            Every unit of money a buyer paid arrived somewhere: the seller's wallet or the
+            treasury. Nothing is created or destroyed in a settlement.
+          </div>
+          <div id="m3-settlement" aria-labelledby="m3-settlement-title"></div>
+        </div>
+      </div>
+
+      <h3 id="m3-table-title">Exact values</h3>
+      <p>
+        Everything the charts above encode visually, in text. Screen readers and copy-paste get the
+        same numbers the plots do.
+      </p>
+      <div id="m3-table" aria-labelledby="m3-table-title"></div>
+
+      <h3>Whole-run totals</h3>
+      <p id="m3-totals"></p>
+    `;
+
+    const metrics = document.getElementById("m3-metrics");
+    const balance = document.getElementById("m3-balance");
+    const settlement = document.getElementById("m3-settlement");
+    const table = document.getElementById("m3-table");
+    const charts = document.getElementById("m3-charts");
+    const legends = document.getElementById("m3-legends");
+    const slider = document.getElementById("m3-tick");
+    const readout = document.getElementById("m3-tick-readout");
+
+    const priceSeries = [
+      { label: `Seller-net price (${money})`, color: "--net", values: preview.ticks.map(t => t.sellerNetPrice) },
+      { label: `Buyer-gross price (${money})`, color: "--gross", values: preview.ticks.map(t => t.householdGrossPrice) },
+    ];
+    const quantitySeries = [
+      { label: `Effective demand (${units})`, color: "--demand", values: preview.ticks.map(t => t.effectiveDemandQuantity) },
+      { label: `Offered (${units})`, color: "--offer", values: preview.ticks.map(t => t.offeredQuantity) },
+      { label: `Cleared (${units})`, color: "--cleared", values: preview.ticks.map(t => t.clearedQuantity) },
+    ];
+
+    legends.innerHTML = legend([...priceSeries, ...quantitySeries]);
+
+    const identity = preview.settlementIdentity;
+    document.getElementById("m3-totals").innerHTML =
+      `Over ${escapeHtml(preview.scenario.ticksExecuted)} ticks the market cleared ` +
+      `<strong>${escapeHtml(num(preview.totals.clearedQuantity))} ${escapeHtml(units)}</strong> ` +
+      `across ${escapeHtml(preview.totals.allocationCount)} settled lots. Buyers paid ` +
+      `<strong>${escapeHtml(num(identity.buyerGrossCost))} ${escapeHtml(money)}</strong>; sellers received ` +
+      `${escapeHtml(num(preview.totals.sellerNetReceipt))} ${escapeHtml(money)} and ` +
+      `${escapeHtml(market.destinationStateName ?? "the treasury")} collected ` +
+      `${escapeHtml(num(preview.totals.consumptionTaxCollected))} ${escapeHtml(money)}. ` +
+      `Those two add to ${escapeHtml(num(identity.sellerNetReceiptPlusTax))} ${escapeHtml(money)}, leaving a ` +
+      `residual of ${escapeHtml(identity.residual.toExponential(2))} ${escapeHtml(money)} — within the ` +
+      `configured money epsilon of ${escapeHtml(identity.moneyEpsilon.toExponential(0))}. ` +
+      `Phase-6 prices stayed inside the configured bounds ` +
+      `${escapeHtml(num(preview.priceBounds.minimumPrice))}–${escapeHtml(num(preview.priceBounds.maximumPrice))} ` +
+      `${escapeHtml(money)} and moved at most ${escapeHtml(preview.priceBounds.maxAbsoluteLogPriceMovePerTick)} in log terms per tick.`;
+
+    const show = index => {
+      const tick = preview.ticks[index - 1];
+      metrics.innerHTML = headlineMetrics(preview, tick);
+      balance.innerHTML = balanceVisual(preview, tick);
+      settlement.innerHTML = settlementVisual(preview, tick);
+      table.innerHTML = exactValueTable(preview, tick.tick);
+      readout.textContent = `tick ${tick.tick}`;
+
+      charts.textContent = "";
+      charts.appendChild(lineChart({
+        title: `${market.goodName} price`,
+        note: `${money} per ${units.replace(/s$/, "")}, per tick`,
+        series: priceSeries, ticks: tickNumbers, unitLabel: `${money} per unit`,
+        selectedTick: tick.tick,
+      }));
+      charts.appendChild(lineChart({
+        title: `${market.goodName} quantity`,
+        note: `${units} per tick`,
+        series: quantitySeries, ticks: tickNumbers, unitLabel: units,
+        selectedTick: tick.tick, forceZeroFloor: true,
+      }));
+    };
+
+    slider.addEventListener("input", () => show(Number(slider.value)));
+    show(preview.ticks.length);
+  }
+
+  fetch("m3-preview.json")
+    .then(response => {
+      if (!response.ok) {
+        // Distinct from a parse failure: the artifact was not served at all.
+        const error = new Error(`m3-preview.json: HTTP ${response.status}`);
+        error.unavailable = true;
+        throw error;
+      }
+      return response.text();
+    })
+    .then(text => {
+      let preview;
+      try {
+        preview = JSON.parse(text);
+      } catch (parseError) {
+        throw new Error(`the artifact is not valid JSON (${parseError.message})`);
+      }
+      const problem = validate(preview);
+      if (problem !== null) throw new Error(problem);
+      render(preview);
+    })
+    .catch(error => {
+      if (error.unavailable === true) {
+        showState(
+          "M3 local market unavailable",
+          `The deterministic M3 artifact could not be fetched — ${error.message}. ` +
+          "Nothing is shown rather than something stale."
+        );
+      } else {
+        showState(
+          "M3 local market could not be read",
+          `The artifact was fetched but could not be used: ${error.message}.`
+        );
+      }
+    });
+})();
+</script>
 
 <script>
 (() => {
@@ -199,7 +709,14 @@
     return node;
   };
 
-  /** Turns the simulator's own CSV into turns[turn][city][resource]. */
+  /**
+   * Turns the simulator's own CSV into an ordered array of turns.
+   *
+   * The real numeric `turn` key is kept on every entry. The replay used to discard it and
+   * label everything by array position, which is only truthful for a contiguous run that
+   * starts at 1; a retained history starting later or containing gaps would have displayed
+   * fabricated tick identities.
+   */
   function parseCsv(text) {
     const lines = text.trim().split(/\r?\n/);
     const header = lines[0].split(",");
@@ -218,7 +735,9 @@
       (byCity[row.city] ??= {})[row.resource] = row;
     }
 
-    return [...turns.entries()].sort((a, b) => a[0] - b[0]).map(([, byCity]) => byCity);
+    return [...turns.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([turn, byCity]) => ({ turn, byCity }));
   }
 
   // ---- price charts -------------------------------------------------------
@@ -229,19 +748,29 @@
     const names = Object.keys(CITIES);
 
     let max = 0;
-    for (const turn of turns) for (const city of names) max = Math.max(max, turn[city][resource].price);
+    for (const turn of turns) for (const city of names) max = Math.max(max, turn.byCity[city][resource].price);
     max = Math.ceil(max * 10) / 10 || 1;
 
-    const x = i => pad.left + (i / (turns.length - 1)) * (width - pad.left - pad.right);
+    // A single-turn artifact has no horizontal extent: dividing by `turns.length - 1` would
+    // make every x coordinate NaN, so the sole observation is centred instead.
+    const x = i => turns.length === 1
+      ? pad.left + (width - pad.left - pad.right) / 2
+      : pad.left + (i / (turns.length - 1)) * (width - pad.left - pad.right);
     const y = v => height - pad.bottom - (v / max) * (height - pad.top - pad.bottom);
 
     const wrap = document.createElement("div");
     wrap.className = "panel";
     wrap.innerHTML =
-      `<div class="chart-title">${resource}</div>` +
-      `<div class="chart-note">price in money, per turn</div>`;
+      `<h4 class="chart-title">${resource}</h4>` +
+      `<div class="chart-note">price in legacy money units, per turn</div>`;
 
-    const svg = el("svg", { viewBox: `0 0 ${width} ${height}` });
+    const svg = el("svg", {
+      viewBox: `0 0 ${width} ${height}`,
+      role: "img",
+      "aria-label":
+        `${resource} price in legacy money units for each city, ` +
+        `turns ${turns[0].turn} to ${turns[turns.length - 1].turn}.`,
+    });
     wrap.appendChild(svg);
 
     for (let step = 0; step <= 4; ++step) {
@@ -252,16 +781,17 @@
     }
     el("line", { class: "axis", x1: pad.left, x2: width - pad.right, y1: y(0), y2: y(0) }, svg);
 
-    for (const [first, last] of [[0, "1"], [turns.length - 1, String(turns.length)]]) {
-      const label = el("text", {
-        class: "tick", x: x(first), y: height - 6,
-        "text-anchor": first === 0 ? "start" : "end",
-      }, svg);
-      label.textContent = last;
+    for (const [index, anchor] of [[0, "start"], [turns.length - 1, "end"]]) {
+      const label = el("text", { class: "tick", x: x(index), y: height - 6, "text-anchor": anchor }, svg);
+      label.textContent = String(turns[index].turn);
     }
 
     for (const city of names) {
-      const points = turns.map((turn, i) => `${x(i).toFixed(1)},${y(turn[city][resource].price).toFixed(1)}`);
+      const points = turns.map((turn, i) => `${x(i).toFixed(1)},${y(turn.byCity[city][resource].price).toFixed(1)}`);
+      if (turns.length === 1) {
+        el("circle", { cx: x(0), cy: y(turns[0].byCity[city][resource].price), r: 3, fill: css(CITIES[city].color) }, svg);
+        continue;
+      }
       el("polyline", {
         points: points.join(" "),
         fill: "none",
@@ -364,7 +894,8 @@
 
   // ---- the table beside the map -------------------------------------------
 
-  function drawSnapshot(node, turn) {
+  function drawSnapshot(node, entry) {
+    const turn = entry.byCity;
     const rows = Object.keys(CITIES).map(name => {
       const cells = RESOURCES.map(resource => {
         const row = turn[name][resource];
@@ -372,25 +903,46 @@
       }).join("");
 
       const fed = RESOURCES.reduce((sum, r) => sum + turn[name][r].satisfaction, 0) / RESOURCES.length;
+      const fedPercent = (fed * 100).toFixed(0);
 
       return `<tr>
-        <td><span class="city-dot" style="background:${css(CITIES[name].color)}"></span>${name}</td>
+        <th scope="row"><span class="city-dot" style="background:${css(CITIES[name].color)}"></span>${name}</th>
         ${cells}
-        <td style="width:64px"><div class="bar"><i style="width:${(fed * 100).toFixed(0)}%"></i></div></td>
+        <td><span class="needs"><span>${fedPercent}%</span><span class="bar"><i style="width:${fedPercent}%"></i></span></span></td>
       </tr>`;
     }).join("");
 
     node.innerHTML = `
       <table>
-        <thead><tr><th>city</th><th>food</th><th>wood</th><th>tools</th><th>needs met</th></tr></thead>
+        <caption>City prices and need satisfaction on turn ${entry.turn}.</caption>
+        <thead><tr>
+          <th scope="col">City</th>
+          <th scope="col">Food price (legacy money)</th>
+          <th scope="col">Wood price (legacy money)</th>
+          <th scope="col">Tools price (legacy money)</th>
+          <th scope="col">Needs met</th>
+        </tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
   }
 
   // ---- wiring -------------------------------------------------------------
 
+  function showEmpty(app, message) {
+    app.className = "";
+    app.innerHTML = `<div class="panel"><h3>Nothing to replay</h3><p class="state-note">${message}</p></div>`;
+  }
+
   function render(turns) {
     const app = document.getElementById("app");
+
+    // A syntactically valid CSV with a header and no observation rows is an empty run, not a
+    // failed load, and it must not fall through to the generic load-error path.
+    if (turns.length === 0) {
+      showEmpty(app, "The run artifact parsed correctly but contains no observation turns.");
+      return;
+    }
+
     app.className = "";
     app.textContent = "";
     app.appendChild(document.getElementById("content").content.cloneNode(true));
@@ -415,19 +967,24 @@
     let timer = null;
 
     const show = index => {
-      const turn = turns[index - 1];
-      drawMap(map, turn);
-      drawSnapshot(snapshot, turn);
+      const entry = turns[index - 1];
+      drawMap(map, entry.byCity);
+      drawSnapshot(snapshot, entry);
       const moved = PROVINCES.reduce((sum, p) =>
-        sum + RESOURCES.reduce((s, r) => s + turn[p][r].imported + turn[p][r].exported, 0), 0);
-      readout.textContent = `turn ${index} — ${moved.toFixed(0)} units shipped`;
+        sum + RESOURCES.reduce((s, r) => s + entry.byCity[p][r].imported + entry.byCity[p][r].exported, 0), 0);
+      readout.textContent = `turn ${entry.turn} — ${moved.toFixed(0)} units shipped`;
     };
 
     const stop = () => { clearInterval(timer); timer = null; play.textContent = "▶ Play"; };
 
     play.addEventListener("click", () => {
       if (timer) return stop();
-      if (Number(scrub.value) >= turns.length) scrub.value = "1";
+      // Restarting from the final turn rewinds to the first retained turn and renders it.
+      // Without the render, the first frame the viewer saw was the *second* turn.
+      if (Number(scrub.value) >= turns.length) {
+        scrub.value = "1";
+        show(1);
+      }
       play.textContent = "❚❚ Pause";
       timer = setInterval(() => {
         const next = Number(scrub.value) + 1;
@@ -575,10 +1132,5 @@
     });
 })();
 </script>
-
-<main>
-  <footer>
-    Generated by the simulator itself — the page reads the very CSV it writes:
-    <br><code>dotnet run --project TradeCraftSimulation -- --turns 300 --seed 42 --quiet --csv docs/run.csv</code>
-  </footer>
-</main>
+</body>
+</html>
