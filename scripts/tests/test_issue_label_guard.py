@@ -155,6 +155,35 @@ class QuotedTextTests(unittest.TestCase):
         # ``` cannot close ````, so the keyword below stays quoted and links nothing.
         self.assertEqual(guard.linked_issues("````\nquoted\n```\nCloses #999999\n"), [])
 
+    def test_an_invalid_backtick_info_string_does_not_open_a_block(self):
+        # GFM 4.5 example 115: a backtick fence's info string may not contain a backtick, so
+        # "``` aa ```" is an ordinary paragraph and GitHub links the keyword under it. The
+        # guard used to accept it as an opener; the `|\Z` fallback then ate the rest of the
+        # body and #448 was never resolved, so its labels were never checked. Issue #521.
+        self.assertEqual(guard.linked_issues("``` aa ```\nCloses #448\n```\n"), [448])
+
+    def test_an_invalid_opener_does_not_hide_a_link_further_down(self):
+        # The same fail-open without a trailing fence line: nothing closes the would-be
+        # block, so every link below it disappeared at once.
+        body = "``` a ` b\n\nsome prose\n\nCloses #448\n"
+        self.assertEqual(guard.linked_issues(body), [448])
+
+    def test_a_valid_fence_after_an_invalid_opener_still_hides_its_contents(self):
+        # Rejecting the bad opener must not also stop the real fence below from closing.
+        body = "``` aa ```\nCloses #448\n\n```python\nFixes #999999\n```\n"
+        self.assertEqual(guard.linked_issues(body), [448])
+
+    def test_a_tilde_info_string_may_contain_backticks(self):
+        # The prohibition is on the backtick side only (GFM 4.5 example 118), so the repair
+        # is deliberately not mirrored onto tildes: this is still a real fence.
+        self.assertEqual(guard.linked_issues("~~~ ```\nFixes #999999\n~~~\n\nCloses #448\n"), [448])
+        self.assertEqual(guard.linked_issues("~~~ ~ x\nFixes #999999\n~~~\n"), [])
+
+    def test_a_backtick_info_string_without_backticks_still_opens_a_block(self):
+        # The ordinary case the repair must not break: an info string is allowed, it just
+        # may not contain a backtick.
+        self.assertEqual(guard.linked_issues("```python title=x\nFixes #999999\n```\n"), [])
+
     def test_an_html_comment_does_not_link(self):
         # The pull request template ships its guidance in exactly these.
         self.assertEqual(guard.linked_issues("<!-- Closes #1 -->\nCloses #2"), [2])
@@ -199,6 +228,17 @@ class CheckTests(unittest.TestCase):
         )
         self.assertEqual(len(violations), 1)
         self.assertIn("#448", violations[0])
+
+    def test_an_invalid_backtick_opener_does_not_bypass_the_axis_gate(self):
+        # Issue #521, at the level the gate actually decides. The resolver returns the #448
+        # label set, which is missing `area:*`; before the repair the parser never reached
+        # #448, the resolver was never consulted, and `check()` returned no violation — a
+        # required gate passing over an Issue nobody looked at.
+        body = "``` aa ```\nCloses #448\n```\n"
+        violations = guard.check(body, "claude/issue-521-x", resolver({448: LABELS_448}))
+        self.assertEqual(len(violations), 1)
+        self.assertIn("#448", violations[0])
+        self.assertIn("area:", violations[0])
 
     def test_a_machine_branch_is_exempt_without_resolving_anything(self):
         # A mirror snapshot has no author and no Issue; its own class guard decides it.
