@@ -1,9 +1,11 @@
 # TradeCraftSimulation
 
 A deterministic economic simulation that models price formation, trade, and settlement in an
-interconnected local-market system. The **canonical implementation is TypeScript** and is
-browser-capable (scheduled for M11+). The current [GitHub Pages](https://drevendev.github.io/trade_simulation/)
-deployment shows the legacy reference viewer and M1/M2 milestone previews, not the canonical engine executing.
+interconnected local-market system. The **canonical implementation is TypeScript** and the engine
+is browser-capable today; the full Worker-backed interactive observatory around that same engine is
+scheduled for M11. The current [GitHub Pages](https://drevendev.github.io/trade_simulation/)
+deployment shows the legacy reference viewer and M1/M2 milestone previews — static, one-way
+milestone output, not the canonical engine executing in the browser.
 
 ## Current state
 
@@ -11,11 +13,16 @@ deployment shows the legacy reference viewer and M1/M2 milestone previews, not t
 - Deterministic world genesis with configured regions, currencies, clans and production units
 - Sixteen-phase tick orchestrator with stable execution order
 - Stock reconciliation across all economic categories (money, goods, population, capital, resources)
-- Ledger framework tracking all economic flows
+- Normalized accounting spine: typed MONEY and GOOD signed deltas plus PHYSICAL_LOSS attribution,
+  reconciled at phase and tick boundaries
 
-**Milestone 3:** In progress. Local market implementation adds (core mechanics complete, acceptance and telemetry refinement ongoing):
-- Ephemeral budget commitments and persistent MarketIntent contracts
-- Log-space price formation using supply/demand expectations with bounded daily movement
+**Milestone 3:** In progress. The local-market runtime rows are recorded complete in the
+[implementation ledger](docs/spec/IMPLEMENTATION_STATUS.md); the milestone stays open on its
+representation requirements (see [Known scope boundaries](#known-scope-boundaries)). Local market
+implementation adds:
+- Ephemeral MarketIntent contracts and the budget commitments that back them
+- Log-space price formation using supply/demand expectations, bounded per tick by
+  `maxAbsoluteLogPriceMovePerTick`
 - Deterministic proportional local clearing with stable allocation
 - Atomic market settlement with tax-aware money and goods transfers
 - Canonical M3 local-market telemetry for diagnostics (shortage/surplus rates, cleared/traded quantities, collection efficiency)
@@ -93,10 +100,15 @@ The canonical simulation is **deterministic**:
 - Configuration, scenario definition, and world genesis
 
 **In progress:**
-- Local market price formation, clearing, and settlement with tax (core mechanics complete; telemetry and acceptance test refinement ongoing per REQ-MARKET-005 and REQ-ACCEPTANCE-004)
+- Local market price formation, clearing, and settlement with tax — the M3 runtime and acceptance
+  rows (REQ-MARKET-001..005, REQ-ACCEPTANCE-004) are recorded IMPLEMENTED in the ledger
+- M3 representation: the polished LocalMarket Pages experience (REQ-VISUALIZATION-006) is not yet
+  started, and the README/public-documentation row (REQ-VISUALIZATION-007) is still open. M3 does
+  not close until REQ-VISUALIZATION-006, 007 and 008 are all IMPLEMENTED; the
+  [implementation ledger](docs/spec/IMPLEMENTATION_STATUS.md) is the authoritative per-row status
 
 **Not implemented yet (later milestones M4–M8):**
-- Production function, labor allocation and population dynamics (M4–M5)
+- Production, labor allocation, household consumption and population cohorts in a one-region closed economy (M4)
 - Inter-regional transport, trade logistics and FX (M5)
 - Fiscal policy, governance, clans and debt (M6)
 - Monetary policy and currency dynamics (M7)
