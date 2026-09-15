@@ -1,25 +1,33 @@
 name: Mergeability
 
 # A pull request stops merging when its base moves, and GitHub does not re-run that
-# pull request's checks when `master` advances. So this also runs on pushes, fanning
-# out over every open pull request.
+# pull request's checks when `master` advances. So this also runs on pushes to
+# `master`, fanning out over every open pull request.
 #
-# The fan-out runs on pushes to **any** branch, not only `master`, because of a
-# property that cost a review run to discover: a conflicting pull request gets no
-# checks at all. GitHub runs `pull_request` workflows against `refs/pull/N/merge`, and
-# for a conflicting pull request that ref cannot be built — so no workflow fires, this
-# one included. A branch force-pushed into a conflicting state would therefore carry
-# stale checks or none, be selected for review as if unmeasured meant clean, and be
-# invisible to the AUTHOR's own "failing required check" rule, since there is no
-# failing check to see.
+# Every run of this workflow executes the definition and the scripts of `master`,
+# never those of the branch being judged. That is what `pull_request_target` is for:
+# it fires on the same activity as `pull_request` — a pull request opened, reopened,
+# pushed to, or marked ready — but runs in the context of the base, so the copy of
+# `scripts/mergeability.py` that writes the required status is always the reviewed
+# one, and the revision under judgement cannot change what judges it (#495). The
+# default checkout of such a run is the base branch, and nothing here checks out or
+# executes the pull request's own code — the one rule that makes the trigger safe to
+# hold `statuses: write`. `scripts/tests/test_mergeability_trust.py` refuses the edits
+# that would undo any of this.
 #
-# A commit status does not need the merge ref, so the fan-out can still mark that head
-# red from a push event. That single status is what returns the pull request to the
-# author's queue.
+# A property that cost a review run to discover: a conflicting pull request gets no
+# `pull_request` run at all. GitHub runs those against `refs/pull/N/merge`, and for a
+# conflicting pull request that ref cannot be built. `pull_request_target` needs no
+# merge ref and fires even then, so a branch force-pushed into a conflicting state is
+# still marked red on its own head, and that single status is what returns the pull
+# request to the author's queue. The unfiltered `push` trigger that used to provide
+# this is gone: it ran the pushed branch's unreviewed copy of the script over every
+# open pull request, which is the trust inversion #495 reports.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review]
   push:
+    branches: [master]
   workflow_dispatch:
 
 # `statuses: write` is the whole grant `github.token` needs: this workflow writes one
@@ -32,8 +40,13 @@ permissions:
   pull-requests: read
   statuses: write
 
+# One group per pull request and one for `master`. A `pull_request_target` run's
+# `github.ref` is the base branch, so keying on the ref alone would put every pull
+# request's run and every push to `master` into a single queue, where GitHub keeps one
+# pending run and cancels the rest — a pull request could then lose the run that was
+# going to write its status. The number keeps them apart; `master` keeps its own key.
 concurrency:
-  group: mergeability-${{ github.ref }}
+  group: mergeability-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -52,8 +65,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # Full history: the ledger resolver below merges `master` into a branch, and a
-      # shallow clone has no merge base to do it from.
+      # The base branch on every event, which is the default and is load-bearing: a
+      # `ref:` pointing at the pull request's head here would hand the judged revision
+      # the token that writes the verdict. Full history: the ledger resolver below
+      # merges `master` into a branch, and a shallow clone has no merge base to do it
+      # from.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -64,15 +80,24 @@ jobs:
       - name: Prove the classifier fires
         run: python -m unittest discover -s scripts/tests -v
 
+      # One pull request, the one the event is about. This step never fans out: the
+      # event that carries a pull request's number has authority over that head only.
       - name: Status for this pull request
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: python scripts/mergeability.py --repo "${{ github.repository }}" --pull "${PR_NUMBER}"
 
+      # From `master` only, like the three steps below it. A `push` cannot arrive from
+      # anywhere else now, but a `workflow_dispatch` can be started on any ref, and
+      # from any other ref this definition and its scripts would be that ref's,
+      # unreviewed, holding the credential that writes the required status on every
+      # open pull request. `pull_request_target` is excluded by name because its
+      # `github.ref` *is* `master`: the ref guard alone would let a pull request event
+      # fan out.
       - name: Status for every open pull request, because the base moved
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request_target' && github.ref == 'refs/heads/master'
         env:
           GH_TOKEN: ${{ github.token }}
         run: python scripts/mergeability.py --repo "${{ github.repository }}" --all-open
@@ -83,10 +108,10 @@ jobs:
       # The forge does it here instead, for the loop's own branches only; a conflict
       # (`dirty`) is still the author's.
       #
-      # From `master` only. On a push to any other branch this workflow's definition
-      # and its scripts come from that branch, unreviewed, and this step carries a
-      # credential that can push. `master` is the reviewed definition — and `master`
-      # moving is exactly when branches fall behind.
+      # From `master` only. On a `workflow_dispatch` from any other ref this workflow's
+      # definition and its scripts come from that ref, unreviewed, and this step
+      # carries a credential that can push. `master` is the reviewed definition — and
+      # `master` moving is exactly when branches fall behind.
       #
       # The MACHINE identity's token, not `github.token`: a push made with the workflow
       # token starts no workflows, so the updated branch would sit with the stale checks
@@ -96,7 +121,7 @@ jobs:
       # not paint master red.
       - name: Act as the MACHINE identity
         id: identity
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        if: github.event_name != 'pull_request_target' && github.ref == 'refs/heads/master'
         continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
@@ -106,7 +131,7 @@ jobs:
           repositories: ${{ github.event.repository.name }}
 
       - name: Update loop branches that are merely behind
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        if: github.event_name != 'pull_request_target' && github.ref == 'refs/heads/master'
         env:
           GH_TOKEN: ${{ steps.identity.outputs.token }}
         run: |
@@ -122,7 +147,7 @@ jobs:
       # refusal aborts its merge. Same guards as the sweep above: `master` only, the
       # reviewed definition, the MACHINE identity's token so the push is measured.
       - name: Resolve conflicts the forge itself created in the ledger
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        if: github.event_name != 'pull_request_target' && github.ref == 'refs/heads/master'
         env:
           GH_TOKEN: ${{ steps.identity.outputs.token }}
         run: |
