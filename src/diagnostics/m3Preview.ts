@@ -136,6 +136,17 @@ export interface M3GoldenRunFixture {
   readonly maxSpendPerBuyer: number;
   readonly ticks: number;
   readonly priceConfig: Phase6PriceConfig;
+  /**
+   * The consumption-tax policy this scenario trades under. Handoff/04 section 2 requires an
+   * M3 fixture to state its own rate and collection efficiency rather than inherit one, so
+   * these are scenario inputs and carry no canonical authority.
+   */
+  readonly taxPolicy: {
+    /** Statutory consumption-tax rate applied to the seller-net price, in [0,1]. */
+    readonly consumptionTaxRate: number;
+    /** Share of assessed tax the destination State actually collects, in [0,1]. */
+    readonly collectionEfficiency: number;
+  };
 }
 
 /**
@@ -204,7 +215,15 @@ export function generateM3Preview(worldState: WorldState, fixture: M3GoldenRunFi
 
   const phaseHandler = composePhaseHandlers(
     createPhase6Handler({ getFixtureIntents, getFixtureMarketIds, priceConfig: fixture.priceConfig }),
-    createPhase8Handler({ getFixtureIntents, getFixtureMarketIds, collectTelemetry: true }),
+    createPhase8Handler({
+      getFixtureIntents,
+      getFixtureMarketIds,
+      collectTelemetry: true,
+      taxPolicy: {
+        getConsumptionTaxRate: () => fixture.taxPolicy.consumptionTaxRate,
+        getCollectionEfficiency: () => fixture.taxPolicy.collectionEfficiency,
+      },
+    }),
   );
 
   const priceKey = marketPriceKey(fixture.marketId, fixture.goodId);
@@ -366,6 +385,10 @@ export function m3GoldenRunFixture(world: WorldState): M3GoldenRunFixture {
     // last tick still settles real money. Running further would only append ticks in which
     // nothing at all trades, which would make the default (latest) view an empty market.
     ticks: 10,
+    // The values Phase 8 used to pin internally, now stated where the scenario can be read.
+    // Holding them fixed keeps this published preview's story unchanged; the collection
+    // efficiency this fixture does not exercise is proven by the Phase-8 regression instead.
+    taxPolicy: { consumptionTaxRate: 0.1, collectionEfficiency: 1 },
     priceConfig: {
       shortageSignalWeight: read(markets.shortageSignalWeight, "shortageSignalWeight"),
       inventorySignalWeight: read(markets.inventorySignalWeight, "inventorySignalWeight"),

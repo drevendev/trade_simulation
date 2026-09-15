@@ -71,6 +71,18 @@ import { createTransactionId, executeTick, composePhaseHandlers, type EconomicTr
 import { createPhase6Handler, marketPriceKey, type Phase6PriceConfig } from "./phase6MarketPriceFormation";
 import { createPhase8Handler } from "./phase8MainMarketClearing";
 
+/**
+ * Consumption-tax policy for the Phase-6/Phase-8 dispatch fixtures below.
+ *
+ * Handoff/04 section 2 requires an M3 fixture to inject explicit finite values. These two
+ * restate what Phase 8 used to pin internally, so the price/expectation assertions in those
+ * tests keep measuring the same scenario; they are scenario inputs, not canonical defaults.
+ */
+const dispatchFixtureTaxPolicy: TaxPolicyProvider = {
+  getConsumptionTaxRate: () => 0.1,
+  getCollectionEfficiency: () => 1,
+};
+
 // Test ID creators using branded type casting
 const createTestRegionId = (key: string): RegionId => `r:${key}` as RegionId;
 const createTestClanId = (key: string): ClanId => `cl:${key}` as ClanId;
@@ -2251,6 +2263,7 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
         getFixtureIntents: buildIntents,
         getFixtureMarketIds,
         collectTelemetry: false,
+        taxPolicy: dispatchFixtureTaxPolicy,
       });
       const dispatchPipeline = composePhaseHandlers(phase6Handler, phase8Handler);
 
@@ -2389,6 +2402,7 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
         getFixtureIntents: buildIntents,
         getFixtureMarketIds,
         collectTelemetry: false,
+        taxPolicy: dispatchFixtureTaxPolicy,
       });
       const dispatchPipeline = composePhaseHandlers(phase6Handler, phase8Handler);
 

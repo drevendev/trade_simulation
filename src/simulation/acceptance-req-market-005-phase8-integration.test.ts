@@ -59,8 +59,22 @@ import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { executeTick, computeTickHash, type TickContext } from "./tickOrchestrator";
 import { createPhase8Handler } from "./phase8MainMarketClearing";
+import type { TaxPolicyProvider } from "./marketSettlement";
 import type { MarketIntent } from "./marketIntent";
 import { createMarketIntentId } from "./marketIntent";
+
+/**
+ * The consumption-tax policy these Phase-8 fixtures trade under.
+ *
+ * Handoff/04 section 2 requires an M3 fixture to inject explicit finite values rather than
+ * inherit them. These are the values Phase 8 used to pin internally, restated here so the
+ * existing expectations in this file keep measuring the same scenario; the collection
+ * efficiency they do not exercise is covered by phase8MainMarketClearing.test.ts.
+ */
+const fixtureTaxPolicy: TaxPolicyProvider = {
+  getConsumptionTaxRate: () => 0.1,
+  getCollectionEfficiency: () => 1,
+};
 
 /**
  * Serialize a WorldState Map bucket (and any nested Maps, e.g. LocalMarketState's
@@ -192,6 +206,7 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     const phase8HandlerWithTelemetry = createPhase8Handler({
       getFixtureIntents,
       collectTelemetry: true,
+      taxPolicy: fixtureTaxPolicy,
     });
 
     // Execute one tick with telemetry enabled
@@ -224,6 +239,7 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     const phase8HandlerNoTelemetry = createPhase8Handler({
       getFixtureIntents,
       collectTelemetry: false,
+      taxPolicy: fixtureTaxPolicy,
     });
 
     const resultNoTelemetry = executeTick(
@@ -299,6 +315,7 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     const phase8HandlerNoTelemetry = createPhase8Handler({
       getFixtureIntents,
       collectTelemetry: false,
+      taxPolicy: fixtureTaxPolicy,
     });
 
     const result = executeTick(worldState, 1, worldState.pendingTransitions, phase8HandlerNoTelemetry);
@@ -359,6 +376,7 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     const phase8WithTelemetry = createPhase8Handler({
       getFixtureIntents,
       collectTelemetry: true,
+      taxPolicy: fixtureTaxPolicy,
     });
 
     const result = executeTick(worldState, 1, worldState.pendingTransitions, phase8WithTelemetry);
@@ -443,6 +461,7 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     const phase8Handler = createPhase8Handler({
       getFixtureIntents,
       collectTelemetry: true,
+      taxPolicy: fixtureTaxPolicy,
     });
 
     const result = executeTick(worldState, 1, worldState.pendingTransitions, phase8Handler);
@@ -537,6 +556,7 @@ describe("acceptance-req-market-005-phase8-integration", () => {
     const phase8Handler = createPhase8Handler({
       getFixtureIntents,
       collectTelemetry: true,
+      taxPolicy: fixtureTaxPolicy,
     });
 
     const result = executeTick(worldState, 1, worldState.pendingTransitions, phase8Handler);
@@ -656,7 +676,7 @@ describe("acceptance-req-market-005-phase8-integration", () => {
         worldState,
         1,
         worldState.pendingTransitions,
-        createPhase8Handler({ getFixtureIntents, collectTelemetry: true }),
+        createPhase8Handler({ getFixtureIntents, collectTelemetry: true, taxPolicy: fixtureTaxPolicy }),
       );
       expect(resultWithTelemetry.context.marketAllocations.length).toBeGreaterThan(0);
       expect(canonicalizeMapBucket(worldState.clans)).toEqual(pristine.clans);
@@ -668,7 +688,7 @@ describe("acceptance-req-market-005-phase8-integration", () => {
         worldState,
         1,
         worldState.pendingTransitions,
-        createPhase8Handler({ getFixtureIntents, collectTelemetry: false }),
+        createPhase8Handler({ getFixtureIntents, collectTelemetry: false, taxPolicy: fixtureTaxPolicy }),
       );
       expect(resultNoTelemetry.context.marketAllocations).toEqual(
         resultWithTelemetry.context.marketAllocations,
@@ -785,7 +805,7 @@ describe("acceptance-req-market-005-phase8-integration", () => {
         ...counterparties,
         sellerUnitId,
         buyerCohortId,
-        handler: createPhase8Handler({ getFixtureIntents, collectTelemetry }),
+        handler: createPhase8Handler({ getFixtureIntents, collectTelemetry, taxPolicy: fixtureTaxPolicy }),
       };
     }
 
