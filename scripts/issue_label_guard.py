@@ -69,7 +69,17 @@ LINK = re.compile(
 # Issue 999999. A handoff must be able to quote a link without creating one — otherwise
 # the record of what a guard does cannot be written down without tripping it.
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
-FENCED_CODE = re.compile(r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ \t]*$|\Z)", re.DOTALL | re.MULTILINE)
+# The closing fence is the same character as the opening one, repeated *at least* as many
+# times (GFM 4.5), which is why the two fence characters are two alternatives rather than
+# one backreference: `\1` alone matches only an exactly-equal closer. Requiring equality
+# made this guard fail open, and that is the dangerous direction — a body closing ``` with
+# ```` left the opener unmatched, the `|\Z` fallback ate the rest of the body, and the real
+# `Closes #N` below it vanished before `LINK` ever ran. Reported against PR #518.
+FENCED_CODE = re.compile(
+    r"^[ \t]*(?:(`{3,})[^\n]*\n.*?(?:^[ \t]*\1`*[ \t]*$|\Z)"
+    r"|(~{3,})[^\n]*\n.*?(?:^[ \t]*\2~*[ \t]*$|\Z))",
+    re.DOTALL | re.MULTILINE,
+)
 # A code span may not contain a blank line, so an unclosed backtick swallows a
 # paragraph at most rather than the rest of the body.
 INLINE_CODE = re.compile(r"(`+)(?:(?!\1)[^\n]|\n(?!\s*\n))+?\1")

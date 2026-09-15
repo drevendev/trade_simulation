@@ -138,6 +138,23 @@ class QuotedTextTests(unittest.TestCase):
     def test_a_tilde_fence_does_not_link(self):
         self.assertEqual(guard.linked_issues("~~~\nFixes #1\n~~~\n"), [])
 
+    def test_a_longer_closing_fence_closes_the_block(self):
+        # GFM 4.5: the closer is the same character, at least as many times. Requiring an
+        # exactly-equal closer left the block open, the `|\Z` fallback ate the rest of the
+        # body, and the real link below it disappeared — the guard failing open. Reported
+        # against PR #518 by the external QA voice.
+        self.assertEqual(guard.linked_issues("```\nquoted\n````\n\nCloses #448\n"), [448])
+        self.assertEqual(guard.linked_issues("~~~\nquoted\n~~~~\n\nCloses #448\n"), [448])
+
+    def test_the_quoted_link_inside_such_a_block_still_does_not_link(self):
+        # The other half of the same rule: closing the block early must not start reading
+        # links out of it.
+        self.assertEqual(guard.linked_issues("```\nFixes #999999\n````\n\nCloses #448\n"), [448])
+
+    def test_a_shorter_closing_fence_does_not_close_the_block(self):
+        # ``` cannot close ````, so the keyword below stays quoted and links nothing.
+        self.assertEqual(guard.linked_issues("````\nquoted\n```\nCloses #999999\n"), [])
+
     def test_an_html_comment_does_not_link(self):
         # The pull request template ships its guidance in exactly these.
         self.assertEqual(guard.linked_issues("<!-- Closes #1 -->\nCloses #2"), [2])
@@ -225,6 +242,39 @@ class RunbookTests(unittest.TestCase):
         )
         self.assertIn("issue_label_guard.py", row)
         self.assertNotIn("| you |", row)
+
+    def test_the_prose_counts_agree_with_the_rows_it_counts(self):
+        """The section's stated purpose is that its accounting is complete.
+
+        *"A gate belonging to neither would be the worst outcome — the contract would make
+        it look enforced while nothing enforced it."* The count words are how a reader
+        checks that claim, so a wrong one is not a typo: a later editor reconciling "four"
+        against five bullets closes the gap by deleting one, and the deleted one is a gate
+        nobody then holds. The first revision of #518 moved a row between the columns and
+        left all three words behind; this pins them to the rows themselves.
+        """
+        words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven"}
+        text = ACCEPTOR_RUNBOOK.read_text(encoding="utf-8")
+        rows = [line.rstrip() for line in text.splitlines() if line.startswith("|")]
+        yours = words[sum(1 for row in rows if row.endswith("| you |"))]
+        checked = words[sum(1 for row in rows if row.endswith(", required |"))]
+
+        reasons = text.index("the reason no check decides them")
+        closing = text.index("If you find a defect in one of the")
+        bullets = sum(
+            1 for line in text[reasons:closing].splitlines() if line.startswith("- *")
+        )
+        self.assertEqual(words[bullets], yours, "one bullet per gate that is yours")
+
+        for sentence in (
+            "and %s are yours;" % yours,
+            "**For the %s that are yours" % yours,
+            "If you find a defect in one of the %s," % yours,
+            "%s of them are already decided" % checked.capitalize(),
+            "**For the %s a check decides" % checked,
+        ):
+            with self.subTest(sentence=sentence):
+                self.assertIn(sentence, text)
 
     def test_the_observed_failure_that_moved_the_gate_is_recorded(self):
         text = ACCEPTOR_RUNBOOK.read_text(encoding="utf-8")

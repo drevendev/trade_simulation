@@ -91,7 +91,7 @@ Post REQUEST_CHANGES and stop if any of these is true:
 
 ### Who decides each of these
 
-Four of them are already decided before you see the pull request, and four are yours;
+Four of them are already decided before you see the pull request, and five are yours;
 one gate is split down the middle, and both halves are named. A gate belonging to
 neither would be the worst outcome — the contract would make it look enforced while
 nothing enforced it — so each is named here.
@@ -124,7 +124,7 @@ and #462 moved the gate to `issue_label_guard.py`. It moved *only* the axis pred
 never applies the label, and a pull request that links no Issue passes it — that refusal
 is still yours, immediately below.
 
-**For the four that are yours, the reason no check decides them** — each is a property of
+**For the five that are yours, the reason no check decides them** — each is a property of
 the gate, not a gap someone has yet to fill:
 
 - *Issue completeness* could be checked, and no run has yet failed it. A check here would
@@ -150,7 +150,7 @@ the gate, not a gap someone has yet to fill:
   record nearby, but reporting is not refusing, and a control that never refuses teaches
   its reader to scroll past it.
 
-If you find a defect in one of the four, say so in your verdict and open an Issue for the
+If you find a defect in one of the five, say so in your verdict and open an Issue for the
 check. An observed failure is what moves a gate; symmetry is not.
 
 ## 2a. Machine-generated pull requests are not yours
