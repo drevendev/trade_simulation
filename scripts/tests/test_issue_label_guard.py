@@ -184,6 +184,50 @@ class QuotedTextTests(unittest.TestCase):
         # may not contain a backtick.
         self.assertEqual(guard.linked_issues("```python title=x\nFixes #999999\n```\n"), [])
 
+    def test_a_four_space_indented_fence_does_not_open_a_block(self):
+        # GFM 4.5 example 104: a fence indented four spaces is an indented code line, not an
+        # opener, so the unindented keyword under it is ordinary Markdown and GitHub links
+        # it. The guard's `[ \t]*` accepted the four spaces, the unindented fence below
+        # "closed" the block, and `strip_code` reduced the entire body to "\n" — #448 was
+        # never resolved and its labels were never checked. Issue #523.
+        self.assertEqual(guard.linked_issues("    ```\nCloses #448\n```\n"), [448])
+        self.assertEqual(guard.linked_issues("    ~~~\nCloses #448\n~~~\n"), [448])
+
+    def test_a_four_space_indented_opener_does_not_hide_a_link_further_down(self):
+        # The same fail-open with no trailing fence at all: nothing closed the falsely
+        # recognized block, so the `|\Z` fallback ate every link below it at once.
+        body = "    ```python\n\nsome prose\n\nCloses #448\n"
+        self.assertEqual(guard.linked_issues(body), [448])
+
+    def test_a_tab_indented_fence_does_not_open_a_block(self):
+        # Indentation is measured in columns against four-column tab stops, so a tab in
+        # columns 0-3 lands on column 4 and is already past the three-space allowance.
+        # There is no leading tab a fence may carry.
+        self.assertEqual(guard.linked_issues("\t```\nCloses #448\n```\n"), [448])
+        self.assertEqual(guard.linked_issues(" \t```\nCloses #448\n```\n"), [448])
+
+    def test_an_opener_indented_up_to_three_spaces_still_hides_its_contents(self):
+        # The allowance GFM does grant, which the repair must not take away.
+        for indent in ("", " ", "  ", "   "):
+            with self.subTest(indent=len(indent)):
+                self.assertEqual(guard.linked_issues("%s```\nFixes #999999\n```\n" % indent), [])
+                self.assertEqual(guard.linked_issues("%s~~~\nFixes #999999\n~~~\n" % indent), [])
+
+    def test_a_closer_indented_up_to_three_spaces_still_closes_the_block(self):
+        # The closer carries the same 0-3-space allowance, independently of the opener's.
+        for indent in ("", " ", "  ", "   "):
+            with self.subTest(indent=len(indent)):
+                body = "```\nFixes #999999\n%s```\n\nCloses #448\n" % indent
+                self.assertEqual(guard.linked_issues(body), [448])
+
+    def test_a_four_space_indented_closer_does_not_close_the_block(self):
+        # The other half of the rule, and the one place the repair removes a link: at four
+        # spaces the line is content, the fence stays open to the end of the document, and
+        # GitHub links nothing below it. The guard used to close the block there and read
+        # #448 out of text GitHub renders as code. Agreeing with GitHub is the whole point
+        # of `strip_code`; a body that links nothing is the ACCEPTOR's gate, not this one.
+        self.assertEqual(guard.linked_issues("```\nFixes #999999\n    ```\n\nCloses #448\n"), [])
+
     def test_an_html_comment_does_not_link(self):
         # The pull request template ships its guidance in exactly these.
         self.assertEqual(guard.linked_issues("<!-- Closes #1 -->\nCloses #2"), [2])
@@ -236,6 +280,17 @@ class CheckTests(unittest.TestCase):
         # required gate passing over an Issue nobody looked at.
         body = "``` aa ```\nCloses #448\n```\n"
         violations = guard.check(body, "claude/issue-521-x", resolver({448: LABELS_448}))
+        self.assertEqual(len(violations), 1)
+        self.assertIn("#448", violations[0])
+        self.assertIn("area:", violations[0])
+
+    def test_a_four_space_indented_opener_does_not_bypass_the_axis_gate(self):
+        # Issue #523 at the level the gate actually decides, with the #448 label set, which
+        # is missing `area:*`. Before the repair the parser stripped the whole body, #448
+        # was never resolved, the resolver was never consulted, and `check()` returned no
+        # violation — the required gate reporting success over an Issue nobody looked at.
+        body = "    ```\nCloses #448\n```\n"
+        violations = guard.check(body, "claude/issue-523-x", resolver({448: LABELS_448}))
         self.assertEqual(len(violations), 1)
         self.assertIn("#448", violations[0])
         self.assertIn("area:", violations[0])
