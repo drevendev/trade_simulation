@@ -20,12 +20,80 @@ import {
   assertNoBehavioralOverrides,
   validateDefinitionPack,
   validateLaborConfig,
+  validatePopulationConfig,
   validateProductionConfig,
   validateScenarioContent,
 } from "./validation";
-import type { DefinitionPack, RecipeDefinition } from "./definitionPack";
+import type { DefinitionPack, NeedCategoryDefinition, RecipeDefinition } from "./definitionPack";
+import { BASELINE_NEED_CATEGORY_IDS } from "./definitionPack";
 import { createDefaultSimulationConfig } from "./simulationConfig";
-import type { LaborConfig, ProductionConfig } from "./simulationConfig";
+import type {
+  LaborConfig,
+  MarketConfig,
+  NumericConfig,
+  PopulationConfig,
+  ProductionConfig,
+} from "./simulationConfig";
+
+/**
+ * Every control section 33 puts on `PopulationConfig`, named once so the tests that
+ * depend on the surface do not each re-derive it from `Object.keys()` of the defaults.
+ *
+ * Deriving it that way is what made the ownership negative control below vacuous:
+ * sixteen of these twenty controls are deliberately undefaulted (Q-002), so they never
+ * appear on the runtime object, and a duplicate declared among them was invisible.
+ */
+const M4_POPULATION_CONTROLS = [
+  "minHouseholdCashPerCapita",
+  "liquidityFloorShare",
+  "baseParticipationByStratum",
+  "minParticipation",
+  "maxParticipation",
+  "minHealthParticipationFactor",
+  "maxHealthParticipationFactor",
+  "minWeakOpportunityFactor",
+  "maxWeakOpportunityFactor",
+  "wageSignalAdjustmentSpeed",
+  "maxWageSignalStep",
+  "prosperityAlpha",
+  "essentialAlpha",
+  "incomeAlpha",
+  "employmentAlpha",
+  "scenarioRealIncomeScale",
+  "healthRecoveryRate",
+  "healthMaintenanceThreshold",
+  "serviceHealthRate",
+  "serviceBaseline",
+] as const satisfies readonly (keyof PopulationConfig)[];
+
+/**
+ * Compile-time completeness: `satisfies` above proves every listed name is a real
+ * `PopulationConfig` key, and this proves the converse — that the interface declares
+ * no key the list omits. Adding a control to `PopulationConfig` without adding it here
+ * fails `npm run typecheck` with the missing name in the message, so the list cannot
+ * silently drift out of date the way a hand-counted "nineteen" did.
+ */
+type UnlistedPopulationControl = Exclude<keyof PopulationConfig, (typeof M4_POPULATION_CONTROLS)[number]>;
+const _everyPopulationControlIsListed: UnlistedPopulationControl extends never
+  ? true
+  : UnlistedPopulationControl = true;
+void _everyPopulationControlIsListed;
+
+/**
+ * The ownership negative control for acceptance criterion 6, at the type level.
+ *
+ * `HANDOFF-REPAIR-010` forbids a second owner for a value another config block already
+ * holds. Checked here rather than only at runtime because it is the *declared* surfaces
+ * that must be disjoint: both sides leave controls undefaulted — `PopulationConfig`
+ * sixteen, and `ProductionConfig`/`LaborConfig` the fourteen REQ-CONFIG-006 left for
+ * Q-001 — so neither side is fully visible through `Object.keys()` of the defaults.
+ * Declaring `baselineParticipationRate` on `PopulationConfig`, which `LaborConfig`
+ * already owns, fails `npm run typecheck` here and names the key.
+ */
+type SiblingOwnedConfigKey = keyof LaborConfig | keyof MarketConfig | keyof NumericConfig | keyof ProductionConfig;
+type DuplicatedConfigOwner = Extract<keyof PopulationConfig, SiblingOwnedConfigKey>;
+const _populationOwnsNoSiblingKey: DuplicatedConfigOwner extends never ? true : DuplicatedConfigOwner = true;
+void _populationOwnsNoSiblingKey;
 
 /** A minimal, well-formed `ScenarioDefinition`-shaped object (required keys only). */
 function minimalScenario(): Record<string, unknown> {
@@ -1008,6 +1076,156 @@ describe("validateDefinitionPack", () => {
       expect(() => validateDefinitionPack(pack)).not.toThrow();
     });
   });
+
+  // Section 4 of `06 - Handoff/06 — POPULATION_DEMOGRAPHY_CLANS_CONTRACTS.md`
+  // (REQ-CONFIG-007). `needCategories` is where the four baseline need categories
+  // live; Handoff/03 section 8 puts need quantities and substitute groups in
+  // definitions rather than global config, which is what settles the owner.
+  describe("needCategories (REQ-CONFIG-007)", () => {
+    function needCategory(id: string, overrides?: Partial<NeedCategoryDefinition>): NeedCategoryDefinition {
+      return {
+        id,
+        perCapitaTarget: 1,
+        priority: 1,
+        substitutionGoods: [{ goodId: "good-1" as unknown as GoodId, basePreference: 1, qualityFactor: 1 }],
+        priceSensitivity: 0.6,
+        inventoryCarryoverTicks: 1,
+        ...overrides,
+      };
+    }
+
+    function packWithCategories(
+      needCategories: Record<string, NeedCategoryDefinition>,
+    ): DefinitionPack {
+      return { ...minimalPack(), needCategories };
+    }
+
+    function baselineCategories(
+      overrides?: Record<string, NeedCategoryDefinition>,
+    ): Record<string, NeedCategoryDefinition> {
+      const categories: Record<string, NeedCategoryDefinition> = {};
+      for (const id of BASELINE_NEED_CATEGORY_IDS) {
+        categories[id] = needCategory(id);
+      }
+      return { ...categories, ...overrides };
+    }
+
+    it("accepts a pack that declares no need categories at all", () => {
+      expect(() => validateDefinitionPack(minimalPack())).not.toThrow();
+      expect(minimalPack().needCategories).toBeUndefined();
+    });
+
+    it("accepts exactly the four baseline categories", () => {
+      expect(() => validateDefinitionPack(packWithCategories(baselineCategories()))).not.toThrow();
+      expect(Object.keys(baselineCategories())).toEqual(["ESSENTIAL_FOOD", "BASIC_GOODS", "SERVICES", "COMFORT"]);
+    });
+
+    it("rejects a category id that is not one of the four baseline ids", () => {
+      const categories = baselineCategories({ LUXURY_TRAVEL: needCategory("LUXURY_TRAVEL") });
+      expect(() => validateDefinitionPack(packWithCategories(categories))).toThrow(
+        /declares "LUXURY_TRAVEL", which is not one of the four baseline categories/,
+      );
+    });
+
+    it("rejects a registry missing one of the four baseline ids", () => {
+      const categories = baselineCategories();
+      delete categories.COMFORT;
+      expect(() => validateDefinitionPack(packWithCategories(categories))).toThrow(
+        /must declare the baseline category "COMFORT"/,
+      );
+    });
+
+    it("rejects a duplicate id filed under a second key", () => {
+      // The registry is keyed, so a repeated id can only arrive as a key/id
+      // mismatch — which is the same defect and is caught first.
+      const categories = baselineCategories({ COMFORT_ALIAS: needCategory("SERVICES") });
+      expect(() => validateDefinitionPack(packWithCategories(categories))).toThrow(
+        /NeedCategoryDefinition "COMFORT_ALIAS": id "SERVICES" does not match the key it is declared under/,
+      );
+    });
+
+    it("rejects a non-finite or negative quantity", () => {
+      for (const [field, value, message] of [
+        ["perCapitaTarget", Number.NaN, /perCapitaTarget must be a non-negative finite number, got NaN/],
+        ["perCapitaTarget", -1, /perCapitaTarget must be a non-negative finite number, got -1/],
+        ["priceSensitivity", -0.5, /priceSensitivity must be a non-negative finite number, got -0.5/],
+        ["inventoryCarryoverTicks", -2, /inventoryCarryoverTicks must be a non-negative finite number, got -2/],
+        ["priority", Number.POSITIVE_INFINITY, /priority must be a finite number, got Infinity/],
+      ] as const) {
+        const categories = baselineCategories({ SERVICES: needCategory("SERVICES", { [field]: value }) });
+        expect(() => validateDefinitionPack(packWithCategories(categories))).toThrow(message);
+      }
+    });
+
+    it("accepts a zero priceSensitivity and a zero carryover window", () => {
+      const categories = baselineCategories({
+        ESSENTIAL_FOOD: needCategory("ESSENTIAL_FOOD", { priceSensitivity: 0, inventoryCarryoverTicks: 0 }),
+      });
+      expect(() => validateDefinitionPack(packWithCategories(categories))).not.toThrow();
+    });
+
+    it("rejects a minimumBudgetShare outside [0,1]", () => {
+      for (const share of [-0.1, 1.5]) {
+        const categories = baselineCategories({ BASIC_GOODS: needCategory("BASIC_GOODS", { minimumBudgetShare: share }) });
+        expect(() => validateDefinitionPack(packWithCategories(categories))).toThrow(
+          /minimumBudgetShare must be a finite number in \[0, 1\]/,
+        );
+      }
+      const categories = baselineCategories({ BASIC_GOODS: needCategory("BASIC_GOODS", { minimumBudgetShare: 0.2 }) });
+      expect(() => validateDefinitionPack(packWithCategories(categories))).not.toThrow();
+    });
+
+    // Decided one way: section 5 normalizes `share_g = weight_g / Σ weight`, so an
+    // empty candidate list makes every share 0/0 and the category unsatisfiable.
+    it("rejects an empty substitutionGoods list", () => {
+      const categories = baselineCategories({ COMFORT: needCategory("COMFORT", { substitutionGoods: [] }) });
+      expect(() => validateDefinitionPack(packWithCategories(categories))).toThrow(
+        /substitutionGoods must declare at least one candidate good, got an empty array/,
+      );
+    });
+
+    // The REQ-CONFIG-005 negative control (#512, #516) applied to the new reference.
+    it("rejects a substitutionGoods entry naming a good the pack does not declare", () => {
+      const categories = baselineCategories({
+        ESSENTIAL_FOOD: needCategory("ESSENTIAL_FOOD", {
+          substitutionGoods: [{ goodId: "good:unobtainium" as unknown as GoodId, basePreference: 1, qualityFactor: 1 }],
+        }),
+      });
+      expect(() => validateDefinitionPack(packWithCategories(categories))).toThrow(
+        /substitutionGoods goodId "good:unobtainium" references a Good the DefinitionPack does not declare/,
+      );
+    });
+
+    it("rejects the same good listed twice in one category", () => {
+      const candidate = { goodId: "good-1" as unknown as GoodId, basePreference: 1, qualityFactor: 1 };
+      const categories = baselineCategories({
+        SERVICES: needCategory("SERVICES", { substitutionGoods: [candidate, { ...candidate, basePreference: 2 }] }),
+      });
+      expect(() => validateDefinitionPack(packWithCategories(categories))).toThrow(
+        /substitutionGoods declares goodId "good-1" more than once/,
+      );
+    });
+
+    it("rejects a non-positive preference or quality factor", () => {
+      for (const overrides of [{ basePreference: 0 }, { qualityFactor: -1 }]) {
+        const categories = baselineCategories({
+          BASIC_GOODS: needCategory("BASIC_GOODS", {
+            substitutionGoods: [{ goodId: "good-2" as unknown as GoodId, basePreference: 1, qualityFactor: 1, ...overrides }],
+          }),
+        });
+        expect(() => validateDefinitionPack(packWithCategories(categories))).toThrow(
+          /substitutionGoods\["good-2"\]\.(basePreference|qualityFactor) must be a positive finite number/,
+        );
+      }
+    });
+
+    it("rejects a needCategories value that is not a keyed object", () => {
+      const pack = { ...minimalPack(), needCategories: [] as unknown as Record<string, NeedCategoryDefinition> };
+      expect(() => validateDefinitionPack(pack)).toThrow(
+        /DefinitionPack.needCategories must be a plain object keyed by category id when present, got an array/,
+      );
+    });
+  });
 });
 
 describe("canonical market defaults (REQ-MARKET-002)", () => {
@@ -1337,8 +1555,238 @@ describe("production and labor config ownership (REQ-CONFIG-006)", () => {
 
   it("leaves every sibling placeholder empty", () => {
     const config = createDefaultSimulationConfig();
-    for (const key of ["population", "trade", "clans", "fiscal", "monetary", "expansion", "events", "performance"] as const) {
+    // `population` left this list when REQ-CONFIG-007 filled it; every other M5+
+    // block is still an untouched placeholder.
+    for (const key of ["trade", "clans", "fiscal", "monetary", "expansion", "events", "performance"] as const) {
       expect(config[key]).toEqual({});
     }
+  });
+});
+
+describe("canonical population defaults (REQ-CONFIG-007)", () => {
+  /**
+   * The only four of the twenty M4-subset controls with a value reachable from this
+   * requirement's slice. Two are stated by section 8 of Handoff/06 itself as a
+   * recommended range; two are section 8 of Handoff/03 under the section 9/10
+   * spelling (Decision on Issue #531). The other sixteen are `UNVALUED` below.
+   */
+  const STATED_BASELINE: ReadonlyArray<readonly [keyof PopulationConfig, number]> = [
+    ["minHealthParticipationFactor", 0.75],
+    ["maxHealthParticipationFactor", 1.02],
+    ["wageSignalAdjustmentSpeed", 0.2],
+    ["prosperityAlpha", 0.15],
+  ];
+
+  it.each(STATED_BASELINE)("%s matches the value the specification states", (field, expected) => {
+    expect(createDefaultSimulationConfig().population[field]).toBe(expected);
+  });
+
+  it("accepts its own defaults", () => {
+    expect(() => validatePopulationConfig(createDefaultSimulationConfig().population)).not.toThrow();
+  });
+
+  it("is deterministic across calls", () => {
+    expect(createDefaultSimulationConfig().population).toEqual(createDefaultSimulationConfig().population);
+  });
+
+  /**
+   * Section 8 of Handoff/03 states its population baseline in a different
+   * vocabulary (`consumptionBudgetShare*`, `precautionaryCashFloorMonths`,
+   * `needSubstitutionElasticity`, `healthEmaAlpha`), so these have no reachable
+   * value and the run refuses to invent one. This test is the durable record of
+   * that gap: it fails the moment a later run silently fills one in without the
+   * researcher answering `docs/spec/OPEN_QUESTIONS.md` Q-002.
+   */
+  const UNVALUED: readonly (keyof PopulationConfig)[] = [
+    "minHouseholdCashPerCapita",
+    "liquidityFloorShare",
+    "baseParticipationByStratum",
+    "minParticipation",
+    "maxParticipation",
+    "minWeakOpportunityFactor",
+    "maxWeakOpportunityFactor",
+    "maxWageSignalStep",
+    "essentialAlpha",
+    "incomeAlpha",
+    "employmentAlpha",
+    "scenarioRealIncomeScale",
+    "healthRecoveryRate",
+    "healthMaintenanceThreshold",
+    "serviceHealthRate",
+    "serviceBaseline",
+  ];
+
+  it.each(UNVALUED)("%s is left undefaulted because no reachable document states a value", (field) => {
+    expect(createDefaultSimulationConfig().population[field]).toBeUndefined();
+  });
+
+  /**
+   * `M4_POPULATION_CONTROLS` at the top of this file is section 33's list cut down to
+   * REQ-CONFIG-007's STATEMENT, spelled by the sections of Handoff/06 that state each
+   * control. It is twenty controls; `STATED_BASELINE` values four of them and
+   * `UNVALUED` leaves the other sixteen, and this pins that partition so the counts
+   * cannot drift apart again.
+   */
+  it("declares every M4-subset control section 33 names, and nothing else", () => {
+    const declared = new Set<string>([...Object.keys(createDefaultSimulationConfig().population), ...UNVALUED]);
+    expect(M4_POPULATION_CONTROLS.filter((field) => !declared.has(field))).toEqual([]);
+    expect(M4_POPULATION_CONTROLS).toHaveLength(20);
+    expect(STATED_BASELINE).toHaveLength(4);
+    expect(UNVALUED).toHaveLength(16);
+    expect([...STATED_BASELINE.map(([field]) => field), ...UNVALUED].sort()).toEqual(
+      [...M4_POPULATION_CONTROLS].sort(),
+    );
+  });
+
+  /**
+   * REQ-CONFIG-007's STATEMENT defers demography, migration and mobility, and
+   * `EXECUTION_ORDER.md` puts them in M8. Section 33 names them in the same
+   * sentence as the M4 controls, so their absence is the thing that has to be
+   * proved: this test fails the moment a later run pulls M8 forward.
+   */
+  it.each([
+    "annualFertilityRate",
+    "baselineMonthlyBirthRate",
+    "baselineMonthlyDeathRateChild",
+    "baselineMonthlyDeathRateWorking",
+    "baselineMonthlyDeathRateElder",
+    "maximumMortalityMultiplier",
+    "healthMortalitySensitivity",
+    "hungerMortalitySensitivity",
+    "agingChildToWorkingMonthlyShare",
+    "agingWorkingToElderMonthlyShare",
+    "migrationReviewEveryTicks",
+    "maxMigratingSharePerTick",
+    "maxMonthlyMigrationRate",
+    "migrationUtilitySensitivity",
+    "migrationNetworkWeight",
+    "migrationDistancePenalty",
+    "migrationCandidateCap",
+    "dependentAttachmentShare",
+    "mobilityCadenceTicks",
+    "socialMobilityMaxSharePerTick",
+  ])("does not declare the deferred M8 control %s", (field) => {
+    expect(createDefaultSimulationConfig().population).not.toHaveProperty(field);
+  });
+
+  /**
+   * Decision on Issue #531, applying the #528 reading: workers are measured in
+   * worker-equivalents, a quantity, and `NumericConfig.quantityEpsilon` owns that
+   * tolerance. The section 10 `P_raw` weights are formula coefficients that must
+   * sum to 1.0, and section 33 does not list them among what `PopulationConfig`
+   * centralizes; a scenario-tunable weight vector is the "new bespoke formula"
+   * that same section forbids without a schema version change.
+   */
+  it("declares neither a worker epsilon nor the prosperity weights", () => {
+    const config = createDefaultSimulationConfig();
+    expect(config.population).not.toHaveProperty("workerEpsilon");
+    expect(config.population).not.toHaveProperty("prosperityEssentialWeight");
+    expect(config.population).not.toHaveProperty("prosperityWeights");
+    expect(config.numeric.quantityEpsilon).toBe(1e-9);
+  });
+});
+
+describe("validatePopulationConfig (REQ-CONFIG-007)", () => {
+  it("rejects a non-finite value", () => {
+    expect(() => validatePopulationConfig({ prosperityAlpha: Number.NaN })).toThrow(
+      /PopulationConfig.prosperityAlpha must be a finite number in \[0, 1\], got NaN/,
+    );
+    expect(() => validatePopulationConfig({ healthRecoveryRate: Number.POSITIVE_INFINITY })).toThrow(
+      /PopulationConfig.healthRecoveryRate must be a non-negative finite number, got Infinity/,
+    );
+    expect(() => validatePopulationConfig({ scenarioRealIncomeScale: Number.NEGATIVE_INFINITY })).toThrow(
+      /PopulationConfig.scenarioRealIncomeScale must be a positive finite number, got -Infinity/,
+    );
+  });
+
+  it("rejects a value outside its declared range", () => {
+    expect(() => validatePopulationConfig({ liquidityFloorShare: 1.5 })).toThrow(
+      /PopulationConfig.liquidityFloorShare must be a finite number in \[0, 1\], got 1.5/,
+    );
+    expect(() => validatePopulationConfig({ employmentAlpha: -0.1 })).toThrow(
+      /PopulationConfig.employmentAlpha must be a finite number in \[0, 1\], got -0.1/,
+    );
+    expect(() => validatePopulationConfig({ minHouseholdCashPerCapita: -1 })).toThrow(
+      /PopulationConfig.minHouseholdCashPerCapita must be a non-negative finite number, got -1/,
+    );
+    expect(() => validatePopulationConfig({ maxWageSignalStep: 0 })).toThrow(
+      /PopulationConfig.maxWageSignalStep must be a positive finite number, got 0/,
+    );
+  });
+
+  it("rejects an inverted participation bound pair", () => {
+    expect(() => validatePopulationConfig({ minParticipation: 0.9, maxParticipation: 0.2 })).toThrow(
+      /PopulationConfig.minParticipation \(0.9\) must not exceed maxParticipation \(0.2\)/,
+    );
+  });
+
+  it("rejects an inverted health or opportunity factor clamp", () => {
+    expect(() =>
+      validatePopulationConfig({ minHealthParticipationFactor: 1.2, maxHealthParticipationFactor: 0.9 }),
+    ).toThrow(/minHealthParticipationFactor \(1.2\) must not exceed maxHealthParticipationFactor \(0.9\)/);
+    expect(() =>
+      validatePopulationConfig({ minWeakOpportunityFactor: 1.1, maxWeakOpportunityFactor: 1 }),
+    ).toThrow(/minWeakOpportunityFactor \(1.1\) must not exceed maxWeakOpportunityFactor \(1\)/);
+  });
+
+  it("validates baseParticipationByStratum entry by entry", () => {
+    expect(() => validatePopulationConfig({ baseParticipationByStratum: { WORKING_MIDDLE: 1.4 } })).toThrow(
+      /baseParticipationByStratum\["WORKING_MIDDLE"\] must be a finite number in \[0, 1\], got 1.4/,
+    );
+    expect(() => validatePopulationConfig({ baseParticipationByStratum: { VULNERABLE: Number.NaN } })).toThrow(
+      /baseParticipationByStratum\["VULNERABLE"\] must be a finite number in \[0, 1\], got NaN/,
+    );
+    expect(() =>
+      validatePopulationConfig({ baseParticipationByStratum: [0.7] as unknown as Record<string, number> }),
+    ).toThrow(/baseParticipationByStratum must be a plain object keyed by stratum when present, got an array/);
+    expect(() =>
+      validatePopulationConfig({ baseParticipationByStratum: { VULNERABLE: 0.4, WORKING_MIDDLE: 0.7, AFFLUENT: 0.6 } }),
+    ).not.toThrow();
+  });
+
+  it("accepts an empty config, because every control is optional", () => {
+    expect(() => validatePopulationConfig({})).not.toThrow();
+  });
+});
+
+describe("population config ownership (REQ-CONFIG-007)", () => {
+  /**
+   * Section 33 gives `PopulationConfig` its own list, and `HANDOFF-REPAIR-010` is
+   * the standing precedent against a second owner for a value another block
+   * already holds. `LaborConfig` in particular already owns
+   * `baselineParticipationRate` and the working-health-factor clamp.
+   */
+  it("duplicates no LaborConfig, MarketConfig, ProductionConfig or NumericConfig key", () => {
+    const config = createDefaultSimulationConfig();
+    const owned = new Set([
+      ...Object.keys(config.labor),
+      ...Object.keys(config.markets),
+      ...Object.keys(config.production),
+      ...Object.keys(config.numeric),
+    ]);
+    // All twenty declared controls, not the four the defaults materialize: the other
+    // sixteen are undefaulted and `Object.keys(config.population)` cannot see them, so
+    // checking the runtime object alone proved nothing about the surface this
+    // requirement actually declares. The exhaustive half of this control is the
+    // `DuplicatedConfigOwner` type at the top of this file, which also sees the sibling
+    // keys that are declared but undefaulted; this runtime half keeps the failure
+    // visible in `npm test` as well as in `npm run typecheck`.
+    expect(M4_POPULATION_CONTROLS.filter((key) => owned.has(key))).toEqual([]);
+  });
+
+  it("still refuses a scenario carrying population", () => {
+    expect(() => assertNoBehavioralOverrides({ ...minimalScenario(), population: { prosperityAlpha: 0.9 } })).toThrow(
+      /SimulationConfig-owned behavioral key "population"/,
+    );
+  });
+
+  it("changes no numeric, markets, production or labor value", () => {
+    const config = createDefaultSimulationConfig();
+    expect(config.numeric.quantityEpsilon).toBe(1e-9);
+    expect(config.markets.basePriceAdjustmentSpeed).toBe(0.12);
+    expect(config.production.baseTargetUtilization).toBe(0.7);
+    expect(config.labor.baselineParticipationRate).toBe(0.7);
+    expect(config.labor.minimumWorkingHealthFactor).toBe(0.5);
+    expect(config.labor.maximumWorkingHealthFactor).toBe(1.05);
   });
 });
