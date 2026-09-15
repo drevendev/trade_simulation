@@ -4,8 +4,10 @@ A deterministic economic simulation that models price formation, trade, and sett
 interconnected local-market system. The **canonical implementation is TypeScript** and the engine
 is browser-capable today; the full Worker-backed interactive observatory around that same engine is
 scheduled for M11. The current [GitHub Pages](https://drevendev.github.io/trade_simulation/)
-deployment shows the legacy reference viewer and M1/M2 milestone previews — static, one-way
-milestone output, not the canonical engine executing in the browser.
+deployment leads with the consolidated M3 LocalMarket experience — price and traded-quantity trends,
+a selected-tick market balance and settlement split, and headline metrics — and keeps the earlier
+M0–M2 milestone previews and the legacy run viewer behind a collapsed history disclosure. All of it
+is static, one-way milestone output, not the canonical engine executing in the browser.
 
 ## Current state
 
@@ -16,10 +18,10 @@ milestone output, not the canonical engine executing in the browser.
 - Normalized accounting spine: typed MONEY and GOOD signed deltas plus PHYSICAL_LOSS attribution,
   reconciled at phase and tick boundaries
 
-**Milestone 3:** In progress. The local-market runtime rows are recorded complete in the
-[implementation ledger](docs/spec/IMPLEMENTATION_STATUS.md); the milestone stays open on its
-representation requirements (see [Known scope boundaries](#known-scope-boundaries)). Local market
-implementation adds:
+**Milestone 3:** Local markets and transaction settlement. Per-requirement evidence lives in the
+[implementation ledger](docs/spec/implementation_status.csv); see
+[Known scope boundaries](#known-scope-boundaries) for what that ledger currently records. Local
+market implementation adds:
 - Ephemeral MarketIntent contracts and the budget commitments that back them
 - Log-space price formation using supply/demand expectations, bounded per tick by
   `maxAbsoluteLogPriceMovePerTick`
@@ -27,7 +29,7 @@ implementation adds:
 - Atomic market settlement with tax-aware money and goods transfers
 - Canonical M3 local-market telemetry for diagnostics (shortage/surplus rates, cleared/traded quantities, collection efficiency)
 
-**Interactive viewer:** [View the current M2 Milestone Preview](https://drevendev.github.io/trade_simulation/) — see baseline-scenario world topology, tick execution, and zero-flow reconciliation across 100+ ticks.
+**Interactive viewer:** [Open the M3 LocalMarket Pages experience](https://drevendev.github.io/trade_simulation/) — price and traded-quantity trends, the selected-tick market balance and settlement split, and headline metrics from the deterministic golden run, with the M0–M2 previews and the legacy run viewer under the history disclosure.
 
 ## Understanding M3 local markets
 
@@ -87,7 +89,8 @@ The canonical simulation is **deterministic**:
 - Same configuration, seed, and tick count produce identical replay hash across runs
 - No random-number consumption outside of reproducible seeded calls
 
-**M3 local market settlement** (in progress, with refinements ongoing):
+**M3 local market settlement** (REQ-MARKET-001..005 and REQ-ACCEPTANCE-004, recorded IMPLEMENTED in
+the ledger):
 - Atomic transaction settlement with preflight affordability/inventory checks and tax-aware transfers
 - Deterministic proportional clearing within a tick/phase
 - Phase and tick boundary reconciliation: conserved MONEY and GOOD stock deltas reconcile by asset key within configured tolerance (1e-9 by default)
@@ -95,17 +98,24 @@ The canonical simulation is **deterministic**:
 
 ## Known scope boundaries
 
-**Completed:**
+[`docs/spec/implementation_status.csv`](docs/spec/implementation_status.csv) is the authoritative
+per-requirement implementation record: one evidence row per requirement identifier, written by the
+pull request that earns it. [`docs/spec/IMPLEMENTATION_STATUS.md`](docs/spec/IMPLEMENTATION_STATUS.md)
+is generated from that file and is presentation only. The summary below follows it.
+
+**Recorded IMPLEMENTED:**
 - Core deterministic orchestration and ledger framework
 - Configuration, scenario definition, and world genesis
+- Local market price formation, clearing, and settlement with tax (REQ-MARKET-001..005,
+  REQ-ACCEPTANCE-004)
+- M3 representation: the consolidated LocalMarket Pages experience (REQ-VISUALIZATION-006), the
+  README and public project text (REQ-VISUALIZATION-007), and the two public explainer articles
+  (REQ-VISUALIZATION-008)
 
-**In progress:**
-- Local market price formation, clearing, and settlement with tax — the M3 runtime and acceptance
-  rows (REQ-MARKET-001..005, REQ-ACCEPTANCE-004) are recorded IMPLEMENTED in the ledger
-- M3 representation: the polished LocalMarket Pages experience (REQ-VISUALIZATION-006) is not yet
-  started, and the README/public-documentation row (REQ-VISUALIZATION-007) is still open. M3 does
-  not close until REQ-VISUALIZATION-006, 007 and 008 are all IMPLEMENTED; the
-  [implementation ledger](docs/spec/IMPLEMENTATION_STATUS.md) is the authoritative per-row status
+**Not closed:**
+- Milestone 3 itself. A milestone is released only once every one of its ledger rows reads
+  IMPLEMENTED *and* carries the merge commit that landed it, and `release-tag.yml` makes that
+  judgement mechanically from the ledger. This README does not claim M3 has closed.
 
 **Not implemented yet (later milestones M4–M8):**
 - Production, labor allocation, household consumption and population cohorts in a one-region closed economy (M4)
