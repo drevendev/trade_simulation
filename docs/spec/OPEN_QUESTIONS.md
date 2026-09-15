@@ -118,7 +118,7 @@ Answer:   —
 
 ---
 
-## Q-002 — REQ-CONFIG-007 — Which document values the fifteen M4 population controls that section 33 names and section 8 of Handoff/03 states in a different vocabulary?
+## Q-002 — REQ-CONFIG-007 — Which document values the sixteen M4 population controls that section 33 names and section 8 of Handoff/03 states in a different vocabulary?
 
 Status:   OPEN
 Blocks:   REQ-CONFIG-007 (landed PARTIAL), and the M4 rows that read these controls —
@@ -140,8 +140,8 @@ Context:  Section 33 "Configuration surface" of
           `EXECUTION_ORDER.md` puts there too. Of its non-demographic entries,
           `consumptionBudgetShareLower/Middle/Upper`, `precautionaryCashFloorMonths`,
           `needSubstitutionElasticity` and `healthEmaAlpha` have no counterpart among the
-          controls sections 4-11 name, and four of the nineteen M4 controls have no value
-          anywhere. The fifteen left undefaulted are:
+          controls sections 4-11 name, and sixteen of the twenty M4 controls have no value
+          anywhere. The sixteen left undefaulted are:
 
           Liquidity floor (section 4) — `minHouseholdCashPerCapita`,
           `liquidityFloorShare`.
@@ -233,7 +233,7 @@ Options:  1. Section 8 of Handoff/03 gains the missing values under the section 
           would defeat. If either reading is wrong, it needs saying here.
 
           Implemented in the meantime: every M4-subset control section 33 names is declared
-          and validated, the four above carry their value, and the fifteen are left
+          and validated, the four above carry their value, and the other sixteen are left
           `undefined` rather than guessed. A test asserts each of them is absent, so filling
           one in without answering this question fails the build. A second test asserts the
           deferred M8 demography/migration/mobility controls are absent, so pulling them

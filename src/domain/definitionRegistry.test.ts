@@ -1,8 +1,31 @@
 import { describe, expect, it } from "vitest";
 
-import type { DefinitionPack, RecipeDefinition } from "../config/definitionPack";
+import type { DefinitionPack, NeedCategoryDefinition, RecipeDefinition } from "../config/definitionPack";
+import { BASELINE_NEED_CATEGORY_IDS } from "../config/definitionPack";
 import type { GoodId } from "./id";
 import { buildDefinitionRegistry } from "./definitionRegistry";
+
+/**
+ * The only `DefinitionPack` keys that are *not* definitions data, and so are the
+ * only ones `DefinitionRegistry` may legitimately omit. Everything else the pack
+ * declares has to reach `WorldState`, because the pack itself does not.
+ */
+const PACK_METADATA_KEYS: readonly string[] = ["id", "version"];
+
+function needCategory(id: string): NeedCategoryDefinition {
+  return {
+    id,
+    perCapitaTarget: 1,
+    priority: 1,
+    substitutionGoods: [{ goodId: "good:food" as GoodId, basePreference: 1, qualityFactor: 1 }],
+    priceSensitivity: 1,
+    inventoryCarryoverTicks: 1,
+  };
+}
+
+function baselineNeedCategories(): Record<string, NeedCategoryDefinition> {
+  return Object.fromEntries(BASELINE_NEED_CATEGORY_IDS.map((id) => [id, needCategory(id)]));
+}
 
 describe("buildDefinitionRegistry", () => {
   it("carries every DefinitionPack definitions field through unchanged", () => {
@@ -36,6 +59,68 @@ describe("buildDefinitionRegistry", () => {
     expect(registry.recipes["recipe-a"]).toBe(recipe);
     expect(registry.eventDefinitions).toBe(definitionPack.eventDefinitions);
     expect(registry.metricDefinitions).toBe(definitionPack.metricDefinitions);
+  });
+
+  /**
+   * The negative control for the boundary itself, not for any one field.
+   *
+   * `needCategories` was declared on `DefinitionPack` and validated at genesis while
+   * `buildDefinitionRegistry()` still copied four fields, so it was silently dropped
+   * on the way into `WorldState`. Naming fields one by one is what let that happen:
+   * the test above passes whether or not a *newly added* pack field is projected.
+   * This one derives the expectation from the pack, so the next definitions field
+   * added to `DefinitionPack` and forgotten here fails instead of disappearing.
+   */
+  it("projects every definitions field the pack declares, naming none by hand", () => {
+    const definitionPack: DefinitionPack = {
+      id: "exhaustive-pack",
+      version: "1",
+      goods: {},
+      recipes: {},
+      eventDefinitions: {},
+      metricDefinitions: {},
+      needCategories: baselineNeedCategories(),
+    };
+
+    const registry = buildDefinitionRegistry(definitionPack);
+
+    const expected = Object.keys(definitionPack)
+      .filter((key) => !PACK_METADATA_KEYS.includes(key))
+      .sort();
+    expect(Object.keys(registry).sort()).toEqual(expected);
+  });
+
+  it("carries needCategories through by reference when the pack declares them", () => {
+    const needCategories = baselineNeedCategories();
+    const definitionPack: DefinitionPack = {
+      id: "needs-pack",
+      version: "1",
+      goods: {},
+      recipes: {},
+      eventDefinitions: {},
+      metricDefinitions: {},
+      needCategories,
+    };
+
+    const registry = buildDefinitionRegistry(definitionPack);
+
+    expect(registry.needCategories).toBe(needCategories);
+    expect(Object.keys(registry.needCategories ?? {}).sort()).toEqual([...BASELINE_NEED_CATEGORY_IDS].sort());
+  });
+
+  it("leaves needCategories undefined rather than empty when the pack declares none", () => {
+    const definitionPack: DefinitionPack = {
+      id: "no-needs-pack",
+      version: "1",
+      goods: {},
+      recipes: {},
+      eventDefinitions: {},
+      metricDefinitions: {},
+    };
+
+    const registry = buildDefinitionRegistry(definitionPack);
+
+    expect(registry.needCategories).toBeUndefined();
   });
 
   it("leaves an empty definition pack as an empty registry, not an error", () => {

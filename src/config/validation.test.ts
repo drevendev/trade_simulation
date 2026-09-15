@@ -27,7 +27,73 @@ import {
 import type { DefinitionPack, NeedCategoryDefinition, RecipeDefinition } from "./definitionPack";
 import { BASELINE_NEED_CATEGORY_IDS } from "./definitionPack";
 import { createDefaultSimulationConfig } from "./simulationConfig";
-import type { LaborConfig, PopulationConfig, ProductionConfig } from "./simulationConfig";
+import type {
+  LaborConfig,
+  MarketConfig,
+  NumericConfig,
+  PopulationConfig,
+  ProductionConfig,
+} from "./simulationConfig";
+
+/**
+ * Every control section 33 puts on `PopulationConfig`, named once so the tests that
+ * depend on the surface do not each re-derive it from `Object.keys()` of the defaults.
+ *
+ * Deriving it that way is what made the ownership negative control below vacuous:
+ * sixteen of these twenty controls are deliberately undefaulted (Q-002), so they never
+ * appear on the runtime object, and a duplicate declared among them was invisible.
+ */
+const M4_POPULATION_CONTROLS = [
+  "minHouseholdCashPerCapita",
+  "liquidityFloorShare",
+  "baseParticipationByStratum",
+  "minParticipation",
+  "maxParticipation",
+  "minHealthParticipationFactor",
+  "maxHealthParticipationFactor",
+  "minWeakOpportunityFactor",
+  "maxWeakOpportunityFactor",
+  "wageSignalAdjustmentSpeed",
+  "maxWageSignalStep",
+  "prosperityAlpha",
+  "essentialAlpha",
+  "incomeAlpha",
+  "employmentAlpha",
+  "scenarioRealIncomeScale",
+  "healthRecoveryRate",
+  "healthMaintenanceThreshold",
+  "serviceHealthRate",
+  "serviceBaseline",
+] as const satisfies readonly (keyof PopulationConfig)[];
+
+/**
+ * Compile-time completeness: `satisfies` above proves every listed name is a real
+ * `PopulationConfig` key, and this proves the converse — that the interface declares
+ * no key the list omits. Adding a control to `PopulationConfig` without adding it here
+ * fails `npm run typecheck` with the missing name in the message, so the list cannot
+ * silently drift out of date the way a hand-counted "nineteen" did.
+ */
+type UnlistedPopulationControl = Exclude<keyof PopulationConfig, (typeof M4_POPULATION_CONTROLS)[number]>;
+const _everyPopulationControlIsListed: UnlistedPopulationControl extends never
+  ? true
+  : UnlistedPopulationControl = true;
+void _everyPopulationControlIsListed;
+
+/**
+ * The ownership negative control for acceptance criterion 6, at the type level.
+ *
+ * `HANDOFF-REPAIR-010` forbids a second owner for a value another config block already
+ * holds. Checked here rather than only at runtime because it is the *declared* surfaces
+ * that must be disjoint: both sides leave controls undefaulted — `PopulationConfig`
+ * sixteen, and `ProductionConfig`/`LaborConfig` the fourteen REQ-CONFIG-006 left for
+ * Q-001 — so neither side is fully visible through `Object.keys()` of the defaults.
+ * Declaring `baselineParticipationRate` on `PopulationConfig`, which `LaborConfig`
+ * already owns, fails `npm run typecheck` here and names the key.
+ */
+type SiblingOwnedConfigKey = keyof LaborConfig | keyof MarketConfig | keyof NumericConfig | keyof ProductionConfig;
+type DuplicatedConfigOwner = Extract<keyof PopulationConfig, SiblingOwnedConfigKey>;
+const _populationOwnsNoSiblingKey: DuplicatedConfigOwner extends never ? true : DuplicatedConfigOwner = true;
+void _populationOwnsNoSiblingKey;
 
 /** A minimal, well-formed `ScenarioDefinition`-shaped object (required keys only). */
 function minimalScenario(): Record<string, unknown> {
@@ -1499,10 +1565,10 @@ describe("production and labor config ownership (REQ-CONFIG-006)", () => {
 
 describe("canonical population defaults (REQ-CONFIG-007)", () => {
   /**
-   * The only four M4-subset controls with a value reachable from this
+   * The only four of the twenty M4-subset controls with a value reachable from this
    * requirement's slice. Two are stated by section 8 of Handoff/06 itself as a
    * recommended range; two are section 8 of Handoff/03 under the section 9/10
-   * spelling (Decision on Issue #531).
+   * spelling (Decision on Issue #531). The other sixteen are `UNVALUED` below.
    */
   const STATED_BASELINE: ReadonlyArray<readonly [keyof PopulationConfig, number]> = [
     ["minHealthParticipationFactor", 0.75],
@@ -1554,21 +1620,22 @@ describe("canonical population defaults (REQ-CONFIG-007)", () => {
     expect(createDefaultSimulationConfig().population[field]).toBeUndefined();
   });
 
-  it("declares every M4-subset control section 33 names", () => {
+  /**
+   * `M4_POPULATION_CONTROLS` at the top of this file is section 33's list cut down to
+   * REQ-CONFIG-007's STATEMENT, spelled by the sections of Handoff/06 that state each
+   * control. It is twenty controls; `STATED_BASELINE` values four of them and
+   * `UNVALUED` leaves the other sixteen, and this pins that partition so the counts
+   * cannot drift apart again.
+   */
+  it("declares every M4-subset control section 33 names, and nothing else", () => {
     const declared = new Set<string>([...Object.keys(createDefaultSimulationConfig().population), ...UNVALUED]);
-    // Section 33's list cut down to REQ-CONFIG-007's STATEMENT, spelled by the
-    // sections of Handoff/06 that state each control.
-    const m4Subset = [
-      "minHouseholdCashPerCapita", "liquidityFloorShare",
-      "baseParticipationByStratum", "minParticipation", "maxParticipation",
-      "minHealthParticipationFactor", "maxHealthParticipationFactor",
-      "minWeakOpportunityFactor", "maxWeakOpportunityFactor",
-      "wageSignalAdjustmentSpeed", "maxWageSignalStep",
-      "prosperityAlpha", "essentialAlpha", "incomeAlpha", "employmentAlpha",
-      "scenarioRealIncomeScale",
-      "healthRecoveryRate", "healthMaintenanceThreshold", "serviceHealthRate", "serviceBaseline",
-    ];
-    expect(m4Subset.filter((field) => !declared.has(field))).toEqual([]);
+    expect(M4_POPULATION_CONTROLS.filter((field) => !declared.has(field))).toEqual([]);
+    expect(M4_POPULATION_CONTROLS).toHaveLength(20);
+    expect(STATED_BASELINE).toHaveLength(4);
+    expect(UNVALUED).toHaveLength(16);
+    expect([...STATED_BASELINE.map(([field]) => field), ...UNVALUED].sort()).toEqual(
+      [...M4_POPULATION_CONTROLS].sort(),
+    );
   });
 
   /**
@@ -1697,7 +1764,14 @@ describe("population config ownership (REQ-CONFIG-007)", () => {
       ...Object.keys(config.production),
       ...Object.keys(config.numeric),
     ]);
-    expect(Object.keys(config.population).filter((key) => owned.has(key))).toEqual([]);
+    // All twenty declared controls, not the four the defaults materialize: the other
+    // sixteen are undefaulted and `Object.keys(config.population)` cannot see them, so
+    // checking the runtime object alone proved nothing about the surface this
+    // requirement actually declares. The exhaustive half of this control is the
+    // `DuplicatedConfigOwner` type at the top of this file, which also sees the sibling
+    // keys that are declared but undefaulted; this runtime half keeps the failure
+    // visible in `npm test` as well as in `npm run typecheck`.
+    expect(M4_POPULATION_CONTROLS.filter((key) => owned.has(key))).toEqual([]);
   });
 
   it("still refuses a scenario carrying population", () => {

@@ -802,7 +802,7 @@ function validateAllowedLaborCategories(categories: readonly string[] | undefine
  * zero divides or freezes.
  *
  * Every field is optional: section 8 of Handoff/03 states its population baseline in
- * a different vocabulary, so fifteen of the nineteen controls have no reachable
+ * a different vocabulary, so sixteen of the twenty controls have no reachable
  * value and `createDefaultSimulationConfig` does not invent one. Presence is what
  * gets checked.
  *

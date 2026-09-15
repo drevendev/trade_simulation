@@ -173,7 +173,7 @@ export interface LaborConfig {
  * baseline-value owner, as `HANDOFF-REPAIR-005`/`-010` establish for every other
  * block — but it states its population baseline in a different vocabulary
  * (`consumptionBudgetShare*`, `precautionaryCashFloorMonths`,
- * `needSubstitutionElasticity`, `healthEmaAlpha`), so fifteen of the nineteen
+ * `needSubstitutionElasticity`, `healthEmaAlpha`), so sixteen of the twenty
  * controls below have no reachable value and are declared undefaulted rather than
  * guessed. See `docs/spec/OPEN_QUESTIONS.md`, Q-002.
  *
@@ -379,7 +379,7 @@ export function createDefaultSimulationConfig(): SimulationConfig {
     // Handoff/06 section 33's M4 subset. Section 8 of Handoff/03 states its
     // population baseline in a different vocabulary, so only the four controls
     // below have a value reachable from this requirement's slice; the other
-    // fifteen are declared and left undefaulted, not guessed. See
+    // sixteen of the twenty are declared and left undefaulted, not guessed. See
     // `docs/spec/OPEN_QUESTIONS.md`, Q-002.
     population: {
       // Handoff/06 section 8, "Recommended healthParticipationFactor range [0.75,1.02]".

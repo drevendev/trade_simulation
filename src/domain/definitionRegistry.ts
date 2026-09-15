@@ -4,17 +4,25 @@
  * See `docs/spec/mirror/06 - Handoff/01 — CORE_SCHEMA_AND_LIFECYCLES.md`
  * section 6: `DefinitionRegistry` holds immutable, scenario-versioned
  * content/reference definitions distinct from live world-entity instances —
- * `goods`, `recipes`, `eventDefinitions`, `metricDefinitions`. `DefinitionPack`
- * (`REQ-CONFIG-001`, `../config/definitionPack.ts`) already declares exactly
- * these four fields with matching key/value shapes, so this registry is a
- * typed, read-only view over a `DefinitionPack` rather than new storage.
+ * `goods`, `recipes`, `eventDefinitions`, `metricDefinitions`. Section 4 of
+ * `06 - Handoff/06 — POPULATION_DEMOGRAPHY_CLANS_CONTRACTS.md` names one more
+ * on this same registry, `DefinitionRegistry.needCategories` (REQ-CONFIG-007).
+ * `DefinitionPack` (`REQ-CONFIG-001`, `../config/definitionPack.ts`) declares
+ * exactly these five fields with matching key/value shapes, so this registry is
+ * a typed, read-only view over a `DefinitionPack` rather than new storage.
+ *
+ * Every definitions field of the pack belongs in the projection below. A field
+ * validated by `validateDefinitionPack()` and then left out of it is discarded
+ * at genesis: the pack is not reachable from `WorldState`, so a reader inside
+ * the simulation would have no canonical source for it. `needCategories` was in
+ * exactly that state when it was added to the pack without being added here.
  */
 import type { DefinitionPack } from "../config/definitionPack";
 import type { GoodId } from "./id";
 
 export type DefinitionRegistry = Pick<
   DefinitionPack,
-  "goods" | "recipes" | "eventDefinitions" | "metricDefinitions"
+  "goods" | "recipes" | "eventDefinitions" | "metricDefinitions" | "needCategories"
 >;
 
 /**
@@ -51,12 +59,24 @@ export function resolveCapitalGoodsPerCapitalUnit(
     .map(([goodKey, goodsPerCapitalUnit]) => [goodKey as GoodId, goodsPerCapitalUnit] as const);
 }
 
-/** Builds the definitions registry from `definitionPack`, unchanged. */
+/**
+ * Builds the definitions registry from `definitionPack`, unchanged.
+ *
+ * `needCategories` is optional on the pack and stays optional here: a pack that
+ * declares none produces a registry with none, and none is never replaced by an
+ * empty object, so "declares no categories" and "declares zero categories" do not
+ * become the same state at the boundary.
+ *
+ * The conditional spread is what `exactOptionalPropertyTypes` requires — writing
+ * the key with an `undefined` value is not the same as leaving it out, and only
+ * leaving it out keeps an absent field absent across the projection.
+ */
 export function buildDefinitionRegistry(definitionPack: DefinitionPack): DefinitionRegistry {
   return {
     goods: definitionPack.goods,
     recipes: definitionPack.recipes,
     eventDefinitions: definitionPack.eventDefinitions,
     metricDefinitions: definitionPack.metricDefinitions,
+    ...(definitionPack.needCategories === undefined ? {} : { needCategories: definitionPack.needCategories }),
   };
 }
