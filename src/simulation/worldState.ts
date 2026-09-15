@@ -45,7 +45,7 @@ import type {
 } from "../config/scenarioDefinition";
 import type { DefinitionPack } from "../config/definitionPack";
 import type { SimulationConfig } from "../config/simulationConfig";
-import { validateDefinitionPack, validateLaborConfig, validateProductionConfig } from "../config/validation";
+import { validateDefinitionPack, validateLaborConfig, validatePopulationConfig, validateProductionConfig } from "../config/validation";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
 
@@ -927,10 +927,12 @@ function validateWorldGenesis(
   });
 
   // Step 1 promises "config bounds". REQ-CONFIG-006 makes that true for the M4
-  // production and labor surface: a non-finite or out-of-range control fails here,
-  // at genesis, rather than at the first tick that reads it.
+  // production and labor surface, REQ-CONFIG-007 for the population surface: a
+  // non-finite or out-of-range control fails here, at genesis, rather than at the
+  // first tick that reads it.
   validateProductionConfig(config.production);
   validateLaborConfig(config.labor);
+  validatePopulationConfig(config.population);
 
   validateExtractionResourcesPresent(scenario, definitionPack);
 }
