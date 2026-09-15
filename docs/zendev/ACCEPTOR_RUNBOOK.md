@@ -91,7 +91,7 @@ Post REQUEST_CHANGES and stop if any of these is true:
 
 ### Who decides each of these
 
-Three of them are already decided before you see the pull request, and five are yours;
+Four of them are already decided before you see the pull request, and four are yours;
 one gate is split down the middle, and both halves are named. A gate belonging to
 neither would be the worst outcome — the contract would make it look enforced while
 nothing enforced it — so each is named here.
@@ -101,25 +101,36 @@ nothing enforced it — so each is named here.
 | Policy paths mixed with product paths | `scripts/policy_guard.py`, required |
 | Credentials, tokens, and local machine paths | `scripts/policy_guard.py`, required |
 | Every changed path is named in the handoff | `scripts/scope_guard.py`, required |
+| Label axes on the Issue | `scripts/issue_label_guard.py`, required |
 | No linked Issue, or the Issue lacks a required section | you |
-| Label axes on the Issue | you |
 | The handoff record is incomplete | you |
 | The declared set is what the Issue's scope allows, and no more | you |
 | Tests deleted, disabled, or weakened | you |
 | An invariant test relaxed without a Decision record | you |
 
-**For the three a check decides: read the check, do not re-derive it.** `policy-guard`
+**For the four a check decides: read the check, do not re-derive it.** `policy-guard`
 runs on every pull request and its result is on the checks tab. Restating its finding
 costs a run and invites you to disagree with a control you cannot overrule. This does not
 excuse you from reading the diff — you read it for everything else in this section, and a
 guard that refused nothing is not a statement that there was nothing to find.
 
-**For the five that are yours, the reason no check decides them** — each is a property of
+**Why the label-axis gate moved, and how far.** It was yours until 2026-09-13, on the
+reasoning below: it could be checked, and no run had failed it. Issue #448 then reached
+review carrying `priority:high`, `type:bug` and no `area:*` label at all — claimed,
+implemented, and refused at PR #459 for one missing label, at the cost of an AUTHOR run,
+an ACCEPTOR run and a rework round. That is the observed failure this section asks for,
+and #462 moved the gate to `issue_label_guard.py`. It moved *only* the axis predicate:
+`status:*` is not counted toward any axis, the guard names the Issue and the axis but
+never applies the label, and a pull request that links no Issue passes it — that refusal
+is still yours, immediately below.
+
+**For the four that are yours, the reason no check decides them** — each is a property of
 the gate, not a gap someone has yet to fill:
 
-- *Issue completeness and label axes* could be checked, and no run has yet failed them.
-  A check here would encode a shape the Issue standard already states, and would have to
-  be revised in step with it. They remain yours until a run gets one wrong.
+- *Issue completeness* could be checked, and no run has yet failed it. A check here would
+  encode a shape the Issue standard already states, and would have to be revised in step
+  with it. It remains yours until a run gets one wrong — which is exactly what happened to
+  the label axes beside it, and why they no longer are.
 - *Handoff completeness* splits: whether every section is present is mechanical, whether
   the evidence honestly separates what was measured from what was assumed is the thing
   you exist to judge. Checking the first half alone would report a complete handoff for a
@@ -139,7 +150,7 @@ the gate, not a gap someone has yet to fill:
   record nearby, but reporting is not refusing, and a control that never refuses teaches
   its reader to scroll past it.
 
-If you find a defect in one of the five, say so in your verdict and open an Issue for the
+If you find a defect in one of the four, say so in your verdict and open an Issue for the
 check. An observed failure is what moves a gate; symmetry is not.
 
 ## 2a. Machine-generated pull requests are not yours
