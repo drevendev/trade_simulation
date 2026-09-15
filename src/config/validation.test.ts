@@ -16,9 +16,16 @@ import type {
   StateSeed,
   TransportLinkSeed,
 } from "./scenarioDefinition";
-import { assertNoBehavioralOverrides, validateScenarioContent, validateDefinitionPack } from "./validation";
+import {
+  assertNoBehavioralOverrides,
+  validateDefinitionPack,
+  validateLaborConfig,
+  validateProductionConfig,
+  validateScenarioContent,
+} from "./validation";
 import type { DefinitionPack, RecipeDefinition } from "./definitionPack";
 import { createDefaultSimulationConfig } from "./simulationConfig";
+import type { LaborConfig, ProductionConfig } from "./simulationConfig";
 
 /** A minimal, well-formed `ScenarioDefinition`-shaped object (required keys only). */
 function minimalScenario(): Record<string, unknown> {
@@ -1032,5 +1039,306 @@ describe("canonical market defaults (REQ-MARKET-002)", () => {
   it("targetInventoryCoverageTicks matches Handoff/03 section 4", () => {
     const config = createDefaultSimulationConfig();
     expect(config.markets.targetInventoryCoverageTicks).toBe(1.0);
+  });
+});
+
+describe("canonical production defaults (REQ-CONFIG-006)", () => {
+  /**
+   * Handoff/03 section 6 "Production defaults". Every entry section 6 states, under
+   * the section 37 spelling where the two documents differ (Decision A on Issue #527).
+   */
+  const SECTION_6_BASELINE: ReadonlyArray<readonly [keyof ProductionConfig, number]> = [
+    ["baseTargetUtilization", 0.7],
+    ["minTargetUtilization", 0.1],
+    ["maxTargetUtilization", 1.0],
+    ["targetSellThrough", 0.8],
+    ["marginResponse", 0.15],
+    ["sellThroughResponse", 0.2],
+    ["inventoryResponse", 0.25],
+    ["outputCoverageTicks", 0.75],
+    ["inputCoverageTicks", 1.0],
+    ["inputSafetyCoverageTicks", 0.5],
+    ["productionSignalAlpha", 0.25],
+    ["liquidityBufferShare", 0.1],
+    ["minOperatingCash", 0],
+    ["maxInputCriticality", 4.0],
+    ["mothballAfterReviews", 3],
+    ["reactivateAfterReviews", 2],
+    ["closeAfterReviews", 8],
+    ["minimumLifecycleScale", 1e-6],
+  ];
+
+  it.each(SECTION_6_BASELINE)("%s matches Handoff/03 section 6", (field, expected) => {
+    expect(createDefaultSimulationConfig().production[field]).toBe(expected);
+  });
+
+  it("accepts its own defaults", () => {
+    expect(() => validateProductionConfig(createDefaultSimulationConfig().production)).not.toThrow();
+  });
+
+  it("is deterministic across calls", () => {
+    expect(createDefaultSimulationConfig().production).toEqual(createDefaultSimulationConfig().production);
+  });
+
+  /**
+   * Section 6 states no value for these, so the run declares them and refuses to
+   * invent one. This test is the durable record of that gap: it fails the moment a
+   * later run silently fills one in without the researcher answering
+   * `docs/spec/OPEN_QUESTIONS.md`.
+   */
+  const UNVALUED_BY_SECTION_6: readonly (keyof ProductionConfig)[] = [
+    "investmentReviewCadenceTicks",
+    "investmentUtilizationThreshold",
+    "minimumInvestmentMargin",
+    "investmentPropensity",
+    "maxInvestmentShareOfExcessCash",
+    "maxCapitalGrowthPerReview",
+    "lifecycleReviewCadenceTicks",
+    "mothballMarginThreshold",
+    "mothballUtilizationThreshold",
+    "reactivateMarginThreshold",
+    "closingGraceReviews",
+  ];
+
+  it.each(UNVALUED_BY_SECTION_6)("%s is left undefaulted because section 6 states no value", (field) => {
+    expect(createDefaultSimulationConfig().production[field]).toBeUndefined();
+  });
+
+  it("declares every control section 37 names", () => {
+    const declared = new Set<string>([
+      ...Object.keys(createDefaultSimulationConfig().production),
+      ...UNVALUED_BY_SECTION_6,
+    ]);
+    // Section 37's list verbatim, less `laborEpsilon`-style tolerances that
+    // NumericConfig owns; the capital tolerance is `minimumLifecycleScale`.
+    const section37 = [
+      "baseTargetUtilization", "minTargetUtilization", "maxTargetUtilization", "marginResponse",
+      "sellThroughResponse", "inventoryResponse", "targetSellThrough", "outputCoverageTicks",
+      "inputCoverageTicks", "inputSafetyCoverageTicks", "productionSignalAlpha", "minOperatingCash",
+      "liquidityBufferShare", "maxInputCriticality", "investmentReviewCadenceTicks",
+      "investmentUtilizationThreshold", "minimumInvestmentMargin", "investmentPropensity",
+      "maxInvestmentShareOfExcessCash", "maxCapitalGrowthPerReview", "lifecycleReviewCadenceTicks",
+      "mothballMarginThreshold", "mothballUtilizationThreshold", "mothballAfterReviews",
+      "reactivateMarginThreshold", "reactivateAfterReviews", "closeAfterReviews",
+      "closingGraceReviews", "minimumLifecycleScale",
+    ];
+    expect(section37.filter((field) => !declared.has(field))).toEqual([]);
+  });
+});
+
+describe("validateProductionConfig (REQ-CONFIG-006)", () => {
+  it("rejects a non-finite value", () => {
+    expect(() => validateProductionConfig({ baseTargetUtilization: Number.NaN })).toThrow(
+      /baseTargetUtilization must be a finite number in \[0, 1\], got NaN/,
+    );
+    expect(() => validateProductionConfig({ outputCoverageTicks: Number.POSITIVE_INFINITY })).toThrow(
+      /outputCoverageTicks must be a non-negative finite number, got Infinity/,
+    );
+    expect(() => validateProductionConfig({ minimumInvestmentMargin: Number.NaN })).toThrow(
+      /minimumInvestmentMargin must be a finite number, got NaN/,
+    );
+  });
+
+  it("rejects a share outside [0, 1]", () => {
+    expect(() => validateProductionConfig({ liquidityBufferShare: 1.5 })).toThrow(
+      /liquidityBufferShare must be a finite number in \[0, 1\], got 1.5/,
+    );
+    expect(() => validateProductionConfig({ targetSellThrough: -0.1 })).toThrow(
+      /targetSellThrough must be a finite number in \[0, 1\]/,
+    );
+  });
+
+  it("rejects a negative coverage and a non-positive tolerance", () => {
+    expect(() => validateProductionConfig({ inputCoverageTicks: -1 })).toThrow(
+      /inputCoverageTicks must be a non-negative finite number, got -1/,
+    );
+    expect(() => validateProductionConfig({ minimumLifecycleScale: 0 })).toThrow(
+      /minimumLifecycleScale must be a positive finite number, got 0/,
+    );
+  });
+
+  it("rejects a negative or fractional cadence and review count", () => {
+    expect(() => validateProductionConfig({ investmentReviewCadenceTicks: -4 })).toThrow(
+      /investmentReviewCadenceTicks must be a positive integer, got -4/,
+    );
+    expect(() => validateProductionConfig({ lifecycleReviewCadenceTicks: 0 })).toThrow(
+      /lifecycleReviewCadenceTicks must be a positive integer, got 0/,
+    );
+    expect(() => validateProductionConfig({ mothballAfterReviews: 2.5 })).toThrow(
+      /mothballAfterReviews must be a positive integer, got 2.5/,
+    );
+    expect(() => validateProductionConfig({ closingGraceReviews: -1 })).toThrow(
+      /closingGraceReviews must be a non-negative integer, got -1/,
+    );
+  });
+
+  it("accepts a zero closing grace but not a zero review count", () => {
+    expect(() => validateProductionConfig({ closingGraceReviews: 0 })).not.toThrow();
+    expect(() => validateProductionConfig({ closeAfterReviews: 0 })).toThrow(/positive integer/);
+  });
+
+  it("rejects an inverted utilization bound pair", () => {
+    expect(() => validateProductionConfig({ minTargetUtilization: 0.9, maxTargetUtilization: 0.2 })).toThrow(
+      /minTargetUtilization \(0.9\) must not exceed maxTargetUtilization \(0.2\)/,
+    );
+  });
+
+  it("rejects a mothball margin above the reactivate margin", () => {
+    expect(() => validateProductionConfig({ mothballMarginThreshold: 0.2, reactivateMarginThreshold: 0.05 })).toThrow(
+      /mothballMarginThreshold \(0.2\) must not exceed reactivateMarginThreshold \(0.05\)/,
+    );
+  });
+
+  it("accepts a negative margin threshold, whose sign the spec leaves open", () => {
+    expect(() => validateProductionConfig({ mothballMarginThreshold: -0.05, reactivateMarginThreshold: 0 })).not.toThrow();
+  });
+
+  it("accepts an empty config, because every control is optional", () => {
+    expect(() => validateProductionConfig({})).not.toThrow();
+  });
+});
+
+describe("canonical labor defaults (REQ-CONFIG-006)", () => {
+  /** Handoff/03 section 7 "Labor defaults". */
+  const SECTION_7_BASELINE: ReadonlyArray<readonly [keyof LaborConfig, number]> = [
+    ["baselineParticipationRate", 0.7],
+    ["laborWageAttractivenessElasticity", 0.5],
+    ["minWageWeight", 0.5],
+    ["maxWageWeight", 2.0],
+    ["wageAdjustmentSpeed", 0.1],
+    ["startingReferenceWage", 10],
+    ["unemploymentWagePressure", 0.4],
+    ["vacancyWagePressure", 0.4],
+    ["minimumWorkingHealthFactor", 0.5],
+    ["maximumWorkingHealthFactor", 1.05],
+  ];
+
+  it.each(SECTION_7_BASELINE)("%s matches Handoff/03 section 7", (field, expected) => {
+    expect(createDefaultSimulationConfig().labor[field]).toBe(expected);
+  });
+
+  it("allows exactly the one core baseline labor category", () => {
+    expect(createDefaultSimulationConfig().labor.allowedLaborCategories).toEqual(["GENERAL"]);
+  });
+
+  it("accepts its own defaults", () => {
+    expect(() => validateLaborConfig(createDefaultSimulationConfig().labor)).not.toThrow();
+  });
+
+  it("is deterministic across calls", () => {
+    expect(createDefaultSimulationConfig().labor).toEqual(createDefaultSimulationConfig().labor);
+  });
+
+  it.each(["maxLogWageStep", "unitVacancyResponse", "maxTightnessSignal"] as const)(
+    "%s is left undefaulted because section 7 states no value",
+    (field) => {
+      expect(createDefaultSimulationConfig().labor[field]).toBeUndefined();
+    },
+  );
+
+  /**
+   * Decision on Issue #527: labor is measured in worker-equivalents, a quantity, and
+   * `NumericConfig.quantityEpsilon` already owns that tolerance. Declaring a
+   * `laborEpsilon` here would create a second owner for one value.
+   */
+  it("does not restate an epsilon NumericConfig owns", () => {
+    const config = createDefaultSimulationConfig();
+    expect(config.labor).not.toHaveProperty("laborEpsilon");
+    expect(config.numeric.quantityEpsilon).toBe(1e-9);
+  });
+});
+
+describe("validateLaborConfig (REQ-CONFIG-006)", () => {
+  it("rejects a non-finite value", () => {
+    expect(() => validateLaborConfig({ baselineParticipationRate: Number.NaN })).toThrow(
+      /baselineParticipationRate must be a finite number in \[0, 1\], got NaN/,
+    );
+    expect(() => validateLaborConfig({ maxLogWageStep: Number.POSITIVE_INFINITY })).toThrow(
+      /maxLogWageStep must be a positive finite number, got Infinity/,
+    );
+  });
+
+  it("rejects a participation rate outside [0, 1]", () => {
+    expect(() => validateLaborConfig({ baselineParticipationRate: 1.2 })).toThrow(
+      /baselineParticipationRate must be a finite number in \[0, 1\], got 1.2/,
+    );
+  });
+
+  it("rejects a non-positive wage weight and reference wage", () => {
+    expect(() => validateLaborConfig({ minWageWeight: 0 })).toThrow(
+      /minWageWeight must be a positive finite number, got 0/,
+    );
+    expect(() => validateLaborConfig({ startingReferenceWage: -10 })).toThrow(
+      /startingReferenceWage must be a positive finite number, got -10/,
+    );
+  });
+
+  it("rejects a negative elasticity and wage pressure", () => {
+    expect(() => validateLaborConfig({ laborWageAttractivenessElasticity: -0.5 })).toThrow(
+      /laborWageAttractivenessElasticity must be a non-negative finite number, got -0.5/,
+    );
+    expect(() => validateLaborConfig({ vacancyWagePressure: -1 })).toThrow(
+      /vacancyWagePressure must be a non-negative finite number, got -1/,
+    );
+  });
+
+  it("rejects an inverted wage-weight bound pair", () => {
+    expect(() => validateLaborConfig({ minWageWeight: 3, maxWageWeight: 1 })).toThrow(
+      /minWageWeight \(3\) must not exceed maxWageWeight \(1\)/,
+    );
+  });
+
+  it("rejects an inverted working-health bound pair", () => {
+    expect(() => validateLaborConfig({ minimumWorkingHealthFactor: 1.2, maximumWorkingHealthFactor: 0.9 })).toThrow(
+      /minimumWorkingHealthFactor \(1.2\) must not exceed maximumWorkingHealthFactor \(0.9\)/,
+    );
+  });
+
+  it("rejects more labor categories than v1 allows", () => {
+    expect(() => validateLaborConfig({ allowedLaborCategories: ["GENERAL", "A", "B", "C"] })).toThrow(
+      /must declare at most 3 categories in v1, got 4/,
+    );
+  });
+
+  it("rejects an empty, duplicated or unnamed labor category list", () => {
+    expect(() => validateLaborConfig({ allowedLaborCategories: [] })).toThrow(/at least one category/);
+    expect(() => validateLaborConfig({ allowedLaborCategories: ["GENERAL", "GENERAL"] })).toThrow(
+      /declares "GENERAL" more than once/,
+    );
+    expect(() => validateLaborConfig({ allowedLaborCategories: [""] })).toThrow(/non-empty category names/);
+  });
+
+  it("accepts an empty config, because every control is optional", () => {
+    expect(() => validateLaborConfig({})).not.toThrow();
+  });
+});
+
+describe("production and labor config ownership (REQ-CONFIG-006)", () => {
+  /**
+   * Section 37: "MarketConfig owns prices/clearing. Do not duplicate those values in
+   * ProductionConfig." The same rule protects NumericConfig, whose tolerances
+   * HANDOFF-REPAIR-010 explicitly left under `SimulationConfig.numeric`.
+   */
+  it("duplicates no MarketConfig or NumericConfig key", () => {
+    const config = createDefaultSimulationConfig();
+    const owned = new Set([...Object.keys(config.markets), ...Object.keys(config.numeric)]);
+    const added = [...Object.keys(config.production), ...Object.keys(config.labor)];
+    expect(added.filter((key) => owned.has(key))).toEqual([]);
+  });
+
+  it("still refuses a scenario carrying production or labor", () => {
+    expect(() => assertNoBehavioralOverrides({ ...minimalScenario(), production: { marginResponse: 0.9 } })).toThrow(
+      /SimulationConfig-owned behavioral key "production"/,
+    );
+    expect(() => assertNoBehavioralOverrides({ ...minimalScenario(), labor: { minWageWeight: 0.1 } })).toThrow(
+      /SimulationConfig-owned behavioral key "labor"/,
+    );
+  });
+
+  it("leaves every sibling placeholder empty", () => {
+    const config = createDefaultSimulationConfig();
+    for (const key of ["population", "trade", "clans", "fiscal", "monetary", "expansion", "events", "performance"] as const) {
+      expect(config[key]).toEqual({});
+    }
   });
 });
