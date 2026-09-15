@@ -26,6 +26,18 @@ export type DefinitionRegistry = Pick<
  * reader of the same conversion resolve it here, so the emitting and reconciling
  * sides cannot drift apart. An empty result means the recipe declares no investment
  * good: its capital embodies no tradable good.
+ *
+ * The filter below is defence-in-depth, not the rule. `validateDefinitionPack()`
+ * (`REQ-CONFIG-005`, `../config/validation.ts`) is authoritative and rejects a
+ * non-finite, zero, negative or unknown-good coefficient before `buildInitialWorld()`
+ * runs, so on the genesis path the filter can no longer discard anything. It is kept
+ * because this resolver is also reachable from a registry assembled without that
+ * validation, and because both the emitting and the reconciling side call it: loosening
+ * it on one side only would let them disagree. It is deliberately not an assertion —
+ * raising here would move the diagnostic away from the validator that can name the
+ * offending pack, and would change the behavior of callers that never validated.
+ * Anything it drops is a configuration defect that validation should have caught
+ * (Issue #465).
  */
 export function resolveCapitalGoodsPerCapitalUnit(
   definitions: DefinitionRegistry,

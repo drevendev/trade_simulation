@@ -124,11 +124,15 @@ export function validateScenarioContent(scenario: ScenarioDefinition): void {
  * - extractedResourcePerBatch (if present) must be positive
  * - baseThroughputFactor must be positive
  * - depreciationRatePerTick must be in [0,1)
+ * - every declared investmentGoodsPerCapitalUnit coefficient must be strictly
+ *   positive and keyed by a good the pack declares (REQ-CONFIG-005, Issue #465)
  *
  * Produces useful diagnostics identifying the recipe, field, value and reason for
  * every validation failure. Does not silently coerce or substitute defaults.
  */
 export function validateDefinitionPack(definitionPack: DefinitionPack): void {
+  const declaredGoodKeys = new Set(Object.keys(definitionPack.goods ?? {}));
+
   Object.entries(definitionPack.recipes ?? {}).forEach(([recipeId, recipe]) => {
     // outputPerBatch: positive (> 0)
     if (!isFiniteCanonicalNumber(recipe.outputPerBatch) || recipe.outputPerBatch <= 0) {
@@ -215,6 +219,27 @@ export function validateDefinitionPack(definitionPack: DefinitionPack): void {
       throw new Error(
         `RecipeDefinition "${recipeId}": depreciationRatePerTick must be a finite number in [0,1), got ${describeValue(recipe.depreciationRatePerTick)}`,
       );
+    }
+
+    // investmentGoodsPerCapitalUnit: every key a declared good, every coefficient
+    // strictly positive. An empty map is a real "no investment good" declaration and
+    // stays valid; without this check an invalid entry is instead dropped downstream by
+    // resolveCapitalGoodsPerCapitalUnit() and becomes indistinguishable from that
+    // declaration on both the emitting and the reconciling side (Issue #465).
+    if (recipe.investmentGoodsPerCapitalUnit) {
+      Object.entries(recipe.investmentGoodsPerCapitalUnit).forEach(([goodKey, coefficient]) => {
+        if (!declaredGoodKeys.has(goodKey)) {
+          throw new Error(
+            `RecipeDefinition "${recipeId}": investmentGoodsPerCapitalUnit["${goodKey}"] references a Good the DefinitionPack does not declare`,
+          );
+        }
+
+        if (!isFiniteCanonicalNumber(coefficient) || coefficient <= 0) {
+          throw new Error(
+            `RecipeDefinition "${recipeId}": investmentGoodsPerCapitalUnit["${goodKey}"] must be a strictly positive finite number, got ${describeValue(coefficient)}`,
+          );
+        }
+      });
     }
   });
 }

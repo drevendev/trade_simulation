@@ -844,6 +844,65 @@ describe("validateDefinitionPack", () => {
     const pack = minimalPack({});
     expect(() => validateDefinitionPack(pack)).not.toThrow();
   });
+
+  // REQ-CONFIG-005, Issue #465: an invalid investmentGoodsPerCapitalUnit coefficient used
+  // to survive validation and be dropped downstream by resolveCapitalGoodsPerCapitalUnit(),
+  // where it became indistinguishable from a recipe declaring no investment good.
+  describe("investmentGoodsPerCapitalUnit (REQ-CONFIG-005)", () => {
+    function goodDefinition(id: string): GoodDefinition {
+      return {
+        id: id as unknown as GoodId,
+        name: id,
+        unitLabel: "unit",
+        spoilageRatePerTick: 0,
+        consumerNeedCategory: null,
+        referencePrice: 1,
+        tradable: true,
+      };
+    }
+
+    /** A pack declaring `good:tools`, so an investment coefficient can name a real good. */
+    function packWithTools(investment: Record<string, number>): DefinitionPack {
+      return {
+        ...minimalPack({
+          "recipe-1": minimalRecipe({
+            investmentGoodsPerCapitalUnit: investment as unknown as Record<GoodId, number>,
+          }),
+        }),
+        goods: { "good:tools": goodDefinition("good:tools") } as unknown as Record<GoodId, GoodDefinition>,
+      };
+    }
+
+    it.each([
+      ["NaN", Number.NaN],
+      ["+Infinity", Number.POSITIVE_INFINITY],
+      ["-Infinity", Number.NEGATIVE_INFINITY],
+      ["zero", 0],
+      ["negative", -5],
+    ])("rejects a %s coefficient, naming the recipe and the good", (_label, coefficient) => {
+      const pack = packWithTools({ "good:tools": coefficient });
+      expect(() => validateDefinitionPack(pack)).toThrow(
+        /RecipeDefinition "recipe-1": investmentGoodsPerCapitalUnit\["good:tools"\].*strictly positive/,
+      );
+    });
+
+    it("rejects a coefficient keyed by a good the pack does not declare", () => {
+      const pack = packWithTools({ "good:unobtainium": 100 });
+      expect(() => validateDefinitionPack(pack)).toThrow(
+        /RecipeDefinition "recipe-1": investmentGoodsPerCapitalUnit\["good:unobtainium"\] references a Good the DefinitionPack does not declare/,
+      );
+    });
+
+    it("accepts a strictly positive coefficient keyed by a declared good", () => {
+      const pack = packWithTools({ "good:tools": 100 });
+      expect(() => validateDefinitionPack(pack)).not.toThrow();
+    });
+
+    it("accepts an empty map — a real 'no investment good' declaration", () => {
+      const pack = packWithTools({});
+      expect(() => validateDefinitionPack(pack)).not.toThrow();
+    });
+  });
 });
 
 describe("canonical market defaults (REQ-MARKET-002)", () => {

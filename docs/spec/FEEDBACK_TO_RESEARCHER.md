@@ -319,3 +319,67 @@ from *the ACCEPTOR* is read:
   and #193 closed at the bound with two of their refusals yours.
 
 Nothing about the specification, the registry or the channel files changes with this.
+
+## 2026-09-15 — REQ-CONFIG-005 — `investmentGoodsPerCapitalUnit` has no stated bound, and its one prose annotation is unmeasurable
+
+Two related gaps in the same field, found while implementing the fail-fast invariant
+(`REQ-CONFIG-005`, *"Invalid references, non-finite values and out-of-range configuration
+fail fast with useful diagnostics; do not silently coerce"*) for Issue #465.
+
+### Part 1 — no per-coefficient bound is stated anywhere
+
+Observed: `06 - Handoff/05 — PRODUCTION_CAPITAL_LABOR_CONTRACTS.md:62-78` annotates every
+sibling numeric field of `RecipeDefinition` with an explicit bound, and annotates this one
+with prose only:
+
+```text
+  outputPerBatch: number;                  // > 0
+  inputsPerBatch: Record<GoodId, number>;  // each > 0
+  laborPerBatch: number;                   // >= 0
+  batchesPerCapitalUnit: number;           // > 0
+  investmentGoodsPerCapitalUnit: Record<GoodId, number>; // at least one good for capital-forming recipes
+  minimumStartupCapital: number;           // >= 0
+```
+
+`06 - Handoff/03 — CANONICAL_CONFIG_AND_WORLD_GENERATION.md:490` (section 16A) enumerates
+recipe validation field by field and defers to that contract — *"Validation is unchanged
+from the production contract"* — and `investmentGoodsPerCapitalUnit`, declared in section
+16A's own interface at `:481`, is absent from the enumeration. Section 21's fail-fast list
+(`:598-608`) does not name the field either; only its general entries reach it.
+
+Problem: the strictly-positive rule is therefore an inference, not a quoted rule, and
+`AGENTS.md` requires an implementation to mark an assumption as such rather than present it
+as the specification. The inference is strong — `05 …:463` computes
+`possibleCapitalFromGoods = min over required investment goods g of investmentInventory[g] /
+recipe.investmentGoodsPerCapitalUnit[g]`, so a zero coefficient is a divide-by-zero and a
+negative one makes the minimum meaningless. That is the same argument `HANDOFF-REPAIR-015`
+used to fix `inputsPerBatch` (*"a meaningless named input and later act as a
+divide-by-zero/non-binding production constraint"*); that repair was never carried across to
+this field.
+
+Proposal: state the bound explicitly in both places — `// each > 0` at `05 …:70`, and the
+field added to section 16A's enumeration at `03 …:490`.
+
+Impact: not blocking. Issue #465 implements the strictly-positive reading, which rejects
+only values `resolveCapitalGoodsPerCapitalUnit()` already discarded silently, so no pack
+that is valid today changes outcome. Until the bound is stated, the implemented rule is an
+assumption that a later spec revision could contradict.
+
+### Part 2 — "at least one good for capital-forming recipes" is unmeasurable as written
+
+Observed: the prose annotation quoted above is the field's only stated constraint.
+
+Problem: *"capital-forming recipe"* is not defined in either owning document, so the
+predicate that would select which recipes the constraint applies to does not exist. It is
+also in direct tension with the baseline pack the specification itself requires: the M1
+baseline declares `investmentGoodsPerCapitalUnit: {}` for `recipe:food-harvest`
+(`src/config/fixtures/baselineDefinitionPack.ts:121`), and that empty map must stay valid.
+
+Proposal: say whether an empty map is unconditionally valid — the reading implemented for
+Issue #465, which leaves the baseline accepted — or, if some recipes genuinely must declare
+an investment good, define the predicate that identifies them in terms of fields
+`RecipeDefinition` already carries.
+
+Impact: not blocking. The implemented reading accepts an empty map unconditionally and
+validates only declared entries (finite, strictly positive, keyed by a declared good). If
+the intended rule is the stricter one, the missing check is a follow-up, not a regression.
