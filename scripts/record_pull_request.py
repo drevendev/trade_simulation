@@ -370,7 +370,13 @@ def main(argv=None) -> int:
     if args.pull:
         pulls = [read_pull(args.repo, args.pull)]
     else:
-        pulls = closed_since(_flatten(read_closed(args.repo)), args.closed_since)
+        # The list endpoint says which pull requests closed and when; it does not carry
+        # the diff size (`additions`, `deletions`, `changed_files`, `commits`), which only
+        # the single-pull-request endpoint returns. So the list is the selection and every
+        # chosen pull request is read again in full, or a backfill records every size as
+        # unknown — which the first backfill did.
+        chosen = closed_since(_flatten(read_closed(args.repo)), args.closed_since)
+        pulls = [read_pull(args.repo, pull["number"]) for pull in chosen]
     for pull in pulls:
         number = pull["number"]
         if not pull.get("closed_at"):
