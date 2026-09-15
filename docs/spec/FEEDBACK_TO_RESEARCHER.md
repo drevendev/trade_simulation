@@ -383,3 +383,41 @@ an investment good, define the predicate that identifies them in terms of fields
 Impact: not blocking. The implemented reading accepts an empty map unconditionally and
 validates only declared entries (finite, strictly positive, keyed by a declared good). If
 the intended rule is the stricter one, the missing check is a follow-up, not a regression.
+
+## 2026-09-15 — REQ-CONFIG-005 — "eligible regions" is undefined, and the baseline rules out the narrow reading
+
+Observed: Handoff/03 section 21, line 614, fails configuration validation on
+
+> recipe extraction referring to a resource absent from all eligible regions when the
+> baseline expects that recipe to operate;
+
+Problem: *"eligible regions"* appears exactly once in that document and is defined nowhere
+in it. Two readings are available, and they disagree:
+
+1. every Region in the scenario;
+2. only the Regions hosting a ProductionUnit on that recipe.
+
+Reading 2 rejects the baseline the specification itself requires. `recipe:iron-mine`
+extracts `resource:iron-ore` and the baseline scenario starts ACTIVE units on it in five
+Regions, but only three of those Regions deposit `resource:iron-ore`; `region:b6-mineral`
+and `region:d3-mountain` deposit `resource:copper-ore` instead
+(`src/config/fixtures/baselineScenario.ts`). So under reading 2, `baseline-multistate-v1`
+fails its own step-1 validation.
+
+*"expects that recipe to operate"* is likewise not defined against a field. The baseline
+marks every tenth unit `MOTHBALLED` and the rest `ACTIVE`, which makes `status === "ACTIVE"`
+the obvious predicate, but the document does not say so.
+
+Proposal: define "eligible regions" in section 21 against fields the schema already carries.
+If the intent is the scenario-wide reading, saying "absent from every Region in the scenario"
+removes the term entirely. If some narrower set is meant, state the predicate that selects
+it — and then reconcile it with the baseline above, since the narrow reading currently
+invalidates the shipped fixture. Naming the ProductionUnitSeed status values that count as
+"expects to operate" would resolve the second term at the same time.
+
+Impact: not blocking. Issue #514 implements the strictly weaker rule — reject only when the
+resource is absent from *every* Region while some unit on that recipe starts `ACTIVE`.
+Because the eligible set is a subset of all Regions under either reading, this can only
+reject worlds that both readings reject, so it cannot over-tighten. If reading 2 is intended
+*and* the baseline fixture is meant to change, the extra rejections are a follow-up, not a
+regression.
