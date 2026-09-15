@@ -178,7 +178,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertGreater(sweep, fan_out, "statuses must be written before branches are updated")
         step = text[text.rfind("- name:", 0, sweep):sweep]
         self.assertIn("refs/heads/master", step)
-        self.assertIn("github.event_name != 'pull_request'", step)
+        # A pull request event's `github.ref` is `master` too, so the ref alone is no guard.
+        self.assertIn("github.event_name != 'pull_request_target'", step)
 
     def test_the_sweep_acts_as_the_machine_identity_so_the_push_triggers_checks(self):
         text = self.text()
