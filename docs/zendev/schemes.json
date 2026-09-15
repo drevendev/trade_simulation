@@ -148,8 +148,8 @@
     },
     {
       "id": "scheme/8",
-      "in_force_from": null,
-      "commit": null,
+      "in_force_from": "2026-09-15T21:21:42Z",
+      "commit": "d533e76",
       "summary": "No model runs at all. The researcher (EndlessZen) writes the code as drevendev, SLOPSTER reviews as andy-zen-dev and owns the verdict, and the operator merges. The dispatcher, reading this descriptor, starts neither zendev-author.yml nor zendev-acceptor.yml; the forge keeps everything that costs no tokens: the four required checks, the mergeability status and the branch sweep, the specification mirror, and both ledgers.",
       "roles": {
         "author": {"identity": "drevendev (EndlessZen)", "model": null},
