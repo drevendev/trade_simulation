@@ -1,7 +1,8 @@
 """Recover missed ZenDev dispatches; dry-run unless --dispatch is explicit.
 
 Only the repository this runs in, its master branch and three existing workflows are
-allowed. No model runs here. A successful dispatch is not a successful unit of product
+allowed. No model runs here. A model role the active scheme declares without a model
+is never dispatched: the descriptor is the switch. A successful dispatch is not a successful unit of product
 work. A run that GitHub lists as queued but never starts is abandoned after
 STALE_QUEUE, so a role frozen by the forge thaws on its own instead of waiting for
 an operator.
@@ -17,6 +18,8 @@ from pathlib import Path
 import subprocess
 from urllib.parse import urlencode
 
+import schemes
+
 # The repository this dispatcher acts on. Inside Actions it is the one the workflow
 # runs in, read from the environment, so renaming the repository changes nothing here.
 # A literal once did the opposite: on 2026-09-05 a rename in case only turned every
@@ -30,6 +33,8 @@ BRANCH = "master"
 # model and stays outside that rotation, dispatched every pass like before.
 MODEL_TARGETS = ("zendev-author.yml", "zendev-acceptor.yml")
 TARGETS = ("spec-sync.yml",) + MODEL_TARGETS
+# The role each model target runs, as the scheme descriptor names it.
+ROLE_OF = {"zendev-author.yml": "author", "zendev-acceptor.yml": "acceptor"}
 ACTIVE_STATUSES = ("queued", "in_progress", "waiting", "pending", "requested")
 # A run listed as queued, pending or requested that has not started after this long
 # is not going to. No job on this repository legitimately waits an hour for a
@@ -225,6 +230,43 @@ def select_model_target(candidates: list[str]) -> str:
     )
 
 
+def active_scheme():
+    """The active descriptor in docs/zendev/schemes.json, or None when it cannot be read."""
+    try:
+        return schemes.active(schemes.load())
+    except (OSError, ValueError):
+        return None
+
+
+def model_targets_off(scheme) -> dict[str, str]:
+    """The model targets the active scheme does not run, each with its reason. Pure.
+
+    A scheme names the model each role runs. A role declared without one — the AUTHOR
+    under scheme/7, where the researcher writes the code as a person would — has no run
+    to dispatch, and dispatching it anyway would start a paid run to discover that. So
+    the descriptor is the switch, not a repository variable: it is reviewed, tagged, and
+    carried by every telemetry record, so a window sliced by scheme also says which
+    roles were running in it.
+
+    Fails closed. A descriptor that cannot be read switches every model target off and
+    says so in the report. A frozen loop shows in the next pass; a role resurrected by a
+    malformed file is a day of spend nobody asked for.
+    """
+    if not scheme:
+        reason = "the active scheme could not be read; no model role runs until it can"
+        return {target: reason for target in MODEL_TARGETS}
+    roles = scheme.get("roles") or {}
+    off = {}
+    for target in MODEL_TARGETS:
+        role = ROLE_OF[target]
+        declared = roles.get(role)
+        if not isinstance(declared, dict):
+            off[target] = f"{scheme.get('id')} names no {role} role"
+        elif not declared.get("model"):
+            off[target] = f"{scheme.get('id')} runs no model for the {role}"
+    return off
+
+
 def resolve_interval() -> timedelta:
     """Read the operator cadence, falling back to the default on anything unusable.
 
@@ -289,8 +331,16 @@ def run(*, dispatch: bool = False, now: datetime | None = None,
     if not is_enabled():
         return [{"decision": "disabled", "reason": "ZENDEV_ENABLED is not true"}]
     when = now or datetime.now(timezone.utc)
+    off = model_targets_off(active_scheme())
     # Only a recovery pass may abandon a stale run; diagnostics never touch the forge.
-    results = {target: inspect_target(target, when, interval, recover=dispatch) for target in TARGETS}
+    # A target the scheme switched off is reported and never inspected: there is
+    # nothing to recover for a role that does not run.
+    results = {}
+    for target in TARGETS:
+        if target in off:
+            results[target] = {"workflow": target, "decision": "off", "reason": off[target]}
+        else:
+            results[target] = inspect_target(target, when, interval, recover=dispatch)
 
     if dispatch:
         # At most one model target dispatches per pass. When both are simultaneously

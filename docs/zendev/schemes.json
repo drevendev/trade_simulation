@@ -13,7 +13,7 @@
     "descriptor in the tag message, and every telemetry record carries {id, digest} so",
     "a measurement window can be sliced by scheme without knowing any dates."
   ],
-  "active": "scheme/6",
+  "active": "scheme/7",
   "schemes": [
     {
       "id": "scheme/1",
@@ -125,6 +125,26 @@
       "rework_limit": 3,
       "cadence_minutes": 25,
       "note": "The same question as scheme/5, one tier up: does the strongest model need so much less rework that a landed requirement costs less than the 2.5x per-token price would say? What scheme/5 measured, in its 20 live hours (2026-09-10 17:41Z to 09-11 13:40Z, after which every AUTHOR run failed on its first turn and the loop stood still until 09-14): $97.86 per day extrapolated against $27.47 on Haiku, author mean $1.336 and max $4.31, acceptor mean $0.362 and max $1.12, 18 author pull requests merged against 12, 0.44 refusals per merged pull request against 1.0, 11 of 18 accepted on the first verdict against 3 of 12, and $4.53 per merged pull request against $2.29, exactly 2.0x. Forecast at equal volume about $245 per day. Ceilings scaled 2.5x on purpose this time: the costliest Sonnet run reached 86% of its $5.00 ceiling, and a run cut by the ceiling is money spent on nothing. Effort is the CLI's default; no effort flag is passed. Activated by the four role variables (ZENDEV_{AUTHOR,ACCEPTOR}_{MODEL,BUDGET_USD}) after this descriptor is active and the tag is cut, so `in_force_from` and `commit` are filled after activation, which does not change the digest. The queue at activation: the M3 tail (REQ-MARKET-005 and REQ-VISUALIZATION-007 PARTIAL, REQ-VISUALIZATION-006 blocked) plus ten ready bug Issues from the specification owner filed while the loop stood still, with M4's fifteen rows waiting on the M3 gate. Decided 2026-09-14 as the last model experiment for now."
+    },
+    {
+      "id": "scheme/7",
+      "in_force_from": null,
+      "commit": null,
+      "summary": "The AUTHOR role runs no model: the researcher (EndlessZen) writes the code under the drevendev account, and the dispatcher, reading this descriptor, never starts zendev-author.yml. The ACCEPTOR stays exactly as in scheme/6, Opus 5 with a $7.50 ceiling, so every pull request is judged by the same judge as the autonomous days it is compared with.",
+      "roles": {
+        "author": {"identity": "drevendev (EndlessZen)", "model": null},
+        "acceptor": {"identity": "zendev-acceptor[bot]", "model": "claude-opus-5", "max_budget_usd": 7.5},
+        "machine": {"identity": "zendev-machine[bot]", "model": null}
+      },
+      "verdict_owner": "zendev-acceptor",
+      "voices": [
+        "EndlessZen as drevendev, owns the specification and, under this scheme, writes the code",
+        "SLOPSTER as andy-zen-dev, read-only: comments and Issues, never a formal review"
+      ],
+      "required_checks": ["build-and-test", "typescript", "policy-guard", "mergeability"],
+      "rework_limit": 3,
+      "cadence_minutes": 25,
+      "note": "The question: how fast and how well does a person driving the researcher land requirements against the same gates and the same judge, and at what token cost: nothing for the author, the ACCEPTOR's per review. The autonomous days to compare with, per merged pull request: refusals 1.0 on Haiku (scheme/4), 0.44 on Sonnet (scheme/5), 0.19 on Opus (scheme/6); accepted on the first verdict 3 of 12, 11 of 18, 22 of 27; merged per day 12, 18 (in 20 live hours), 27; cost $2.29, $4.53, $8.87; the loop's own daily cost $27.47, $97.86, $239.37. From here the pull-request ledger (pulls/ in zen-telemetry, written at close by pr-ledger.yml) carries the same measures for every author, and the ACCEPTOR's runs are recorded as before. The author's branches are not claude/**, so the forge neither updates nor deletes them; docs/zendev/ENDLESSZEN_AUTHOR.md is the contract an outside author works to. The scheme takes effect when the dispatcher first reads it, which is the merge of the pull request that activates it; in_force_from and commit are filled after the tag, which does not change the digest. Decided 2026-09-15."
     }
   ]
 }
