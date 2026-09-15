@@ -40,9 +40,11 @@ After the main market clearing completes (Phase 8), the market observes two key 
 
 - **Surplus Rate**: What fraction of seller supply was left unsold? If every seller sold everything they offered, this is 0%. If half the goods sellers offered went unsold, this is 50%.
 
-These observed rates are **Phase-8 MAIN observations, computed after the tick's Phase-6 repricing**. They do not cause the current tick's price move; that price change was already determined in Phase 6 based on current effective demand, sellable supply, and inventory coverage. The observed shortage/surplus rates inform future price adjustments through market expectations.
+These observed rates are **Phase-8 MAIN observations, computed after the tick's Phase-6 repricing**. They do not cause the current tick's price move; that price change was already determined in Phase 6 based on current effective demand, sellable supply, and inventory coverage.
 
-The market does not invent these numbers; they are computed directly from actual supply and demand each tick. They are **read-only telemetry** of what happened, not state that influences the current tick's clearing or pricing.
+They do not cause later price moves either. Each observation is also folded into a persistent shortage EMA and surplus EMA, but those two EMAs are **diagnostics**: nothing reads them back. The only expectation the Phase-6 price formula consults is the expected-use EMA described below, and it consults it through inventory coverage.
+
+The market does not invent these numbers; they are computed directly from actual supply and demand each tick. They are **read-only telemetry** of what happened, and neither the rates nor the EMAs kept from them influence any tick's clearing or pricing.
 
 ## Why Deterministic Ordering Matters
 
@@ -60,9 +62,9 @@ Over time, the market learns approximate patterns through exponential moving ave
 
 - **Expected Use**: The market remembers roughly how much effective demand for this good there is each tick, tracked as an EMA. This is the sum of what all actors want to use, not the sum of what they actually get to use (which may be constrained by rationing). This distinction is intentional: when shortage occurs, the market still learns what buyers actually wanted, not just what they obtained.
 
-This expectation is **not** an inventory or financial asset. It is a weak memory of past patterns that helps inform price adjustments. It cannot be bought, sold, or consumed. A market with zero expected use still sets prices based on current supply and demand, and observed shortages/surpluses do not directly feed back into expectation tracking—only actual effective demand does.
+This expectation is **not** an inventory or financial asset. It is a weak memory of past patterns that helps inform price adjustments. It cannot be bought, sold, or consumed. A market with zero expected use still sets prices based on current supply and demand, and observed shortages and surpluses never feed the expected-use EMA—only actual effective demand does. They are tracked separately, as the diagnostics described above.
 
-In the first tick a good trades, the market uses current effective demand and sellable supply only. After the first observation, it switches to using the lagged expected-use EMA in the price formula, making price movements less erratic as patterns stabilize.
+The switch from current demand to remembered demand is keyed on the market's **observation count**, not on whether a trade happened. While that count is zero, Phase 6 uses current effective demand and sellable supply only. The count advances on the first **informative** Phase-8 MAIN observation: any MAIN pass in which effective demand or offered quantity exceeds the configured quantity epsilon. Clearing is not required, so a demand-only or supply-only tick that clears nothing still initializes the market's expectations, while a pass with neither demand nor offer carries no information and leaves them untouched. From the next tick's Phase 6 onward the market uses the lagged expected-use EMA in the price formula, making price movements less erratic as patterns stabilize.
 
 ## No Limits, No Order Books
 
