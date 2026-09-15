@@ -164,8 +164,102 @@ export interface LaborConfig {
   readonly maxTightnessSignal?: number;
 }
 
-/** Concrete fields land with the population requirement that owns them (section 8). */
-export interface PopulationConfig {}
+/**
+ * M4 household-demand, participation and welfare-signal controls (REQ-CONFIG-007).
+ *
+ * The field list is the M4 subset of section 33 "Configuration surface" of
+ * `06 - Handoff/06 — POPULATION_DEMOGRAPHY_CLANS_CONTRACTS.md`, spelled as the
+ * sections that state each control spell it. Section 8 of Handoff/03 is the
+ * baseline-value owner, as `HANDOFF-REPAIR-005`/`-010` establish for every other
+ * block — but it states its population baseline in a different vocabulary
+ * (`consumptionBudgetShare*`, `precautionaryCashFloorMonths`,
+ * `needSubstitutionElasticity`, `healthEmaAlpha`), so fifteen of the nineteen
+ * controls below have no reachable value and are declared undefaulted rather than
+ * guessed. See `docs/spec/OPEN_QUESTIONS.md`, Q-002.
+ *
+ * Deliberately absent, because another owner already holds the value:
+ *
+ * - `workerEpsilon` (section 9). Workers are measured in worker-equivalents, a
+ *   quantity, and `NumericConfig.quantityEpsilon` owns that tolerance —
+ *   `HANDOFF-REPAIR-010` states the precedent and #528 applied it to `laborEpsilon`.
+ * - The `P_raw` prosperity weights (section 10). Section 33 enumerates what
+ *   `PopulationConfig` must centralize and prosperity weights are not in it; they
+ *   are stated inline as coefficients summing to 1.0, and section 33's "Scenario
+ *   files may override values but may not introduce new bespoke formulas without
+ *   schema version change" is exactly what a scenario-tunable weight vector would
+ *   defeat. They belong to the requirement that owns the welfare formula.
+ * - `NeedCategoryDefinition` instances. Handoff/03 section 8: "Need quantities,
+ *   nutrition/health contribution, spoilage and substitute groups belong to
+ *   GoodDefinition/NeedDefinition, not global config." The shape lives with the
+ *   other per-definition registries in `./definitionPack.ts`.
+ *
+ * Demography, migration, mobility and every `ClanConfig` control are deferred by
+ * this requirement's own statement and are absent; `EXECUTION_ORDER.md` puts them
+ * in M6 and M8.
+ */
+export interface PopulationConfig {
+  /** Section 4: cash per person a cohort reserves before planning consumption. */
+  readonly minHouseholdCashPerCapita?: number;
+  /** Section 4: share of opening home cash a cohort reserves, whichever floor binds. */
+  readonly liquidityFloorShare?: number;
+
+  /**
+   * Section 8: participation before health, law and opportunity factors, keyed by
+   * cohort stratum. Its relationship to the single `LaborConfig`-owned
+   * `baselineParticipationRate` is unresolved — see Q-002.
+   */
+  readonly baseParticipationByStratum?: Readonly<Record<string, number>>;
+  /** Section 8: lower clamp on participation. Must not exceed `maxParticipation`. */
+  readonly minParticipation?: number;
+  /** Section 8: upper clamp on participation. */
+  readonly maxParticipation?: number;
+  /**
+   * Section 8: lower clamp on `healthParticipationFactor`, whose recommended range
+   * is `[0.75, 1.02]`. Distinct from `LaborConfig.minimumWorkingHealthFactor`,
+   * which bounds the Production `healthLaborProductivityFactor` (section 11).
+   */
+  readonly minHealthParticipationFactor?: number;
+  /** Section 8: upper clamp on `healthParticipationFactor`. */
+  readonly maxHealthParticipationFactor?: number;
+  /**
+   * Section 8: lower clamp on the EMA-based `weakOpportunityFactor`. Section 8
+   * offers `[0.9, 1.05]` as an example, not a value, so this is undefaulted.
+   */
+  readonly minWeakOpportunityFactor?: number;
+  /** Section 8: upper clamp on `weakOpportunityFactor`. */
+  readonly maxWeakOpportunityFactor?: number;
+
+  /**
+   * Section 9: smoothing factor of the log-space wage-signal update. Section 8 of
+   * Handoff/03 spells it `wageSignalAlpha`; the section 9 formula
+   * `wageSignal × exp(speed × ln(target/wageSignal))` *is* a geometric EMA with
+   * that smoothing factor, and neither section declares a second wage-signal
+   * smoothing control, so the mapping is forced rather than chosen.
+   */
+  readonly wageSignalAdjustmentSpeed?: number;
+  /** Section 9: upper clamp on one log step of the cohort wage signal. */
+  readonly maxWageSignalStep?: number;
+
+  /** Section 10: EMA alpha for `prosperityEma`. */
+  readonly prosperityAlpha?: number;
+  /** Section 10: EMA alpha for `essentialSatisfactionEma`. */
+  readonly essentialAlpha?: number;
+  /** Section 10: EMA alpha for `realIncomePerCapitaEma`. */
+  readonly incomeAlpha?: number;
+  /** Section 10: EMA alpha for `employmentRateEma`. */
+  readonly employmentAlpha?: number;
+  /** Section 10: scale of `saturatingNormalize` on real income per capita. */
+  readonly scenarioRealIncomeScale?: number;
+
+  /** Section 11: health gained per unit of essential satisfaction above threshold. */
+  readonly healthRecoveryRate?: number;
+  /** Section 11: essential satisfaction at which health neither rises nor falls. */
+  readonly healthMaintenanceThreshold?: number;
+  /** Section 11: health gained per unit of service coverage above baseline. */
+  readonly serviceHealthRate?: number;
+  /** Section 11: service coverage at which services neither help nor harm health. */
+  readonly serviceBaseline?: number;
+}
 
 /** Concrete fields land with the clans requirement that owns them (section 9). */
 export interface ClanConfig {}
@@ -282,7 +376,20 @@ export function createDefaultSimulationConfig(): SimulationConfig {
       maximumWorkingHealthFactor: 1.05,
       allowedLaborCategories: ["GENERAL"],
     },
-    population: {},
+    // Handoff/06 section 33's M4 subset. Section 8 of Handoff/03 states its
+    // population baseline in a different vocabulary, so only the four controls
+    // below have a value reachable from this requirement's slice; the other
+    // fifteen are declared and left undefaulted, not guessed. See
+    // `docs/spec/OPEN_QUESTIONS.md`, Q-002.
+    population: {
+      // Handoff/06 section 8, "Recommended healthParticipationFactor range [0.75,1.02]".
+      minHealthParticipationFactor: 0.75,
+      maxHealthParticipationFactor: 1.02,
+      // Handoff/03 section 8 `wageSignalAlpha`/`prosperityEmaAlpha` under the
+      // section 9/10 spelling.
+      wageSignalAdjustmentSpeed: 0.2,
+      prosperityAlpha: 0.15,
+    },
     clans: {},
     fiscal: {},
     monetary: {},

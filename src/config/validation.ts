@@ -14,9 +14,10 @@
  */
 import { isFiniteCanonicalNumber } from "../domain/numeric";
 import type { CohortSeed, MarketSeed, ProductionUnitSeed, RegionSeed, ScenarioDefinition, TransportLinkSeed } from "./scenarioDefinition";
-import type { DefinitionPack } from "./definitionPack";
+import type { DefinitionPack, NeedCategoryDefinition } from "./definitionPack";
+import { BASELINE_NEED_CATEGORY_IDS } from "./definitionPack";
 import { SIMULATION_CONFIG_BEHAVIORAL_KEYS } from "./simulationConfig";
-import type { LaborConfig, ProductionConfig } from "./simulationConfig";
+import type { LaborConfig, PopulationConfig, ProductionConfig } from "./simulationConfig";
 import { SCENARIO_DEFINITION_KEYS } from "./scenarioDefinition";
 
 const BEHAVIORAL_KEY_SET: ReadonlySet<string> = new Set(SIMULATION_CONFIG_BEHAVIORAL_KEYS);
@@ -130,11 +131,16 @@ export function validateScenarioContent(scenario: ScenarioDefinition): void {
  * - every declared investmentGoodsPerCapitalUnit coefficient must be strictly
  *   positive and keyed by a good the pack declares (REQ-CONFIG-005, Issue #465)
  *
+ * and, when the pack declares `needCategories` (REQ-CONFIG-007), the rules in
+ * `validateNeedCategories` below.
+ *
  * Produces useful diagnostics identifying the recipe, field, value and reason for
  * every validation failure. Does not silently coerce or substitute defaults.
  */
 export function validateDefinitionPack(definitionPack: DefinitionPack): void {
   const declaredGoodKeys = new Set(Object.keys(definitionPack.goods ?? {}));
+
+  validateNeedCategories(definitionPack.needCategories, declaredGoodKeys);
 
   Object.entries(definitionPack.recipes ?? {}).forEach(([recipeId, recipe]) => {
     // outputGoodId: a good the pack declares. Section 21 fails configuration validation
@@ -781,6 +787,209 @@ function validateAllowedLaborCategories(categories: readonly string[] | undefine
       throw new Error(`LaborConfig.allowedLaborCategories declares "${category}" more than once`);
     }
     seen.add(category);
+  }
+}
+
+/**
+ * Throws unless every `PopulationConfig` control present is finite and inside its
+ * declared range (REQ-CONFIG-007).
+ *
+ * The field list is the M4 subset of section 33 of
+ * `06 - Handoff/06 — POPULATION_DEMOGRAPHY_CLANS_CONTRACTS.md`. Ranges are
+ * structural, as in `validateProductionConfig`: a share or a coverage is a fraction
+ * in [0,1], an EMA alpha is a fraction in [0,1], a multiplicative clamp is
+ * non-negative, a normalization scale and a log-step bound are positive because
+ * zero divides or freezes.
+ *
+ * Every field is optional: section 8 of Handoff/03 states its population baseline in
+ * a different vocabulary, so fifteen of the nineteen controls have no reachable
+ * value and `createDefaultSimulationConfig` does not invent one. Presence is what
+ * gets checked.
+ *
+ * Produces useful diagnostics identifying the field, value and reason for every
+ * validation failure. Does not silently coerce or substitute defaults.
+ */
+export function validatePopulationConfig(population: PopulationConfig): void {
+  const unitInterval: readonly NumericControl<PopulationConfig>[] = [
+    "liquidityFloorShare",
+    "minParticipation",
+    "maxParticipation",
+    "wageSignalAdjustmentSpeed",
+    "prosperityAlpha",
+    "essentialAlpha",
+    "incomeAlpha",
+    "employmentAlpha",
+    "healthMaintenanceThreshold",
+    "serviceBaseline",
+  ];
+  for (const field of unitInterval) {
+    assertInClosedUnitInterval("PopulationConfig", field, population[field]);
+  }
+
+  const nonNegative: readonly NumericControl<PopulationConfig>[] = [
+    "minHouseholdCashPerCapita",
+    "minHealthParticipationFactor",
+    "maxHealthParticipationFactor",
+    "minWeakOpportunityFactor",
+    "maxWeakOpportunityFactor",
+    "healthRecoveryRate",
+    "serviceHealthRate",
+  ];
+  for (const field of nonNegative) {
+    assertNonNegative("PopulationConfig", field, population[field]);
+  }
+
+  // `scenarioRealIncomeScale` divides in saturatingNormalize; `maxWageSignalStep`
+  // at zero would pin the wage signal to its seed forever.
+  const positive: readonly NumericControl<PopulationConfig>[] = ["scenarioRealIncomeScale", "maxWageSignalStep"];
+  for (const field of positive) {
+    assertPositive("PopulationConfig", field, population[field]);
+  }
+
+  assertOrderedBounds("PopulationConfig", "minParticipation", population.minParticipation, "maxParticipation", population.maxParticipation);
+  assertOrderedBounds(
+    "PopulationConfig",
+    "minHealthParticipationFactor",
+    population.minHealthParticipationFactor,
+    "maxHealthParticipationFactor",
+    population.maxHealthParticipationFactor,
+  );
+  assertOrderedBounds(
+    "PopulationConfig",
+    "minWeakOpportunityFactor",
+    population.minWeakOpportunityFactor,
+    "maxWeakOpportunityFactor",
+    population.maxWeakOpportunityFactor,
+  );
+
+  validateBaseParticipationByStratum(population.baseParticipationByStratum);
+}
+
+function validateBaseParticipationByStratum(byStratum: Readonly<Record<string, number>> | undefined): void {
+  if (byStratum === undefined) {
+    return;
+  }
+
+  if (typeof byStratum !== "object" || byStratum === null || Array.isArray(byStratum)) {
+    throw new Error(
+      `PopulationConfig.baseParticipationByStratum must be a plain object keyed by stratum when present, got ${describeValue(byStratum)}`,
+    );
+  }
+
+  for (const [stratum, rate] of Object.entries(byStratum)) {
+    assertInClosedUnitInterval("PopulationConfig", `baseParticipationByStratum["${stratum}"]`, rate);
+  }
+}
+
+/**
+ * Throws unless the pack's need categories satisfy section 4 of
+ * `06 - Handoff/06 — POPULATION_DEMOGRAPHY_CLANS_CONTRACTS.md` (REQ-CONFIG-007):
+ *
+ * - the registry declares exactly the four baseline categories, no more and no
+ *   fewer — section 4: "must support exactly four baseline categories";
+ * - each entry's `id` equals the key it is filed under, so one category cannot be
+ *   reached under two names, and no `id` repeats across keys;
+ * - `perCapitaTarget`, `priceSensitivity` and `inventoryCarryoverTicks` are
+ *   non-negative and finite; a zero `priceSensitivity` (price-insensitive) and a
+ *   zero `inventoryCarryoverTicks` (fully perishable) are both meaningful;
+ * - `minimumBudgetShare`, when present, is a share in [0,1];
+ * - `substitutionGoods` is non-empty, because section 5 normalizes
+ *   `share_g = weight_g / Σ weight` and an empty candidate list makes every share
+ *   0/0 — a category no purchase can ever satisfy;
+ * - every `goodId` names a good the pack declares, and names it once; a repeated
+ *   good would double-count its own weight in that same normalization. This is the
+ *   REQ-CONFIG-005 negative control (#512, #516) applied to the new reference;
+ * - `basePreference` and `qualityFactor` are strictly positive, which is what makes
+ *   `Σ weight > 0` structural rather than accidental. A zero-weight candidate is
+ *   indistinguishable from one that was never listed.
+ *
+ * A pack that declares no `needCategories` at all is valid and unchecked: household
+ * demand is REQ-POPULATION-001's to run, not this surface's to require.
+ */
+function validateNeedCategories(
+  needCategories: Readonly<Record<string, NeedCategoryDefinition>> | undefined,
+  declaredGoodKeys: ReadonlySet<string>,
+): void {
+  if (needCategories === undefined) {
+    return;
+  }
+
+  if (typeof needCategories !== "object" || needCategories === null || Array.isArray(needCategories)) {
+    throw new Error(
+      `DefinitionPack.needCategories must be a plain object keyed by category id when present, got ${describeValue(needCategories)}`,
+    );
+  }
+
+  const seenIds = new Set<string>();
+
+  for (const [key, category] of Object.entries(needCategories)) {
+    const owner = `NeedCategoryDefinition "${key}"`;
+
+    if (typeof category !== "object" || category === null || Array.isArray(category)) {
+      throw new Error(`${owner}: must be a plain object, got ${describeValue(category)}`);
+    }
+
+    if (category.id !== key) {
+      throw new Error(`${owner}: id "${category.id}" does not match the key it is declared under`);
+    }
+
+    if (seenIds.has(category.id)) {
+      throw new Error(`${owner}: id "${category.id}" is declared more than once`);
+    }
+    seenIds.add(category.id);
+
+    assertNonNegative(owner, "perCapitaTarget", category.perCapitaTarget);
+    assertNonNegative(owner, "priceSensitivity", category.priceSensitivity);
+    assertNonNegative(owner, "inventoryCarryoverTicks", category.inventoryCarryoverTicks);
+    assertFiniteControl(owner, "priority", category.priority);
+    assertInClosedUnitInterval(owner, "minimumBudgetShare", category.minimumBudgetShare);
+
+    if (!Array.isArray(category.substitutionGoods)) {
+      throw new Error(`${owner}: substitutionGoods must be an array, got ${describeValue(category.substitutionGoods)}`);
+    }
+
+    if (category.substitutionGoods.length === 0) {
+      throw new Error(
+        `${owner}: substitutionGoods must declare at least one candidate good, got an empty array — ` +
+          "section 5 normalizes demand shares over this list, so a category with no candidate can never be satisfied",
+      );
+    }
+
+    const seenGoods = new Set<string>();
+    for (const candidate of category.substitutionGoods) {
+      const goodKey = candidate.goodId as unknown as string;
+
+      if (!declaredGoodKeys.has(goodKey)) {
+        throw new Error(`${owner}: substitutionGoods goodId "${goodKey}" references a Good the DefinitionPack does not declare`);
+      }
+
+      if (seenGoods.has(goodKey)) {
+        throw new Error(`${owner}: substitutionGoods declares goodId "${goodKey}" more than once`);
+      }
+      seenGoods.add(goodKey);
+
+      assertPositive(owner, `substitutionGoods["${goodKey}"].basePreference`, candidate.basePreference);
+      assertPositive(owner, `substitutionGoods["${goodKey}"].qualityFactor`, candidate.qualityFactor);
+    }
+  }
+
+  for (const baselineId of BASELINE_NEED_CATEGORY_IDS) {
+    if (!seenIds.has(baselineId)) {
+      throw new Error(
+        `DefinitionPack.needCategories must declare the baseline category "${baselineId}": ` +
+          `section 4 requires exactly ${BASELINE_NEED_CATEGORY_IDS.join(", ")}`,
+      );
+    }
+  }
+
+  const baselineIdSet: ReadonlySet<string> = new Set(BASELINE_NEED_CATEGORY_IDS);
+  for (const id of seenIds) {
+    if (!baselineIdSet.has(id)) {
+      throw new Error(
+        `DefinitionPack.needCategories declares "${id}", which is not one of the four baseline categories ` +
+          `${BASELINE_NEED_CATEGORY_IDS.join(", ")}`,
+      );
+    }
   }
 }
 

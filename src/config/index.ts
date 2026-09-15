@@ -51,10 +51,12 @@ export {
 } from "./scenarioDefinition";
 
 export {
+  BASELINE_NEED_CATEGORY_IDS,
   type DefinitionPack,
   type EventDefinition,
   type GoodDefinition,
   type MetricDefinition,
+  type NeedCategoryDefinition,
   type RecipeDefinition,
 } from "./definitionPack";
 
