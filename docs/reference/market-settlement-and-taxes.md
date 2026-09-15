@@ -51,17 +51,21 @@ After clearing determines a buyer's fill quantity, the settlement process valida
 
 If the settlement preflight check fails (buyer lacks sufficient funds), the entire sale is rejected as a unit: no partial quantity reduction occurs, and all stocks remain unchanged. The sale is all-or-nothing. The market never allows negative cash balances or impossible transactions; atomic settlement means the preflight ensures all inventory and cash changes are valid before any mutation happens.
 
-## Reconciliation: Goods and Money Balance
+## Reconciliation: Transfers Balance, Stocks Are Accounted For
 
-After every tick, the system checks that goods and money are conserved. M2 phase-boundary reconciliation verifies that transfers of money and goods are zero-flow: money conserved by currency ID, goods conserved by good ID, independent of which actors hold them.
+Two different guarantees live here, and conflating them is the easiest mistake to make when reading the ledger.
 
-**Goods**: The total quantity of each good across all actors is conserved. Goods leave one actor's inventory and enter another's during explicit trades. Physical loss (goods destroyed by events or transport shrinkage) is recorded separately and validated as a controlled, allowed exception.
+**A transfer is conserved.** Goods and transaction money reconcile exactly after every settlement. The seller's inventory decrement equals the buyer's increment for the traded good; the buyer's wallet debit equals the seller's credit plus the collected tax landing in the State treasury. Both sides of a transfer are recorded, so a transfer must net to zero. M2 phase-boundary reconciliation checks exactly this zero-flow property over the recorded transfer flows: money matched by `currencyId`, goods matched by `goodId`, independent of which actors hold them.
 
-**Money**: The total money in each currency is conserved. Taxation and wage payments are transfers: money moves from one actor's wallet to another's (or to a State treasury) without changing the total currency supply. When other sources or sinks (production value creation, consumption value destruction, or monetary policy) arrive in later milestones, they will be described as explicit typed sources/sinks, not ordinary transfer imbalance.
+**A whole tick is not required to leave stock totals unchanged.** Reconciliation accounts for every change to a stock; it does not force the net change to zero. A change that is not a transfer is legitimate only when it is recorded as an explicit typed source or sink, attributed to the process that caused it. Anything else is an unaccounted flow, and that is what the check catches.
+
+**Goods**: Trade is zero-sum for the traded good — it relocates quantity between actors without changing the total. Whole-tick goods totals may still change, and from M4 onward normally will, through typed physical sources and sinks: production creates output from real inputs, resources, labor and capacity; household consumption, spoilage, and physical loss (goods destroyed by events or transport shrinkage) remove it. Physical loss is a one-sided sink, recorded in its own category with its source attribution rather than as half of a transfer, and it is deliberately exempt from the zero-sum check. M3 itself has no production or consumption, so the only goods flows an M3 tick records are market transfers; the typed-sink machinery exists so those later flows are representable without ever looking like a transfer imbalance.
+
+**Money**: Transaction money is stricter. Ordinary economic activity only ever moves it — a sale, a consumption tax, a wage payment are all transfers, from one actor's wallet to another's or to a State treasury, leaving the total in that currency unchanged. Production and consumption are physical processes: they change goods stocks, not money totals. Cash is a budget constraint on production, not an ingredient that can become output, and consuming a good destroys the good rather than any money. The total money in a currency changes only through explicitly authorized monetary or genesis operations, which are recorded as typed sources and sinks when those subsystems arrive in later milestones — never as ordinary transfer imbalance.
 
 The reconciliation diagnostic tracks the category (MONEY or GOOD), the key (`currencyId` for MONEY, `goodId` for GOOD), and any residual unmatched amount. If any flow is unaccounted for, the diagnostic reports the exact discrepancy and category/key pair affected—how much is missing or extra for that currency or good ID.
 
-This reconciliation happens automatically each tick. It's a core invariant: the system cannot tolerate accounting errors.
+This reconciliation happens automatically each tick. It's a core invariant: the system cannot tolerate an unaccounted flow.
 
 ## Telemetry: What Gets Recorded
 
@@ -137,4 +141,4 @@ The fundamental principle: every transaction is zero-sum among the parties invol
 - The State gains the tax
 - Total: $100 in, $100 out
 
-Money never appears or disappears. It flows from one balance sheet to another, leaving a complete audit trail in the ledger.
+Money never appears or disappears in a trade. It flows from one balance sheet to another, leaving a complete audit trail in the ledger. Creating or destroying money is not something a market can do; it belongs to the authorized monetary and genesis operations described above.
