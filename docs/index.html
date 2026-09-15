@@ -170,9 +170,12 @@
   <p>
     This is the canonical TypeScript simulation at milestone <strong>M3</strong>: local markets,
     price formation and transaction settlement. Nobody sets the price below — it is formed each
-    tick from the shortage and inventory signals the market itself observed on the previous one.
-    Everything on this page is a one-way export of a deterministic run; it never feeds back into
-    the simulation.
+    tick from what the market faces on that same tick: the gap between the effective demand and
+    the sellable supply stated for this tick, and how far this tick's market-facing stock falls
+    short of the coverage the market wants to hold. Only that coverage target consults memory,
+    through the expected use the market has learned from its earlier observations. Everything on
+    this page is a one-way export of a deterministic run; it never feeds back into the
+    simulation.
   </p>
 
   <section id="m3-preview" aria-labelledby="m3-heading">

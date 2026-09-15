@@ -330,6 +330,38 @@ describe("REQ-VISUALIZATION-006: M3 Pages render smoke", () => {
     expect(html).toContain("consumption tax");
   });
 
+  it("attributes the shortage signal to the current tick and memory only to inventory coverage", () => {
+    // Acceptance criterion 4, pinned against the one causality this copy got wrong once.
+    // Phase 6 aggregates D and S from *this* tick's intents
+    // (phase6MarketPriceFormation.ts) and forms `excessRatio` from them
+    // (marketPricing.ts); the only lagged input is `expectedUseEma`, consulted solely as
+    // the denominator of inventory coverage. Presence checks cannot pin accuracy in
+    // general, but they can stop this specific reversal from returning green.
+    const lead = new JSDOM(pageHtml()).window.document.querySelector("main > p");
+    expect(lead).not.toBeNull();
+    const sentences = (lead!.textContent ?? "")
+      .replace(/\s+/g, " ")
+      .split(/(?<=[.!?])\s+/)
+      .filter((sentence) => sentence.trim().length > 0);
+
+    const namesExcessSignal = /\bdemand\b|\bsupply\b|shortage|excess/i;
+    const laggedTick = /previous (tick|one)|prior tick|last tick|earlier tick|preceding tick|tick before/i;
+    const memory = /remember|previous|prior|earlier|learned|history|past/i;
+    const coverageSide = /coverage|expected use|inventory/i;
+
+    const excessSentences = sentences.filter((sentence) => namesExcessSignal.test(sentence));
+    expect(excessSentences.length).toBeGreaterThan(0);
+    for (const sentence of excessSentences) {
+      expect(sentence).not.toMatch(laggedTick);
+    }
+
+    const memorySentences = sentences.filter((sentence) => memory.test(sentence));
+    expect(memorySentences.length).toBeGreaterThan(0);
+    for (const sentence of memorySentences) {
+      expect(sentence).toMatch(coverageSide);
+    }
+  });
+
   it("states the whole-run totals and the settlement identity the artifact measured", async () => {
     const window = await renderM3();
     const preview = artifact();
