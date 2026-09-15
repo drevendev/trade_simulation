@@ -23,6 +23,7 @@ const pagesDocument = readFileSync(`${repoRoot}docs/index.html`, "utf8").replace
 interface LedgerRow {
   readonly reqId: string;
   readonly status: string;
+  readonly mergeCommit: string;
 }
 
 /**
@@ -39,29 +40,103 @@ function group(match: RegExpMatchArray, index: number): string {
 }
 
 /**
- * Reads REQ_ID and STATUS out of the authoritative ledger. The EVIDENCE cell is quoted free text
- * containing commas and newlines, but REQ_ID and STATUS are the first two fields of every row and
- * neither is ever quoted, so a leading-field match is enough and avoids a CSV dependency.
+ * Reads a CSV file into one record per row, keyed by its header. Both files read here quote free
+ * text that contains commas and newlines — the ledger's EVIDENCE cell and the registry's STATEMENT
+ * and ACCEPTANCE cells — so field position alone cannot be recovered by splitting on a delimiter.
  */
-function readLedgerStatuses(): readonly LedgerRow[] {
-  const csv = readFileSync(`${repoRoot}docs/spec/implementation_status.csv`, "utf8").replace(
-    /\r\n/g,
-    "\n",
-  );
-  const rows: LedgerRow[] = [];
-  for (const line of csv.split("\n")) {
-    const match = /^(REQ-[A-Z]+-\d+),([A-Z_]+),/.exec(line);
-    if (match !== null) {
-      rows.push({ reqId: group(match, 1), status: group(match, 2) });
+function readCsvRecords(path: string): readonly Readonly<Record<string, string>>[] {
+  const text = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const character = text.charAt(i);
+    if (quoted) {
+      if (character !== '"') {
+        field += character;
+      } else if (text.charAt(i + 1) === '"') {
+        field += '"';
+        i += 1;
+      } else {
+        quoted = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      quoted = true;
+    } else if (character === ",") {
+      row.push(field);
+      field = "";
+    } else if (character === "\n") {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else {
+      field += character;
     }
   }
-  return rows;
+  if (field !== "" || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  const header = rows.shift();
+  if (header === undefined) {
+    throw new Error(`${path} is empty`);
+  }
+  return rows
+    .filter((fields) => fields.some((value) => value.trim() !== ""))
+    .map((fields) => Object.fromEntries(header.map((name, index) => [name, fields[index] ?? ""])));
+}
+
+/** Reads the fields of the authoritative ledger that decide whether work has actually landed. */
+function readLedgerStatuses(): readonly LedgerRow[] {
+  return readCsvRecords(`${repoRoot}docs/spec/implementation_status.csv`)
+    .filter((record) => /^REQ-[A-Z]+-\d+$/.test(record["REQ_ID"] ?? ""))
+    .map((record) => ({
+      reqId: record["REQ_ID"] ?? "",
+      status: (record["STATUS"] ?? "").trim(),
+      mergeCommit: (record["MERGE_COMMIT"] ?? "").trim(),
+    }));
 }
 
 const ledger = readLedgerStatuses();
 
 function ledgerStatusOf(reqId: string): string | undefined {
   return ledger.find((row) => row.reqId === reqId)?.status;
+}
+
+/**
+ * Milestones every one of whose requirements has landed, derived exactly the way
+ * `scripts/release_tag.py` derives it: milestone membership is the mirrored registry's MILESTONE
+ * column, and a member has landed only when its ledger row reads IMPLEMENTED *and* carries the
+ * merge commit that landed it. A blank MILESTONE marks a cross-cutting requirement and gates
+ * nothing, and a milestone with no registry rows at all is not closed — it is unindexed, and an
+ * empty membership would otherwise make every future milestone vacuously closed.
+ */
+function closedMilestones(): ReadonlySet<string> {
+  const members = new Map<string, string[]>();
+  for (const record of readCsvRecords(`${repoRoot}docs/spec/mirror/REQUIREMENTS_REGISTRY.csv`)) {
+    const milestone = (record["MILESTONE"] ?? "").trim();
+    if (!/^M\d+$/.test(milestone)) {
+      continue;
+    }
+    const reqIds = members.get(milestone) ?? [];
+    reqIds.push((record["REQ_ID"] ?? "").trim());
+    members.set(milestone, reqIds);
+  }
+  const closed = new Set<string>();
+  for (const [milestone, reqIds] of members) {
+    const landed = reqIds.every((reqId) => {
+      const row = ledger.find((candidate) => candidate.reqId === reqId);
+      return row !== undefined && row.status === "IMPLEMENTED" && row.mergeCommit !== "";
+    });
+    if (landed) {
+      closed.add(milestone);
+    }
+  }
+  return closed;
 }
 
 /**
@@ -86,6 +161,28 @@ function requirementIdsIn(text: string): readonly string[] {
     for (let n = first; n <= last; n += 1) {
       ids.add(`${area}-${String(n).padStart(width, "0")}`);
     }
+  }
+  return [...ids];
+}
+
+/**
+ * Expands the milestone references a README block can carry: `M3`, the `Milestone 3` long form,
+ * and ranges such as `M4–M8` or `M0-M2`, which name every milestone between their endpoints.
+ */
+function milestoneIdsIn(text: string): readonly string[] {
+  const ids = new Set<string>();
+  for (const match of text.matchAll(/\bM(\d+)\s*[-–—]\s*M(\d+)\b/g)) {
+    const first = Number.parseInt(group(match, 1), 10);
+    const last = Number.parseInt(group(match, 2), 10);
+    for (let n = first; n <= last; n += 1) {
+      ids.add(`M${String(n)}`);
+    }
+  }
+  for (const match of text.matchAll(/\bM(\d+)\b/g)) {
+    ids.add(`M${String(Number.parseInt(group(match, 1), 10))}`);
+  }
+  for (const match of text.matchAll(/\bMilestones?\s+(\d+)\b/gi)) {
+    ids.add(`M${String(Number.parseInt(group(match, 1), 10))}`);
   }
   return [...ids];
 }
@@ -130,6 +227,44 @@ describe("README conformance (REQ-VISUALIZATION-007)", () => {
       for (const id of requirementIdsIn(block)) {
         if (ledgerStatusOf(id) === "IMPLEMENTED") {
           contradictions.push(`${id} is IMPLEMENTED but README says "${phrase}"`);
+        }
+      }
+    }
+    expect(contradictions).toEqual([]);
+  });
+
+  it("never describes a milestone the ledger records closed as still open", () => {
+    const closed = closedMilestones();
+    // Non-vacuity guard: a parse failure in either CSV would otherwise make this check pass
+    // while measuring nothing.
+    expect([...closed].length).toBeGreaterThan(0);
+
+    const openPhrases = [
+      "not closed",
+      "not yet closed",
+      "has not closed",
+      "have not closed",
+      "remains open",
+      "remain open",
+      "still open",
+      "not released",
+      "not yet released",
+      "not implemented",
+      "not yet implemented",
+    ];
+    const contradictions: string[] = [];
+    for (const block of readmeBlocks()) {
+      const lowered = block.toLowerCase();
+      const phrase = openPhrases.find((candidate) => lowered.includes(candidate));
+      if (phrase === undefined) {
+        continue;
+      }
+      for (const id of milestoneIdsIn(block)) {
+        if (closed.has(id)) {
+          contradictions.push(
+            `${id} has landed in full (every registry requirement IMPLEMENTED with a merge ` +
+              `commit) but README says "${phrase}"`,
+          );
         }
       }
     }
