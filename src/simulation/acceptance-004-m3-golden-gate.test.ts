@@ -49,7 +49,16 @@ import {
   computeSellableQuantity,
 } from "./marketClearing";
 import type { ActorRef } from "../domain/genesisLedger";
-import type { ClanId, GoodId, MarketId, RegionId, CurrencyId, StateId } from "../domain/id";
+import type {
+  ClanId,
+  CohortId,
+  GoodId,
+  MarketId,
+  ProductionUnitId,
+  RegionId,
+  CurrencyId,
+  StateId,
+} from "../domain/id";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import { repriceGoodInPhase6, updateMarketExpectations } from "./marketPricing";
@@ -92,6 +101,64 @@ const createTestCurrencyId = (key: string): CurrencyId => `cur:${key}` as Curren
 
 const quantityEpsilon = 1e-8;
 const moneyEpsilon = 1e-8;
+
+/** The one good every baseline ProductionUnit carries in its OUTPUT inventory. */
+const DISPATCH_FIXTURE_GOOD = "good:food" as GoodId;
+
+interface DispatchCounterparties {
+  readonly regionId: RegionId;
+  readonly regionKey: string;
+  readonly goodId: GoodId;
+  readonly sellerUnitId: ProductionUnitId;
+  readonly buyerCohortId: CohortId;
+}
+
+/**
+ * Pick the canonical owners of the stock the Phase-6/Phase-8 dispatch fixtures below claim
+ * to move, out of a real `buildInitialWorld()` world: a `ProductionUnit` seller offering
+ * from the `OUTPUT` inventory it actually holds food in, against a funded `COHORT` buyer
+ * whose single household inventory is where consumed food lands.
+ *
+ * Both fixtures used to trade `CLAN` against `CLAN` on a `GENERAL` bucket, on a synthetic
+ * region that was not in `world.regions` (Issue #478). R235
+ * (`ANSWERS_TO_IMPLEMENTER.md`, `CODE_RUNTIME_QA_M3_16`) calls that implementation drift:
+ * authoritative household stock belongs to `PopulationCohortState`, and a Clan owns a
+ * treasury and no physical goods at all (Handoff/01 §§5.3/5.4/7), so `resolveGoodsEndpoint()`
+ * in `marketSettlementTransition.ts` refuses a `CLAN` goods endpoint outright rather than
+ * inventing a container. These two fixtures never settle -- they measure dispatch timing and
+ * price persistence, not stock mutation -- so they did not throw, but they named endpoints no
+ * production path could produce.
+ *
+ * The region must have a controller: with `RegionState.controllerStateId` non-null, the
+ * settlement currency and the consumption-tax destination Phase 8 reads off the canonical
+ * `RegionState` both resolve, as they would in production.
+ */
+function canonicalDispatchCounterparties(world: WorldState): DispatchCounterparties {
+  for (const region of world.regions.values()) {
+    if (region.controllerStateId === null) continue;
+    const regionKey = region.seed.key;
+    const currencyId = region.settlementCurrencyId;
+
+    const seller = Array.from(world.productionUnits.values()).find(
+      (unit) => unit.seed.regionKey === regionKey && (unit.outputInventory.get(DISPATCH_FIXTURE_GOOD) ?? 0) > 0,
+    );
+    const buyer = Array.from(world.cohorts.values()).find(
+      (cohort) => cohort.seed.regionKey === regionKey && (cohort.wallet.get(currencyId) ?? 0) > 0,
+    );
+    if (!seller || !buyer) continue;
+
+    return {
+      regionId: region.regionId,
+      regionKey,
+      goodId: DISPATCH_FIXTURE_GOOD,
+      sellerUnitId: seller.productionUnitId,
+      buyerCohortId: buyer.cohortId,
+    };
+  }
+  throw new Error(
+    "baseline scenario carries no controlled region with a food-selling ProductionUnit and a funded Cohort",
+  );
+}
 
 describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () => {
   describe("Local-shortage golden scenario (Handoff/04 §40 scenario A)", () => {
@@ -2181,11 +2248,16 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       // real dispatch path, not merely for an isolated function call.
       const config = createDefaultSimulationConfig();
 
-      const regionId = createTestRegionId("region-i5-dispatch");
-      const goodId = createTestGoodId("good-i5-dispatch");
+      // R235: the counterparties and the region come from the real baseline world, not from
+      // synthetic ids. The seller is the ProductionUnit that canonically owns the food it
+      // offers, in its OUTPUT inventory; the buyer is the Cohort whose household inventory
+      // canonically owns consumed food. A Clan -- which this fixture used to name on both
+      // sides, on a GENERAL bucket -- owns a treasury and no physical goods at all, so it is
+      // not the owner of any stock this trade moves. See canonicalDispatchCounterparties().
+      const baseWorld = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 2004);
+      const { regionId, goodId, sellerUnitId, buyerCohortId, regionKey } =
+        canonicalDispatchCounterparties(baseWorld);
       const marketId = createTestMarketId("market-i5-dispatch");
-      const sellerClanId = createTestClanId("clan-seller-i5-dispatch");
-      const buyerClanId = createTestClanId("clan-buyer-i5-dispatch");
       const key = marketPriceKey(marketId, goodId);
 
       const priceConfig: Phase6PriceConfig = {
@@ -2207,12 +2279,12 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       const initialPrice = 1.0;
       const seededMarket: LocalMarketState = {
         marketId,
-        seed: { regionKey: regionId, initialPriceByGood: { [goodId]: initialPrice } },
+        seed: { regionKey, initialPriceByGood: { [goodId]: initialPrice } },
         priceByGood: new Map([[goodId, initialPrice]]),
         expectationsByGood: new Map(),
       };
       const initialWorldState: WorldState = {
-        ...buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 2004),
+        ...baseWorld,
         markets: new Map([[marketId, seededMarket]]),
       };
       let worldState = initialWorldState;
@@ -2222,18 +2294,20 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       const buildIntents = (): MarketIntent[] => [
         {
           id: createMarketIntentId(`mi:seller-i5-dispatch`),
-          actor: { type: "CLAN", clanId: sellerClanId },
+          actor: { type: "PRODUCTION_UNIT", productionUnitId: sellerUnitId },
           regionId,
           goodId,
           side: "SELL",
           purpose: "INVENTORY_REBALANCE",
           desiredQuantity: 10,
           sourcePlanId: "plan-seller-i5-dispatch",
-          inventoryBucket: "GENERAL",
+          inventoryBucket: "OUTPUT",
         },
         {
           id: createMarketIntentId(`mi:buyer-i5-dispatch`),
-          actor: { type: "CLAN", clanId: buyerClanId },
+          // No inventoryBucket: a Cohort holds a single authoritative household goods
+          // stock, and only the default GENERAL bucket resolves to it.
+          actor: { type: "COHORT", cohortId: buyerCohortId },
           regionId,
           goodId,
           side: "BUY",
@@ -2244,7 +2318,6 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
           // binding constraint and every tick's allocation price is directly observable.
           maxSpend: 1_000_000 * priceConfig.maximumPrice,
           sourcePlanId: "plan-buyer-i5-dispatch",
-          inventoryBucket: "GENERAL",
         },
       ];
 
@@ -2337,11 +2410,16 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       // tick's Phase-6/Phase-8 output into the next tick's WorldState.
       const config = createDefaultSimulationConfig();
 
-      const regionId = createTestRegionId("region-i5-no-persistence");
-      const goodId = createTestGoodId("good-i5-no-persistence");
+      // R235: same canonical pairing as the persisted fixture above, and for the same
+      // reason -- this negative control has to be the same scenario minus the persistence
+      // boundary, so its counterparties must be the canonical owners of the stock it moves:
+      // a ProductionUnit selling from the OUTPUT inventory that holds its food, and a Cohort
+      // buying into the household inventory that owns consumed food. A Clan owns a treasury
+      // and no physical goods, so it owns neither side of this trade.
+      const baseWorld = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 2005);
+      const { regionId, goodId, sellerUnitId, buyerCohortId, regionKey } =
+        canonicalDispatchCounterparties(baseWorld);
       const marketId = createTestMarketId("market-i5-no-persistence");
-      const sellerClanId = createTestClanId("clan-seller-i5-no-persistence");
-      const buyerClanId = createTestClanId("clan-buyer-i5-no-persistence");
       const key = marketPriceKey(marketId, goodId);
 
       const priceConfig: Phase6PriceConfig = {
@@ -2357,30 +2435,32 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       const initialPrice = 1.0;
       const seededMarket: LocalMarketState = {
         marketId,
-        seed: { regionKey: regionId, initialPriceByGood: { [goodId]: initialPrice } },
+        seed: { regionKey, initialPriceByGood: { [goodId]: initialPrice } },
         priceByGood: new Map([[goodId, initialPrice]]),
         expectationsByGood: new Map(),
       };
       const worldState: WorldState = {
-        ...buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 2005),
+        ...baseWorld,
         markets: new Map([[marketId, seededMarket]]),
       };
 
       const buildIntents = (): MarketIntent[] => [
         {
           id: createMarketIntentId(`mi:seller-i5-no-persistence`),
-          actor: { type: "CLAN", clanId: sellerClanId },
+          actor: { type: "PRODUCTION_UNIT", productionUnitId: sellerUnitId },
           regionId,
           goodId,
           side: "SELL",
           purpose: "INVENTORY_REBALANCE",
           desiredQuantity: 10,
           sourcePlanId: "plan-seller-i5-no-persistence",
-          inventoryBucket: "GENERAL",
+          inventoryBucket: "OUTPUT",
         },
         {
           id: createMarketIntentId(`mi:buyer-i5-no-persistence`),
-          actor: { type: "CLAN", clanId: buyerClanId },
+          // No inventoryBucket: a Cohort holds a single authoritative household goods
+          // stock, and only the default GENERAL bucket resolves to it.
+          actor: { type: "COHORT", cohortId: buyerCohortId },
           regionId,
           goodId,
           side: "BUY",
@@ -2388,7 +2468,6 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
           desiredQuantity: 1_000_000,
           maxSpend: 1_000_000 * priceConfig.maximumPrice,
           sourcePlanId: "plan-buyer-i5-no-persistence",
-          inventoryBucket: "GENERAL",
         },
       ];
       const getFixtureMarketIds = () => new Map([[regionId, marketId]]);
