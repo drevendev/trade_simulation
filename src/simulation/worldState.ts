@@ -925,6 +925,57 @@ function validateWorldGenesis(
       throw new Error(`Region ${region.key} references missing currency ${currencyKey}`);
     }
   });
+
+  validateExtractionResourcesPresent(scenario, definitionPack);
+}
+
+/**
+ * Section 21: "recipe extraction referring to a resource absent from all eligible
+ * regions when the baseline expects that recipe to operate".
+ *
+ * This check needs both halves of world genesis — the recipe lives in the
+ * DefinitionPack, the deposits live in the ScenarioDefinition — so it cannot sit in
+ * validateDefinitionPack(), which never sees the scenario.
+ *
+ * "Eligible regions" is not defined anywhere in the governing document, so the rule
+ * is applied in its weakest form: reject only when the resource is absent from *every*
+ * Region in the scenario. The eligible set is a subset of all Regions under any reading
+ * of the term, so absence from every Region entails absence from all eligible ones, and
+ * this can never reject a world that some reading of "eligible" would permit. In the
+ * baseline, recipe:iron-mine runs in region:b6-mineral and region:d3-mountain, neither
+ * of which holds resource:iron-ore, so a per-Region reading would reject the shipped
+ * baseline. The undefined term is reported in docs/spec/FEEDBACK_TO_RESEARCHER.md.
+ *
+ * "Expects that recipe to operate" is read as: some ProductionUnit seed on that recipe
+ * starts ACTIVE. PLANNED and MOTHBALLED units are not operating at tick 0.
+ */
+function validateExtractionResourcesPresent(
+  scenario: ScenarioDefinition,
+  definitionPack: DefinitionPack,
+): void {
+  const depositedResourceIds = new Set<string>();
+  (scenario.geography ?? []).forEach((region) => {
+    (region.deposits ?? []).forEach((deposit) => {
+      depositedResourceIds.add(deposit.resourceId);
+    });
+  });
+
+  const activeRecipeIds = new Set<string>();
+  (scenario.productionUnits ?? []).forEach((unit) => {
+    if (unit.status === "ACTIVE") {
+      activeRecipeIds.add(unit.recipeId);
+    }
+  });
+
+  for (const recipeId of Array.from(activeRecipeIds).sort()) {
+    const resourceId = definitionPack.recipes?.[recipeId]?.extractionResourceId;
+    if (resourceId === undefined) continue;
+    if (depositedResourceIds.has(resourceId)) continue;
+
+    throw new Error(
+      `RecipeDefinition "${recipeId}": extractionResourceId "${resourceId}" is absent from every Region deposit in scenario "${scenario.id}", but the scenario starts at least one ACTIVE ProductionUnit on that recipe`,
+    );
+  }
 }
 
 function validateInitializationInvariants(
