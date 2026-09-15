@@ -1,0 +1,78 @@
+name: Pull-request ledger
+
+# One record per closed pull request, written to the private ledger beside the run
+# records: who opened it and when, when it was first judged and when it merged or
+# closed, how many refusals it took, its size, and the Issue and requirement
+# identifiers it names. The run ledger measures what a model run cost; this measures
+# how fast and how well requirements land, whoever the author is — which is the
+# question from scheme/7 on, where the author is not a run.
+#
+# `pull_request_target`, not `pull_request`: the definition and `scripts/` are
+# `master`'s, the checkout is the base, and the pull request's own code never runs with
+# the ledger credential in the environment. Same rule as mergeability.yml, tested the
+# same way (scripts/tests/test_record_pull_request.py). `closed` fires for a merge and
+# for a close alike; the record says which.
+#
+# A record is never the reason a pull request fails to close: a missing or refused
+# ledger is a warning, and the recorder exits 0 whatever happened.
+on:
+  pull_request_target:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      number:
+        description: "Pull request number to record (backfill or repair)"
+        required: true
+        type: string
+
+# Reads only, from `github.token`. The ledger is written by the MACHINE identity's own
+# token, minted below for that repository alone.
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-ledger-${{ github.event.pull_request.number || inputs.number }}
+  cancel-in-progress: false
+
+jobs:
+  # Named apart from any commit status this repository writes (see
+  # scripts/tests/test_check_names_are_unambiguous.py).
+  record-pull-request:
+    name: record-pull-request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The base branch, which is the default for this event and is load-bearing: a
+      # `ref:` pointing at the pull request's head would run the judged revision's copy
+      # of the recorder with the ledger credential.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # Minted for zen-telemetry alone and revoked with the job (docs/adr/0006). A
+      # failed mint is a gap in the bookkeeping, not a failed run.
+      - name: Act as the MACHINE identity towards the ledger
+        id: ledger
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ZENDEV_MACHINE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZENDEV_MACHINE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: zen-telemetry
+
+      - name: Record the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TELEMETRY_TOKEN: ${{ steps.ledger.outputs.token }}
+          ZENDEV_QA_LOGIN: ${{ vars.ZENDEV_QA_LOGIN }}
+        run: |
+          python scripts/record_pull_request.py \
+            --repo "${{ github.repository }}" \
+            --pull "${{ github.event.pull_request.number || inputs.number }}" \
+            --ledger-repo "${{ github.repository_owner }}/zen-telemetry" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
