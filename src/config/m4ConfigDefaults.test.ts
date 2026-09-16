@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createDefaultSimulationConfig } from "./simulationConfig";
 import { validateLaborConfig, validateProductionConfig } from "./validation";
 
+// This focused regression is the executable evidence for HANDOFF-REPAIR-M4-002.
 describe("canonical M4 REQ-CONFIG-006 defaults", () => {
   it("pins all fourteen HANDOFF-REPAIR-M4-002 production/labor values", () => {
     const config = createDefaultSimulationConfig();
