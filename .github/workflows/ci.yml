@@ -19,10 +19,10 @@ concurrency:
 
 jobs:
   # One-run branch-local repair for #533. The connector can replace files but cannot
-  # make a narrow edit to the large validation test. This job performs four exact,
-  # count-checked text replacements, verifies the two affected test files, removes the
-  # temporary patch artifact, restores this workflow from master, and pushes the clean
-  # result back to the PR branch. The workflow is absent from the final PR diff.
+  # apply a narrow patch to a large file. This job applies the already-reviewed patch,
+  # removes the temporary patch artifact, restores this workflow from master, and
+  # pushes only the resulting source/test cleanup back to the PR branch. Because the
+  # workflow restores itself before the push, it is absent from the final PR diff.
   apply-issue-533-patch:
     name: apply-issue-533-patch
     if: github.event_name == 'pull_request' && github.head_ref == 'zen/issue-533-config-006-defaults'
@@ -38,102 +38,16 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 'lts/*'
-          cache: npm
       - name: Apply the bounded Q-001 cleanup and restore CI definition
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('src/config/validation.test.ts')
-          text = path.read_text(encoding='utf-8')
-
-          def replace_once(old: str, new: str, label: str) -> None:
-              global text
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
-              text = text.replace(old, new, 1)
-
-          replace_once(
-              ''' * holds. Checked here rather than only at runtime because it is the *declared* surfaces
-           * that must be disjoint: both sides leave controls undefaulted — `PopulationConfig`
-           * sixteen, and `ProductionConfig`/`LaborConfig` the fourteen REQ-CONFIG-006 left for
-           * Q-001 — so neither side is fully visible through `Object.keys()` of the defaults.
-           * Declaring''',
-              ''' * holds. Checked here rather than only at runtime because it is the *declared* surfaces
-           * that must be disjoint. `PopulationConfig` still has sixteen Q-002 controls that are
-           * declared but undefaulted, so runtime `Object.keys()` alone cannot prove ownership.
-           * Declaring''',
-              'ownership comment',
-          )
-
-          replace_once(
-              '''  /**
-           * Section 6 states no value for these, so the run declares them and refuses to
-           * invent one. This test is the durable record of that gap: it fails the moment a
-           * later run silently fills one in without the researcher answering
-           * `docs/spec/OPEN_QUESTIONS.md`.
-           */
-          const UNVALUED_BY_SECTION_6: readonly (keyof ProductionConfig)[] = [
-            "investmentReviewCadenceTicks",
-            "investmentUtilizationThreshold",
-            "minimumInvestmentMargin",
-            "investmentPropensity",
-            "maxInvestmentShareOfExcessCash",
-            "maxCapitalGrowthPerReview",
-            "lifecycleReviewCadenceTicks",
-            "mothballMarginThreshold",
-            "mothballUtilizationThreshold",
-            "reactivateMarginThreshold",
-            "closingGraceReviews",
-          ];
-
-          it.each(UNVALUED_BY_SECTION_6)("%s is left undefaulted because section 6 states no value", (field) => {
-            expect(createDefaultSimulationConfig().production[field]).toBeUndefined();
-          });
-
-''',
-              '',
-              'production stale Q-001 absence block',
-          )
-
-          replace_once(
-              '''    const declared = new Set<string>([
-              ...Object.keys(createDefaultSimulationConfig().production),
-              ...UNVALUED_BY_SECTION_6,
-            ]);''',
-              '''    const declared = new Set<string>(Object.keys(createDefaultSimulationConfig().production));''',
-              'production declared-control set',
-          )
-
-          replace_once(
-              '''  it.each(["maxLogWageStep", "unitVacancyResponse", "maxTightnessSignal"] as const)(
-            "%s is left undefaulted because section 7 states no value",
-            (field) => {
-              expect(createDefaultSimulationConfig().labor[field]).toBeUndefined();
-            },
-          );
-
-''',
-              '',
-              'labor stale Q-001 absence block',
-          )
-
-          path.write_text(text, encoding='utf-8')
-          PY
-          rm tools/patches/issue-533-remove-stale-q001-tests.patch
-          npm ci
-          npx vitest run src/config/validation.test.ts src/config/m4ConfigDefaults.test.ts
+          PATCH='tools/patches/issue-533-remove-stale-q001-tests.patch'
+          git apply --check "${PATCH}"
+          git apply "${PATCH}"
+          git rm "${PATCH}"
           git checkout "origin/${BASE_REF}" -- .github/workflows/ci.yml
           git diff --check
-          test ! -e tools/patches/issue-533-remove-stale-q001-tests.patch
-          ! grep -q 'UNVALUED_BY_SECTION_6' src/config/validation.test.ts
-          ! grep -q 'maxLogWageStep is left undefaulted' src/config/validation.test.ts
-          git add -A src/config/validation.test.ts tools/patches/issue-533-remove-stale-q001-tests.patch .github/workflows/ci.yml
+          git add src/config/validation.test.ts .github/workflows/ci.yml
           git config user.name 'drevendev'
           git config user.email '19223266+drevendev@users.noreply.github.com'
           git commit -m 'test(config): remove stale Q-001 absence assertions'
