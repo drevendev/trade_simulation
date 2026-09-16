@@ -1,7 +1,7 @@
 diff --git a/src/config/validation.test.ts b/src/config/validation.test.ts
 --- a/src/config/validation.test.ts
 +++ b/src/config/validation.test.ts
-@@ -1297,29 +1297,5 @@ describe("canonical production defaults (REQ-CONFIG-006)", () => {
+@@ -1297,35 +1297,8 @@ describe("canonical production defaults (REQ-CONFIG-006)", () => {
    it("is deterministic across calls", () => {
      expect(createDefaultSimulationConfig().production).toEqual(createDefaultSimulationConfig().production);
    });
@@ -30,8 +30,6 @@ diff --git a/src/config/validation.test.ts b/src/config/validation.test.ts
 -    expect(createDefaultSimulationConfig().production[field]).toBeUndefined();
 -  });
  
-   it("declares every control section 37 names", () => {
-@@ -1325,7 +1301,4 @@ describe("canonical production defaults (REQ-CONFIG-006)", () => {
    it("declares every control section 37 names", () => {
 -    const declared = new Set<string>([
 -      ...Object.keys(createDefaultSimulationConfig().production),
