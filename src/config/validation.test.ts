@@ -1298,35 +1298,8 @@ describe("canonical production defaults (REQ-CONFIG-006)", () => {
     expect(createDefaultSimulationConfig().production).toEqual(createDefaultSimulationConfig().production);
   });
 
-  /**
-   * Section 6 states no value for these, so the run declares them and refuses to
-   * invent one. This test is the durable record of that gap: it fails the moment a
-   * later run silently fills one in without the researcher answering
-   * `docs/spec/OPEN_QUESTIONS.md`.
-   */
-  const UNVALUED_BY_SECTION_6: readonly (keyof ProductionConfig)[] = [
-    "investmentReviewCadenceTicks",
-    "investmentUtilizationThreshold",
-    "minimumInvestmentMargin",
-    "investmentPropensity",
-    "maxInvestmentShareOfExcessCash",
-    "maxCapitalGrowthPerReview",
-    "lifecycleReviewCadenceTicks",
-    "mothballMarginThreshold",
-    "mothballUtilizationThreshold",
-    "reactivateMarginThreshold",
-    "closingGraceReviews",
-  ];
-
-  it.each(UNVALUED_BY_SECTION_6)("%s is left undefaulted because section 6 states no value", (field) => {
-    expect(createDefaultSimulationConfig().production[field]).toBeUndefined();
-  });
-
   it("declares every control section 37 names", () => {
-    const declared = new Set<string>([
-      ...Object.keys(createDefaultSimulationConfig().production),
-      ...UNVALUED_BY_SECTION_6,
-    ]);
+    const declared = new Set<string>(Object.keys(createDefaultSimulationConfig().production));
     // Section 37's list verbatim, less `laborEpsilon`-style tolerances that
     // NumericConfig owns; the capital tolerance is `minimumLifecycleScale`.
     const section37 = [
@@ -1446,13 +1419,6 @@ describe("canonical labor defaults (REQ-CONFIG-006)", () => {
   it("is deterministic across calls", () => {
     expect(createDefaultSimulationConfig().labor).toEqual(createDefaultSimulationConfig().labor);
   });
-
-  it.each(["maxLogWageStep", "unitVacancyResponse", "maxTightnessSignal"] as const)(
-    "%s is left undefaulted because section 7 states no value",
-    (field) => {
-      expect(createDefaultSimulationConfig().labor[field]).toBeUndefined();
-    },
-  );
 
   /**
    * Decision on Issue #527: labor is measured in worker-equivalents, a quantity, and

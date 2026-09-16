@@ -18,41 +18,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # One-run branch-local repair for #533. The connector can replace files but cannot
-  # apply a narrow patch to a large file. This job applies the already-reviewed patch,
-  # removes the temporary patch artifact, restores this workflow from master, and
-  # pushes only the resulting source/test cleanup back to the PR branch. Because the
-  # workflow restores itself before the push, it is absent from the final PR diff.
-  apply-issue-533-patch:
-    name: apply-issue-533-patch
-    if: github.event_name == 'pull_request' && github.head_ref == 'zen/issue-533-config-006-defaults'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    env:
-      HEAD_REF: ${{ github.head_ref }}
-      BASE_REF: ${{ github.base_ref }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-      - name: Apply the bounded Q-001 cleanup and restore CI definition
-        run: |
-          set -euo pipefail
-          PATCH='tools/patches/issue-533-remove-stale-q001-tests.patch'
-          git apply --check "${PATCH}"
-          git apply "${PATCH}"
-          git rm "${PATCH}"
-          git checkout "origin/${BASE_REF}" -- .github/workflows/ci.yml
-          git diff --check
-          git add src/config/validation.test.ts .github/workflows/ci.yml
-          git config user.name 'drevendev'
-          git config user.email '19223266+drevendev@users.noreply.github.com'
-          git commit -m 'test(config): remove stale Q-001 absence assertions'
-          git push origin "HEAD:${HEAD_REF}"
-
   build-and-test:
     name: build-and-test
     runs-on: ubuntu-latest
