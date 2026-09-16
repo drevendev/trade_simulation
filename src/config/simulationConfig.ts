@@ -45,9 +45,9 @@ export interface TradeConfig {}
  * are section 6 "Production defaults" of
  * `06 - Handoff/03 — CANONICAL_CONFIG_AND_WORLD_GENERATION.md`, which
  * `HANDOFF-REPAIR-005`/`-010` establish as the sole owner of `SimulationConfig`
- * baseline numbers. Fields section 37 names but section 6 gives no value for are
- * declared here and left undefaulted — see `docs/spec/OPEN_QUESTIONS.md`,
- * REQ-CONFIG-006. They are validated when present; they are not guessed.
+ * baseline numbers. `HANDOFF-REPAIR-M4-002` completed the eleven section-37
+ * production values that Q-001 had left open; all section-37 production controls
+ * now have canonical M4 defaults and are validated here.
  *
  * Section 37: "Scenario RecipeDefinitions own recipe-specific coefficients and
  * depreciation. State policy owns minimum wage/taxes/ownership gates. MarketConfig
@@ -85,34 +85,34 @@ export interface ProductionConfig {
   /** Upper clamp on the input-criticality multiplier. */
   readonly maxInputCriticality?: number;
 
-  /** Ticks between investment reviews. No value stated by section 6. */
+  /** Ticks between investment reviews. */
   readonly investmentReviewCadenceTicks?: number;
-  /** Utilization a unit must exceed to consider investing. No value stated by section 6. */
+  /** Utilization a unit must exceed to consider investing. */
   readonly investmentUtilizationThreshold?: number;
-  /** Margin a unit must exceed to consider investing. No value stated by section 6. */
+  /** Margin a unit must exceed to consider investing. */
   readonly minimumInvestmentMargin?: number;
-  /** Share of eligible cash a unit directs to investment. No value stated by section 6. */
+  /** Share of eligible cash a unit directs to investment. */
   readonly investmentPropensity?: number;
-  /** Upper clamp on investment as a share of excess cash. No value stated by section 6. */
+  /** Upper clamp on investment as a share of excess cash. */
   readonly maxInvestmentShareOfExcessCash?: number;
-  /** Upper clamp on capital growth per investment review. No value stated by section 6. */
+  /** Upper clamp on capital growth per investment review. */
   readonly maxCapitalGrowthPerReview?: number;
 
-  /** Ticks between lifecycle reviews. No value stated by section 6. */
+  /** Ticks between lifecycle reviews. */
   readonly lifecycleReviewCadenceTicks?: number;
-  /** Margin below which a review counts as nonviable. No value stated by section 6. */
+  /** Margin below which a review counts as nonviable. */
   readonly mothballMarginThreshold?: number;
-  /** Utilization below which a review counts as nonviable. No value stated by section 6. */
+  /** Utilization below which a review counts as nonviable. */
   readonly mothballUtilizationThreshold?: number;
   /** Consecutive nonviable reviews before mothballing. Section 6 `mothballAfterNonviableReviews`. */
   readonly mothballAfterReviews?: number;
-  /** Margin above which a mothballed review counts as viable. No value stated by section 6. */
+  /** Margin above which a mothballed review counts as viable. */
   readonly reactivateMarginThreshold?: number;
   /** Consecutive viable reviews before reactivating. Section 6 `reactivateAfterViableReviews`. */
   readonly reactivateAfterReviews?: number;
   /** Consecutive mothballed reviews before closing. Section 6 `closeAfterMothballedReviews`. */
   readonly closeAfterReviews?: number;
-  /** Reviews a CLOSING unit is granted before removal. No value stated by section 6. */
+  /** Reviews a CLOSING unit is granted before removal. */
   readonly closingGraceReviews?: number;
 
   /** Capital tolerance: scale below which a unit is lifecycle-negligible. */
@@ -123,10 +123,11 @@ export interface ProductionConfig {
  * M4 labor controls (REQ-CONFIG-006).
  *
  * Field list from section 37 of Handoff/05, baseline values from section 7
- * "Labor defaults" of Handoff/03. Section 37's `laborEpsilon` is deliberately
- * absent: labor is measured in worker-equivalents, a quantity, and
- * `NumericConfig.quantityEpsilon` already owns that tolerance. Section 37: State
- * policy owns minimum wage, taxes and ownership gates, so none appears here.
+ * "Labor defaults" of Handoff/03. `HANDOFF-REPAIR-M4-002` completed the three
+ * section-37 labor values that Q-001 had left open. Section 37's `laborEpsilon`
+ * is deliberately absent: labor is measured in worker-equivalents, a quantity,
+ * and `NumericConfig.quantityEpsilon` already owns that tolerance. Section 37:
+ * State policy owns minimum wage, taxes and ownership gates, so none appears here.
  */
 export interface LaborConfig {
   /** Share of the WORKING population that participates in the labor market. */
@@ -152,15 +153,11 @@ export interface LaborConfig {
   /** Labor categories the core baseline allows. Section 7 permits at most three in v1. */
   readonly allowedLaborCategories?: readonly string[];
 
-  /**
-   * Upper clamp on a single log wage step. No value stated by section 7, which
-   * instead states `maxWageMoveSharePerTick = 0.10` — a bound on a proportional
-   * move, not on a log step. Not mapped; see `docs/spec/OPEN_QUESTIONS.md`.
-   */
+  /** Upper clamp on a single log wage step; canonical baseline is `ln(1.05)`. */
   readonly maxLogWageStep?: number;
-  /** Unit-level wage response to its own vacancies. No value stated by section 7. */
+  /** Unit-level wage response to its own vacancies. */
   readonly unitVacancyResponse?: number;
-  /** Upper clamp on the labor-market tightness signal. No value stated by section 7. */
+  /** Upper clamp on the labor-market tightness signal. */
   readonly maxTightnessSignal?: number;
 }
 
@@ -338,9 +335,7 @@ export function createDefaultSimulationConfig(): SimulationConfig {
       expectationAlpha: 0.25,
     },
     trade: {},
-    // Handoff/03 section 6 "Production defaults". Controls section 37 names but
-    // section 6 gives no value for are absent, not guessed: REQ-CONFIG-006 is a
-    // PARTIAL row and `docs/spec/OPEN_QUESTIONS.md` carries the list.
+    // Handoff/03 section 6 "Production defaults", completed by HANDOFF-REPAIR-M4-002.
     production: {
       baseTargetUtilization: 0.7,
       minTargetUtilization: 0.1,
@@ -356,13 +351,23 @@ export function createDefaultSimulationConfig(): SimulationConfig {
       liquidityBufferShare: 0.1,
       minOperatingCash: 0,
       maxInputCriticality: 4.0,
+      investmentReviewCadenceTicks: 3,
+      investmentUtilizationThreshold: 0.75,
+      minimumInvestmentMargin: 0.05,
+      investmentPropensity: 0.35,
+      maxInvestmentShareOfExcessCash: 0.5,
+      maxCapitalGrowthPerReview: 0.25,
+      lifecycleReviewCadenceTicks: 3,
+      mothballMarginThreshold: -0.1,
+      mothballUtilizationThreshold: 0.25,
       mothballAfterReviews: 3,
+      reactivateMarginThreshold: 0.05,
       reactivateAfterReviews: 2,
       closeAfterReviews: 8,
+      closingGraceReviews: 4,
       minimumLifecycleScale: 1e-6,
     },
-    // Handoff/03 section 7 "Labor defaults". `maxLogWageStep`,
-    // `unitVacancyResponse` and `maxTightnessSignal` have no stated value.
+    // Handoff/03 section 7 "Labor defaults", completed by HANDOFF-REPAIR-M4-002.
     labor: {
       baselineParticipationRate: 0.7,
       laborWageAttractivenessElasticity: 0.5,
@@ -375,6 +380,9 @@ export function createDefaultSimulationConfig(): SimulationConfig {
       minimumWorkingHealthFactor: 0.5,
       maximumWorkingHealthFactor: 1.05,
       allowedLaborCategories: ["GENERAL"],
+      maxLogWageStep: Math.log(1.05),
+      unitVacancyResponse: 0.02,
+      maxTightnessSignal: 2.0,
     },
     // Handoff/06 section 33's M4 subset. Section 8 of Handoff/03 states its
     // population baseline in a different vocabulary, so only the four controls
