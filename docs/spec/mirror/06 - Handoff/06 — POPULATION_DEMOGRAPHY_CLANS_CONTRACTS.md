@@ -603,7 +603,7 @@ G8 — Social mobility cycle: long prosperity followed by recession. Verify slow
 
 33\. Configuration surface
 
-PopulationConfig must centralize: participation bounds, health factors, need category definitions, substitution price sensitivities, liquidity floor, EMA alphas, annual fertility/mortality definitions, fertility/mortality sensitivities and caps, aging rates, migration rate/weights/scale/candidate cap/dependent attachment, mobility cadence/thresholds/rate, household inventory carryover and spoilage rules.
+PopulationConfig must centralize: participation bounds, health factors, liquidity floor, EMA alphas, annual fertility/mortality definitions, fertility/mortality sensitivities and caps, aging rates, migration rate/weights/scale/candidate cap/dependent attachment, mobility cadence/thresholds/rate, and global household controls. Need category definitions — including per-category priceSensitivity, perCapitaTarget, minimumBudgetShare, substitutionGoods and inventoryCarryoverTicks — are DefinitionRegistry/NeedCategoryDefinition-owned as typed in section 4; PopulationConfig must not duplicate them. Household spoilage remains explicit Phase-9 behavior driven by definition/category data rather than a second global substitution/spoilage owner. HANDOFF-REPAIR-M4-003 fixes this ownership for M4 and supersedes the earlier ambiguous wording.
 
 ClanConfig must centralize: preference-axis bounds, allowed trait-to-coefficient mappings, payout/member-distribution/owner-injection cadence and caps, liquidity reserve rules, network strength/half-saturation, loyalty weights/adjustment, influence weights and relation retention.
 
