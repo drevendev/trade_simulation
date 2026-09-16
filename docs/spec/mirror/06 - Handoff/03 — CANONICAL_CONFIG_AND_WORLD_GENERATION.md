@@ -181,7 +181,7 @@ Recipe-owned defaults are not duplicated here: batchesPerCapitalUnit, input coef
 7\. Labor defaults
 
 LaborConfig baseline:  
-\- baselineParticipationRate \= 0.70 of WORKING population  
+\- baselineParticipationRate \= 0.70 of WORKING population; retained only as pre-M4 compatibility/staging. When M4 population labor supply activates, PopulationConfig.baseParticipationByStratum is authoritative and LaborConfig.baselineParticipationRate must not be read as a second participation owner.  
 \- laborWageAttractivenessElasticity \= 0.50  
 \- minWageWeight \= 0.50  
 \- maxWageWeight \= 2.00  
@@ -200,14 +200,37 @@ Core baseline has exactly one labor category GENERAL. Definition packs may add a
 8\. Population defaults
 
 PopulationConfig baseline:  
-\- consumptionBudgetShareLower \= 0.90  
-\- consumptionBudgetShareMiddle \= 0.80  
-\- consumptionBudgetShareUpper \= 0.70  
-\- precautionaryCashFloorMonths \= 0.25  
-\- needSubstitutionElasticity \= 0.60  
-\- healthEmaAlpha \= 0.20  
-\- prosperityEmaAlpha \= 0.15  
-\- wageSignalAlpha \= 0.20  
+M4 closed-economy defaults (REQ-CONFIG-007; HANDOFF-REPAIR-M4-003):  
+\- minHouseholdCashPerCapita \= 2.5 settlement-currency units per person; calibrated as one quarter of the baseline startingReferenceWage \= 10, preserving the earlier 0.25-month precautionary intent without treating months as a share.  
+\- liquidityFloorShare \= 0.10 of opening home-currency cash.  
+\- baseParticipationByStratum \= { VULNERABLE: 0.70, WORKING\_MIDDLE: 0.70, AFFLUENT: 0.70 }. The equal baseline deliberately preserves the prior 0.70 scalar and introduces no unsupported stratum participation gap; bounded health/opportunity/law factors create variation later.  
+\- minParticipation \= 0.40.  
+\- maxParticipation \= 0.90.  
+\- minHealthParticipationFactor \= 0.75.  
+\- maxHealthParticipationFactor \= 1.02.  
+\- minWeakOpportunityFactor \= 0.90.  
+\- maxWeakOpportunityFactor \= 1.05.  
+\- wageSignalAdjustmentSpeed \= 0.20.  
+\- maxWageSignalStep \= ln(1.05); the cohort planning signal may not move faster per tick than the baseline Production/Labor wage-move cap.  
+\- essentialAlpha \= 0.25.  
+\- incomeAlpha \= 0.15.  
+\- employmentAlpha \= 0.20.  
+\- prosperityAlpha \= 0.15.  
+\- scenarioRealIncomeScale \= 10 settlement-currency units per person per tick; this matches the baseline startingReferenceWage scale and is a normalization denominator only, never income or a transfer.  
+\- healthRecoveryRate \= 0.05 per tick.  
+\- healthMaintenanceThreshold \= 0.85.  
+\- serviceHealthRate \= 0.02 per tick.  
+\- serviceBaseline \= 0.50 coverage.
+
+Ownership/alias rules for M4:  
+\- PopulationConfig.baseParticipationByStratum supersedes LaborConfig.baselineParticipationRate for M4 labor-supply behavior. The LaborConfig scalar may remain temporarily for compatibility but must not be read once the M4 Population path is active.  
+\- Population healthParticipationFactor bounds \[0.75,1.02\] are distinct from LaborConfig minimumWorkingHealthFactor/maximumWorkingHealthFactor \[0.50,1.05\]: the former scales participation; the latter bounds health-related labor productivity. Do not merge them.  
+\- workerEpsilon is not a PopulationConfig field. Worker-equivalent quantities use NumericConfig.quantityEpsilon.  
+\- The P\_raw weights 0.35 / 0.25 / 0.15 / 0.20 / 0.05 remain formula constants whose sum is exactly 1.0; they are not scenario-tunable configuration in v1.  
+\- NeedCategoryDefinition.priceSensitivity remains definition-owned and per category as required by the population substitution formula. The old global needSubstitutionElasticity \= 0.60 is superseded and must not be used as a second substitution owner.  
+\- consumptionBudgetShareLower/Middle/Upper, precautionaryCashFloorMonths, healthEmaAlpha and wageSignalAlpha are superseded vocabulary for the M4 path and must not be implemented/read as parallel controls. prosperityEmaAlpha maps exactly to prosperityAlpha \= 0.15.
+
+M8-only demography/migration/mobility defaults remain below and must not be pulled into M4:  
 \- baselineMonthlyBirthRate \= 0.0014 per person, applied only through the canonical eligible-population formula  
 \- baselineMonthlyDeathRateChild \= 0.00035  
 \- baselineMonthlyDeathRateWorking \= 0.00020  
