@@ -1,7 +1,7 @@
 diff --git a/src/config/validation.test.ts b/src/config/validation.test.ts
 --- a/src/config/validation.test.ts
 +++ b/src/config/validation.test.ts
-@@ -1297,31 +1297,8 @@ describe("canonical production defaults (REQ-CONFIG-006)", () => {
+@@ -1297,29 +1297,5 @@ describe("canonical production defaults (REQ-CONFIG-006)", () => {
    it("is deterministic across calls", () => {
      expect(createDefaultSimulationConfig().production).toEqual(createDefaultSimulationConfig().production);
    });
@@ -31,12 +31,16 @@ diff --git a/src/config/validation.test.ts b/src/config/validation.test.ts
 -  });
  
    it("declares every control section 37 names", () => {
+@@ -1325,7 +1301,4 @@ describe("canonical production defaults (REQ-CONFIG-006)", () => {
+   it("declares every control section 37 names", () => {
 -    const declared = new Set<string>([
 -      ...Object.keys(createDefaultSimulationConfig().production),
 -      ...UNVALUED_BY_SECTION_6,
 -    ]);
 +    const declared = new Set<string>(Object.keys(createDefaultSimulationConfig().production));
-@@ -1447,14 +1424,6 @@ describe("canonical labor defaults (REQ-CONFIG-006)", () => {
+     // Section 37's list verbatim, less `laborEpsilon`-style tolerances that
+     // NumericConfig owns; the capital tolerance is `minimumLifecycleScale`.
+@@ -1446,12 +1419,5 @@ describe("canonical labor defaults (REQ-CONFIG-006)", () => {
    it("is deterministic across calls", () => {
      expect(createDefaultSimulationConfig().labor).toEqual(createDefaultSimulationConfig().labor);
    });
@@ -49,4 +53,3 @@ diff --git a/src/config/validation.test.ts b/src/config/validation.test.ts
 -  );
  
    /**
-    * Decision on Issue #527: labor is measured in worker-equivalents, a quantity, and
