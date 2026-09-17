@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { M4_POPULATION_DEFAULTS } from "./m4PopulationDefaults";
+import { createDefaultPopulationConfig, M4_POPULATION_DEFAULTS } from "./m4PopulationDefaults";
+import { validatePopulationConfig } from "./validation";
 
 const CANONICAL_FIELDS = [
   "minHouseholdCashPerCapita", "liquidityFloorShare", "baseParticipationByStratum",
@@ -37,6 +38,17 @@ describe("HANDOFF-REPAIR-M4-003 PopulationConfig defaults (REQ-CONFIG-007)", () 
     });
   });
 
+  it("constructs validator-safe runtime defaults with no shared participation map", () => {
+    const first = createDefaultPopulationConfig();
+    const second = createDefaultPopulationConfig();
+
+    expect(first).toEqual(M4_POPULATION_DEFAULTS);
+    expect(second).toEqual(M4_POPULATION_DEFAULTS);
+    expect(first).not.toBe(second);
+    expect(first.baseParticipationByStratum).not.toBe(second.baseParticipationByStratum);
+    expect(() => validatePopulationConfig(first)).not.toThrow();
+  });
+
   it("does not revive stale aliases or pull M8 controls forward", () => {
     for (const forbidden of [
       "workerEpsilon", "needSubstitutionElasticity", "consumptionBudgetShareLower",
@@ -44,7 +56,7 @@ describe("HANDOFF-REPAIR-M4-003 PopulationConfig defaults (REQ-CONFIG-007)", () 
       "precautionaryCashFloorMonths", "healthEmaAlpha", "wageSignalAlpha",
       "baselineMonthlyBirthRate", "migrationReviewEveryTicks", "mobilityCadenceTicks",
     ]) {
-      expect(M4_POPULATION_DEFAULTS).not.toHaveProperty(forbidden);
+      expect(createDefaultPopulationConfig()).not.toHaveProperty(forbidden);
     }
   });
 });
