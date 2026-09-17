@@ -168,13 +168,10 @@ export interface LaborConfig {
  *
  * The field list is the M4 subset of section 33 "Configuration surface" of
  * `06 - Handoff/06 — POPULATION_DEMOGRAPHY_CLANS_CONTRACTS.md`, spelled as the
- * sections that state each control spell it. Section 8 of Handoff/03 is the
- * baseline-value owner, as `HANDOFF-REPAIR-005`/`-010` establish for every other
- * block — but it states its population baseline in a different vocabulary
- * (`consumptionBudgetShare*`, `precautionaryCashFloorMonths`,
- * `needSubstitutionElasticity`, `healthEmaAlpha`), so sixteen of the twenty
- * controls below have no reachable value and are declared undefaulted rather than
- * guessed. See `docs/spec/OPEN_QUESTIONS.md`, Q-002.
+ * sections that state each control spell it. HANDOFF-REPAIR-M4-003 reconciles the
+ * vocabulary mismatch in Handoff/03 section 8, makes Handoff/03 the sole baseline
+ * owner, and supplies the canonical defaults for all twenty controls below. Q-002
+ * is answered; demography/migration remain deferred to M8.
  *
  * Deliberately absent, because another owner already holds the value:
  *
@@ -204,8 +201,8 @@ export interface PopulationConfig {
 
   /**
    * Section 8: participation before health, law and opportunity factors, keyed by
-   * cohort stratum. Its relationship to the single `LaborConfig`-owned
-   * `baselineParticipationRate` is unresolved — see Q-002.
+   * cohort stratum. HANDOFF-REPAIR-M4-003 makes this map the canonical M4
+   * participation baseline; the older LaborConfig scalar is not a second owner.
    */
   readonly baseParticipationByStratum?: Readonly<Record<string, number>>;
   /** Section 8: lower clamp on participation. Must not exceed `maxParticipation`. */
@@ -220,10 +217,7 @@ export interface PopulationConfig {
   readonly minHealthParticipationFactor?: number;
   /** Section 8: upper clamp on `healthParticipationFactor`. */
   readonly maxHealthParticipationFactor?: number;
-  /**
-   * Section 8: lower clamp on the EMA-based `weakOpportunityFactor`. Section 8
-   * offers `[0.9, 1.05]` as an example, not a value, so this is undefaulted.
-   */
+  /** Section 8: lower clamp on the EMA-based `weakOpportunityFactor`. */
   readonly minWeakOpportunityFactor?: number;
   /** Section 8: upper clamp on `weakOpportunityFactor`. */
   readonly maxWeakOpportunityFactor?: number;
