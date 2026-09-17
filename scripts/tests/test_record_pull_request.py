@@ -1,10 +1,13 @@
 """One ledger record per closed pull request, from facts GitHub holds, by `master` only."""
 
 import datetime as dt
+import json
 import pathlib
 import re
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import machine_pr_guard  # noqa: E402
@@ -219,6 +222,79 @@ class SchemeAtTests(unittest.TestCase):
         import schemes
         document = schemes.load(ROOT / "docs" / "zendev" / "schemes.json")
         self.assertEqual(rpr.scheme_at(document, "2026-09-15T03:00:00Z")["id"], "scheme/6")
+
+
+class BackfillOwnerTests(unittest.TestCase):
+    """#545: the verdict owner comes from the scheme a pull request closed under.
+
+    These go through `main()` on purpose. The defect was in `main()` — the pure
+    functions were right and the owner was computed once, outside the loop — so a test
+    of the pure functions alone would have passed over it.
+    """
+
+    DOCUMENT = {"active": "scheme/B", "schemes": [
+        {"id": "scheme/A", "in_force_from": at(0), "verdict_owner": "zendev-acceptor",
+         "roles": {"acceptor": {"model": "claude-x"}}},
+        {"id": "scheme/B", "in_force_from": at(1000), "verdict_owner": "andy-zen-dev",
+         "roles": {"acceptor": {"model": None}}},
+    ]}
+
+    def run_backfill(self, extra=()):
+        old = pull(number=1, created_at=at(10), closed_at=at(100), merged_at=at(100))
+        new = pull(number=2, created_at=at(1010), closed_at=at(1100), merged_at=at(1100))
+        comments = {
+            1: [comment("zendev-acceptor", "## Verdict: REQUEST_CHANGES", 40),
+                comment("zendev-acceptor", "## Verdict: ACCEPT", 90),
+                comment("andy-zen-dev", "## Verdict: REQUEST_CHANGES", 95)],
+            2: [comment("zendev-acceptor", "## Verdict: REQUEST_CHANGES", 1020),
+                comment("andy-zen-dev", "## Verdict: ACCEPT", 1090)],
+        }
+        by_number = {1: old, 2: new}
+        with tempfile.TemporaryDirectory() as out, \
+                patch.object(rpr.schemes, "load", return_value=self.DOCUMENT), \
+                patch.object(rpr, "read_closed", return_value=[old, new]), \
+                patch.object(rpr, "read_pull", side_effect=lambda repo, n: by_number[n]), \
+                patch.object(rpr, "read_reviews", return_value=[]), \
+                patch.object(rpr, "read_comments", side_effect=lambda repo, n: comments[n]):
+            code = rpr.main(["--repo", "o/r", "--closed-since", at(0), "--out-dir", out, *extra])
+            self.assertEqual(code, 0)
+            records = {}
+            for path in pathlib.Path(out).rglob("*.json"):
+                record = json.loads(path.read_text(encoding="utf-8"))
+                records[record["number"]] = record
+        return records
+
+    def test_each_record_takes_its_owner_and_its_stamp_from_one_descriptor(self):
+        records = self.run_backfill()
+        self.assertEqual((records[1]["scheme"]["id"], records[1]["verdict_owner"]),
+                         ("scheme/A", "zendev-acceptor"))
+        self.assertEqual((records[2]["scheme"]["id"], records[2]["verdict_owner"]),
+                         ("scheme/B", "andy-zen-dev"))
+
+    def test_a_historical_pull_request_keeps_its_historical_verdicts(self):
+        old = self.run_backfill()[1]
+        self.assertEqual([v["state"] for v in old["verdicts"]], ["CHANGES_REQUESTED", "APPROVED"])
+        self.assertEqual(old["refusals"], 1)
+        self.assertFalse(old["accepted_first_time"])
+        self.assertEqual(old["first_verdict_at"], at(40))
+
+    def test_the_current_scheme_ignores_verdict_shaped_content_from_anyone_else(self):
+        new = self.run_backfill()[2]
+        self.assertEqual([v["state"] for v in new["verdicts"]], ["APPROVED"])
+        self.assertEqual(new["refusals"], 0)
+        self.assertTrue(new["accepted_first_time"])
+
+    def test_an_explicit_owner_overrides_every_scheme(self):
+        records = self.run_backfill(["--verdict-owner", "andy-zen-dev"])
+        self.assertEqual(records[1]["verdict_owner"], "andy-zen-dev")
+        self.assertEqual([v["state"] for v in records[1]["verdicts"]], ["CHANGES_REQUESTED"])
+        self.assertEqual(records[2]["verdict_owner"], "andy-zen-dev")
+
+    def test_the_owner_falls_back_to_the_active_scheme_only_outside_every_scheme(self):
+        active = self.DOCUMENT["schemes"][1]
+        self.assertEqual(rpr.owner_for(self.DOCUMENT, at(-5), active=active), "andy-zen-dev")
+        self.assertEqual(rpr.owner_for(self.DOCUMENT, at(50), active=active), "zendev-acceptor")
+        self.assertEqual(rpr.owner_for(None, at(50)), "")
 
 
 class WorkflowTests(unittest.TestCase):
