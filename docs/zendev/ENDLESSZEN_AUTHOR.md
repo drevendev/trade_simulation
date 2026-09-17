@@ -21,13 +21,13 @@ request accepted, in the order the gates read it. Sections 6 and 7 of
 - **Product or policy, never both.** Workflows, `scripts/`, `docs/zendev/` and
   `AGENTS.md` are control plane; `policy_guard` refuses a diff that mixes them with
   product code, and a product Issue is not `policy`.
-- **Branch name:** anything but `claude/**` and the machine branches
-  `scripts/machine_pr_guard.py` lists. `zen/issue-<N>-<slug>` is the suggestion.
-  `claude/**` is the loop's own class: the forge merges `master` into such a branch
-  when it falls behind. Yours it leaves alone — so **a branch that falls behind
-  `master` is yours to update** (merge `master` in, or rebase and push); the red
-  `mergeability` status says whether it is behind or in conflict, and branch protection
-  does not merge while it is red.
+- **Branch name: `zen/issue-<N>-<slug>`.** `zen/**` is the class the forge recognizes
+  as an outside author's, and it is maintained for you: when `master` moves, the forge
+  merges it into a `zen/**` branch that has merely fallen behind — a draft included —
+  and resolves a conflict confined to the two ledger files by requirement identifier.
+  It never deletes your branch. A conflict in any other file is yours, and the red
+  `mergeability` status says which case it is; branch protection does not merge while
+  it is red. `zen-edit`, below, works on `zen/**` only.
 - **Read the slice, not the specification.** Registry, changelog, then the one document
   the Issue names. `docs/spec/mirror/**` is machine-owned and never edited by hand; a
   wrong specification is a dated entry in `docs/spec/FEEDBACK_TO_RESEARCHER.md` or
@@ -58,16 +58,58 @@ Before pushing: `npm run typecheck`, `npm test`, `npm run build`, and
 changed. Never cut a tag or a release; the tagger is mechanical and releases a milestone
 only when every one of its rows reads `IMPLEMENTED` and carries its merge commit.
 
+## Editing a file you cannot check out
+
+The contents API writes whole files. For a small file that is fine; for a large one it
+loses whatever you did not mean to touch, and the repair costs more than the change —
+#550 spent six refusals on one import and one line. So do not resubmit a large file to
+change a few lines of it. Commit an **edit file** instead, and the forge applies it.
+
+Create `.zen/edits/<anything>.edit` on your `zen/**` branch (the pull request must
+already be open; a draft is fine):
+
+    ### FILE: src/config/simulationConfig.ts
+    <<<<<<< FIND
+        population: {
+    =======
+        population: createDefaultPopulationConfig(),
+    >>>>>>> REPLACE
+
+- `FIND` is matched character for character, indentation included, and must occur
+  **exactly once** in the file. Too short to be unique? Add the lines around it, in
+  both halves.
+- Blocks apply in order; one edit file may hold several blocks and several
+  `### FILE:` sections, and one push may carry several edit files.
+- All or nothing: one block that does not apply, and nothing is changed.
+- Existing text files only — create and delete through the contents API as before —
+  and never `.github/`, `scripts/`, `docs/zendev/`, `AGENTS.md`, `docs/spec/mirror/` or
+  `.zen/`.
+- To delete lines, put them in `FIND` together with a neighbouring line and repeat only
+  the neighbour in `REPLACE`.
+
+Within a minute `zen-edit` — `master`'s definition, acting as `zendev-machine[bot]` —
+pushes one commit to your branch with the edits applied and the edit file removed, and
+says so in a comment on the pull request. A refusal names the edit file, the block and
+the reason, and changes nothing. The checks then run on the machine's commit: **that
+head, not the one you pushed, is the one to verify and to ask a verdict on.** The head
+that still carries the edit file shows a red `policy-guard`, because it has a path the
+body does not name; it is superseded, not a finding.
+
 ## What happens next
 
 - The four required checks run on the head revision: `build-and-test`, `typescript`,
   `policy-guard`, `mergeability`. All four must be green; `pending` is not green.
-- **SLOPSTER reviews** the head and owns the verdict: a formal review — *Approve* or
-  *Request changes* — on the pull request, or a comment starting `## Verdict: ACCEPT` /
-  `## Verdict: REQUEST_CHANGES`. Its QA findings stay what they were, `## SLOPSTER QA:
-  FINDING` comments. Answer a refusal by pushing to the same branch and asking for a
-  re-review of the new head; a formal *Request changes* blocks the merge until it is
-  re-reviewed or dismissed.
+- **SLOPSTER judges** the head and owns the verdict, as `AGENTS.md` says: a comment
+  starting `## Verdict: ACCEPT` or `## Verdict: REQUEST_CHANGES` that names the exact
+  head it judged. It never posts a formal review — a formal refusal from an account
+  without write access would hold the merge until someone with authority cleared it —
+  and it never labels or merges. Its QA findings stay what they were,
+  `## SLOPSTER QA: FINDING` comments; a finding that blocks acceptance comes with a
+  `## Verdict: REQUEST_CHANGES`. Answer a refusal by pushing to the same branch; the
+  verdict on the old head says nothing about the new one.
+- **A clean head** — nothing to find — gets `## Verdict: ACCEPT` on that head. That
+  comment, together with the four checks green on the same head, is the whole of what
+  the operator needs.
 - **The operator merges** an accepted pull request (squash, as every merge here), and
   closes the Issue through `Closes #N`. Nothing merges by itself.
 - **Nothing closes a pull request by itself either.** The rework bound (three refusals)
@@ -79,8 +121,8 @@ only when every one of its rows reads `IMPLEMENTED` and carries its merge commit
 
 Every closed pull request is written to the private ledger (`pulls/` in
 `zen-telemetry`) by `pr-ledger.yml`: who opened it and when, when it was first judged
-and when it merged or closed, how many refusals it took — SLOPSTER's formal reviews and
-verdict comments are the verdicts now — its size, the Issue and the requirement
+and when it merged or closed, how many refusals it took — SLOPSTER's `## Verdict:` comments
+are the verdicts now — its size, the Issue and the requirement
 identifiers it names, its QA findings, and the scheme it landed under. That is how the
 speed and quality of this scheme compare with the autonomous author's days: same gates,
 a different author and a different judge, and no token cost on either side.

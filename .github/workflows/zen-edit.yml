@@ -1,0 +1,116 @@
+name: zen-edit
+
+# Surgical edits for an author who has no working tree.
+#
+# An author outside the loop writes through the forge's contents API: whole files only.
+# On a large file that loses whatever the author did not mean to touch — #550 spent six
+# refusals on a two-line change for exactly that reason. So the author commits a small
+# `.zen/edits/*.edit` file of exact-text replacements to its `zen/**` branch, and this
+# workflow applies it: `scripts/apply_zen_edits.py` from `master` runs over the branch
+# checked out as data, and the MACHINE identity pushes one commit that carries the edits
+# and removes the edit file. The format and its rules are in
+# docs/zendev/ENDLESSZEN_AUTHOR.md.
+#
+# `pull_request_target`, so the definition and the script are `master`'s, like
+# mergeability.yml and pr-ledger.yml. Unlike them this one must read the branch, and the
+# rule that makes that safe is narrow and tested
+# (scripts/tests/test_apply_zen_edits.py): the branch is checked out into `work/` without
+# credentials and **nothing in `work/` is ever executed** — no install, no test, no
+# script. The only program that touches it is the reviewed applier in `control/`, which
+# reads text and writes text, refuses the control plane and the mirror, and applies all
+# the edits or none.
+#
+# The path filter keeps this silent for every pull request that carries no edit file,
+# and ends the loop by itself: the applying commit removes the edit file, so the
+# MACHINE's own push no longer matches.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+    paths:
+      - '.zen/edits/**'
+
+# Reads only, from `github.token`. The push and the comment are the MACHINE identity's,
+# minted below for this repository alone: a push made with the workflow token would start
+# no checks, and the edited head would sit unmeasured.
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: zen-edit-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  # Named apart from any commit status this repository writes.
+  apply-zen-edits:
+    name: apply-zen-edits
+    # This repository's own `zen/**` branches only: a fork's branch is not ours to push
+    # to, `claude/**` is the loop's class, and the machine classes have their own guard.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository
+      && startsWith(github.event.pull_request.head.ref, 'zen/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the reviewed definition
+        uses: actions/checkout@v7
+        with:
+          path: control
+          persist-credentials: false
+
+      - name: Check out the branch to edit, as data
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: work
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Act as the MACHINE identity
+        id: identity
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ZENDEV_MACHINE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZENDEV_MACHINE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Apply the edits
+        id: apply
+        run: |
+          python control/scripts/apply_zen_edits.py \
+            --work work \
+            --report "${RUNNER_TEMP}/zen-edit-report.md" \
+            --names "${RUNNER_TEMP}/zen-edit-names.txt"
+
+      # The branch name reaches the shell through the environment, never through
+      # expression interpolation: it is text a pusher chose. Not a force push: if the
+      # branch moved while this ran, the push is refused and the next event re-runs it.
+      - name: Push the result as the MACHINE
+        if: steps.apply.outputs.outcome == 'applied'
+        env:
+          TOKEN: ${{ steps.identity.outputs.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          git -C work config user.name "zendev-machine[bot]"
+          git -C work config user.email "zendev-machine[bot]@users.noreply.github.com"
+          git -C work add -A
+          git -C work commit -q -m "zen-edit: apply $(cat "${RUNNER_TEMP}/zen-edit-names.txt")"
+          git -C work push "https://x-access-token:${TOKEN}@github.com/${REPOSITORY}.git" "HEAD:refs/heads/${HEAD_REF}"
+
+      - name: Say what happened on the pull request
+        if: steps.apply.outputs.outcome == 'applied' || steps.apply.outputs.outcome == 'refused'
+        env:
+          GH_TOKEN: ${{ steps.identity.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: gh pr comment "${PR_NUMBER}" --repo "${REPOSITORY}" --body-file "${RUNNER_TEMP}/zen-edit-report.md"
+
+      # A refusal is the author's to fix, and a red run is where they will look.
+      - name: Fail the run when the edits were refused
+        if: steps.apply.outputs.outcome == 'refused'
+        run: exit 1
