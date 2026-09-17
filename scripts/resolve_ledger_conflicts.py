@@ -20,7 +20,9 @@ case and only that case.
 
 ## What it does
 
-For an open loop pull request (``claude/**``) that GitHub reports as ``dirty``:
+For an open pull request of the loop (``claude/**``) or of an outside author
+(``zen/**``, drafts included — see ``update_branches.py``) that GitHub reports as
+``dirty``:
 
 1. merge ``master`` into the branch and list the unmerged paths;
 2. **refuse unless every one of them is a ledger file.** One product file among them and
@@ -56,9 +58,8 @@ import sys
 
 import implementation_status
 import machine_pr_guard
-from update_branches import failure_detail
+from update_branches import LOOP_PREFIX, MAINTAINED_PREFIXES, OUTSIDE_PREFIX, failure_detail
 
-LOOP_PREFIX = "claude/"
 DIRTY = "dirty"
 
 LEDGER_CSV = "docs/spec/implementation_status.csv"
@@ -95,14 +96,14 @@ def should_resolve(pull):
 
     if pull.get("state", "open") != "open":
         return False, "not open"
-    if pull.get("draft"):
+    if pull.get("draft") and not ref.startswith(OUTSIDE_PREFIX):
         return False, "draft"
     if not head_repo or head_repo != base_repo:
         return False, "head is not in this repository"
     if machine_pr_guard.classify(ref) is not None:
         return False, "machine class: a merge commit from anyone else fails its committer gate"
-    if not ref.startswith(LOOP_PREFIX):
-        return False, f"not a loop branch ({LOOP_PREFIX}**)"
+    if not ref.startswith(MAINTAINED_PREFIXES):
+        return False, f"not a loop branch ({LOOP_PREFIX}** or {OUTSIDE_PREFIX}**)"
     if pull.get("mergeable") is None:
         return False, "mergeability not yet computed"
     state = pull.get("mergeable_state")

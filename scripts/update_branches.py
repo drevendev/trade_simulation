@@ -10,7 +10,8 @@ afternoon.
 This performs the merge through the forge's own endpoint, for the loop's branches only:
 
 * the head must live in this repository — a fork's branch is not ours to move;
-* the branch must be the loop's (``claude/**``); an operator's branch is left alone;
+* the branch must be the loop's (``claude/**``) or an outside author's (``zen/**``);
+  any other branch — an operator's — is left alone;
 * it must not be a machine class: a merge commit committed by anyone but the producing
   workflow fails that class's committer gate, so updating one would refuse it;
 * the branch must merge. A conflict is not this sweep's to resolve, and an answer
@@ -52,6 +53,16 @@ import machine_pr_guard
 import mergeability
 
 LOOP_PREFIX = "claude/"
+# An author outside the loop — the researcher under scheme/8 — works on `zen/**` through
+# the forge's API and has no working tree to merge the base into. On 2026-09-17 three
+# control-plane merges left #550 "behind master by 3 commits": a red required check its
+# author had no way to clear. So the forge maintains that class like the loop's own, with
+# one difference. A `claude/**` draft is skipped because a run may still be writing it; a
+# `zen/**` draft is maintained, because such an author keeps its pull request in draft
+# for the whole of its iteration, which is exactly when a moved base costs it the most,
+# and a base merge cannot collide with a working tree that does not exist.
+OUTSIDE_PREFIX = "zen/"
+MAINTAINED_PREFIXES = (LOOP_PREFIX, OUTSIDE_PREFIX)
 BEHIND = "behind"
 
 
@@ -76,14 +87,14 @@ def should_update(pull, behind_by):
 
     if pull.get("state", "open") != "open":
         return False, "not open"
-    if pull.get("draft"):
+    if pull.get("draft") and not ref.startswith(OUTSIDE_PREFIX):
         return False, "draft"
     if not head_repo or head_repo != base_repo:
         return False, "head is not in this repository"
     if machine_pr_guard.classify(ref) is not None:
         return False, "machine class: a merge commit from anyone else fails its committer gate"
-    if not ref.startswith(LOOP_PREFIX):
-        return False, f"not a loop branch ({LOOP_PREFIX}**)"
+    if not ref.startswith(MAINTAINED_PREFIXES):
+        return False, f"not a loop branch ({LOOP_PREFIX}** or {OUTSIDE_PREFIX}**)"
     if pull.get("mergeable") is None:
         return False, "mergeability not yet computed"
     state = pull.get("mergeable_state")

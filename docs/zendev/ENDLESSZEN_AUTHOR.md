@@ -21,13 +21,13 @@ request accepted, in the order the gates read it. Sections 6 and 7 of
 - **Product or policy, never both.** Workflows, `scripts/`, `docs/zendev/` and
   `AGENTS.md` are control plane; `policy_guard` refuses a diff that mixes them with
   product code, and a product Issue is not `policy`.
-- **Branch name:** anything but `claude/**` and the machine branches
-  `scripts/machine_pr_guard.py` lists. `zen/issue-<N>-<slug>` is the suggestion.
-  `claude/**` is the loop's own class: the forge merges `master` into such a branch
-  when it falls behind. Yours it leaves alone — so **a branch that falls behind
-  `master` is yours to update** (merge `master` in, or rebase and push); the red
-  `mergeability` status says whether it is behind or in conflict, and branch protection
-  does not merge while it is red.
+- **Branch name: `zen/issue-<N>-<slug>`.** `zen/**` is the class the forge recognizes
+  as an outside author's, and it is maintained for you: when `master` moves, the forge
+  merges it into a `zen/**` branch that has merely fallen behind — a draft included —
+  and resolves a conflict confined to the two ledger files by requirement identifier.
+  It never deletes your branch. A conflict in any other file is yours, and the red
+  `mergeability` status says which case it is; branch protection does not merge while
+  it is red. `zen-edit`, below, works on `zen/**` only.
 - **Read the slice, not the specification.** Registry, changelog, then the one document
   the Issue names. `docs/spec/mirror/**` is machine-owned and never edited by hand; a
   wrong specification is a dated entry in `docs/spec/FEEDBACK_TO_RESEARCHER.md` or
