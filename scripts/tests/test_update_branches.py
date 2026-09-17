@@ -103,6 +103,22 @@ class ShouldUpdateTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("not a loop branch", reason)
 
+    def test_an_outside_author_s_branch_is_maintained_like_the_loop_s(self):
+        # The researcher under scheme/8 has no working tree to merge the base into.
+        ok, reason = ub.should_update(pull(ref="zen/req-config-007-population-defaults"), 3)
+        self.assertTrue(ok)
+        self.assertIn("behind its base by 3 commits", reason)
+
+    def test_an_outside_author_s_draft_is_maintained_and_the_loop_s_is_not(self):
+        self.assertTrue(ub.should_update(pull(ref="zen/issue-549-x", draft=True), 3)[0])
+        ok, reason = ub.should_update(pull(ref="claude/issue-9-example", draft=True), 3)
+        self.assertEqual((ok, reason), (False, "draft"))
+
+    def test_a_prefix_that_only_resembles_the_class_is_not_the_class(self):
+        for ref in ("zenith/x", "xzen/x", "zen", "claudette/x"):
+            with self.subTest(ref=ref):
+                self.assertFalse(ub.should_update(pull(ref=ref), 3)[0])
+
     def test_a_fork_head_is_not_ours_to_move(self):
         for head_repo in ("someone/trade_simulation", None):
             with self.subTest(head_repo=head_repo):

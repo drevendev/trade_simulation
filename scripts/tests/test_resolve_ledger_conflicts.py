@@ -74,6 +74,14 @@ class ShouldResolveTests(unittest.TestCase):
                 self.assertFalse(ok)
                 self.assertIn("not a loop branch", reason)
 
+    def test_an_outside_author_s_branch_is_resolved_like_the_loop_s_drafts_included(self):
+        for draft in (False, True):
+            with self.subTest(draft=draft):
+                self.assertEqual(resolver.should_resolve(pull(ref="zen/issue-549-x", draft=draft)),
+                                 (True, resolver.DIRTY))
+        self.assertEqual(resolver.should_resolve(pull(ref="claude/issue-9-example", draft=True)),
+                         (False, "draft"))
+
     def test_a_fork_head_is_not_ours_to_move(self):
         ok, reason = resolver.should_resolve(pull(head_repo="someone/trade_simulation"))
         self.assertFalse(ok)
