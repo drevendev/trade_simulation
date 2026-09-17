@@ -62,12 +62,17 @@ only when every one of its rows reads `IMPLEMENTED` and carries its merge commit
 
 - The four required checks run on the head revision: `build-and-test`, `typescript`,
   `policy-guard`, `mergeability`. All four must be green; `pending` is not green.
-- **SLOPSTER reviews** the head and owns the verdict: a formal review — *Approve* or
-  *Request changes* — on the pull request, or a comment starting `## Verdict: ACCEPT` /
-  `## Verdict: REQUEST_CHANGES`. Its QA findings stay what they were, `## SLOPSTER QA:
-  FINDING` comments. Answer a refusal by pushing to the same branch and asking for a
-  re-review of the new head; a formal *Request changes* blocks the merge until it is
-  re-reviewed or dismissed.
+- **SLOPSTER judges** the head and owns the verdict, as `AGENTS.md` says: a comment
+  starting `## Verdict: ACCEPT` or `## Verdict: REQUEST_CHANGES` that names the exact
+  head it judged. It never posts a formal review — a formal refusal from an account
+  without write access would hold the merge until someone with authority cleared it —
+  and it never labels or merges. Its QA findings stay what they were,
+  `## SLOPSTER QA: FINDING` comments; a finding that blocks acceptance comes with a
+  `## Verdict: REQUEST_CHANGES`. Answer a refusal by pushing to the same branch; the
+  verdict on the old head says nothing about the new one.
+- **A clean head** — nothing to find — gets `## Verdict: ACCEPT` on that head. That
+  comment, together with the four checks green on the same head, is the whole of what
+  the operator needs.
 - **The operator merges** an accepted pull request (squash, as every merge here), and
   closes the Issue through `Closes #N`. Nothing merges by itself.
 - **Nothing closes a pull request by itself either.** The rework bound (three refusals)
@@ -79,8 +84,8 @@ only when every one of its rows reads `IMPLEMENTED` and carries its merge commit
 
 Every closed pull request is written to the private ledger (`pulls/` in
 `zen-telemetry`) by `pr-ledger.yml`: who opened it and when, when it was first judged
-and when it merged or closed, how many refusals it took — SLOPSTER's formal reviews and
-verdict comments are the verdicts now — its size, the Issue and the requirement
+and when it merged or closed, how many refusals it took — SLOPSTER's `## Verdict:` comments
+are the verdicts now — its size, the Issue and the requirement
 identifiers it names, its QA findings, and the scheme it landed under. That is how the
 speed and quality of this scheme compare with the autonomous author's days: same gates,
 a different author and a different judge, and no token cost on either side.

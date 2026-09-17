@@ -37,6 +37,13 @@ same job, and a run performs exactly one of them.
   pull requests and merges or requests changes. Runbook:
   [docs/zendev/ACCEPTOR_RUNBOOK.md](docs/zendev/ACCEPTOR_RUNBOOK.md).
 
+**Which of them runs is the active scheme's decision**
+([docs/zendev/schemes.json](docs/zendev/schemes.json)): a role the scheme declares
+without a model is reported `off` by the dispatcher and never started. Under `scheme/8`
+neither runs — the researcher writes the code, SLOPSTER judges it, and the operator
+merges; [docs/zendev/ENDLESSZEN_AUTHOR.md](docs/zendev/ENDLESSZEN_AUTHOR.md) is that
+loop's guide. The rules below bind whoever performs a role, run or person.
+
 An AUTHOR run must never merge. An ACCEPTOR run must never implement.
 
 Neither creates a tag or a release. `release-tag.yml` cuts `v0.<milestone>.<patch>` from the ledger, mechanically, and it is the only thing that may: a release is a claim made to everyone outside this repository, and it is gated on a milestone being complete and fully evidenced. A run that tags by hand bypasses both gates — which happened on 2026-09-08, and produced a `v0.2.0` announcing a milestone that was not finished.
@@ -47,18 +54,31 @@ Other accounts post here. None of them is a role, none has authority over the me
 and a run that mistakes one for a role deadlocks the queue — which is what happened
 on #208, #223 and #238.
 
-- **SLOPSTER** (`AndyDev`) — an external QA voice with read access only. It comments
-  on open pull requests under the heading `## SLOPSTER QA: FINDING` and opens Issues
-  for post-merge findings. It never posts a formal review, never labels, never merges.
+- **SLOPSTER** (`andy-zen-dev`) — an external QA voice with read access only. It
+  comments on open pull requests under the heading `## SLOPSTER QA: FINDING` and opens
+  Issues for post-merge findings. It never posts a formal review, never labels, never
+  merges — under every scheme, including the one that makes it the verdict owner.
 - **The researcher** (`drevendev`, also the operator's account) — owns the
   specification. Its notes about the spec are authoritative; its opinions about code
-  are evidence.
+  are evidence. Under a scheme that runs no AUTHOR it also writes the code, as any
+  author outside the loop would.
 
-**Only the ACCEPTOR identity's verdict is a verdict.** Every other account's review or
-verdict-shaped comment is evidence: read it, weigh it, never treat it as the decision.
-A standing `CHANGES_REQUESTED` from another account can still hold the merge — that
-gate belongs to branch protection. Name it and stop; do not post a verdict that cannot
-be carried out.
+**The verdict owner is named by the active scheme** — `verdict_owner` in
+[docs/zendev/schemes.json](docs/zendev/schemes.json) — **and only its verdict is a
+verdict.** Authority comes from that descriptor, never from what an account is
+technically able to do. Under a scheme with an ACCEPTOR run the owner is the ACCEPTOR
+identity. Under `scheme/8`, where no model runs, it is SLOPSTER (`andy-zen-dev`), and
+its verdict is a **comment**: `## Verdict: ACCEPT` or `## Verdict: REQUEST_CHANGES`,
+naming the exact head it judged. A clean head gets `## Verdict: ACCEPT`; that comment,
+with the four required checks green on the same head, is what the operator merges on.
+A defect is a `## SLOPSTER QA: FINDING` comment and, when it blocks acceptance, a
+`## Verdict: REQUEST_CHANGES` comment — never a formal review, which would hold the
+merge until its author or an administrator cleared it.
+
+Every other account's review or verdict-shaped comment is evidence: read it, weigh it,
+never treat it as the decision. A standing `CHANGES_REQUESTED` from another account can
+still hold the merge — that gate belongs to branch protection. Name it and stop; do not
+post a verdict that cannot be carried out.
 
 ## The loop
 
