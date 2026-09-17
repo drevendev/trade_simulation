@@ -211,14 +211,13 @@ def summarize(pull, reviews, comments, *, verdict_owner, qa_login, scheme, now, 
     }
 
 
-def scheme_at(document, when):
-    """The scheme in force at `when` — the latest whose `in_force_from` is at or before
-    it — as a `{id, digest}` stamp, or None when no scheme was. Pure.
+def scheme_in_force(document, when):
+    """The descriptor of the scheme in force at `when` — the latest whose `in_force_from`
+    is at or before it — or None when no scheme was. Pure.
 
     A live record closes under the active scheme and the two agree. A backfill does
-    not: the pull request landed under whatever scheme was in force then, and stamping
-    it with today's would file a Sonnet day under an Opus scheme. The descriptor's own
-    `in_force_from` is the boundary, exactly as the tags say.
+    not: the pull request landed under whatever scheme was in force then. The
+    descriptor's own `in_force_from` is the boundary, exactly as the tags say.
     """
     moment = parse_time(when)
     if moment is None:
@@ -230,9 +229,36 @@ def scheme_at(document, when):
             continue
         if chosen is None or start >= parse_time(chosen.get("in_force_from")):
             chosen = scheme
+    return chosen
+
+
+def scheme_at(document, when):
+    """`{id, digest}` of the scheme in force at `when`, or None. Pure.
+
+    Stamping a backfilled pull request with today's scheme would file a Sonnet day under
+    an Opus scheme.
+    """
+    chosen = scheme_in_force(document, when)
     if chosen is None:
         return None
     return {"id": chosen["id"], "digest": schemes.digest(chosen)}
+
+
+def owner_for(document, when, *, explicit=None, active=None) -> str:
+    """Whose verdicts count for a pull request that closed at `when`. Pure.
+
+    The verdict owner is part of a scheme, so it has to come from the same descriptor as
+    the stamp. Read once from the active scheme, as this used to be, a backfill run
+    under scheme/8 would judge every earlier pull request by SLOPSTER's verdicts — of
+    which there are none — and rewrite its refusals and first-verdict acceptance to
+    "never judged" while still stamping it scheme/6 (#545). An explicit owner is a
+    deliberate override and wins; the active scheme is only the fallback for a closing
+    time no scheme covers.
+    """
+    if explicit:
+        return explicit
+    in_force = scheme_in_force(document, when) or {}
+    return in_force.get("verdict_owner") or (active or {}).get("verdict_owner") or ""
 
 
 def record_path(record) -> str:
@@ -350,7 +376,8 @@ def main(argv=None) -> int:
     parser.add_argument("--ledger-repo", default=None, help="owner/zen-telemetry; defaults to the owner of --repo")
     parser.add_argument("--out-dir", default=None, help="write records under this directory instead of the ledger")
     parser.add_argument("--run-url", default=None)
-    parser.add_argument("--verdict-owner", default=None, help="defaults to the active scheme's verdict_owner")
+    parser.add_argument("--verdict-owner", default=None,
+                        help="override; defaults to the verdict_owner of the scheme in force when each pull request closed")
     parser.add_argument("--qa-login", default=os.environ.get("ZENDEV_QA_LOGIN", ""))
     args = parser.parse_args(argv)
 
@@ -359,11 +386,7 @@ def main(argv=None) -> int:
         document = schemes.load()
     except (OSError, ValueError):
         pass
-    scheme = schemes.active(document) if document else None
-    owner = args.verdict_owner or (scheme or {}).get("verdict_owner") or ""
-    if not owner:
-        warn("no verdict owner: name one with --verdict-owner or in the active scheme")
-        return 0
+    active = schemes.active(document) if document else None
     ledger_repo = args.ledger_repo or f"{args.repo.split('/')[0]}/zen-telemetry"
     token = os.environ.get("TELEMETRY_TOKEN", "")
 
@@ -383,8 +406,15 @@ def main(argv=None) -> int:
             warn(f"#{number} is still open; a record is written when it closes")
             continue
         # The scheme the pull request closed under, not the one active today: the two
-        # differ exactly when this is a backfill.
-        stamp = scheme_at(document, pull.get("merged_at") or pull.get("closed_at")) or schemes.stamp()
+        # differ exactly when this is a backfill. The stamp and the verdict owner come
+        # from that one descriptor, or the record would contradict itself (#545).
+        closed = pull.get("merged_at") or pull.get("closed_at")
+        stamp = scheme_at(document, closed) or schemes.stamp()
+        owner = owner_for(document, closed, explicit=args.verdict_owner, active=active)
+        if not owner:
+            warn(f"#{number}: no verdict owner in the scheme in force or the active one; "
+                 "name one with --verdict-owner")
+            continue
         record = summarize(
             pull,
             _flatten(read_reviews(args.repo, number)),
