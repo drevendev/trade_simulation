@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDefaultPopulationConfig, M4_POPULATION_DEFAULTS } from "./m4PopulationDefaults";
+import { createDefaultSimulationConfig } from "./simulationConfig";
 import { validatePopulationConfig } from "./validation";
 
 const CANONICAL_FIELDS = [
@@ -47,6 +48,15 @@ describe("HANDOFF-REPAIR-M4-003 PopulationConfig defaults (REQ-CONFIG-007)", () 
     expect(first).not.toBe(second);
     expect(first.baseParticipationByStratum).not.toBe(second.baseParticipationByStratum);
     expect(() => validatePopulationConfig(first)).not.toThrow();
+  });
+
+  it("requires the top-level default simulation config to materialize the canonical population baseline", () => {
+    const first = createDefaultSimulationConfig();
+    const second = createDefaultSimulationConfig();
+
+    expect(first.population).toEqual(M4_POPULATION_DEFAULTS);
+    expect(second.population).toEqual(M4_POPULATION_DEFAULTS);
+    expect(first.population.baseParticipationByStratum).not.toBe(second.population.baseParticipationByStratum);
   });
 
   it("does not revive stale aliases or pull M8 controls forward", () => {
