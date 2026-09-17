@@ -11,6 +11,8 @@
  * requirements add fields without touching this file's shape.
  */
 
+import { createDefaultPopulationConfig } from "./m4PopulationDefaults";
+
 /** Concrete fields land with the numeric-tolerance requirement that owns them (section 3). */
 export interface NumericConfig {
   readonly moneyEpsilon?: number;
@@ -384,20 +386,9 @@ export function createDefaultSimulationConfig(): SimulationConfig {
       unitVacancyResponse: 0.02,
       maxTightnessSignal: 2.0,
     },
-    // Handoff/06 section 33's M4 subset. Section 8 of Handoff/03 states its
-    // population baseline in a different vocabulary, so only the four controls
-    // below have a value reachable from this requirement's slice; the other
-    // sixteen of the twenty are declared and left undefaulted, not guessed. See
-    // `docs/spec/OPEN_QUESTIONS.md`, Q-002.
-    population: {
-      // Handoff/06 section 8, "Recommended healthParticipationFactor range [0.75,1.02]".
-      minHealthParticipationFactor: 0.75,
-      maxHealthParticipationFactor: 1.02,
-      // Handoff/03 section 8 `wageSignalAlpha`/`prosperityEmaAlpha` under the
-      // section 9/10 spelling.
-      wageSignalAdjustmentSpeed: 0.2,
-      prosperityAlpha: 0.15,
-    },
+    // The twenty canonical M4 controls of HANDOFF-REPAIR-M4-003 (Q-002, answered),
+    // built fresh on every call by `createDefaultPopulationConfig()`.
+    population: createDefaultPopulationConfig(),
     clans: {},
     fiscal: {},
     monetary: {},
