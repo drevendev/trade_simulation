@@ -11,6 +11,8 @@
  * requirements add fields without touching this file's shape.
  */
 
+import { createDefaultPopulationConfig } from "./m4PopulationDefaults";
+
 /** Concrete fields land with the numeric-tolerance requirement that owns them (section 3). */
 export interface NumericConfig {
   readonly moneyEpsilon?: number;
@@ -166,13 +168,10 @@ export interface LaborConfig {
  *
  * The field list is the M4 subset of section 33 "Configuration surface" of
  * `06 - Handoff/06 — POPULATION_DEMOGRAPHY_CLANS_CONTRACTS.md`, spelled as the
- * sections that state each control spell it. Section 8 of Handoff/03 is the
- * baseline-value owner, as `HANDOFF-REPAIR-005`/`-010` establish for every other
- * block — but it states its population baseline in a different vocabulary
- * (`consumptionBudgetShare*`, `precautionaryCashFloorMonths`,
- * `needSubstitutionElasticity`, `healthEmaAlpha`), so sixteen of the twenty
- * controls below have no reachable value and are declared undefaulted rather than
- * guessed. See `docs/spec/OPEN_QUESTIONS.md`, Q-002.
+ * sections that state each control spell it. HANDOFF-REPAIR-M4-003 reconciles the
+ * vocabulary mismatch in Handoff/03 section 8, makes Handoff/03 the sole baseline
+ * owner, and supplies the canonical defaults for all twenty controls below. Q-002
+ * is answered; demography/migration remain deferred to M8.
  *
  * Deliberately absent, because another owner already holds the value:
  *
@@ -202,8 +201,8 @@ export interface PopulationConfig {
 
   /**
    * Section 8: participation before health, law and opportunity factors, keyed by
-   * cohort stratum. Its relationship to the single `LaborConfig`-owned
-   * `baselineParticipationRate` is unresolved — see Q-002.
+   * cohort stratum. HANDOFF-REPAIR-M4-003 makes this map the canonical M4
+   * participation baseline; the older LaborConfig scalar is not a second owner.
    */
   readonly baseParticipationByStratum?: Readonly<Record<string, number>>;
   /** Section 8: lower clamp on participation. Must not exceed `maxParticipation`. */
@@ -218,10 +217,7 @@ export interface PopulationConfig {
   readonly minHealthParticipationFactor?: number;
   /** Section 8: upper clamp on `healthParticipationFactor`. */
   readonly maxHealthParticipationFactor?: number;
-  /**
-   * Section 8: lower clamp on the EMA-based `weakOpportunityFactor`. Section 8
-   * offers `[0.9, 1.05]` as an example, not a value, so this is undefaulted.
-   */
+  /** Section 8: lower clamp on the EMA-based `weakOpportunityFactor`. */
   readonly minWeakOpportunityFactor?: number;
   /** Section 8: upper clamp on `weakOpportunityFactor`. */
   readonly maxWeakOpportunityFactor?: number;
@@ -384,20 +380,9 @@ export function createDefaultSimulationConfig(): SimulationConfig {
       unitVacancyResponse: 0.02,
       maxTightnessSignal: 2.0,
     },
-    // Handoff/06 section 33's M4 subset. Section 8 of Handoff/03 states its
-    // population baseline in a different vocabulary, so only the four controls
-    // below have a value reachable from this requirement's slice; the other
-    // sixteen of the twenty are declared and left undefaulted, not guessed. See
-    // `docs/spec/OPEN_QUESTIONS.md`, Q-002.
-    population: {
-      // Handoff/06 section 8, "Recommended healthParticipationFactor range [0.75,1.02]".
-      minHealthParticipationFactor: 0.75,
-      maxHealthParticipationFactor: 1.02,
-      // Handoff/03 section 8 `wageSignalAlpha`/`prosperityEmaAlpha` under the
-      // section 9/10 spelling.
-      wageSignalAdjustmentSpeed: 0.2,
-      prosperityAlpha: 0.15,
-    },
+    // The twenty canonical M4 controls of HANDOFF-REPAIR-M4-003 (Q-002, answered),
+    // built fresh on every call by `createDefaultPopulationConfig()`.
+    population: createDefaultPopulationConfig(),
     clans: {},
     fiscal: {},
     monetary: {},
