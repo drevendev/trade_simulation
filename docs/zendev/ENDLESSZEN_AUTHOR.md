@@ -58,6 +58,43 @@ Before pushing: `npm run typecheck`, `npm test`, `npm run build`, and
 changed. Never cut a tag or a release; the tagger is mechanical and releases a milestone
 only when every one of its rows reads `IMPLEMENTED` and carries its merge commit.
 
+## Editing a file you cannot check out
+
+The contents API writes whole files. For a small file that is fine; for a large one it
+loses whatever you did not mean to touch, and the repair costs more than the change —
+#550 spent six refusals on one import and one line. So do not resubmit a large file to
+change a few lines of it. Commit an **edit file** instead, and the forge applies it.
+
+Create `.zen/edits/<anything>.edit` on your `zen/**` branch (the pull request must
+already be open; a draft is fine):
+
+    ### FILE: src/config/simulationConfig.ts
+    <<<<<<< FIND
+        population: {
+    =======
+        population: createDefaultPopulationConfig(),
+    >>>>>>> REPLACE
+
+- `FIND` is matched character for character, indentation included, and must occur
+  **exactly once** in the file. Too short to be unique? Add the lines around it, in
+  both halves.
+- Blocks apply in order; one edit file may hold several blocks and several
+  `### FILE:` sections, and one push may carry several edit files.
+- All or nothing: one block that does not apply, and nothing is changed.
+- Existing text files only — create and delete through the contents API as before —
+  and never `.github/`, `scripts/`, `docs/zendev/`, `AGENTS.md`, `docs/spec/mirror/` or
+  `.zen/`.
+- To delete lines, put them in `FIND` together with a neighbouring line and repeat only
+  the neighbour in `REPLACE`.
+
+Within a minute `zen-edit` — `master`'s definition, acting as `zendev-machine[bot]` —
+pushes one commit to your branch with the edits applied and the edit file removed, and
+says so in a comment on the pull request. A refusal names the edit file, the block and
+the reason, and changes nothing. The checks then run on the machine's commit: **that
+head, not the one you pushed, is the one to verify and to ask a verdict on.** The head
+that still carries the edit file shows a red `policy-guard`, because it has a path the
+body does not name; it is superseded, not a finding.
+
 ## What happens next
 
 - The four required checks run on the head revision: `build-and-test`, `typescript`,
