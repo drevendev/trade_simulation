@@ -34,3 +34,14 @@ export const M4_POPULATION_DEFAULTS = {
   serviceHealthRate: 0.02,
   serviceBaseline: 0.50,
 } as const satisfies PopulationConfig;
+
+/**
+ * Returns a fresh runtime config so callers cannot share the nested participation
+ * map by reference. `createDefaultSimulationConfig()` is the intended consumer.
+ */
+export function createDefaultPopulationConfig(): PopulationConfig {
+  return {
+    ...M4_POPULATION_DEFAULTS,
+    baseParticipationByStratum: { ...M4_POPULATION_DEFAULTS.baseParticipationByStratum },
+  };
+}
