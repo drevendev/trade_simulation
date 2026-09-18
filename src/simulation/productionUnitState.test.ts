@@ -129,16 +129,16 @@ describe("REQ-PRODUCTION-001 persistent ProductionUnit state", () => {
     );
   });
 
-  it("requires configured neutral targets instead of silently inventing M4 signal defaults", () => {
+  it("uses the canonical config owner for neutral targets when a valid partial config omits them", () => {
     const config = createDefaultSimulationConfig();
-    const { baseTargetUtilization: _base, ...withoutBaseTarget } = config.production;
-    const { targetSellThrough: _sellThrough, ...withoutSellThroughTarget } = config.production;
+    const {
+      baseTargetUtilization: _base,
+      targetSellThrough: _sellThrough,
+      ...partialProduction
+    } = config.production;
 
-    expect(() => createInitialProductionSignalState(withoutBaseTarget)).toThrow(
-      /baseTargetUtilization is required/,
-    );
-    expect(() => createInitialProductionSignalState(withoutSellThroughTarget)).toThrow(
-      /targetSellThrough is required/,
-    );
+    const signals = createInitialProductionSignalState(partialProduction);
+    expect(signals.utilizationEma).toBe(config.production.baseTargetUtilization);
+    expect(signals.sellThroughEma).toBe(config.production.targetSellThrough);
   });
 });

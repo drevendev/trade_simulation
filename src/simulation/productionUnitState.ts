@@ -7,7 +7,7 @@
  * module deliberately exposes no mutable/serialized `capacity` field.
  */
 import type { RecipeDefinition } from "../config/definitionPack";
-import type { ProductionConfig } from "../config/simulationConfig";
+import { createDefaultSimulationConfig, type ProductionConfig } from "../config/simulationConfig";
 import type { GoodId } from "../domain/id";
 import { isFiniteCanonicalNumber } from "../domain/numeric";
 
@@ -63,14 +63,16 @@ function requireInventory(name: string, inventory: ReadonlyMap<GoodId, number>):
  * realized-flow EMAs and lifecycle counters start at zero.
  */
 export function createInitialProductionSignalState(production: ProductionConfig): ProductionSignalState {
-  const utilizationEma = production.baseTargetUtilization;
-  const sellThroughEma = production.targetSellThrough;
+  // ProductionConfig controls are optional at the type boundary so older/minimal valid
+  // scenarios remain constructible. When a caller omits the M4 planning targets, seed
+  // these observer signals from the canonical default owner rather than duplicating a
+  // numeric default here or rejecting an otherwise valid partial configuration.
+  const canonicalProductionDefaults = createDefaultSimulationConfig().production;
+  const utilizationEma = production.baseTargetUtilization ?? canonicalProductionDefaults.baseTargetUtilization;
+  const sellThroughEma = production.targetSellThrough ?? canonicalProductionDefaults.targetSellThrough;
 
-  if (utilizationEma === undefined) {
-    throw new Error("ProductionConfig.baseTargetUtilization is required to initialize M4 production signals");
-  }
-  if (sellThroughEma === undefined) {
-    throw new Error("ProductionConfig.targetSellThrough is required to initialize M4 production signals");
+  if (utilizationEma === undefined || sellThroughEma === undefined) {
+    throw new Error("canonical ProductionConfig defaults must define M4 production-signal targets");
   }
 
   requireFiniteInRange("ProductionSignalState.utilizationEma", utilizationEma, 0, 1);
