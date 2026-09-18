@@ -107,7 +107,7 @@ that fact; this file does not.
 | REQ-ACCEPTANCE-005 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-VISUALIZATION-009 | `READY` | `NOT_STARTED` | — | — | — |
 
-**Summary: 32 of 49 requirement identifiers implemented.**
+**Summary: 33 of 49 requirement identifiers implemented.**
 The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
 
 <!-- coverage:generated:end -->
