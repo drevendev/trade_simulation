@@ -1,0 +1,13 @@
+### FILE: docs/spec/implementation_status.csv
+<<<<<<< FIND
+TypeScript: typecheck clean, 672 tests passed (46 files), build succeeded. C#/.NET: build clean, 45 tests passed (REQ-MIGRATION-003 maintained).
+=======
+TypeScript: typecheck clean, 672 tests passed (46 files), build succeeded. C#/.NET: build clean, 45 tests passed (REQ-MIGRATION-003 maintained). PR #557 (Issue #347) repairs the remaining MTFX-I2 proof gap left by those earlier fixture-map checks: the focused acceptance test now builds the canonical baseline WorldState, clears a non-zero ProductionUnit OUTPUT sale to a Cohort household, applies the allocation through executeAllocation(world, context, allocation), and proves on authoritative stock that seller decrease = buyer increase = allocation.quantity with total goods conserved. The same assertion fails on a bypassed seller mutation and on a reversed buyer mutation, providing sensitive negative controls. Exact-head CI run 35293863449 on 884d98f1913e6648f2ebc3051c85b7f20565f57f passed all required gates before this evidence-only reconciliation; the requirement remains IMPLEMENTED and its existing #506 merge provenance is preserved until this corrective PR merges.
+>>>>>>> REPLACE
+
+### FILE: docs/spec/IMPLEMENTATION_STATUS.md
+<<<<<<< FIND
+TypeScript: typecheck clean, 672 tests passed (46 files), build succeeded. C#/.NET: build clean, 45 tests passed (REQ-MIGRATION-003 maintained).
+=======
+TypeScript: typecheck clean, 672 tests passed (46 files), build succeeded. C#/.NET: build clean, 45 tests passed (REQ-MIGRATION-003 maintained). PR #557 (Issue #347) repairs the remaining MTFX-I2 proof gap left by those earlier fixture-map checks: the focused acceptance test now builds the canonical baseline WorldState, clears a non-zero ProductionUnit OUTPUT sale to a Cohort household, applies the allocation through executeAllocation(world, context, allocation), and proves on authoritative stock that seller decrease = buyer increase = allocation.quantity with total goods conserved. The same assertion fails on a bypassed seller mutation and on a reversed buyer mutation, providing sensitive negative controls. Exact-head CI run 35293863449 on 884d98f1913e6648f2ebc3051c85b7f20565f57f passed all required gates before this evidence-only reconciliation; the requirement remains IMPLEMENTED and its existing #506 merge provenance is preserved until this corrective PR merges.
+>>>>>>> REPLACE
