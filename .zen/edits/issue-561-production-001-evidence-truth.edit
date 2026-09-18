@@ -1,0 +1,13 @@
+### FILE: docs/spec/implementation_status.csv
+<<<<<<< FIND
+Exact-head CI run 35306175336 on 260973f5255a7c7c84c6bf226a3366539fd4ae28 passed TypeScript typecheck/tests/build, retained .NET build/test, policy-guard and mergeability. MERGE_COMMIT intentionally blank until integration;
+=======
+Exact-head CI run 35306469114 on b2dabe251952dd6dd79b15e4cdc384398b3f8155 passed TypeScript typecheck/tests/build, retained .NET build/test, policy-guard and mergeability. PR #559 then squash-merged as 96ed4198e3f3220916e9ce78455befe37ff971f3;
+>>>>>>> REPLACE
+
+### FILE: docs/spec/IMPLEMENTATION_STATUS.md
+<<<<<<< FIND
+Exact-head CI run 35306175336 on 260973f5255a7c7c84c6bf226a3366539fd4ae28 passed TypeScript typecheck/tests/build, retained .NET build/test, policy-guard and mergeability. MERGE_COMMIT intentionally blank until integration;
+=======
+Exact-head CI run 35306469114 on b2dabe251952dd6dd79b15e4cdc384398b3f8155 passed TypeScript typecheck/tests/build, retained .NET build/test, policy-guard and mergeability. PR #559 then squash-merged as 96ed4198e3f3220916e9ce78455befe37ff971f3;
+>>>>>>> REPLACE
