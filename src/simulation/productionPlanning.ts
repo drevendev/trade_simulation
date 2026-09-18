@@ -377,9 +377,15 @@ export function planProductionUnitPhase2(args: {
     purchaseEntries.push([goodId, plannedPurchase]);
 
     if (plannedPurchase > planning.quantityEpsilon) {
+      const expectedPriceValue = evidence.priorCloseGrossInputPriceByGood[goodId];
+      if (expectedPriceValue === undefined) {
+        throw new Error(
+          `ProductionPlanningEvidence.priorCloseGrossInputPriceByGood[${String(goodId)}] is required when INPUT procurement is planned`,
+        );
+      }
       const expectedPrice = requirePositive(
         `ProductionPlanningEvidence.priorCloseGrossInputPriceByGood[${String(goodId)}]`,
-        evidence.priorCloseGrossInputPriceByGood[goodId],
+        expectedPriceValue,
       );
       const cost = plannedPurchase * expectedPrice;
       desiredInputCost += cost;
@@ -511,6 +517,7 @@ export function createPhase2ProductionPlanningHandler(options: {
         );
       }
       const region = regionForUnit(world, unit);
+      const planningEvidence = options.evidenceByUnit.get(unit.productionUnitId);
       const result = planProductionUnitPhase2({
         tick: context.tick,
         unit,
@@ -518,7 +525,7 @@ export function createPhase2ProductionPlanningHandler(options: {
         settlementCurrencyId: region.settlementCurrencyId,
         recipe,
         config: world.simulationConfig,
-        evidence: options.evidenceByUnit.get(unit.productionUnitId),
+        ...(planningEvidence === undefined ? {} : { evidence: planningEvidence }),
       });
       productionPlans.push(result.productionPlan);
       laborDemandPlans.push(result.laborDemandPlan);
