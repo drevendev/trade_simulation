@@ -366,21 +366,19 @@ describe("reconcileGenesisStocks", () => {
 
       const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
 
-      // Find a production unit with capital
+      // Find a production unit with live authoritative capital.
       const puWithCapital = Array.from(worldState.productionUnits.values()).find(
-        (pu) => pu.seed.installedCapital > 0,
+        (pu) => pu.installedCapital > 0,
       );
       expect(puWithCapital).toBeDefined();
       if (!puWithCapital) return;
 
-      // Create a modified world state with reduced capital
+      // Create a modified world state with reduced live capital. The scenario seed is
+      // immutable genesis provenance and must not remain the reconciliation authority.
       const modifiedPUs = new Map(worldState.productionUnits);
       const modifiedPU = {
         ...puWithCapital,
-        seed: {
-          ...puWithCapital.seed,
-          installedCapital: puWithCapital.seed.installedCapital / 2,
-        },
+        installedCapital: puWithCapital.installedCapital / 2,
       };
       modifiedPUs.set(puWithCapital.productionUnitId, modifiedPU);
 

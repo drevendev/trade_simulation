@@ -24,6 +24,15 @@ export {
 } from "./worldState";
 
 export {
+  INITIAL_LIFECYCLE_REVIEW_TICK,
+  createInitialProductionSignalState,
+  deriveNameplateCapacity,
+  validateProductionUnitPersistentState,
+  type ProductionSignalState,
+  type ProductionUnitPersistentStateView,
+} from "./productionUnitState";
+
+export {
   TOTAL_PHASES,
   PHASE_NAMES,
   initializeTickContext,

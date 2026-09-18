@@ -363,8 +363,10 @@ export function reconcileGenesisStocks(
     addPuGoods("INPUT", pu.seed.inputInventory);
     addPuGoods("OUTPUT", pu.seed.outputInventory);
     addPuGoods("INVESTMENT", pu.seed.investmentInventory);
-    // Capital by PU owner + capital good, through the documented recipe conversion
-    if (pu.seed.installedCapital > 0) {
+    // Capital by PU owner + capital good, through the documented recipe conversion.
+    // REQ-PRODUCTION-001 moves installed capital into live ProductionUnit state: the
+    // scenario seed is opening provenance only and must not remain the runtime authority.
+    if (pu.installedCapital > 0) {
       const ownerKey = `PU:${pu.productionUnitId}`;
       const capitalGoods = resolveCapitalGoodsPerCapitalUnit(
         worldState.definitionRegistry,
@@ -375,12 +377,12 @@ export function reconcileGenesisStocks(
         capitalGoods.forEach(([goodId, goodsPerCapitalUnit]) => {
           const key = `${ownerKey}:${serializeCapitalGood(goodId)}`;
           const current = actualCapitalByOwnerGood.get(key) ?? 0;
-          actualCapitalByOwnerGood.set(key, current + pu.seed.installedCapital * goodsPerCapitalUnit);
+          actualCapitalByOwnerGood.set(key, current + pu.installedCapital * goodsPerCapitalUnit);
         });
       } else {
         const key = `${ownerKey}:${UNCONVERTED_CAPITAL_KEY}`;
         const current = actualCapitalByOwnerGood.get(key) ?? 0;
-        actualCapitalByOwnerGood.set(key, current + pu.seed.installedCapital);
+        actualCapitalByOwnerGood.set(key, current + pu.installedCapital);
       }
     }
   });
