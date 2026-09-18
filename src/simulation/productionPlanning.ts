@@ -541,11 +541,15 @@ export function planProductionUnitPhase2(args: {
   }
 
   const investmentIntents: MarketIntent[] = [];
+  let allocatedInvestmentSpend = 0;
   for (const [goodId, requiredCost] of stableOrderBy(investmentCostEntries, ([candidate]) => String(candidate))) {
     const desiredQuantity = investmentPurchaseEntries.find(([candidate]) => candidate === goodId)?.[1] ?? 0;
-    const maxSpend = totalRequiredInvestmentCost > planning.moneyEpsilon
+    const proportionalSpend = totalRequiredInvestmentCost > planning.moneyEpsilon
       ? investmentBudget * requiredCost / totalRequiredInvestmentCost
       : 0;
+    const remainingInvestmentBudget = Math.max(0, investmentBudget - allocatedInvestmentSpend);
+    const maxSpend = Math.min(proportionalSpend, remainingInvestmentBudget);
+    allocatedInvestmentSpend += maxSpend;
     const intent: MarketIntent = {
       id: createMarketIntentId(`mi:${tick}:${String(unit.productionUnitId)}:INVESTMENT:${String(goodId)}`),
       actor: { type: "PRODUCTION_UNIT", productionUnitId: unit.productionUnitId },
