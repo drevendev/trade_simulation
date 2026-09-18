@@ -1,0 +1,13 @@
+### FILE: docs/spec/implementation_status.csv
+<<<<<<< FIND
+No production/labor behavior is claimed here; REQ-PRODUCTION-001..008 own it. Merge commit intentionally remains blank until PR #546 is independently accepted and merged; scripts/implementation_status.py must regenerate docs/spec/IMPLEMENTATION_STATUS.md from this authoritative row before judgement.
+=======
+No production/labor behavior is claimed here; REQ-PRODUCTION-001..008 own it. Final judged PR #546 head `ec14fa1c2a8fa9bddfd75028fe908a84682d3051` had exact-head CI #1071 complete successfully with TypeScript, retained .NET, policy-guard and mergeability green; PR #546 then squash-merged as `cd12a1cd8bffd298ca237378687312da47c91355`.
+>>>>>>> REPLACE
+
+### FILE: docs/spec/IMPLEMENTATION_STATUS.md
+<<<<<<< FIND
+No production/labor behavior is claimed here; REQ-PRODUCTION-001..008 own it. Merge commit intentionally remains blank until PR #546 is independently accepted and merged; scripts/implementation_status.py must regenerate docs/spec/IMPLEMENTATION_STATUS.md from this authoritative row before judgement.
+=======
+No production/labor behavior is claimed here; REQ-PRODUCTION-001..008 own it. Final judged PR #546 head `ec14fa1c2a8fa9bddfd75028fe908a84682d3051` had exact-head CI #1071 complete successfully with TypeScript, retained .NET, policy-guard and mergeability green; PR #546 then squash-merged as `cd12a1cd8bffd298ca237378687312da47c91355`.
+>>>>>>> REPLACE
