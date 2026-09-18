@@ -1,0 +1,47 @@
+### FILE: src/simulation/productionPlanning.ts
+<<<<<<< FIND
+    if (plannedPurchase > planning.quantityEpsilon) {
+      const expectedPrice = requirePositive(
+        `ProductionPlanningEvidence.priorCloseGrossInputPriceByGood[${String(goodId)}]`,
+        evidence.priorCloseGrossInputPriceByGood[goodId],
+      );
+      const cost = plannedPurchase * expectedPrice;
+=======
+    if (plannedPurchase > planning.quantityEpsilon) {
+      const expectedPriceValue = evidence.priorCloseGrossInputPriceByGood[goodId];
+      if (expectedPriceValue === undefined) {
+        throw new Error(
+          `ProductionPlanningEvidence.priorCloseGrossInputPriceByGood[${String(goodId)}] is required when INPUT procurement is planned`,
+        );
+      }
+      const expectedPrice = requirePositive(
+        `ProductionPlanningEvidence.priorCloseGrossInputPriceByGood[${String(goodId)}]`,
+        expectedPriceValue,
+      );
+      const cost = plannedPurchase * expectedPrice;
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+      const region = regionForUnit(world, unit);
+      const result = planProductionUnitPhase2({
+        tick: context.tick,
+        unit,
+        regionId: region.regionId,
+        settlementCurrencyId: region.settlementCurrencyId,
+        recipe,
+        config: world.simulationConfig,
+        evidence: options.evidenceByUnit.get(unit.productionUnitId),
+      });
+=======
+      const region = regionForUnit(world, unit);
+      const planningEvidence = options.evidenceByUnit.get(unit.productionUnitId);
+      const result = planProductionUnitPhase2({
+        tick: context.tick,
+        unit,
+        regionId: region.regionId,
+        settlementCurrencyId: region.settlementCurrencyId,
+        recipe,
+        config: world.simulationConfig,
+        ...(planningEvidence === undefined ? {} : { evidence: planningEvidence }),
+      });
+>>>>>>> REPLACE
