@@ -5,7 +5,7 @@ import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { GoodId } from "../domain/id";
 import { createTransactionId, initializeTickContext } from "./tickOrchestrator";
-import { validateMarketIntent } from "./marketIntent";
+import { getEnvelopeCommitment, validateMarketIntent } from "./marketIntent";
 import {
   createPhase2ProductionPlanningHandler,
   planProductionUnitPhase2,
@@ -288,7 +288,7 @@ describe("REQ-PRODUCTION-002 Phase-2 production planning slice", () => {
     ).toThrow(/infrastructureFactor.*\[0, 1\]/);
   });
 
-  it("populates only the Phase-2 TickContext planning outputs and self-guards other phases", () => {
+  it("commits Phase-2 INPUT maxSpend to the plan envelope and rejects duplicate overcommit", () => {
     const base = fixture();
     const oneUnitWorld: WorldState = {
       ...base.world,
@@ -307,5 +307,21 @@ describe("REQ-PRODUCTION-002 Phase-2 production planning slice", () => {
     expect(planned.productionMarketIntents?.length).toBeGreaterThan(0);
     expect(planned.transactions).toEqual([]);
     expect(planned.currentLedger.records).toEqual([]);
+
+    const productionPlan = planned.productionPlans![0]!;
+    const intents = planned.productionMarketIntents!;
+    const submittedMaxSpend = intents.reduce((sum, intent) => sum + (intent.maxSpend ?? 0), 0);
+    const committed = getEnvelopeCommitment(
+      planned.budgetLedger,
+      intents[0]!.actor,
+      base.region.settlementCurrencyId,
+      productionPlan.planId,
+    );
+    expect(committed).toBeCloseTo(submittedMaxSpend, 10);
+    expect(submittedMaxSpend).toBeCloseTo(productionPlan.procurementCashEnvelope, 8);
+
+    expect(() => handler(oneUnitWorld, planned, oneUnitWorld.pendingTransitions)).toThrow(
+      /Phase-2 INPUT budget commitment failed.*would exceed limit/,
+    );
   });
 });

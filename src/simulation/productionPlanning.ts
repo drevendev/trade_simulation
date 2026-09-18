@@ -17,7 +17,13 @@ import { createDefaultSimulationConfig, type SimulationConfig } from "../config/
 import type { CurrencyId, GoodId, ProductionUnitId, RegionId } from "../domain/id";
 import { isFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
-import { createMarketIntentId, validateMarketIntent, type MarketIntent, type MarketIntentId } from "./marketIntent";
+import {
+  commitBudget,
+  createMarketIntentId,
+  validateMarketIntent,
+  type MarketIntent,
+  type MarketIntentId,
+} from "./marketIntent";
 import { deriveNameplateCapacity } from "./productionUnitState";
 import type { PhaseHandler, TickContext } from "./tickOrchestrator";
 import type { PendingTransitions, ProductionUnitState, RegionState, WorldState } from "./worldState";
@@ -508,6 +514,7 @@ export function createPhase2ProductionPlanningHandler(options: {
     const productionPlans: ProductionPlan[] = [];
     const laborDemandPlans: LaborDemandPlan[] = [];
     const productionMarketIntents: MarketIntent[] = [];
+    let budgetLedger = context.budgetLedger;
 
     for (const unit of stableOrderBy(world.productionUnits.values(), (candidate) => String(candidate.productionUnitId))) {
       const recipe = world.definitionRegistry.recipes[unit.seed.recipeId];
@@ -527,6 +534,26 @@ export function createPhase2ProductionPlanningHandler(options: {
         config: world.simulationConfig,
         ...(planningEvidence === undefined ? {} : { evidence: planningEvidence }),
       });
+
+      for (const intent of result.inputIntents) {
+        const maxSpend = intent.maxSpend;
+        if (maxSpend === undefined) {
+          throw new Error(`Phase-2 INPUT intent ${String(intent.id)} is missing maxSpend`);
+        }
+        const committed = commitBudget(
+          budgetLedger,
+          intent.actor,
+          region.settlementCurrencyId,
+          result.productionPlan.planId,
+          maxSpend,
+          result.productionPlan.procurementCashEnvelope,
+        );
+        if (typeof committed === "string") {
+          throw new Error(`Phase-2 INPUT budget commitment failed for ${String(intent.id)}: ${committed}`);
+        }
+        budgetLedger = committed;
+      }
+
       productionPlans.push(result.productionPlan);
       laborDemandPlans.push(result.laborDemandPlan);
       productionMarketIntents.push(...result.inputIntents);
@@ -534,6 +561,7 @@ export function createPhase2ProductionPlanningHandler(options: {
 
     return {
       ...context,
+      budgetLedger,
       productionPlans,
       laborDemandPlans,
       productionMarketIntents,
