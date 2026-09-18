@@ -419,20 +419,23 @@ marginSignalEma \= EMA(realized/planning normalized margin signal)
 
 19\. Investment planning
 
-Investment review cadence defaults to every 3 ticks. Only ACTIVE or eligible MOTHBALLED units review normal capacity investment. PLANNED units use startup funding rules instead.
+M4 implementation normalization (HANDOFF-REPAIR-M4-004): investment review cadence defaults to every 3 ticks. A normal capacity-investment review is due only when tick \> 0 and tick % investmentReviewCadenceTicks \== 0; investmentReviewCadenceTicks must be an integer \>= 1\. Tick 0 is genesis and emits no ordinary capacity-expansion intents. REQ-PRODUCTION-002 implements ordinary Phase-2 investment-intent planning for ACTIVE units only. Eligible MOTHBALLED expansion is activated later by REQ-PRODUCTION-007 once reactivation eligibility is implemented; PLANNED units use startup funding rules instead.
 
 Positive investment pressure is intentionally small:  
 demandPressure \= clamp((u.signals.utilizationEma \- investmentUtilizationThreshold) / max(1-investmentUtilizationThreshold,epsilon), \-1, 1\)  
 marginPressure \= max(0, u.signals.marginSignalEma \- minimumInvestmentMargin)  
 salesPressure \= max(0, u.signals.sellThroughEma \- targetSellThrough)  
-positivePressure \= clamp(wUtil\*demandPressure \+ wMargin\*marginPressure \+ wSales\*salesPressure, 0, 1\)
+positivePressure \= clamp((demandPressure \+ marginPressure \+ salesPressure) / 3, 0, 1\)  
+Core-v1 investment-pressure weights are fixed and equal: wUtil \= wMargin \= wSales \= 1/3. They are formula constants, not SimulationConfig fields; changing them requires a specification/version change.
 
 homeCash \= u.wallet\[region.settlementCurrencyId\]  
-workingCapitalTarget \= grossWageCashEnvelope \+ desired next-tick input envelope estimate \+ minimumOperatingCash  
+desiredNextTickInputEnvelopeEstimate \= desiredInputCost from Section 10, computed only from opening inventories, the current Phase-2 plan and prior-close gross INPUT prices  
+workingCapitalTarget \= mandatoryKnownCash \+ grossWageCashEnvelope \+ desiredNextTickInputEnvelopeEstimate \+ operatingLiquidityBuffer  
 investableCash \= max(0, homeCash \- workingCapitalTarget)  
 investmentBudget \= investableCash × clamp(investmentPropensity × positivePressure, 0, maxInvestmentShareOfExcessCash)
 
-No investment is created by the budget. It only funds MarketIntent BUY with purpose=INVESTMENT for the recipe’s investment goods. Same canonical market/trade/FX rules apply.
+No investment is created by the budget. It only funds MarketIntent BUY with purpose=INVESTMENT for the recipe’s investment goods. Same canonical market/trade/FX rules apply.  
+INPUT and INVESTMENT budget commitments are distinct, non-reusable envelopes. MarketIntent.sourcePlanId remains ProductionPlan.planId; the budget ledger must use a separate deterministic investment commitment key so investment maxSpend cannot consume or masquerade as the INPUT procurement envelope. Sum INVESTMENT maxSpend \<= investmentBudget, and because investmentBudget is derived only after the Section-10 mandatory/payroll/input/liquidity reserves, combined Phase-2 commitments cannot rely on same-tick sales, Phase-7 imports, later owner distributions, future subsidies or implicit credit.
 
 Recommended starting defaults:  
 investmentReviewCadenceTicks \= 3  
@@ -450,9 +453,12 @@ capitalAdditionTarget \= maxDesiredCapitalAddition × positivePressure
 For each investment good g:  
 required\_g \= capitalAdditionTarget × recipe.investmentGoodsPerCapitalUnit\[g\]  
 onHand\_g \= u.investmentInventory\[g\]  
-desiredPurchase\_g \= max(0, required\_g \- onHand\_g)
+desiredPurchase\_g \= max(0, required\_g \- onHand\_g)  
+For every desiredPurchase\_g \> quantityEpsilon, the prior-close gross buyer price for INVESTMENT must exist, be finite and \> 0; otherwise planning fails fast. Iterate investment goods in stable goodId order. Planning creates only intents and plan IDs; it does not mutate investmentInventory or installedCapital.
 
-Allocate investmentBudget across required goods by required cash share, using prior-close gross buyer prices. Submit canonical MarketIntent BUY purpose=INVESTMENT with inventoryBucket=INVESTMENT. Market settlement transfers purchased goods into investmentInventory, not inputInventory. The same bucket is copied into any delayed TradeShipment so imported investment goods arrive in investmentInventory rather than a generic ProductionUnit stock.
+Allocate investmentBudget across required goods by required cash share, using prior-close gross buyer prices. Submit canonical MarketIntent BUY purpose=INVESTMENT with inventoryBucket=INVESTMENT. Market settlement transfers purchased goods into investmentInventory, not inputInventory. The same bucket is copied into any delayed TradeShipment so imported investment goods arrive in investmentInventory rather than a generic ProductionUnit stock.  
+M4 ownership boundary: REQ-PRODUCTION-002 owns this Phase-2 investment-intent construction and cash-envelope evidence. REQ-PRODUCTION-006 consumes the resulting investmentInventory and owns Phase-12 capital formation/depreciation. Section 17 output SELL intents are created only after Phase-5 output exists and therefore are owned by REQ-PRODUCTION-005; ProductionPlan.outputSellIntentId remains unset during Phase 2 and may be attached by that later slice.  
+Required planning regressions for this slice: off-cadence produces no INVESTMENT intents; due-cadence planning is deterministic; mandatory cash, payroll, desired-input reserve and liquidity buffer are protected before investment; summed INVESTMENT maxSpend is within investmentBudget and the canonical budget ledger; same-tick sales/imports/later distributions/future subsidies cannot finance investment; missing or invalid required price evidence fails fast; insertion-order changes do not change plans/IDs; planning alone mutates no inventory or capital.
 
 maxCapitalGrowthPerReview recommended 0.20–0.35. This cap prevents exponential browser/economy explosions and makes investment visually legible.
 
