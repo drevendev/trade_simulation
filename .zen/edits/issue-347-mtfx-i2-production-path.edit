@@ -1,0 +1,298 @@
+### FILE: src/simulation/acceptance-004-m3-golden-gate.test.ts
+<<<<<<< FIND
+import { createTransactionId, executeTick, composePhaseHandlers, type EconomicTransaction } from "./tickOrchestrator";
+=======
+import {
+  createTransactionId,
+  executeTick,
+  composePhaseHandlers,
+  initializeTickContext,
+  type EconomicTransaction,
+} from "./tickOrchestrator";
+import { executeAllocation } from "./marketSettlementTransition";
+>>>>>>> REPLACE
+
+### FILE: src/simulation/acceptance-004-m3-golden-gate.test.ts
+<<<<<<< FIND
+  describe("MTFX-I2: Goods conservation in local clearing", () => {
+    it("executes authoritative inventory mutation and proves seller decrease equals buyer increase", () => {
+      // MTFX-I2: Distinct buyer/seller actors with authoritative inventories.
+      // Execute real settlement/inventory mutation, verify goods conservation.
+      // Prove: seller inventory decrease = buyer inventory increase for guaranteed non-zero allocation.
+      // Test fails (not skips) if no allocation occurs.
+      const regionId = createTestRegionId("region-i2");
+      const goodId = createTestGoodId("good-i2");
+      const marketId = createTestMarketId("market-i2");
+      const currencyId = createTestCurrencyId("currency-i2");
+      const marketPrice = 1.0;
+
+      const sellerClanId = createTestClanId("clan-seller-i2");
+      const buyerClanId = createTestClanId("clan-buyer-i2");
+
+      // Authoritative test inventories: Map<GoodId, amount>
+      const sellerInventory = new Map<GoodId, number>([
+        [goodId, 100.0], // Seller starts with 100 units of good
+      ]);
+      const buyerInventory = new Map<GoodId, number>([
+        [goodId, 50.0], // Buyer starts with 50 units of good
+      ]);
+
+      const sellerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:seller-i2"),
+        actor: { type: "CLAN", clanId: sellerClanId },
+        regionId,
+        goodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: 5,
+        sourcePlanId: "plan-seller",
+        inventoryBucket: "GENERAL",
+      };
+
+      const buyerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:buyer-i2"),
+        actor: { type: "CLAN", clanId: buyerClanId },
+        regionId,
+        goodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: 5,
+        maxSpend: 10,
+        sourcePlanId: "plan-buyer",
+        inventoryBucket: "GENERAL",
+      };
+
+      const input: LocalClearingInput = {
+        marketId,
+        regionId,
+        goodId,
+        pass: "MAIN",
+        marketCurrencyId: currencyId,
+        buyerIntents: [buyerIntent],
+        sellerIntents: [sellerIntent],
+        computeEffectiveDemand: () => 5,
+        computeSellableQuantity: () => 5,
+        computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice,
+        getTaxationInfo: () => ({
+          destinationStateId: null,
+          assessedTaxRate: 0,
+          collectionEfficiency: 0,
+        }),
+      };
+
+      const idCounter = { value: 0 };
+      const allocations = computeLocalClearing(input, new Map(), marketPrice, quantityEpsilon, idCounter);
+
+      // MUST have allocations - test fails (not skips) if zero allocations
+      expect(allocations.length).toBeGreaterThan(0);
+      const allocation = allocations[0]!;
+
+      // Quantity should be conserved in the allocation and non-zero
+      expect(allocation.quantity).toBeGreaterThan(0);
+      expect(allocation.quantity).toBeLessThanOrEqual(5);
+
+      // Verify preflight passes (required before settlement mutations)
+      const preflightError = preflightMarketSettlement(allocation, 0, 8);
+      expect(preflightError).toBeNull();
+
+      // === BEFORE STATE ===
+      const sellerInventoryBefore = sellerInventory.get(goodId) ?? 0;
+      const buyerInventoryBefore = buyerInventory.get(goodId) ?? 0;
+
+      // === APPLY AUTHORITATIVE SETTLEMENT MUTATION ===
+      // These mutations represent what happens when settlement applies the allocation
+      const tradeQuantity = allocation.quantity;
+
+      // Mutate seller inventory: decrease by trade quantity
+      sellerInventory.set(goodId, sellerInventoryBefore - tradeQuantity);
+      // Mutate buyer inventory: increase by trade quantity
+      buyerInventory.set(goodId, buyerInventoryBefore + tradeQuantity);
+
+      // === AFTER STATE ===
+      const sellerInventoryAfter = sellerInventory.get(goodId) ?? 0;
+      const buyerInventoryAfter = buyerInventory.get(goodId) ?? 0;
+
+      // === VERIFY GOODS CONSERVATION LAWS ===
+      // 1. Seller decrease equals buyer increase (goods conservation identity)
+      const sellerDecrease = sellerInventoryBefore - sellerInventoryAfter;
+      const buyerIncrease = buyerInventoryAfter - buyerInventoryBefore;
+
+      expect(Math.abs(sellerDecrease - buyerIncrease)).toBeLessThan(quantityEpsilon);
+
+      // 2. Both changes equal the allocation quantity
+      expect(Math.abs(sellerDecrease - tradeQuantity)).toBeLessThan(quantityEpsilon);
+      expect(Math.abs(buyerIncrease - tradeQuantity)).toBeLessThan(quantityEpsilon);
+
+      // 3. Seller inventory never goes negative (fail if settlement breaks invariant)
+      expect(sellerInventoryAfter).toBeGreaterThanOrEqual(0);
+      // Buyer inventory never goes negative
+      expect(buyerInventoryAfter).toBeGreaterThanOrEqual(0);
+
+      // 4. Total goods in system conserved (no creation/destruction)
+      const totalBefore = sellerInventoryBefore + buyerInventoryBefore;
+      const totalAfter = sellerInventoryAfter + buyerInventoryAfter;
+      expect(Math.abs(totalBefore - totalAfter)).toBeLessThan(quantityEpsilon);
+
+      // 5. Execute settlement transaction to verify it represents the correct goods flow
+      const txIdCounter = { value: 0 };
+      const bundleId = "tb:test-bundle-i2-0" as any;
+      const marketSaleTx = createMarketSaleTransaction(allocation, bundleId, 0, 8, txIdCounter);
+
+      // Verify transaction represents the correct goods transfer
+      expect(marketSaleTx.goodId).toBe(goodId);
+      if (marketSaleTx.quantity !== undefined) {
+        expect(Math.abs(marketSaleTx.quantity - allocation.quantity)).toBeLessThan(quantityEpsilon);
+      }
+      if (marketSaleTx.source !== undefined) {
+        expect(marketSaleTx.source.type).toBe("CLAN");
+      }
+      if (marketSaleTx.destination !== undefined) {
+        expect(marketSaleTx.destination.type).toBe("CLAN");
+      }
+    });
+  });
+=======
+  describe("MTFX-I2: Goods conservation in local clearing", () => {
+    const assertMtfxI2GoodsTransfer = (
+      sellerBefore: number,
+      buyerBefore: number,
+      sellerAfter: number,
+      buyerAfter: number,
+      tradeQuantity: number,
+    ): void => {
+      const sellerDecrease = sellerBefore - sellerAfter;
+      const buyerIncrease = buyerAfter - buyerBefore;
+
+      expect(Math.abs(sellerDecrease - buyerIncrease)).toBeLessThan(quantityEpsilon);
+      expect(Math.abs(sellerDecrease - tradeQuantity)).toBeLessThan(quantityEpsilon);
+      expect(Math.abs(buyerIncrease - tradeQuantity)).toBeLessThan(quantityEpsilon);
+      expect(sellerAfter).toBeGreaterThanOrEqual(0);
+      expect(buyerAfter).toBeGreaterThanOrEqual(0);
+      expect(Math.abs((sellerBefore + buyerBefore) - (sellerAfter + buyerAfter))).toBeLessThan(quantityEpsilon);
+    };
+
+    it("executes the canonical actor-owned settlement boundary and proves seller decrease equals buyer increase", () => {
+      // Build the real canonical opening world so the proof observes the same actor-owned
+      // stock MarketSettlement.executeAllocation() mutates in production. The seller is a
+      // ProductionUnit OUTPUT inventory; the buyer is a Cohort householdInventory.
+      const world = buildInitialWorld(
+        baselineScenario,
+        baselineDefinitionPack,
+        createDefaultSimulationConfig(),
+        42,
+      );
+      const counterparties = canonicalDispatchCounterparties(world);
+      const region = world.regions.get(counterparties.regionId)!;
+      const sellerUnit = world.productionUnits.get(counterparties.sellerUnitId)!;
+      const buyerCohort = world.cohorts.get(counterparties.buyerCohortId)!;
+      const sellerInventoryBefore = sellerUnit.outputInventory.get(counterparties.goodId) ?? 0;
+      const buyerInventoryBefore = buyerCohort.householdInventory.get(counterparties.goodId) ?? 0;
+      const buyerCash = buyerCohort.wallet.get(region.settlementCurrencyId) ?? 0;
+      const marketPrice = 1.0;
+      const desiredQuantity = Math.min(1, sellerInventoryBefore, buyerCash / marketPrice);
+
+      expect(desiredQuantity).toBeGreaterThan(0);
+
+      const sellerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:production-unit-seller-i2"),
+        actor: { type: "PRODUCTION_UNIT", productionUnitId: counterparties.sellerUnitId },
+        regionId: counterparties.regionId,
+        goodId: counterparties.goodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity,
+        sourcePlanId: "plan-seller-i2",
+        inventoryBucket: "OUTPUT",
+      };
+      const buyerIntent: MarketIntent = {
+        id: createMarketIntentId("mi:cohort-buyer-i2"),
+        actor: { type: "COHORT", cohortId: counterparties.buyerCohortId },
+        regionId: counterparties.regionId,
+        goodId: counterparties.goodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity,
+        maxSpend: buyerCash,
+        sourcePlanId: "plan-buyer-i2",
+        inventoryBucket: "GENERAL",
+      };
+      const input: LocalClearingInput = {
+        marketId: createTestMarketId("market-i2-production-path"),
+        regionId: counterparties.regionId,
+        goodId: counterparties.goodId,
+        pass: "MAIN",
+        marketCurrencyId: region.settlementCurrencyId,
+        buyerIntents: [buyerIntent],
+        sellerIntents: [sellerIntent],
+        computeEffectiveDemand: () => desiredQuantity,
+        computeSellableQuantity: () => desiredQuantity,
+        computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice,
+        getTaxationInfo: () => ({
+          destinationStateId: null,
+          assessedTaxRate: 0,
+          collectionEfficiency: 0,
+        }),
+      };
+
+      const allocations = computeLocalClearing(input, new Map(), marketPrice, quantityEpsilon, { value: 0 });
+      expect(allocations).toHaveLength(1);
+      const allocation = allocations[0]!;
+      expect(allocation.quantity).toBeGreaterThan(0);
+      expect(allocation.seller).toEqual({
+        type: "PRODUCTION_UNIT",
+        productionUnitId: counterparties.sellerUnitId,
+      });
+      expect(allocation.buyer).toEqual({ type: "COHORT", cohortId: counterparties.buyerCohortId });
+
+      const context = { ...initializeTickContext(0, world.seed), phase: 8 };
+      const settledWorld = executeAllocation(world, context, allocation);
+      const sellerInventoryAfter =
+        settledWorld.productionUnits.get(counterparties.sellerUnitId)!.outputInventory.get(counterparties.goodId) ?? 0;
+      const buyerInventoryAfter =
+        settledWorld.cohorts.get(counterparties.buyerCohortId)!.householdInventory.get(counterparties.goodId) ?? 0;
+
+      assertMtfxI2GoodsTransfer(
+        sellerInventoryBefore,
+        buyerInventoryBefore,
+        sellerInventoryAfter,
+        buyerInventoryAfter,
+        allocation.quantity,
+      );
+
+      // Sensitive negative controls: the proof must fail if either production mutation is
+      // bypassed or reversed. These call the same assertion helper used for the real path,
+      // so a future regression cannot keep MTFX-I2 green merely by preserving arithmetic
+      // in a test-local fixture.
+      expect(() =>
+        assertMtfxI2GoodsTransfer(
+          sellerInventoryBefore,
+          buyerInventoryBefore,
+          sellerInventoryBefore,
+          buyerInventoryAfter,
+          allocation.quantity,
+        ),
+      ).toThrow();
+      expect(() =>
+        assertMtfxI2GoodsTransfer(
+          sellerInventoryBefore,
+          buyerInventoryBefore,
+          sellerInventoryAfter,
+          buyerInventoryBefore - allocation.quantity,
+          allocation.quantity,
+        ),
+      ).toThrow();
+
+      const marketSaleTx = createMarketSaleTransaction(
+        allocation,
+        "tb:test-bundle-i2-0" as any,
+        0,
+        8,
+        { value: 0 },
+      );
+      expect(marketSaleTx.goodId).toBe(counterparties.goodId);
+      expect(marketSaleTx.quantity).toBe(allocation.quantity);
+      expect(marketSaleTx.source?.type).toBe("PRODUCTION_UNIT");
+      expect(marketSaleTx.destination?.type).toBe("COHORT");
+    });
+  });
+>>>>>>> REPLACE
