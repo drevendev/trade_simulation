@@ -1,9 +1,10 @@
 /**
  * Deterministic Phase-2 production planning (REQ-PRODUCTION-002, first bounded slice).
  *
- * Implements Handoff/05 sections 5-12 for ProductionPlan/LaborDemandPlan construction
- * and INPUT procurement intents. Cadence-based INVESTMENT intents (section 15), Phase-5
- * execution and the post-production OUTPUT sell intent (section 17) remain separate work.
+ * Implements Handoff/05 sections 5-12 and 19-20 for ProductionPlan/LaborDemandPlan
+ * construction, INPUT procurement and cadence-based ACTIVE-unit INVESTMENT intents.
+ * Phase-5 execution and the post-production OUTPUT sell intent (section 17) remain
+ * separate work.
  *
  * The planning-evidence boundary is deliberately explicit. Callers supply only values
  * that Phase 2 is allowed to know at tick open: prior-close gross input prices, effective
@@ -43,6 +44,10 @@ export interface ProductionPlan {
   readonly procurementCashEnvelope: number;
   readonly grossWageCashEnvelope: number;
   readonly operatingLiquidityBuffer: number;
+  readonly workingCapitalTarget: number;
+  readonly investableCash: number;
+  readonly investmentPressure: number;
+  readonly investmentBudget: number;
   readonly laborDemandPlanId: string;
   readonly investmentIntentIds: readonly MarketIntentId[];
   readonly inputIntentIds: readonly MarketIntentId[];
@@ -69,6 +74,7 @@ export interface ProductionPlanningEvidence {
   readonly mandatoryKnownCash: number;
   readonly legalMinimumWageFloor: number;
   readonly priorCloseGrossInputPriceByGood: Readonly<Record<GoodId, number>>;
+  readonly priorCloseGrossInvestmentPriceByGood?: Readonly<Record<GoodId, number>>;
   readonly infrastructureFactor: number;
   readonly resourceAccessFactor: number;
   readonly healthLaborProductivityFactor?: number;
@@ -78,6 +84,7 @@ export interface ProductionPlanningResult {
   readonly productionPlan: ProductionPlan;
   readonly laborDemandPlan: LaborDemandPlan;
   readonly inputIntents: readonly MarketIntent[];
+  readonly investmentIntents: readonly MarketIntent[];
 }
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
@@ -102,6 +109,14 @@ function requirePositive(name: string, value: number): number {
   requireFinite(name, value);
   if (value <= 0) {
     throw new Error(`${name} must be > 0, got ${String(value)}`);
+  }
+  return value;
+}
+
+function requirePositiveInteger(name: string, value: number): number {
+  requireFinite(name, value);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${name} must be an integer >= 1, got ${String(value)}`);
   }
   return value;
 }
@@ -206,6 +221,34 @@ function resolvePlanningConfig(config: SimulationConfig) {
       "ProductionConfig.maxInputCriticality",
       config.production.maxInputCriticality ?? defaults.production.maxInputCriticality!,
     ),
+    investmentReviewCadenceTicks: requirePositiveInteger(
+      "ProductionConfig.investmentReviewCadenceTicks",
+      config.production.investmentReviewCadenceTicks ?? defaults.production.investmentReviewCadenceTicks!,
+    ),
+    investmentUtilizationThreshold: requireRange(
+      "ProductionConfig.investmentUtilizationThreshold",
+      config.production.investmentUtilizationThreshold ?? defaults.production.investmentUtilizationThreshold!,
+      0,
+      1,
+    ),
+    minimumInvestmentMargin: requireFinite(
+      "ProductionConfig.minimumInvestmentMargin",
+      config.production.minimumInvestmentMargin ?? defaults.production.minimumInvestmentMargin!,
+    ),
+    investmentPropensity: requireNonNegative(
+      "ProductionConfig.investmentPropensity",
+      config.production.investmentPropensity ?? defaults.production.investmentPropensity!,
+    ),
+    maxInvestmentShareOfExcessCash: requireRange(
+      "ProductionConfig.maxInvestmentShareOfExcessCash",
+      config.production.maxInvestmentShareOfExcessCash ?? defaults.production.maxInvestmentShareOfExcessCash!,
+      0,
+      1,
+    ),
+    maxCapitalGrowthPerReview: requireNonNegative(
+      "ProductionConfig.maxCapitalGrowthPerReview",
+      config.production.maxCapitalGrowthPerReview ?? defaults.production.maxCapitalGrowthPerReview!,
+    ),
     startingReferenceWage: requireNonNegative(
       "LaborConfig.startingReferenceWage",
       config.labor.startingReferenceWage ?? defaults.labor.startingReferenceWage!,
@@ -275,6 +318,10 @@ export function planProductionUnitPhase2(args: {
         procurementCashEnvelope: 0,
         grossWageCashEnvelope: 0,
         operatingLiquidityBuffer: 0,
+        workingCapitalTarget: 0,
+        investableCash: 0,
+        investmentPressure: 0,
+        investmentBudget: 0,
         laborDemandPlanId: laborPlanId,
         investmentIntentIds: [],
         inputIntentIds: [],
@@ -290,6 +337,7 @@ export function planProductionUnitPhase2(args: {
         grossPayrollCap: 0,
       },
       inputIntents: [],
+      investmentIntents: [],
     };
   }
 
@@ -427,6 +475,97 @@ export function planProductionUnitPhase2(args: {
   const procurementCashEnvelope = Math.min(availableForInputs, desiredInputCost);
   const totalWeight = weightEntries.reduce((sum, [, weight]) => sum + weight, 0);
 
+  const investmentReviewDue = tick > 0 && tick % planning.investmentReviewCadenceTicks === 0;
+  const demandPressure = investmentReviewDue
+    ? clamp(
+        (unit.signals.utilizationEma - planning.investmentUtilizationThreshold) /
+          Math.max(1 - planning.investmentUtilizationThreshold, planning.quantityEpsilon),
+        -1,
+        1,
+      )
+    : 0;
+  const marginPressure = investmentReviewDue
+    ? Math.max(0, unit.signals.marginSignalEma - planning.minimumInvestmentMargin)
+    : 0;
+  const salesPressure = investmentReviewDue
+    ? Math.max(0, unit.signals.sellThroughEma - planning.targetSellThrough)
+    : 0;
+  const investmentPressure = investmentReviewDue
+    ? clamp((demandPressure + marginPressure + salesPressure) / 3, 0, 1)
+    : 0;
+  const workingCapitalTarget =
+    mandatoryKnownCash + grossWageCashEnvelope + desiredInputCost + operatingLiquidityBuffer;
+  const investableCash = Math.max(0, openingHomeCash - workingCapitalTarget);
+  const investmentBudget = investmentReviewDue
+    ? investableCash * clamp(
+        planning.investmentPropensity * investmentPressure,
+        0,
+        planning.maxInvestmentShareOfExcessCash,
+      )
+    : 0;
+
+  const maxDesiredCapitalAddition = unit.installedCapital * planning.maxCapitalGrowthPerReview;
+  const capitalAdditionTarget = maxDesiredCapitalAddition * investmentPressure;
+  const investmentCostEntries: (readonly [GoodId, number])[] = [];
+  const investmentPurchaseEntries: (readonly [GoodId, number])[] = [];
+  let totalRequiredInvestmentCost = 0;
+  for (const goodId of stableOrderBy(Object.keys(recipe.investmentGoodsPerCapitalUnit) as GoodId[], String)) {
+    const unitsPerCapital = requireNonNegative(
+      `RecipeDefinition.investmentGoodsPerCapitalUnit[${String(goodId)}]`,
+      recipe.investmentGoodsPerCapitalUnit[goodId] ?? 0,
+    );
+    const requiredQuantity = capitalAdditionTarget * unitsPerCapital;
+    const onHand = requireNonNegative(
+      `investmentInventory[${String(goodId)}]`,
+      unit.investmentInventory.get(goodId) ?? 0,
+    );
+    const desiredPurchase = Math.max(0, requiredQuantity - onHand);
+    investmentPurchaseEntries.push([goodId, desiredPurchase]);
+    if (desiredPurchase <= planning.quantityEpsilon) {
+      continue;
+    }
+
+    const expectedPriceValue = evidence.priorCloseGrossInvestmentPriceByGood?.[goodId];
+    if (expectedPriceValue === undefined) {
+      throw new Error(
+        `ProductionPlanningEvidence.priorCloseGrossInvestmentPriceByGood[${String(goodId)}] is required when INVESTMENT procurement is planned`,
+      );
+    }
+    const expectedPrice = requirePositive(
+      `ProductionPlanningEvidence.priorCloseGrossInvestmentPriceByGood[${String(goodId)}]`,
+      expectedPriceValue,
+    );
+    const requiredCost = desiredPurchase * expectedPrice;
+    investmentCostEntries.push([goodId, requiredCost]);
+    totalRequiredInvestmentCost += requiredCost;
+  }
+
+  const investmentIntents: MarketIntent[] = [];
+  let allocatedInvestmentSpend = 0;
+  for (const [goodId, requiredCost] of stableOrderBy(investmentCostEntries, ([candidate]) => String(candidate))) {
+    const desiredQuantity = investmentPurchaseEntries.find(([candidate]) => candidate === goodId)?.[1] ?? 0;
+    const proportionalSpend = totalRequiredInvestmentCost > planning.moneyEpsilon
+      ? investmentBudget * requiredCost / totalRequiredInvestmentCost
+      : 0;
+    const remainingInvestmentBudget = Math.max(0, investmentBudget - allocatedInvestmentSpend);
+    const maxSpend = Math.min(proportionalSpend, remainingInvestmentBudget);
+    allocatedInvestmentSpend += maxSpend;
+    const intent: MarketIntent = {
+      id: createMarketIntentId(`mi:${tick}:${String(unit.productionUnitId)}:INVESTMENT:${String(goodId)}`),
+      actor: { type: "PRODUCTION_UNIT", productionUnitId: unit.productionUnitId },
+      regionId,
+      goodId,
+      side: "BUY",
+      purpose: "INVESTMENT",
+      desiredQuantity,
+      maxSpend,
+      sourcePlanId: planId,
+      inventoryBucket: "INVESTMENT",
+    };
+    validateMarketIntent(intent);
+    investmentIntents.push(intent);
+  }
+
   const inputIntents: MarketIntent[] = [];
   for (const [goodId, weight] of stableOrderBy(weightEntries, ([goodId]) => String(goodId))) {
     const desiredQuantity = purchaseEntries.find(([candidate]) => candidate === goodId)?.[1] ?? 0;
@@ -453,6 +592,7 @@ export function planProductionUnitPhase2(args: {
   }
 
   const inputIntentIds = inputIntents.map((intent) => intent.id);
+  const investmentIntentIds = investmentIntents.map((intent) => intent.id);
   const productionPlan: ProductionPlan = {
     planId,
     unitId: unit.productionUnitId,
@@ -468,8 +608,12 @@ export function planProductionUnitPhase2(args: {
     procurementCashEnvelope,
     grossWageCashEnvelope,
     operatingLiquidityBuffer,
+    workingCapitalTarget,
+    investableCash,
+    investmentPressure,
+    investmentBudget,
     laborDemandPlanId: laborPlanId,
-    investmentIntentIds: [],
+    investmentIntentIds,
     inputIntentIds,
   };
   const laborDemandPlan: LaborDemandPlan = {
@@ -483,7 +627,7 @@ export function planProductionUnitPhase2(args: {
     grossPayrollCap: grossWageCashEnvelope,
   };
 
-  return { productionPlan, laborDemandPlan, inputIntents };
+  return { productionPlan, laborDemandPlan, inputIntents, investmentIntents };
 }
 
 function regionForUnit(world: WorldState, unit: ProductionUnitState): RegionState {
@@ -554,9 +698,29 @@ export function createPhase2ProductionPlanningHandler(options: {
         budgetLedger = committed;
       }
 
+      const investmentEnvelope = `${result.productionPlan.planId}:INVESTMENT`;
+      for (const intent of result.investmentIntents) {
+        const maxSpend = intent.maxSpend;
+        if (maxSpend === undefined) {
+          throw new Error(`Phase-2 INVESTMENT intent ${String(intent.id)} is missing maxSpend`);
+        }
+        const committed = commitBudget(
+          budgetLedger,
+          intent.actor,
+          region.settlementCurrencyId,
+          investmentEnvelope,
+          maxSpend,
+          result.productionPlan.investmentBudget,
+        );
+        if (typeof committed === "string") {
+          throw new Error(`Phase-2 INVESTMENT budget commitment failed for ${String(intent.id)}: ${committed}`);
+        }
+        budgetLedger = committed;
+      }
+
       productionPlans.push(result.productionPlan);
       laborDemandPlans.push(result.laborDemandPlan);
-      productionMarketIntents.push(...result.inputIntents);
+      productionMarketIntents.push(...result.inputIntents, ...result.investmentIntents);
     }
 
     return {

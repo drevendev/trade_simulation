@@ -40,10 +40,15 @@ function fixture() {
   for (const goodId of Object.keys(recipe!.inputsPerBatch) as GoodId[]) {
     priorCloseGrossInputPriceByGood[goodId] = world.definitionRegistry.goods[goodId]!.referencePrice;
   }
+  const priorCloseGrossInvestmentPriceByGood: Record<string, number> = {};
+  for (const goodId of Object.keys(recipe!.investmentGoodsPerCapitalUnit) as GoodId[]) {
+    priorCloseGrossInvestmentPriceByGood[goodId] = world.definitionRegistry.goods[goodId]!.referencePrice;
+  }
   const evidence: ProductionPlanningEvidence = {
     mandatoryKnownCash: 0,
     legalMinimumWageFloor: 0,
     priorCloseGrossInputPriceByGood: priorCloseGrossInputPriceByGood as Record<GoodId, number>,
+    priorCloseGrossInvestmentPriceByGood: priorCloseGrossInvestmentPriceByGood as Record<GoodId, number>,
     infrastructureFactor: 1,
     resourceAccessFactor: 1,
     healthLaborProductivityFactor: 1,
@@ -323,5 +328,315 @@ describe("REQ-PRODUCTION-002 Phase-2 production planning slice", () => {
     expect(() => handler(oneUnitWorld, planned, oneUnitWorld.pendingTransitions)).toThrow(
       /Phase-2 INPUT budget commitment failed.*would exceed limit/,
     );
+  });
+
+  it("emits deterministic due-cadence INVESTMENT intents from the canonical pressure and protected cash envelope", () => {
+    const base = fixture();
+    const unit: ProductionUnitState = {
+      ...base.unit,
+      signals: {
+        ...base.unit.signals,
+        utilizationEma: 0.9,
+        marginSignalEma: 0.2,
+        sellThroughEma: 0.95,
+      },
+    };
+    const result = planProductionUnitPhase2({
+      tick: 6,
+      unit,
+      regionId: base.region.regionId,
+      settlementCurrencyId: base.region.settlementCurrencyId,
+      recipe: base.recipe,
+      config: base.config,
+      evidence: base.evidence,
+    });
+
+    const demandPressure = Math.min(
+      1,
+      Math.max(
+        -1,
+        (unit.signals.utilizationEma - base.config.production.investmentUtilizationThreshold!) /
+          Math.max(1 - base.config.production.investmentUtilizationThreshold!, base.config.numeric.quantityEpsilon!),
+      ),
+    );
+    const marginPressure = Math.max(
+      0,
+      unit.signals.marginSignalEma - base.config.production.minimumInvestmentMargin!,
+    );
+    const salesPressure = Math.max(
+      0,
+      unit.signals.sellThroughEma - base.config.production.targetSellThrough!,
+    );
+    const expectedPressure = Math.min(1, Math.max(0, (demandPressure + marginPressure + salesPressure) / 3));
+
+    expect(result.productionPlan.investmentPressure).toBeCloseTo(expectedPressure, 10);
+    expect(result.productionPlan.workingCapitalTarget).toBeCloseTo(
+      base.evidence.mandatoryKnownCash +
+        result.productionPlan.grossWageCashEnvelope +
+        Object.entries(result.productionPlan.plannedInputPurchaseQuantity).reduce(
+          (sum, [goodId, quantity]) =>
+            sum + quantity * base.evidence.priorCloseGrossInputPriceByGood[goodId as GoodId]!,
+          0,
+        ) +
+        result.productionPlan.operatingLiquidityBuffer,
+      8,
+    );
+    expect(result.investmentIntents.length).toBeGreaterThan(0);
+    expect(result.productionPlan.investmentIntentIds).toEqual(result.investmentIntents.map((intent) => intent.id));
+    expect(result.investmentIntents.map((intent) => String(intent.goodId))).toEqual(
+      [...result.investmentIntents.map((intent) => String(intent.goodId))].sort(),
+    );
+    for (const intent of result.investmentIntents) {
+      expect(() => validateMarketIntent(intent)).not.toThrow();
+      expect(intent.side).toBe("BUY");
+      expect(intent.purpose).toBe("INVESTMENT");
+      expect(intent.inventoryBucket).toBe("INVESTMENT");
+      expect(intent.sourcePlanId).toBe(result.productionPlan.planId);
+    }
+    expect(result.investmentIntents.reduce((sum, intent) => sum + (intent.maxSpend ?? 0), 0)).toBeCloseTo(
+      result.productionPlan.investmentBudget,
+      8,
+    );
+    expect(result.productionPlan.outputSellIntentId).toBeUndefined();
+  });
+
+  it("emits no ordinary INVESTMENT intents at genesis or off cadence", () => {
+    const base = fixture();
+    const investmentReady: ProductionUnitState = {
+      ...base.unit,
+      signals: { ...base.unit.signals, utilizationEma: 1, marginSignalEma: 1, sellThroughEma: 1 },
+    };
+    for (const tick of [0, 7]) {
+      const result = planProductionUnitPhase2({
+        tick,
+        unit: investmentReady,
+        regionId: base.region.regionId,
+        settlementCurrencyId: base.region.settlementCurrencyId,
+        recipe: base.recipe,
+        config: base.config,
+        evidence: base.evidence,
+      });
+      expect(result.productionPlan.investmentPressure).toBe(0);
+      expect(result.productionPlan.investmentBudget).toBe(0);
+      expect(result.investmentIntents).toEqual([]);
+      expect(result.productionPlan.investmentIntentIds).toEqual([]);
+    }
+  });
+
+  it("requires positive finite prior-close INVESTMENT prices for material desired purchases", () => {
+    const base = fixture();
+    const investmentReady: ProductionUnitState = {
+      ...base.unit,
+      signals: { ...base.unit.signals, utilizationEma: 1, marginSignalEma: 1, sellThroughEma: 1 },
+    };
+    const investmentGood = Object.keys(base.recipe.investmentGoodsPerCapitalUnit)[0] as GoodId;
+    expect(investmentGood).toBeDefined();
+
+    for (const badPrice of [undefined, 0, -1, Number.NaN]) {
+      const prices = badPrice === undefined
+        ? {}
+        : { [investmentGood]: badPrice };
+      expect(() =>
+        planProductionUnitPhase2({
+          tick: 6,
+          unit: investmentReady,
+          regionId: base.region.regionId,
+          settlementCurrencyId: base.region.settlementCurrencyId,
+          recipe: base.recipe,
+          config: base.config,
+          evidence: {
+            ...base.evidence,
+            priorCloseGrossInvestmentPriceByGood: prices as Record<GoodId, number>,
+          },
+        }),
+      ).toThrow(/priorCloseGrossInvestmentPriceByGood/);
+    }
+  });
+
+  it("keeps INVESTMENT commitments distinct from INPUT and rejects duplicate investment overcommit", () => {
+    const base = fixture();
+    const fullInputs = new Map<GoodId, number>();
+    for (const goodId of Object.keys(base.recipe.inputsPerBatch) as GoodId[]) {
+      fullInputs.set(goodId, 1_000_000);
+    }
+    const unit: ProductionUnitState = {
+      ...base.unit,
+      inputInventory: fullInputs,
+      signals: { ...base.unit.signals, utilizationEma: 1, marginSignalEma: 1, sellThroughEma: 1 },
+    };
+    const oneUnitWorld: WorldState = {
+      ...base.world,
+      productionUnits: new Map([[unit.productionUnitId, unit]]),
+    };
+    const handler = createPhase2ProductionPlanningHandler({
+      evidenceByUnit: new Map([[unit.productionUnitId, base.evidence]]),
+    });
+    const phase2 = { ...initializeTickContext(6, 42), phase: 2 };
+    const planned = handler(oneUnitWorld, phase2, oneUnitWorld.pendingTransitions);
+    const productionPlan = planned.productionPlans![0]!;
+    const investmentIntents = planned.productionMarketIntents!.filter((intent) => intent.purpose === "INVESTMENT");
+    expect(investmentIntents.length).toBeGreaterThan(0);
+    expect(planned.productionMarketIntents!.filter((intent) => intent.purpose === "INPUT")).toEqual([]);
+    expect(getEnvelopeCommitment(
+      planned.budgetLedger,
+      investmentIntents[0]!.actor,
+      base.region.settlementCurrencyId,
+      productionPlan.planId,
+    )).toBe(0);
+    expect(getEnvelopeCommitment(
+      planned.budgetLedger,
+      investmentIntents[0]!.actor,
+      base.region.settlementCurrencyId,
+      `${productionPlan.planId}:INVESTMENT`,
+    )).toBeCloseTo(investmentIntents.reduce((sum, intent) => sum + (intent.maxSpend ?? 0), 0), 10);
+
+    expect(() => handler(oneUnitWorld, planned, oneUnitWorld.pendingTransitions)).toThrow(
+      /Phase-2 INVESTMENT budget commitment failed.*would exceed limit/,
+    );
+  });
+
+  it("keeps uneven multi-good INVESTMENT shares within the exact ledger envelope", () => {
+    const base = fixture();
+    const investmentBudget = 16_457.035838952725;
+    const investmentGoods = {
+      "good:stone": 0.01490897216709655,
+      "good:tools": 465_419.80594505713,
+    } as Record<GoodId, number>;
+    const recipe = {
+      ...base.recipe,
+      laborPerBatch: 0,
+      investmentGoodsPerCapitalUnit: investmentGoods,
+    };
+    const fullInputs = new Map<GoodId, number>();
+    for (const goodId of Object.keys(recipe.inputsPerBatch) as GoodId[]) {
+      fullInputs.set(goodId, 1_000_000);
+    }
+    const unit: ProductionUnitState = {
+      ...base.unit,
+      installedCapital: 1,
+      wallet: new Map([[base.region.settlementCurrencyId, investmentBudget]]),
+      inputInventory: fullInputs,
+      investmentInventory: new Map<GoodId, number>(),
+      signals: { ...base.unit.signals, utilizationEma: 1, marginSignalEma: 1, sellThroughEma: 1 },
+    };
+    const config = {
+      ...base.config,
+      production: {
+        ...base.config.production,
+        minOperatingCash: 0,
+        liquidityBufferShare: 0,
+        investmentReviewCadenceTicks: 3,
+        investmentUtilizationThreshold: 0,
+        minimumInvestmentMargin: 0,
+        targetSellThrough: 0,
+        investmentPropensity: 1,
+        maxInvestmentShareOfExcessCash: 1,
+        maxCapitalGrowthPerReview: 1,
+      },
+    };
+    const evidence: ProductionPlanningEvidence = {
+      ...base.evidence,
+      priorCloseGrossInvestmentPriceByGood: {
+        "good:stone": 1,
+        "good:tools": 1,
+      } as Record<GoodId, number>,
+    };
+    const oneUnitWorld: WorldState = {
+      ...base.world,
+      simulationConfig: config,
+      definitionRegistry: {
+        ...base.world.definitionRegistry,
+        recipes: { ...base.world.definitionRegistry.recipes, [recipe.id]: recipe },
+      },
+      productionUnits: new Map([[unit.productionUnitId, unit]]),
+    };
+    const handler = createPhase2ProductionPlanningHandler({
+      evidenceByUnit: new Map([[unit.productionUnitId, evidence]]),
+    });
+    const phase2 = { ...initializeTickContext(6, 42), phase: 2 };
+
+    const planned = handler(oneUnitWorld, phase2, oneUnitWorld.pendingTransitions);
+    const productionPlan = planned.productionPlans![0]!;
+    const investmentIntents = planned.productionMarketIntents!.filter((intent) => intent.purpose === "INVESTMENT");
+    const submittedMaxSpend = investmentIntents.reduce((sum, intent) => sum + (intent.maxSpend ?? 0), 0);
+    const committed = getEnvelopeCommitment(
+      planned.budgetLedger,
+      investmentIntents[0]!.actor,
+      base.region.settlementCurrencyId,
+      `${productionPlan.planId}:INVESTMENT`,
+    );
+
+    expect(investmentIntents).toHaveLength(2);
+    expect(productionPlan.investmentBudget).toBe(investmentBudget);
+    expect(submittedMaxSpend).toBeLessThanOrEqual(productionPlan.investmentBudget);
+    expect(committed).toBe(submittedMaxSpend);
+    expect(committed).toBeLessThanOrEqual(productionPlan.investmentBudget);
+  });
+
+  it("is investment-order invariant, ignores same-tick financing context, and mutates no capital or INVESTMENT stock", () => {
+    const base = fixture();
+    const investmentGoods = {
+      "good:tools": 100,
+      "good:stone": 40,
+    } as Record<GoodId, number>;
+    const recipe = { ...base.recipe, investmentGoodsPerCapitalUnit: investmentGoods };
+    const unit: ProductionUnitState = {
+      ...base.unit,
+      signals: { ...base.unit.signals, utilizationEma: 1, marginSignalEma: 1, sellThroughEma: 1 },
+      investmentInventory: new Map([["good:tools" as GoodId, 1]]),
+    };
+    const prices = {
+      "good:tools": base.world.definitionRegistry.goods["good:tools" as GoodId]!.referencePrice,
+      "good:stone": base.world.definitionRegistry.goods["good:stone" as GoodId]!.referencePrice,
+    } as Record<GoodId, number>;
+    const evidence = { ...base.evidence, priorCloseGrossInvestmentPriceByGood: prices };
+    const beforeCapital = unit.installedCapital;
+    const beforeInventory = Array.from(unit.investmentInventory.entries());
+    const forward = planProductionUnitPhase2({
+      tick: 6,
+      unit,
+      regionId: base.region.regionId,
+      settlementCurrencyId: base.region.settlementCurrencyId,
+      recipe,
+      config: base.config,
+      evidence,
+    });
+    const reversed = planProductionUnitPhase2({
+      tick: 6,
+      unit,
+      regionId: base.region.regionId,
+      settlementCurrencyId: base.region.settlementCurrencyId,
+      recipe: { ...recipe, investmentGoodsPerCapitalUnit: Object.fromEntries(Object.entries(investmentGoods).reverse()) as Record<GoodId, number> },
+      config: base.config,
+      evidence: { ...evidence, priorCloseGrossInvestmentPriceByGood: Object.fromEntries(Object.entries(prices).reverse()) as Record<GoodId, number> },
+    });
+    expect(reversed).toEqual(forward);
+    expect(unit.installedCapital).toBe(beforeCapital);
+    expect(Array.from(unit.investmentInventory.entries())).toEqual(beforeInventory);
+
+    const oneUnitWorld: WorldState = {
+      ...base.world,
+      definitionRegistry: {
+        ...base.world.definitionRegistry,
+        recipes: { ...base.world.definitionRegistry.recipes, [recipe.id]: recipe },
+      },
+      productionUnits: new Map([[unit.productionUnitId, unit]]),
+    };
+    const handler = createPhase2ProductionPlanningHandler({
+      evidenceByUnit: new Map([[unit.productionUnitId, evidence]]),
+    });
+    const clean = { ...initializeTickContext(6, 42), phase: 2 };
+    const contaminated = {
+      ...clean,
+      transactions: [
+        { tick: 6, phase: 7, type: "MARKET_SALE", transactionId: createTransactionId("tx:fake-import-money"), amount: 900_000, moneyAmount: 900_000 },
+        { tick: 6, phase: 10, type: "MARKET_SALE", transactionId: createTransactionId("tx:fake-distribution"), amount: 900_000, moneyAmount: 900_000 },
+      ],
+      marketPrices: new Map([["fake-market|good:tools", 900_000]]),
+    };
+    const cleanResult = handler(oneUnitWorld, clean, oneUnitWorld.pendingTransitions);
+    const contaminatedResult = handler(oneUnitWorld, contaminated, oneUnitWorld.pendingTransitions);
+    expect(contaminatedResult.productionPlans).toEqual(cleanResult.productionPlans);
+    expect(contaminatedResult.productionMarketIntents).toEqual(cleanResult.productionMarketIntents);
   });
 });
