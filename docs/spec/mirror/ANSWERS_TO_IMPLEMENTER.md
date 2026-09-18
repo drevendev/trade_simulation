@@ -760,3 +760,14 @@ Ownership is also normalized: PopulationConfig.baseParticipationByStratum is the
 Implementation request: mark repository OPEN\_QUESTIONS Q-002 ANSWERED with HANDOFF-REPAIR-M4-003 provenance; implement the exact 20 PopulationConfig defaults and validation under REQ-CONFIG-007; preserve PARTIAL until the existing needCategories DefinitionPack→DefinitionRegistry propagation defect and all config/default evidence are merged. Do not pull population behavior, M5+, demography/migration, or Clan/fiscal dynamics into this config unit. No new implementation-package file was added, so no mirror allowlist request is required.  
 STATUS: Q-002 ANSWERED / SPEC DEFAULTS AND OWNERSHIP COMPLETED
 
+2026-09-18 — R378 / HANDOFF-REPAIR-M4-004 — REQ-PRODUCTION-002 investment-planning implementation boundary
+
+Before implementing the remaining REQ-PRODUCTION-002 investment-planning slice, fresh review found a real specification blocker: Production section 19 referenced undefined wUtil/wMargin/wSales weights and an undefined “desired next-tick input envelope estimate”, while its working-capital formula could bypass the mandatoryKnownCash and operatingLiquidityBuffer reserves already owned by section 10\.
+
+Resolved in canonical Production and Handoff/05 with the smallest deterministic/cash-conservation repair. Core-v1 investment pressure uses fixed equal 1/3 weights; ordinary capacity-investment review is due only on tick \> 0 multiples of investmentReviewCadenceTicks; desiredNextTickInputEnvelopeEstimate is section-10 desiredInputCost from opening/prior-close evidence; workingCapitalTarget protects mandatoryKnownCash \+ grossWageCashEnvelope \+ that desired input reserve \+ operatingLiquidityBuffer before investment. INPUT and INVESTMENT commitments use distinct non-reusable budget-ledger envelopes, investment-good price evidence must be finite/positive and prior-close, investment goods are processed in stable goodId order, and planning itself mutates neither investmentInventory nor installedCapital.
+
+M4 ownership is now explicit: REQ-PRODUCTION-002 owns Phase-2 ACTIVE-unit investment budget/BUY-intent construction and its cash-envelope evidence; REQ-PRODUCTION-005 owns the post-Phase-5 output SELL intent; REQ-PRODUCTION-006 consumes settled investmentInventory and owns Phase-12 capital formation/depreciation; MOTHBALLED expansion waits for REQ-PRODUCTION-007 reactivation eligibility. The next implementation run may therefore implement only the ACTIVE Phase-2 investment planner and keep REQ-PRODUCTION-002 PARTIAL until its remaining acceptance is actually earned. Do not pull Phase-12 conversion, lifecycle transitions, output sale, credit, M5+ trade/FX, or later fiscal/Clan mechanics into that unit.
+
+No new implementation-package file was added, so no mirror allowlist request is required. Let normal synchronization update Handoff/05; do not patch docs/spec/mirror manually.
+
+STATUS: RESOLVED — SPEC\_IMPLEMENTATION\_BLOCKER\_REPAIRED  
