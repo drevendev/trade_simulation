@@ -33,6 +33,15 @@ export {
 } from "./productionUnitState";
 
 export {
+  createPhase2ProductionPlanningHandler,
+  planProductionUnitPhase2,
+  type LaborDemandPlan,
+  type ProductionPlan,
+  type ProductionPlanningEvidence,
+  type ProductionPlanningResult,
+} from "./productionPlanning";
+
+export {
   TOTAL_PHASES,
   PHASE_NAMES,
   initializeTickContext,
