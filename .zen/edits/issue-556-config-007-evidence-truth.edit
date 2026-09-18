@@ -1,0 +1,13 @@
+### FILE: docs/spec/implementation_status.csv
+<<<<<<< FIND
+Exact-head CI run 35274952880 on d005c99923f0d00e6eb4954e7da65d2e7c991acf passed TypeScript typecheck/tests/build, retained .NET build-and-test, policy-guard and mergeability. MERGE_COMMIT is intentionally blank until merge; M4 population behavior remains owned by REQ-POPULATION-001..003 and no such behavior is claimed here.
+=======
+Exact-head CI run 35280031062 on 68a911a8e558e9e0a829da61191c2a21d30e4955 passed TypeScript typecheck/tests/build, retained .NET build-and-test, policy-guard (including handoff, generated-status and ledger-honesty checks) and mergeability. PR #550 then merged as cd6e685be439ac5ab2b5f3e5cb4661d9798f3385; M4 population behavior remains owned by REQ-POPULATION-001..003 and no such behavior is claimed here.
+>>>>>>> REPLACE
+
+### FILE: docs/spec/IMPLEMENTATION_STATUS.md
+<<<<<<< FIND
+Exact-head CI run 35274952880 on d005c99923f0d00e6eb4954e7da65d2e7c991acf passed TypeScript typecheck/tests/build, retained .NET build-and-test, policy-guard and mergeability. MERGE_COMMIT is intentionally blank until merge; M4 population behavior remains owned by REQ-POPULATION-001..003 and no such behavior is claimed here.
+=======
+Exact-head CI run 35280031062 on 68a911a8e558e9e0a829da61191c2a21d30e4955 passed TypeScript typecheck/tests/build, retained .NET build-and-test, policy-guard (including handoff, generated-status and ledger-honesty checks) and mergeability. PR #550 then merged as cd6e685be439ac5ab2b5f3e5cb4661d9798f3385; M4 population behavior remains owned by REQ-POPULATION-001..003 and no such behavior is claimed here.
+>>>>>>> REPLACE
