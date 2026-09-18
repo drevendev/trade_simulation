@@ -776,8 +776,10 @@ describe("REQ-ACCEPTANCE-004: M3 local-market golden-gate acceptance test", () =
       );
       expect(marketSaleTx.goodId).toBe(counterparties.goodId);
       expect(marketSaleTx.quantity).toBe(allocation.quantity);
-      expect(marketSaleTx.source?.type).toBe("PRODUCTION_UNIT");
-      expect(marketSaleTx.destination?.type).toBe("COHORT");
+      // MARKET_SALE records the money leg buyer -> seller, while executeAllocation above
+      // proves the physical goods leg seller -> buyer on authoritative stock.
+      expect(marketSaleTx.source?.type).toBe("COHORT");
+      expect(marketSaleTx.destination?.type).toBe("PRODUCTION_UNIT");
     });
   });
 
