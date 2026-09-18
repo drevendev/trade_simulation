@@ -48,6 +48,12 @@ import type { SimulationConfig } from "../config/simulationConfig";
 import { validateDefinitionPack, validateLaborConfig, validatePopulationConfig, validateProductionConfig } from "../config/validation";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
+import {
+  INITIAL_LIFECYCLE_REVIEW_TICK,
+  createInitialProductionSignalState,
+  validateProductionUnitPersistentState,
+  type ProductionSignalState,
+} from "./productionUnitState";
 
 /**
  * Canonical world state: all registries and resolved configuration.
@@ -177,6 +183,11 @@ export interface ProductionUnitState {
   readonly inputInventory: LiveInventory;
   readonly outputInventory: LiveInventory;
   readonly investmentInventory: LiveInventory;
+  /** Authoritative mutable physical capital stock; nameplate capacity is derived from it. */
+  readonly installedCapital: number;
+  readonly signals: ProductionSignalState;
+  /** `-1` at genesis means no Phase-14 lifecycle review has occurred yet. */
+  readonly lastLifecycleReviewTick: number;
 }
 
 export interface MarketExpectationState {
@@ -494,6 +505,9 @@ export function buildInitialWorld(
       inputInventory: new Map(),
       outputInventory: new Map(),
       investmentInventory: new Map(),
+      installedCapital: puSeed.installedCapital,
+      signals: createInitialProductionSignalState(resolvedConfig.production),
+      lastLifecycleReviewTick: INITIAL_LIFECYCLE_REVIEW_TICK,
     });
 
     // ProductionUnit is its own owner for opening-stock records (REQ-CONFIG-004 Part 2)
@@ -636,6 +650,10 @@ export function buildInitialWorld(
     productionUnits: productionUnitRegistry,
     states: stateRegistry,
   });
+
+  // REQ-PRODUCTION-001: fail fast on the live persistent state after opening stocks
+  // have been materialized into their distinct actor-owned inventory buckets.
+  productionUnitRegistry.forEach((unit) => validateProductionUnitPersistentState(unit));
 
   // REQ-CONFIG-004: Reconcile opening stocks before returning WorldState
   // Build a temporary WorldState for reconciliation (without freeze)
