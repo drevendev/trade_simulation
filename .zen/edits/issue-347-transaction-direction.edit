@@ -1,0 +1,10 @@
+### FILE: src/simulation/acceptance-004-m3-golden-gate.test.ts
+<<<<<<< FIND
+      expect(marketSaleTx.source?.type).toBe("PRODUCTION_UNIT");
+      expect(marketSaleTx.destination?.type).toBe("COHORT");
+=======
+      // MARKET_SALE records the money leg buyer -> seller, while executeAllocation above
+      // proves the physical goods leg seller -> buyer on authoritative stock.
+      expect(marketSaleTx.source?.type).toBe("COHORT");
+      expect(marketSaleTx.destination?.type).toBe("PRODUCTION_UNIT");
+>>>>>>> REPLACE
