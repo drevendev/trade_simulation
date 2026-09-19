@@ -1,0 +1,36 @@
+### FILE: src/simulation/householdConsumptionPlanning.ts
+<<<<<<< FIND
+import type { CohortId, CurrencyId, GoodId, MarketId, RegionId } from "../domain/id";
+=======
+import type { CohortId, CurrencyId, GoodId } from "../domain/id";
+>>>>>>> REPLACE
+
+### FILE: src/simulation/marketIntent.ts
+<<<<<<< FIND
+import type { ActorRef } from "../domain/genesisLedger";
+=======
+import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+function buildEnvelopeKey(actor: ActorRef, currencyId: CurrencyId, envelope: string): string {
+  const actorKey =
+    actor.type === "CLAN" ? `clan:${actor.clanId}` :
+    actor.type === "STATE" ? `state:${actor.stateId}` :
+    actor.type === "PRODUCTION_UNIT" ? `pu:${actor.productionUnitId}` :
+    `unknown:${actor.type}`;
+  return `${actorKey}|${currencyId}|${envelope}`;
+}
+=======
+function buildEnvelopeKey(actor: ActorRef, currencyId: CurrencyId, envelope: string): string {
+  return `${actorRefKey(actor)}|${currencyId}|${envelope}`;
+}
+>>>>>>> REPLACE
+
+### FILE: docs/spec/implementation_status.csv
+<<<<<<< FIND
+REQ-PRODUCTION-005,IMPLEMENTED,587,588,7c3509455869e721703be3785a2b9acada37d5da,"PR #588 implements Handoff/05 sections 16-17 and 26 deterministic Phase-5 production/extraction: stable ProductionUnit ordering; realized batches are bounded by the current ProductionPlan, exact live INPUT stock, Phase-3 allocated labor, effective capacity and finite regional resource deposits; shared deposits are reserved/depleted exactly once; exact recipe inputs decline and exact output enters ProductionUnit OUTPUT before the canonical reserve-based SELL intent is built. RegionState now owns the persistent live finite-resource balance, initialized once at genesis from immutable RegionSeed deposits and thereafter carried only through explicit immutable WorldState transitions, so depletion cannot reset to scenario seed. applyProductionExecutionTransition validates unit/region/recipe provenance and exact physical deltas and rejects input/resource overdraw, missing recipe consumption and phantom output. Focused regressions in src/simulation/productionExecution.test.ts prove independent input/labor/capital/resource bottlenecks, finite depletion and zero-after-depletion, shared-resource no-double-spend, exact once-only stock transitions, output-first sale intent, non-ACTIVE suppression, forged-delta refusal, malformed/stale/cross-group evidence rejection, insertion-order determinism and input-world immutability. No random production multiplier, labor refund, market-clearing rewrite, investment/capital formation, lifecycle behavior, M5+ behavior or mirror edit is claimed."
+=======
+REQ-PRODUCTION-005,IMPLEMENTED,587,588,7c3509455869e721703be3785a2b9acada37d5da,"PR #588 implements Handoff/05 sections 16-17 and 26 deterministic Phase-5 production/extraction: stable ProductionUnit ordering; realized batches are bounded by the current ProductionPlan, exact live INPUT stock, Phase-3 allocated labor, effective capacity and finite regional resource deposits; shared deposits are reserved/depleted exactly once; exact recipe inputs decline and exact output enters ProductionUnit OUTPUT before the canonical reserve-based SELL intent is built. RegionState now owns the persistent live finite-resource balance, initialized once at genesis from immutable RegionSeed deposits and thereafter carried only through explicit immutable WorldState transitions, so depletion cannot reset to scenario seed. applyProductionExecutionTransition validates unit/region/recipe provenance and exact physical deltas and rejects input/resource overdraw, missing recipe consumption and phantom output. Focused regressions in src/simulation/productionExecution.test.ts prove independent input/labor/capital/resource bottlenecks, finite depletion and zero-after-depletion, shared-resource no-double-spend, exact once-only stock transitions, output-first sale intent, non-ACTIVE suppression, forged-delta refusal, malformed/stale/cross-group evidence rejection, insertion-order determinism and input-world immutability. No random production multiplier, labor refund, market-clearing rewrite, investment/capital formation, lifecycle behavior, M5+ behavior or mirror edit is claimed."
+REQ-POPULATION-001,IMPLEMENTED,591,592,,"PR #592 implements Handoff/06 sections 4-5 deterministic M4 Phase-2 household consumption planning over the canonical four need categories. Positive-population cohorts reserve the canonical liquidity floor from opening settlement-currency cash; M4 expectedCurrentTickIncome remains zero because no already-committed transfer entitlement surface exists and unsettled Phase-5 wages are not spendable in Phase 2. ESSENTIAL_FOOD is funded before BASIC_GOODS/SERVICES configured minima/targets and COMFORT, while emitted MarketIntents deliberately carry no clearing priority. Substitution uses stable log-space normalization of basePreference × qualityFactor / max(prior-close gross buyer price, moneyEpsilon)^priceSensitivity, then emits canonical Cohort BUY/CONSUMPTION intents with stable IDs, desiredQuantity, maxSpend and sourcePlanId. Budget commitments use canonical actorRefKey ownership so cohorts with identical envelopes cannot collide. Focused regressions in src/simulation/householdConsumptionPlanning.test.ts prove liquidity floors, essential budget priority without market priority, finite low-price normalization, malformed price/need rejection, same-tick wage exclusion, cohort commitment isolation, insertion-order equivalence, zero-population exclusion and planning-time WorldState immutability. Phase-8 affordability/settlement and Phase-9 realized consumption/spoilage remain separate owners; no second shopping loop, household credit, M5+ behavior or mirror edit is introduced."
+>>>>>>> REPLACE
