@@ -111,6 +111,10 @@ export interface EconomicTransaction {
   readonly quantity?: number;
   readonly unitPrice?: number;
   readonly moneyAmount?: number;
+  /** Gross amount before withholding when a transaction records a net settlement leg. */
+  readonly grossMoneyAmount?: number;
+  /** Statutory/assessed tax before collection-efficiency loss. */
+  readonly assessedTaxAmount?: number;
   readonly taxAmount?: number;
   readonly sourceRegionId?: RegionId;
   readonly destinationRegionId?: RegionId;

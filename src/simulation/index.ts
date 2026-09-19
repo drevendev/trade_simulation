@@ -62,6 +62,17 @@ export {
 } from "./wageOfferUpdate";
 
 export {
+  applyWageSettlementTransition,
+  createPhase5WageSettlementHandler,
+  getPostWageSpendableBalance,
+  planWageSettlementsPhase5,
+  type WagePaymentTransaction,
+  type WageSettlement,
+  type WageTaxPolicyProvider,
+  type WageTaxWithheldTransaction,
+} from "./wageSettlement";
+
+export {
   TOTAL_PHASES,
   PHASE_NAMES,
   initializeTickContext,

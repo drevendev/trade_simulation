@@ -343,6 +343,45 @@ function moneyDeltaKey(delta: MoneyDelta): string {
   return `${owner}:${delta.currencyId}`;
 }
 
+/** Public money-only delta seam shared by explicit settlement transitions. */
+export interface ActorMoneyDelta {
+  readonly actor: ActorRef;
+  readonly currencyId: CurrencyId;
+  readonly delta: number;
+}
+
+/** Read the one canonical live wallet owned by an actor. */
+export function readActorWallet(world: WorldState, actor: ActorRef): LiveWallet {
+  return readWallet(world, resolveWalletEndpoint(actor, "actor wallet read"));
+}
+
+/**
+ * Apply a set of actor-money deltas atomically after one shared no-overdraft preflight.
+ * This is deliberately the same endpoint/mutation path used by market settlement, so
+ * later settlement domains cannot grow a second convention for where actor cash lives.
+ */
+export function applyActorMoneyDeltas(
+  world: WorldState,
+  deltas: readonly ActorMoneyDelta[],
+  operation = "actor money transition",
+): WorldState {
+  const resolved: MoneyDelta[] = deltas.map((delta) => {
+    if (!Number.isFinite(delta.delta)) {
+      refuse(`${operation}: money delta for ${actorRefKey(delta.actor)} must be finite, got ${String(delta.delta)}`);
+    }
+    return {
+      endpoint: resolveWalletEndpoint(delta.actor, operation),
+      currencyId: delta.currencyId,
+      delta: delta.delta,
+    };
+  });
+
+  assertNoStockGoesNegative(world, [], resolved);
+  let next = world;
+  for (const delta of resolved) next = applyMoneyDelta(next, delta);
+  return next;
+}
+
 /**
  * Apply one realized `MarketAllocation` to authoritative actor stock, returning the
  * resulting `WorldState`.
