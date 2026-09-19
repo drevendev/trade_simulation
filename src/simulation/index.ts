@@ -60,6 +60,17 @@ export {
 } from "./householdConsumptionPlanning";
 
 export {
+  applyHouseholdConsumptionTransition,
+  createPhase9HouseholdConsumptionHandler,
+  planHouseholdConsumptionPhase9,
+  type HouseholdConsumptionExecution,
+  type HouseholdConsumptionExecutionResult,
+  type HouseholdConsumptionPhase9Input,
+  type HouseholdEconomicEvidence,
+  type HouseholdNeedRealization,
+} from "./householdConsumptionExecution";
+
+export {
   allocateLaborPhase3,
   createPhase3LaborAllocationHandler,
   type LaborAllocation,
