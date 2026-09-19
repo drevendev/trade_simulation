@@ -1,0 +1,78 @@
+### FILE: src/simulation/worldState.ts
+<<<<<<< FIND
+function buildRegionState(seed: RegionSeed, idMap: IdMaps): RegionState {
+  const settlementCurrencyId = idMap.currencyIds.get(seed.settlementCurrencyKey);
+  if (!settlementCurrencyId) {
+    throw new Error(`Region ${seed.key} references missing currency ${seed.settlementCurrencyKey}`);
+  }
+  return {
+    regionId: idMap.regionIds.get(seed.key)!,
+    seed,
+    controllerStateId: null,
+    settlementCurrencyId,
+    resourceDeposits: new Map(
+      stableOrderBy(seed.deposits ?? [], (deposit) => deposit.resourceId).map((deposit) => [
+        deposit.resourceId,
+        deposit.initialQuantity,
+      ] as const),
+    ),
+  };
+}
+=======
+function buildRegionState(seed: RegionSeed, idMap: IdMaps): RegionState {
+  const settlementCurrencyId = idMap.currencyIds.get(seed.settlementCurrencyKey);
+  if (!settlementCurrencyId) {
+    throw new Error(`Region ${seed.key} references missing currency ${seed.settlementCurrencyKey}`);
+  }
+
+  // RegionState is the single live finite-resource authority. RegionSeed.deposits is
+  // provenance/initialization data and may contain more than one entry for the same
+  // resource identity, so preserve the full opening stock by aggregating in stable
+  // resource order rather than letting Map construction overwrite an earlier entry.
+  const resourceDeposits = new Map<string, number>();
+  for (const deposit of stableOrderBy(seed.deposits ?? [], (candidate) => candidate.resourceId)) {
+    resourceDeposits.set(
+      deposit.resourceId,
+      (resourceDeposits.get(deposit.resourceId) ?? 0) + deposit.initialQuantity,
+    );
+  }
+
+  return {
+    regionId: idMap.regionIds.get(seed.key)!,
+    seed,
+    controllerStateId: null,
+    settlementCurrencyId,
+    resourceDeposits,
+  };
+}
+>>>>>>> REPLACE
+
+### FILE: src/simulation/genesisReconciliation.ts
+<<<<<<< FIND
+  // Sum resources by the region they sit in plus the resource good they hold. The
+  // region is read as the registry's own RegionId, not reconstructed from the seed
+  // key, so a record naming the wrong region cannot match a correct deposit.
+  worldState.regions.forEach((region, regionId) => {
+    (region.seed.deposits ?? []).forEach((deposit) => {
+      if (deposit.initialQuantity > 0) {
+        const granularity = `RES:${String(regionId)}:${String(deposit.resourceId)}`;
+        const current = actualResourcesByGranularity.get(granularity) ?? 0;
+        actualResourcesByGranularity.set(granularity, current + deposit.initialQuantity);
+      }
+    });
+  });
+=======
+  // Sum resources from the authoritative live RegionState balance, not from immutable
+  // RegionSeed provenance. This makes opening reconciliation sensitive to any genesis
+  // materialization error (including duplicate-resource overwrite) before tick 0.
+  // The region is the registry's own RegionId, so typed location identity remains load-bearing.
+  worldState.regions.forEach((region, regionId) => {
+    region.resourceDeposits.forEach((quantity, resourceId) => {
+      if (quantity > 0) {
+        const granularity = `RES:${String(regionId)}:${String(resourceId)}`;
+        const current = actualResourcesByGranularity.get(granularity) ?? 0;
+        actualResourcesByGranularity.set(granularity, current + quantity);
+      }
+    });
+  });
+>>>>>>> REPLACE
