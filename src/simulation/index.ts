@@ -42,6 +42,13 @@ export {
 } from "./productionPlanning";
 
 export {
+  createPhase2LaborSupplyPlanningHandler,
+  generateLaborSupplyPlansPhase2,
+  planCohortLaborSupplyPhase2,
+  type LaborSupplyPlan,
+} from "./laborSupplyPlanning";
+
+export {
   TOTAL_PHASES,
   PHASE_NAMES,
   initializeTickContext,
