@@ -161,15 +161,26 @@ export function planWageOfferUpdatesPhase15(args: {
     if (demandByUnit.has(plan.unitId)) throw new Error(`Duplicate LaborDemandPlan unit ${String(plan.unitId)}`);
     if (plan.laborCategory.trim().length === 0) throw new Error(`LaborDemandPlan ${plan.planId} laborCategory must be non-empty`);
     seenDemandPlanIds.add(plan.planId);
+    const unit = productionUnits.get(plan.unitId);
+    if (unit === undefined) {
+      throw new Error(`LaborDemandPlan ${plan.planId} references unknown ProductionUnit ${String(plan.unitId)}`);
+    }
     const requested = requireNonNegative(
       `LaborDemandPlan ${plan.planId} requestedWorkerEquivalents`,
       plan.requestedWorkerEquivalents,
     );
     requireNonNegative(`LaborDemandPlan ${plan.planId} grossWageOffer`, plan.grossWageOffer);
     requireNonNegative(`LaborDemandPlan ${plan.planId} grossPayrollCap`, plan.grossPayrollCap);
+    if (unit.seed.status !== "ACTIVE" && requested > 0) {
+      throw new Error(
+        `LaborDemandPlan ${plan.planId} requests positive normal labor for non-ACTIVE ProductionUnit ${String(plan.unitId)} (${unit.seed.status})`,
+      );
+    }
     demandByUnit.set(plan.unitId, plan);
-    const key = groupKey(plan.regionId, plan.laborCategory);
-    requestedByGroup.set(key, requireNonNegative(`Phase-15 requested labor ${key}`, (requestedByGroup.get(key) ?? 0) + requested));
+    if (unit.seed.status === "ACTIVE") {
+      const key = groupKey(plan.regionId, plan.laborCategory);
+      requestedByGroup.set(key, requireNonNegative(`Phase-15 requested labor ${key}`, (requestedByGroup.get(key) ?? 0) + requested));
+    }
   }
 
   const allocatedByUnit = new Map<ProductionUnitId, number>();
@@ -196,6 +207,15 @@ export function planWageOfferUpdatesPhase15(args: {
     }
     if (demand.regionId !== allocation.regionId || demand.laborCategory !== allocation.laborCategory) {
       throw new Error(`LaborAllocation ${allocation.allocationId} crosses its demand region/laborCategory group`);
+    }
+    const demandUnit = productionUnits.get(allocation.unitId);
+    if (demandUnit === undefined) {
+      throw new Error(`LaborAllocation ${allocation.allocationId} references unknown ProductionUnit ${String(allocation.unitId)}`);
+    }
+    if (demandUnit.seed.status !== "ACTIVE") {
+      throw new Error(
+        `LaborAllocation ${allocation.allocationId} targets non-ACTIVE ProductionUnit ${String(allocation.unitId)} (${demandUnit.seed.status})`,
+      );
     }
     const workers = requireNonNegative(
       `LaborAllocation ${allocation.allocationId} workerEquivalents`,

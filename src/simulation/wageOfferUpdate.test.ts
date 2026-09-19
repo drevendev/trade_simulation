@@ -137,14 +137,15 @@ describe("REQ-PRODUCTION-003 Phase-15 sticky wage-offer update", () => {
     expect(update.effectiveMinimumWageFloor).toBe(12);
   });
 
-  it("updates only ACTIVE units while zero demand still follows the regional sticky signal", () => {
+  it("rejects non-ACTIVE normal labor demand while ACTIVE zero demand follows the regional sticky signal", () => {
     const base = fixture();
     const inactive: ProductionUnitState = {
       ...base.unit,
       wageOffer: 10,
       seed: { ...base.unit.seed, status: "MOTHBALLED" },
     };
-    expect(plan({ unit: inactive, requested: 50, available: 100, allocated: 50 })).toEqual([]);
+    expect(() => plan({ unit: inactive, requested: 50, available: 100, allocated: 50 })).toThrow(/positive normal labor for non-ACTIVE/);
+    expect(plan({ unit: inactive, requested: 0, available: 100, allocated: 0 })).toEqual([]);
 
     const active: ProductionUnitState = { ...base.unit, wageOffer: 10 };
     const zeroDemand = planWageOfferUpdatesPhase15({
@@ -159,6 +160,74 @@ describe("REQ-PRODUCTION-003 Phase-15 sticky wage-offer update", () => {
     expect(zeroDemand).toHaveLength(1);
     expect(zeroDemand[0]!.vacancyRate).toBe(0);
     expect(zeroDemand[0]!.nextOffer).toBeLessThan(10);
+  });
+
+  it("rejects mixed non-ACTIVE demand/allocation before it can contaminate an ACTIVE regional wage signal", () => {
+    const base = fixture();
+    const active: ProductionUnitState = {
+      ...base.unit,
+      productionUnitId: unitId("unit:active"),
+      wageOffer: 10,
+      seed: { ...base.unit.seed, status: "ACTIVE" },
+    };
+    const inactive: ProductionUnitState = {
+      ...base.unit,
+      productionUnitId: unitId("unit:mothballed"),
+      wageOffer: 10,
+      seed: { ...base.unit.seed, status: "MOTHBALLED" },
+    };
+    const productionUnits = new Map<ProductionUnitId, ProductionUnitState>([
+      [active.productionUnitId, active],
+      [inactive.productionUnitId, inactive],
+    ]);
+    const laborSupplyPlans = [supply(base.regionId, base.laborCategory, 100)];
+    const activeDemand = demand(active.productionUnitId, base.regionId, base.laborCategory, 50, 10);
+    const activeAllocation = allocation(active.productionUnitId, base.regionId, base.laborCategory, 50);
+    const floors = new Map<ProductionUnitId, number>([[active.productionUnitId, 0]]);
+
+    const clean = planWageOfferUpdatesPhase15({
+      tick: 9,
+      config: base.config,
+      productionUnits,
+      laborSupplyPlans,
+      laborDemandPlans: [activeDemand],
+      laborAllocations: [activeAllocation],
+      effectiveMinimumWageFloorByUnit: floors,
+    });
+    expect(clean).toHaveLength(1);
+    expect(clean[0]!.nextOffer).toBeLessThan(10);
+
+    expect(() => planWageOfferUpdatesPhase15({
+      tick: 9,
+      config: base.config,
+      productionUnits,
+      laborSupplyPlans,
+      laborDemandPlans: [
+        activeDemand,
+        demand(inactive.productionUnitId, base.regionId, base.laborCategory, 100, 10),
+      ],
+      laborAllocations: [
+        activeAllocation,
+        allocation(inactive.productionUnitId, base.regionId, base.laborCategory, 50),
+      ],
+      effectiveMinimumWageFloorByUnit: floors,
+    })).toThrow(/positive normal labor for non-ACTIVE/);
+
+    expect(() => planWageOfferUpdatesPhase15({
+      tick: 9,
+      config: base.config,
+      productionUnits,
+      laborSupplyPlans,
+      laborDemandPlans: [
+        activeDemand,
+        demand(inactive.productionUnitId, base.regionId, base.laborCategory, 0, 10),
+      ],
+      laborAllocations: [
+        activeAllocation,
+        allocation(inactive.productionUnitId, base.regionId, base.laborCategory, 50),
+      ],
+      effectiveMinimumWageFloorByUnit: floors,
+    })).toThrow(/targets non-ACTIVE/);
   });
 
   it("is insertion-order invariant and emits stable unit ordering", () => {
