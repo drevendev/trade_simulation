@@ -1,0 +1,10 @@
+### FILE: src/simulation/wageSettlement.ts
+<<<<<<< FIND
+  readonly wagePaymentTransaction: WagePaymentTransaction;
+  readonly wageTaxWithheldTransaction?: WageTaxWithheldTransaction;
+}
+=======
+  readonly wagePaymentTransaction: WagePaymentTransaction;
+  readonly wageTaxWithheldTransaction: WageTaxWithheldTransaction | undefined;
+}
+>>>>>>> REPLACE
