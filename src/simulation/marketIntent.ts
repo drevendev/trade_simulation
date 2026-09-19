@@ -16,7 +16,7 @@ import type {
   RegionId,
   StateId,
 } from "../domain/id";
-import type { ActorRef } from "../domain/genesisLedger";
+import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 
 /** Opaque market intent ID (mi:...) */
@@ -164,12 +164,7 @@ export interface BudgetCommitmentLedger {
 
 /** Envelope key format: `${actorRef}|${currencyId}|${envelope}` */
 function buildEnvelopeKey(actor: ActorRef, currencyId: CurrencyId, envelope: string): string {
-  const actorKey =
-    actor.type === "CLAN" ? `clan:${actor.clanId}` :
-    actor.type === "STATE" ? `state:${actor.stateId}` :
-    actor.type === "PRODUCTION_UNIT" ? `pu:${actor.productionUnitId}` :
-    `unknown:${actor.type}`;
-  return `${actorKey}|${currencyId}|${envelope}`;
+  return `${actorRefKey(actor)}|${currencyId}|${envelope}`;
 }
 
 /**

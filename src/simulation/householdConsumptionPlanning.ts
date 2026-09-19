@@ -9,7 +9,7 @@
 
 import { BASELINE_NEED_CATEGORY_IDS, type NeedCategoryDefinition } from "../config/definitionPack";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
-import type { CohortId, CurrencyId, GoodId, MarketId, RegionId } from "../domain/id";
+import type { CohortId, CurrencyId, GoodId } from "../domain/id";
 import { isFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
 import {
