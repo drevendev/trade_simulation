@@ -49,6 +49,12 @@ export {
 } from "./laborSupplyPlanning";
 
 export {
+  allocateLaborPhase3,
+  createPhase3LaborAllocationHandler,
+  type LaborAllocation,
+} from "./laborAllocation";
+
+export {
   TOTAL_PHASES,
   PHASE_NAMES,
   initializeTickContext,
