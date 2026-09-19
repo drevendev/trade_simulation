@@ -51,6 +51,7 @@ import { stableOrderBy } from "../domain/ordering";
 import {
   INITIAL_LIFECYCLE_REVIEW_TICK,
   createInitialProductionSignalState,
+  resolveInitialWageOffer,
   validateProductionUnitPersistentState,
   type ProductionSignalState,
 } from "./productionUnitState";
@@ -183,6 +184,8 @@ export interface ProductionUnitState {
   readonly inputInventory: LiveInventory;
   readonly outputInventory: LiveInventory;
   readonly investmentInventory: LiveInventory;
+  /** Canonical sticky gross wage offer carried from tick N to planning in tick N+1. */
+  readonly wageOffer: number;
   /** Authoritative mutable physical capital stock; nameplate capacity is derived from it. */
   readonly installedCapital: number;
   readonly signals: ProductionSignalState;
@@ -505,6 +508,7 @@ export function buildInitialWorld(
       inputInventory: new Map(),
       outputInventory: new Map(),
       investmentInventory: new Map(),
+      wageOffer: resolveInitialWageOffer(puSeed.wageOffer, resolvedConfig.labor),
       installedCapital: puSeed.installedCapital,
       signals: createInitialProductionSignalState(resolvedConfig.production),
       lastLifecycleReviewTick: INITIAL_LIFECYCLE_REVIEW_TICK,

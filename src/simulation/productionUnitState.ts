@@ -7,7 +7,7 @@
  * module deliberately exposes no mutable/serialized `capacity` field.
  */
 import type { RecipeDefinition } from "../config/definitionPack";
-import { createDefaultSimulationConfig, type ProductionConfig } from "../config/simulationConfig";
+import { createDefaultSimulationConfig, type LaborConfig, type ProductionConfig } from "../config/simulationConfig";
 import type { GoodId } from "../domain/id";
 import { isFiniteCanonicalNumber } from "../domain/numeric";
 
@@ -24,7 +24,19 @@ export interface ProductionSignalState {
 /** `-1` means no lifecycle review has occurred yet; lifecycle behavior lands later. */
 export const INITIAL_LIFECYCLE_REVIEW_TICK = -1;
 
+/** Resolve the canonical live opening wage from scenario seed or the LaborConfig default owner. */
+export function resolveInitialWageOffer(seedWageOffer: number | undefined, labor: LaborConfig): number {
+  const canonicalDefault = createDefaultSimulationConfig().labor.startingReferenceWage;
+  const wageOffer = seedWageOffer ?? labor.startingReferenceWage ?? canonicalDefault;
+  if (wageOffer === undefined) {
+    throw new Error("canonical LaborConfig defaults must define startingReferenceWage");
+  }
+  requireNonNegativeFinite("ProductionUnitState.wageOffer", wageOffer);
+  return wageOffer;
+}
+
 export interface ProductionUnitPersistentStateView {
+  readonly wageOffer: number;
   readonly installedCapital: number;
   readonly inputInventory: ReadonlyMap<GoodId, number>;
   readonly outputInventory: ReadonlyMap<GoodId, number>;
@@ -116,6 +128,7 @@ export function deriveNameplateCapacity(
  * Later requirements add behavioral validation at their own execution boundaries.
  */
 export function validateProductionUnitPersistentState(unit: ProductionUnitPersistentStateView): void {
+  requireNonNegativeFinite("ProductionUnitState.wageOffer", unit.wageOffer);
   requireNonNegativeFinite("ProductionUnitState.installedCapital", unit.installedCapital);
 
   if (

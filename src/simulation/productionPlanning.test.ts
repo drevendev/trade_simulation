@@ -639,4 +639,23 @@ describe("REQ-PRODUCTION-002 Phase-2 production planning slice", () => {
     expect(contaminatedResult.productionPlans).toEqual(cleanResult.productionPlans);
     expect(contaminatedResult.productionMarketIntents).toEqual(cleanResult.productionMarketIntents);
   });
+
+  it("reads the canonical live wageOffer rather than the immutable scenario seed", () => {
+    const base = fixture();
+    const unit: ProductionUnitState = {
+      ...base.unit,
+      wageOffer: 17,
+      seed: { ...base.unit.seed, wageOffer: 2 },
+    };
+    const result = planProductionUnitPhase2({
+      tick: 7,
+      unit,
+      regionId: base.region.regionId,
+      settlementCurrencyId: base.region.settlementCurrencyId,
+      recipe: base.recipe,
+      config: base.config,
+      evidence: { ...base.evidence, legalMinimumWageFloor: 0 },
+    });
+    expect(result.laborDemandPlan.grossWageOffer).toBe(17);
+  });
 });
