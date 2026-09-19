@@ -556,7 +556,7 @@ function lossEvidence(args: {
       amount: quantity,
       cause: args.kind === "CONSUMPTION" ? "consumption" : "spoilage",
       reason: `${type}:${args.categoryId}`,
-      causalPhase: 8,
+      causalPhase: 9,
     });
   }
   return { transactions, losses };

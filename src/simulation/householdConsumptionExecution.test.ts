@@ -319,7 +319,9 @@ describe("REQ-POPULATION-003 Phase-9 household realization", () => {
     expect(food.coverage).toBeCloseTo(0.4);
     expect(execution.essentialCoverage).toBeCloseTo(0.2);
     expect(execution.endingInventoryByGood[FOOD]).toBe(0);
-    expect(result.physicalLosses.some((loss) => loss.cause === "consumption" && loss.amount === 4)).toBe(true);
+    expect(result.physicalLosses.some(
+      (loss) => loss.cause === "consumption" && loss.amount === 4 && loss.phase === 9 && loss.causalPhase === 9,
+    )).toBe(true);
 
     const transitioned = applyHouseholdConsumptionTransition(input, result.executions);
     expect(input.cohorts.get(COHORT)!.householdInventory.get(FOOD)).toBe(4);
@@ -339,7 +341,9 @@ describe("REQ-POPULATION-003 Phase-9 household realization", () => {
     expect(execution.spoiledByGood[FOOD]).toBeCloseTo(6);
     expect(execution.endingInventoryByGood[FOOD]).toBeCloseTo(2);
     expect(result.transactions.some((tx) => tx.type === "HOUSEHOLD_SPOILAGE" && tx.quantity === 6)).toBe(true);
-    expect(result.physicalLosses.some((loss) => loss.cause === "spoilage" && loss.amount === 6)).toBe(true);
+    expect(result.physicalLosses.some(
+      (loss) => loss.cause === "spoilage" && loss.amount === 6 && loss.phase === 9 && loss.causalPhase === 9,
+    )).toBe(true);
   });
 
   it("retains durable goods instead of silently destroying them above a carryover cap", () => {
