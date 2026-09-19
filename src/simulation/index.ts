@@ -73,6 +73,16 @@ export {
 } from "./wageSettlement";
 
 export {
+  applyProductionExecutionTransition,
+  buildProductionOutputSellIntentsPhase5,
+  createPhase5ProductionExecutionHandler,
+  planProductionExecutionsPhase5,
+  resolveRegionResourceDeposits,
+  type ProductionExecution,
+  type ProductionExecutionPlanResult,
+} from "./productionExecution";
+
+export {
   TOTAL_PHASES,
   PHASE_NAMES,
   initializeTickContext,
