@@ -1,6 +1,0 @@
-### FILE: src/simulation/householdConsumptionExecution.test.ts
-<<<<<<< FIND
-    expect(execution.essentialCoverage).toBeCloseTo(0.4);
-=======
-    expect(execution.essentialCoverage).toBeCloseTo(0.2);
->>>>>>> REPLACE

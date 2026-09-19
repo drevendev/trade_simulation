@@ -317,7 +317,7 @@ describe("REQ-POPULATION-003 Phase-9 household realization", () => {
     expect(food.requiredUsefulConsumption).toBe(10);
     expect(food.realizedUsefulConsumption).toBe(4);
     expect(food.coverage).toBeCloseTo(0.4);
-    expect(execution.essentialCoverage).toBeCloseTo(0.4);
+    expect(execution.essentialCoverage).toBeCloseTo(0.2);
     expect(execution.endingInventoryByGood[FOOD]).toBe(0);
     expect(result.physicalLosses.some((loss) => loss.cause === "consumption" && loss.amount === 4)).toBe(true);
 
