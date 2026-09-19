@@ -57,6 +57,7 @@ function makeRegion(id = "region:1"): RegionState {
     },
     controllerStateId: null,
     settlementCurrencyId: "currency:1" as never,
+    resourceDeposits: new Map(),
   };
 }
 
