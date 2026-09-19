@@ -1,0 +1,21 @@
+### FILE: docs/spec/implementation_status.csv
+<<<<<<< FIND
+Phase-3 labor allocation, Phase-5 execution/output sale, Phase-12 capital formation/depreciation, lifecycle transitions, MOTHBALLED reactivation eligibility and M5+ remain owned by their separate requirements and are not claimed here."
+=======
+Phase-3 labor allocation, Phase-5 execution/output sale, Phase-12 capital formation/depreciation, lifecycle transitions, MOTHBALLED reactivation eligibility and M5+ remain owned by their separate requirements and are not claimed here."
+REQ-POPULATION-002,IMPLEMENTED,575,576,,"PR #576 implements the complete M4 Population-owned Phase-2 LaborSupplyPlan boundary from HANDOFF-REPAIR-M4-005 / Handoff/06 section 8: only positive-population WORKING cohorts emit normal supply; participation uses the Population-owned stratum baseline multiplied by the exact linear health and prior-close opportunity factors with neutral M4 workingEligibility/lawParticipationFactor and configured min/max clamps; available worker-equivalents are bounded to cohort population; IDs and enumeration are stable by persistent cohortId; plans are ephemeral TickContext state with no RNG, WorldState mutation or employer linkage. Focused regressions in src/simulation/laborSupplyPlanning.test.ts prove factor endpoints/clamping, CHILD/ELDER and zero-population exclusion, tiny-positive supply, invalid/non-finite evidence rejection, missing-stratum rejection, insertion-order equivalence and no cohort-state mutation. Substantive code head fe2782e77e208c9b002516aaa3e12aa658faf580 passed CI run 35411625919 with TypeScript typecheck/tests/build, retained .NET build/test and policy-guard; final evidence-only head reruns required gates before SLOPSTER judgement. Phase-3 allocation/wage settlement, household consumption, persistent employer stock, Phase-13 demography/migration, M6 institutions and M5+ remain separate requirements."
+>>>>>>> REPLACE
+
+### FILE: docs/spec/IMPLEMENTATION_STATUS.md
+<<<<<<< FIND
+| REQ-POPULATION-002 | `READY` | `NOT_STARTED` | — | — | — |
+=======
+| REQ-POPULATION-002 | `READY` | `IMPLEMENTED` | #575 | #576 | PR #576 implements the complete M4 Population-owned Phase-2 LaborSupplyPlan boundary from HANDOFF-REPAIR-M4-005 / Handoff/06 section 8: only positive-population WORKING cohorts emit normal supply; participation uses the Population-owned stratum baseline multiplied by the exact linear health and prior-close opportunity factors with neutral M4 workingEligibility/lawParticipationFactor and configured min/max clamps; available worker-equivalents are bounded to cohort population; IDs and enumeration are stable by persistent cohortId; plans are ephemeral TickContext state with no RNG, WorldState mutation or employer linkage. Focused regressions in src/simulation/laborSupplyPlanning.test.ts prove factor endpoints/clamping, CHILD/ELDER and zero-population exclusion, tiny-positive supply, invalid/non-finite evidence rejection, missing-stratum rejection, insertion-order equivalence and no cohort-state mutation. Substantive code head fe2782e77e208c9b002516aaa3e12aa658faf580 passed CI run 35411625919 with TypeScript typecheck/tests/build, retained .NET build/test and policy-guard; final evidence-only head reruns required gates before SLOPSTER judgement. Phase-3 allocation/wage settlement, household consumption, persistent employer stock, Phase-13 demography/migration, M6 institutions and M5+ remain separate requirements. |
+>>>>>>> REPLACE
+
+### FILE: docs/spec/IMPLEMENTATION_STATUS.md
+<<<<<<< FIND
+**Summary: 34 of 49 requirement identifiers implemented.**
+=======
+**Summary: 35 of 49 requirement identifiers implemented.**
+>>>>>>> REPLACE
