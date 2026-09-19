@@ -459,7 +459,7 @@ export function planProductionUnitPhase2(args: {
   );
   const unitWageOffer = requireNonNegative(
     "ProductionUnit wageOffer",
-    unit.seed.wageOffer ?? planning.startingReferenceWage,
+    unit.wageOffer,
   );
   const grossWageOffer = Math.max(unitWageOffer, legalMinimumWageFloor);
   const rawLaborDemand = plannedBatches * requireNonNegative("RecipeDefinition.laborPerBatch", recipe.laborPerBatch);

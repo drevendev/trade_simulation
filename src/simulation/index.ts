@@ -55,6 +55,13 @@ export {
 } from "./laborAllocation";
 
 export {
+  applyWageOfferStateTransition,
+  createPhase15WageOfferUpdateHandler,
+  planWageOfferUpdatesPhase15,
+  type WageOfferUpdate,
+} from "./wageOfferUpdate";
+
+export {
   TOTAL_PHASES,
   PHASE_NAMES,
   initializeTickContext,
