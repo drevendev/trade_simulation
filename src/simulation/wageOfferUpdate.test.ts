@@ -201,6 +201,8 @@ describe("REQ-PRODUCTION-003 Phase-15 sticky wage-offer update", () => {
     expect(() => planWageOfferUpdatesPhase15({ ...common, laborSupplyPlans: [goodSupply], laborDemandPlans: [goodDemand, goodDemand], laborAllocations: [goodAllocation] })).toThrow(/Duplicate/);
     expect(() => planWageOfferUpdatesPhase15({ ...common, laborSupplyPlans: [goodSupply], laborDemandPlans: [goodDemand], laborAllocations: [] })).toThrow(/expected matched/);
     expect(() => planWageOfferUpdatesPhase15({ ...common, laborSupplyPlans: [goodSupply], laborDemandPlans: [goodDemand], laborAllocations: [{ ...goodAllocation, laborCategory: "OTHER" }] })).toThrow(/crosses/);
+    expect(() => planWageOfferUpdatesPhase15({ ...common, laborSupplyPlans: [goodSupply], laborDemandPlans: [goodDemand], laborAllocations: [{ ...goodAllocation, tick: 8 }] })).toThrow(/does not match Phase-15 tick/);
+    expect(() => planWageOfferUpdatesPhase15({ ...common, laborSupplyPlans: [goodSupply], laborDemandPlans: [goodDemand], laborAllocations: [{ ...goodAllocation, cohortId: cohortId("cohort:missing") }] })).toThrow(/unknown supply cohort/);
   });
 
   it("keeps WorldState immutable in Phase 15 and persists only the N+1 live wage offer", () => {

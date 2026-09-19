@@ -136,19 +136,19 @@ export function planWageOfferUpdatesPhase15(args: {
 
   const availableByGroup = new Map<string, number>();
   const seenSupplyPlanIds = new Set<string>();
-  const seenCohorts = new Set<string>();
+  const supplyGroupByCohort = new Map<string, string>();
   for (const plan of laborSupplyPlans) {
     if (plan.planId.trim().length === 0) throw new Error("LaborSupplyPlan.planId must be non-empty");
     if (seenSupplyPlanIds.has(plan.planId)) throw new Error(`Duplicate LaborSupplyPlan.planId ${plan.planId}`);
-    if (seenCohorts.has(String(plan.cohortId))) throw new Error(`Duplicate LaborSupplyPlan cohort ${String(plan.cohortId)}`);
+    if (supplyGroupByCohort.has(String(plan.cohortId))) throw new Error(`Duplicate LaborSupplyPlan cohort ${String(plan.cohortId)}`);
     if (plan.laborCategory.trim().length === 0) throw new Error(`LaborSupplyPlan ${plan.planId} laborCategory must be non-empty`);
     seenSupplyPlanIds.add(plan.planId);
-    seenCohorts.add(String(plan.cohortId));
     const available = requireNonNegative(
       `LaborSupplyPlan ${plan.planId} availableWorkerEquivalents`,
       plan.availableWorkerEquivalents,
     );
     const key = groupKey(plan.regionId, plan.laborCategory);
+    supplyGroupByCohort.set(String(plan.cohortId), key);
     availableByGroup.set(key, requireNonNegative(`Phase-15 available labor ${key}`, (availableByGroup.get(key) ?? 0) + available));
   }
 
@@ -178,7 +178,18 @@ export function planWageOfferUpdatesPhase15(args: {
   for (const allocation of laborAllocations) {
     if (allocation.allocationId.trim().length === 0) throw new Error("LaborAllocation.allocationId must be non-empty");
     if (seenAllocationIds.has(allocation.allocationId)) throw new Error(`Duplicate LaborAllocation.allocationId ${allocation.allocationId}`);
+    if (allocation.tick !== tick) {
+      throw new Error(`LaborAllocation ${allocation.allocationId} tick ${allocation.tick} does not match Phase-15 tick ${tick}`);
+    }
     seenAllocationIds.add(allocation.allocationId);
+    const allocationGroup = groupKey(allocation.regionId, allocation.laborCategory);
+    const supplyGroup = supplyGroupByCohort.get(String(allocation.cohortId));
+    if (supplyGroup === undefined) {
+      throw new Error(`LaborAllocation ${allocation.allocationId} references unknown supply cohort ${String(allocation.cohortId)}`);
+    }
+    if (supplyGroup !== allocationGroup) {
+      throw new Error(`LaborAllocation ${allocation.allocationId} crosses its supply region/laborCategory group`);
+    }
     const demand = demandByUnit.get(allocation.unitId);
     if (demand === undefined) {
       throw new Error(`LaborAllocation ${allocation.allocationId} references unknown demand unit ${String(allocation.unitId)}`);
@@ -194,8 +205,7 @@ export function planWageOfferUpdatesPhase15(args: {
       allocation.unitId,
       requireNonNegative(`Phase-15 allocated labor ${String(allocation.unitId)}`, (allocatedByUnit.get(allocation.unitId) ?? 0) + workers),
     );
-    const key = groupKey(allocation.regionId, allocation.laborCategory);
-    allocatedByGroup.set(key, requireNonNegative(`Phase-15 allocated labor ${key}`, (allocatedByGroup.get(key) ?? 0) + workers));
+    allocatedByGroup.set(allocationGroup, requireNonNegative(`Phase-15 allocated labor ${allocationGroup}`, (allocatedByGroup.get(allocationGroup) ?? 0) + workers));
   }
 
   const groupKeys = new Set<string>([...availableByGroup.keys(), ...requestedByGroup.keys(), ...allocatedByGroup.keys()]);
