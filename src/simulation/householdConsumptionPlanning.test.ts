@@ -224,6 +224,33 @@ describe("REQ-POPULATION-001 household consumption planning", () => {
     ]);
   });
 
+  it("reports zero intended consumption when a tiny positive cohort has zero available budget", () => {
+    const population = 1e-12;
+    const result = planHouseholdConsumptionPhase2(
+      makeWorld({ cohorts: [makeCohort("cohort:tiny", 0, population)] }),
+      7,
+    );
+    const plan = result.plans[0]!;
+
+    expect(plan.categoryDetails.every((entry) => entry.targetUsefulConsumption > 0)).toBe(true);
+    expect(plan.planningCashEnvelope).toBe(0);
+    expect(plan.categoryBudgets).toEqual({
+      ESSENTIAL_FOOD: 0,
+      BASIC_GOODS: 0,
+      SERVICES: 0,
+      COMFORT: 0,
+    });
+    expect(plan.intendedUsefulConsumption).toEqual({
+      ESSENTIAL_FOOD: 0,
+      BASIC_GOODS: 0,
+      SERVICES: 0,
+      COMFORT: 0,
+    });
+    expect(plan.categoryDetails.every((entry) => entry.intendedUsefulConsumption === 0)).toBe(true);
+    expect(result.intents).toEqual([]);
+    expect(result.budgetLedger.commitmentsByEnvelope.size).toBe(0);
+  });
+
   it("normalizes substitution finitely in log space even when observed prices are below moneyEpsilon", () => {
     const world = makeWorld({ market: makeMarket({ "food-a": 0, "food-b": Number.MIN_VALUE }) });
     const result = planHouseholdConsumptionPhase2(world, 3);

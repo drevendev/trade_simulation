@@ -401,9 +401,11 @@ function buildCohortPlan(args: {
   for (const categoryId of BASELINE_NEED_CATEGORY_IDS) {
     const category = resolved.get(categoryId)!;
     const budget = budgets.get(categoryId) ?? 0;
-    const intendedUsefulConsumptionForCategory = category.targetCost <= controls.moneyEpsilon
-      ? category.targetUsefulConsumption
-      : category.targetUsefulConsumption * Math.min(1, budget / category.targetCost);
+    const intendedUsefulConsumptionForCategory = budget <= 0
+      ? 0
+      : budget >= category.targetCost
+        ? category.targetUsefulConsumption
+        : category.targetUsefulConsumption * (budget / category.targetCost);
     const intentIds: MarketIntentId[] = [];
 
     let committedWithinCategory = 0;
