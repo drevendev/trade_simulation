@@ -1,0 +1,13 @@
+### FILE: src/simulation/laborSupplyPlanning.test.ts
+<<<<<<< FIND
+    controllerStateId: null,
+    settlementCurrencyId: "currency:1" as never,
+  };
+}
+=======
+    controllerStateId: null,
+    settlementCurrencyId: "currency:1" as never,
+    resourceDeposits: new Map(),
+  };
+}
+>>>>>>> REPLACE
