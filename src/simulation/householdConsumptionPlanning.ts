@@ -21,6 +21,7 @@ import {
   type MarketIntentId,
 } from "./marketIntent";
 import { createEmptyBudgetCommitmentLedger } from "./marketIntent";
+import type { TaxPolicyProvider } from "./marketSettlement";
 import type { PhaseHandler, TickContext } from "./tickOrchestrator";
 import type { CohortState, LocalMarketState, PendingTransitions, RegionState, WorldState } from "./worldState";
 
@@ -57,6 +58,11 @@ export interface HouseholdConsumptionPlanningResult {
   readonly plans: readonly HouseholdConsumptionPlan[];
   readonly intents: readonly MarketIntent[];
   readonly budgetLedger: BudgetCommitmentLedger;
+}
+
+export interface HouseholdConsumptionPlanningOptions {
+  readonly startingBudgetLedger?: BudgetCommitmentLedger;
+  readonly taxPolicy?: TaxPolicyProvider;
 }
 
 interface ResolvedNeedCategory {
@@ -151,10 +157,58 @@ function resolveMarketForRegion(world: WorldState, region: RegionState): LocalMa
   return matches[0]!;
 }
 
+function resolveExpectedGrossBuyerPrice(args: {
+  readonly region: RegionState;
+  readonly goodId: GoodId;
+  readonly sellerNetPrice: number;
+  readonly moneyEpsilon: number;
+  readonly taxPolicy?: TaxPolicyProvider;
+}): number {
+  const sellerNetPrice = requireNonNegative(
+    `Prior-close price for ${String(args.goodId)}`,
+    args.sellerNetPrice,
+  );
+
+  if (args.region.controllerStateId === null) {
+    return Math.max(sellerNetPrice, args.moneyEpsilon);
+  }
+  if (args.taxPolicy === undefined) {
+    throw new Error(
+      `Controlled Region ${String(args.region.regionId)} requires an explicit TaxPolicyProvider for household gross-price planning`,
+    );
+  }
+
+  const assessedTaxRate = requireNonNegative(
+    `Consumption tax rate for ${String(args.goodId)}`,
+    args.taxPolicy.getConsumptionTaxRate(args.region.controllerStateId, args.goodId),
+  );
+  if (assessedTaxRate > 1) {
+    throw new Error(`Consumption tax rate for ${String(args.goodId)} must be in [0, 1], got ${assessedTaxRate}`);
+  }
+  const collectionEfficiency = requireNonNegative(
+    `Consumption tax collection efficiency for ${String(args.region.controllerStateId)}`,
+    args.taxPolicy.getCollectionEfficiency(args.region.controllerStateId),
+  );
+  if (collectionEfficiency > 1) {
+    throw new Error(
+      `Consumption tax collection efficiency for ${String(args.region.controllerStateId)} must be in [0, 1], got ${collectionEfficiency}`,
+    );
+  }
+
+  // Match Phase-8 semantics exactly: only collected tax is part of buyer gross price.
+  const grossPrice = requireNonNegative(
+    `Expected gross buyer price for ${String(args.goodId)}`,
+    sellerNetPrice * (1 + assessedTaxRate * collectionEfficiency),
+  );
+  return Math.max(grossPrice, args.moneyEpsilon);
+}
+
 function normalizedSubstitutionShares(args: {
   readonly category: NeedCategoryDefinition;
   readonly market: LocalMarketState;
+  readonly region: RegionState;
   readonly moneyEpsilon: number;
+  readonly taxPolicy?: TaxPolicyProvider;
 }): readonly HouseholdSubstitutionShare[] {
   const { category, market, moneyEpsilon } = args;
   requireNonNegative(`NeedCategory ${category.id} perCapitaTarget`, category.perCapitaTarget);
@@ -184,11 +238,13 @@ function normalizedSubstitutionShares(args: {
         `NeedCategory ${category.id} good ${String(candidate.goodId)} has no prior-close market price`,
       );
     }
-    const price = requireNonNegative(
-      `Prior-close price for ${String(candidate.goodId)}`,
-      observedPrice,
-    );
-    const effectivePrice = Math.max(price, moneyEpsilon);
+    const effectivePrice = resolveExpectedGrossBuyerPrice({
+      region: args.region,
+      goodId: candidate.goodId,
+      sellerNetPrice: observedPrice,
+      moneyEpsilon,
+      taxPolicy: args.taxPolicy,
+    });
     const logWeight = Math.log(preference) + Math.log(quality) - category.priceSensitivity * Math.log(effectivePrice);
     requireFinite(`NeedCategory ${category.id} ${String(candidate.goodId)} log substitution weight`, logWeight);
     return { candidate, effectivePrice, logWeight };
@@ -223,7 +279,9 @@ function resolveNeedCategory(args: {
   readonly category: NeedCategoryDefinition;
   readonly population: number;
   readonly market: LocalMarketState;
+  readonly region: RegionState;
   readonly moneyEpsilon: number;
+  readonly taxPolicy?: TaxPolicyProvider;
 }): ResolvedNeedCategory {
   const substitutionShares = normalizedSubstitutionShares(args);
   const targetUsefulConsumption = requireNonNegative(
@@ -290,6 +348,7 @@ function buildCohortPlan(args: {
   readonly tick: number;
   readonly startingBudgetLedger: BudgetCommitmentLedger;
   readonly categories: readonly NeedCategoryDefinition[];
+  readonly taxPolicy?: TaxPolicyProvider;
 }): { readonly plan: HouseholdConsumptionPlan; readonly intents: readonly MarketIntent[]; readonly budgetLedger: BudgetCommitmentLedger } | null {
   const { world, cohort, tick, categories } = args;
   const population = requireNonNegative(`Cohort ${String(cohort.cohortId)} population`, cohort.seed.population);
@@ -318,7 +377,14 @@ function buildCohortPlan(args: {
 
   const resolved = new Map<string, ResolvedNeedCategory>();
   for (const category of categories) {
-    resolved.set(category.id, resolveNeedCategory({ category, population, market, moneyEpsilon: controls.moneyEpsilon }));
+    resolved.set(category.id, resolveNeedCategory({
+      category,
+      population,
+      market,
+      region,
+      moneyEpsilon: controls.moneyEpsilon,
+      taxPolicy: args.taxPolicy,
+    }));
   }
   const budgets = allocateCategoryBudgets(resolved, planningCashEnvelope);
   const planId = `household-consumption:${tick}:${String(cohort.cohortId)}`;
@@ -410,7 +476,7 @@ function buildCohortPlan(args: {
 export function planHouseholdConsumptionPhase2(
   world: WorldState,
   tick: number,
-  startingBudgetLedger: BudgetCommitmentLedger = createEmptyBudgetCommitmentLedger(),
+  options: HouseholdConsumptionPlanningOptions = {},
 ): HouseholdConsumptionPlanningResult {
   if (!Number.isInteger(tick) || tick < 0) {
     throw new Error(`Household consumption planning tick must be a non-negative integer, got ${String(tick)}`);
@@ -419,10 +485,17 @@ export function planHouseholdConsumptionPhase2(
   const cohorts = stableOrderBy([...world.cohorts.values()], (cohort) => String(cohort.cohortId));
   const plans: HouseholdConsumptionPlan[] = [];
   const intents: MarketIntent[] = [];
-  let budgetLedger = startingBudgetLedger;
+  let budgetLedger = options.startingBudgetLedger ?? createEmptyBudgetCommitmentLedger();
 
   for (const cohort of cohorts) {
-    const result = buildCohortPlan({ world, cohort, tick, startingBudgetLedger: budgetLedger, categories });
+    const result = buildCohortPlan({
+      world,
+      cohort,
+      tick,
+      startingBudgetLedger: budgetLedger,
+      categories,
+      taxPolicy: options.taxPolicy,
+    });
     if (result === null) continue;
     plans.push(result.plan);
     intents.push(...result.intents);
@@ -436,10 +509,15 @@ export function planHouseholdConsumptionPhase2(
  * Real Phase-2 handler. Household plans and intents remain tick-scoped and the only
  * state carried forward here is the immutable planner budget commitment ledger.
  */
-export function createPhase2HouseholdConsumptionPlanningHandler(): PhaseHandler {
+export function createPhase2HouseholdConsumptionPlanningHandler(options?: {
+  readonly taxPolicy?: TaxPolicyProvider;
+}): PhaseHandler {
   return (world: WorldState, context: TickContext, _pendingTransitions: PendingTransitions): TickContext => {
     if (context.phase !== 2) return context;
-    const result = planHouseholdConsumptionPhase2(world, context.tick, context.budgetLedger);
+    const result = planHouseholdConsumptionPhase2(world, context.tick, {
+      startingBudgetLedger: context.budgetLedger,
+      taxPolicy: options?.taxPolicy,
+    });
     return {
       ...context,
       budgetLedger: result.budgetLedger,

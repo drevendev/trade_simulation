@@ -54,6 +54,7 @@ export {
   planHouseholdConsumptionPhase2,
   type HouseholdCategoryBudget,
   type HouseholdConsumptionPlan,
+  type HouseholdConsumptionPlanningOptions,
   type HouseholdConsumptionPlanningResult,
   type HouseholdSubstitutionShare,
 } from "./householdConsumptionPlanning";

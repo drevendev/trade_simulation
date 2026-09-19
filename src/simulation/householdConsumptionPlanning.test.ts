@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { NeedCategoryDefinition } from "../config/definitionPack";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
-import type { ClanId, CohortId, CurrencyId, GoodId, MarketId, RegionId } from "../domain/id";
+import type { ClanId, CohortId, CurrencyId, GoodId, MarketId, RegionId, StateId } from "../domain/id";
 import { getEnvelopeCommitment } from "./marketIntent";
 import {
   createPhase2HouseholdConsumptionPlanningHandler,
@@ -17,6 +17,7 @@ const regionId = (value: string) => value as RegionId;
 const currencyId = (value: string) => value as CurrencyId;
 const marketId = (value: string) => value as MarketId;
 const goodId = (value: string) => value as GoodId;
+const stateId = (value: string) => value as StateId;
 
 const CUR = currencyId("currency:1");
 
@@ -96,20 +97,20 @@ function makeCohort(id: string, cash = 100, population = 10, wageSignal = 1): Co
   };
 }
 
-function makeRegion(): RegionState {
+function makeRegion(controllerStateId: StateId | null = null): RegionState {
   return {
     regionId: regionId("region:1"),
     seed: {
       key: "region-a",
       name: "Region A",
-      controllerStateKey: null,
+      controllerStateKey: controllerStateId === null ? null : "state-a",
       settlementCurrencyKey: "CUR",
       settlementLevel: 1,
       infrastructure: {},
       climateHabitabilityInputs: {},
       deposits: [],
     },
-    controllerStateId: null,
+    controllerStateId,
     settlementCurrencyId: CUR,
     resourceDeposits: new Map(),
   };
@@ -136,9 +137,10 @@ function makeWorld(args?: {
   readonly cohorts?: readonly CohortState[];
   readonly categories?: Readonly<Record<string, NeedCategoryDefinition>>;
   readonly market?: LocalMarketState;
+  readonly region?: RegionState;
 }): WorldState {
   const config = createDefaultSimulationConfig();
-  const region = makeRegion();
+  const region = args?.region ?? makeRegion();
   const market = args?.market ?? makeMarket();
   const cohorts = args?.cohorts ?? [makeCohort("cohort:a")];
   return {
@@ -208,6 +210,36 @@ describe("REQ-POPULATION-001 household consumption planning", () => {
     expect(essential.substitutionShares.every((candidate) => Number.isFinite(candidate.share) && candidate.share >= 0)).toBe(true);
     expect(essential.substitutionShares.every((candidate) => candidate.expectedGrossBuyerPrice === 1e-9)).toBe(true);
     expect(result.intents.every((intent) => Number.isFinite(intent.desiredQuantity) && Number.isFinite(intent.maxSpend))).toBe(true);
+  });
+
+  it("uses the Phase-8 collected-tax semantics for expected gross buyer prices in controlled Regions", () => {
+    const controlledWorld = makeWorld({ region: makeRegion(stateId("state:1")) });
+
+    expect(() => planHouseholdConsumptionPhase2(controlledWorld, 3)).toThrow(
+      /requires an explicit TaxPolicyProvider/,
+    );
+
+    const result = planHouseholdConsumptionPhase2(controlledWorld, 3, {
+      taxPolicy: {
+        getConsumptionTaxRate: (_stateId, good) => good === goodId("food-a") ? 0.5 : 0,
+        getCollectionEfficiency: () => 0.5,
+      },
+    });
+    const essential = result.plans[0]!.categoryBudgets[0]!;
+    const foodA = essential.substitutionShares.find((entry) => entry.goodId === goodId("food-a"))!;
+    const foodB = essential.substitutionShares.find((entry) => entry.goodId === goodId("food-b"))!;
+
+    expect(foodA.expectedGrossBuyerPrice).toBe(1.25);
+    expect(foodB.expectedGrossBuyerPrice).toBe(1);
+    expect(foodA.share).toBeCloseTo(2 / 7, 12);
+    expect(foodB.share).toBeCloseTo(5 / 7, 12);
+
+    expect(() => planHouseholdConsumptionPhase2(controlledWorld, 3, {
+      taxPolicy: {
+        getConsumptionTaxRate: () => Number.NaN,
+        getCollectionEfficiency: () => 1,
+      },
+    })).toThrow(/Consumption tax rate.*must be finite/);
   });
 
   it("fails fast on missing/non-finite price and malformed need evidence", () => {
