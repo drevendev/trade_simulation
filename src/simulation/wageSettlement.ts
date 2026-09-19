@@ -135,6 +135,10 @@ export function planWageSettlementsPhase5(args: {
   if (!isFiniteCanonicalNumber(moneyEpsilon) || moneyEpsilon <= 0) {
     throw new Error(`SimulationConfig.numeric.moneyEpsilon must be finite and > 0, got ${String(moneyEpsilon)}`);
   }
+  const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon ?? 1e-9;
+  if (!isFiniteCanonicalNumber(quantityEpsilon) || quantityEpsilon <= 0) {
+    throw new Error(`SimulationConfig.numeric.quantityEpsilon must be finite and > 0, got ${String(quantityEpsilon)}`);
+  }
 
   const demandByUnit = new Map<ProductionUnitId, LaborDemandPlan>();
   const seenDemandIds = new Set<string>();
@@ -164,6 +168,7 @@ export function planWageSettlementsPhase5(args: {
 
   const settlements: WageSettlement[] = [];
   const seenAllocationIds = new Set<string>();
+  const allocatedWorkersByUnit = new Map<ProductionUnitId, number>();
   const grossPayrollByUnit = new Map<ProductionUnitId, number>();
 
   for (const allocation of stableOrderBy(laborAllocations, settlementOrderKey)) {
@@ -191,6 +196,14 @@ export function planWageSettlementsPhase5(args: {
     }
 
     const workers = requireNonNegative(`LaborAllocation ${allocation.allocationId} workerEquivalents`, allocation.workerEquivalents);
+    const allocatedWorkers = requireNonNegative(
+      `Phase-5 allocated workers ${String(allocation.unitId)}`,
+      (allocatedWorkersByUnit.get(allocation.unitId) ?? 0) + workers,
+    );
+    allocatedWorkersByUnit.set(allocation.unitId, allocatedWorkers);
+    if (allocatedWorkers > demand.requestedWorkerEquivalents + quantityEpsilon) {
+      throw new Error(`Phase-5 allocated workers for ${String(allocation.unitId)} exceed LaborDemandPlan requestedWorkerEquivalents`);
+    }
     const wagePerWorker = requireNonNegative(`LaborAllocation ${allocation.allocationId} grossWagePerWorker`, allocation.grossWagePerWorker);
     const gross = requireNonNegative(`LaborAllocation ${allocation.allocationId} grossWageObligation`, allocation.grossWageObligation);
     const recomputedGross = requireNonNegative(`LaborAllocation ${allocation.allocationId} recomputed gross`, workers * wagePerWorker);

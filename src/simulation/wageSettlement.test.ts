@@ -263,6 +263,34 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
     })).toThrow(/exceeds available settlement-currency cash/);
 
     expect(poorWorld.productionUnits.get(base.unit.productionUnitId)!.wallet.get(base.currencyId)).toBe(99);
+
+    // A zero wage makes payroll-cap arithmetic unable to detect excess worker allocation;
+    // the worker-equivalent cap is therefore checked independently against Phase-3 demand.
+    const zeroWageDemand = demand({
+      unitId: base.unit.productionUnitId,
+      regionId: base.region.regionId,
+      laborCategory: base.laborCategory,
+      requested: 1,
+      wage: 0,
+      cap: 0,
+    });
+    const excessZeroWageWorkers = allocation({
+      unitId: base.unit.productionUnitId,
+      cohortId: base.cohorts[0]!.cohortId,
+      regionId: base.region.regionId,
+      laborCategory: base.laborCategory,
+      workers: 2,
+      wage: 0,
+      suffix: "zero-wage-overallocation",
+    });
+    expect(() => planWageSettlementsPhase5({
+      tick: 9,
+      world: base.world,
+      laborDemandPlans: [zeroWageDemand],
+      laborAllocations: [excessZeroWageWorkers],
+      effectiveJurisdictionByRegion: jurisdiction(base.region.regionId, base.stateId),
+      taxPolicy: policy(),
+    })).toThrow(/exceed LaborDemandPlan requestedWorkerEquivalents/);
   });
 
   it("fails fast on duplicate, stale, malformed and cross-provenance allocation evidence", () => {
