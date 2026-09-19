@@ -1,0 +1,21 @@
+### FILE: docs/spec/implementation_status.csv
+<<<<<<< FIND
+Phase-5 payroll/wage settlement remains REQ-PRODUCTION-004; no persistent employer stock or M5+ behavior is claimed."
+=======
+Phase-5 payroll/wage settlement remains REQ-PRODUCTION-004; no persistent employer stock or M5+ behavior is claimed."
+REQ-PRODUCTION-004,IMPLEMENTED,584,585,,"PR #585 implements Handoff/05 section 15 atomic Phase-5 wage settlement over canonical Phase-3 LaborAllocation evidence. Whole-tick preflight validates current-tick allocation provenance, ACTIVE employers, exact worker-equivalent times wage gross obligations, per-unit Phase-3 grossPayrollCap and available Region settlement-currency cash before any stock transition. Controlled Regions use an explicit deterministic read-only M4 WageTaxPolicyProvider; uncontrolled Regions assess and collect zero State wage tax. Each accepted bundle conserves employer gross debit as cohort net wage plus State collected tax, leaves assessed-but-uncollected tax with the cohort, emits stable linked WAGE_PAYMENT and positive WAGE_TAX_WITHHELD transactions, and persists wallets only through the shared canonical actor-wallet transition seam. getPostWageSpendableBalance exposes the same accepted Phase-5 deltas to later current-tick affordability without mutating WorldState. Focused regressions in src/simulation/wageSettlement.test.ts prove PCL-I9/PCL-I10/PCL-T6 conservation, partial/zero withholding, uncontrolled jurisdiction, cap/cash refusal, malformed/stale/duplicate/cross-provenance rejection, insertion-order determinism, input-world immutability and current-tick spendable-balance visibility. Phase-10 duplicate wage taxation, production/output execution and mutable M6 fiscal/transfer/debt/review behavior are not introduced."
+>>>>>>> REPLACE
+
+### FILE: docs/spec/IMPLEMENTATION_STATUS.md
+<<<<<<< FIND
+| REQ-PRODUCTION-004 | `READY` | `NOT_STARTED` | — | — | — |
+=======
+| REQ-PRODUCTION-004 | `READY` | `IMPLEMENTED` | #584 | #585 | PR #585 implements Handoff/05 section 15 atomic Phase-5 wage settlement over canonical Phase-3 LaborAllocation evidence. Whole-tick preflight validates current-tick allocation provenance, ACTIVE employers, exact worker-equivalent times wage gross obligations, per-unit Phase-3 grossPayrollCap and available Region settlement-currency cash before any stock transition. Controlled Regions use an explicit deterministic read-only M4 WageTaxPolicyProvider; uncontrolled Regions assess and collect zero State wage tax. Each accepted bundle conserves employer gross debit as cohort net wage plus State collected tax, leaves assessed-but-uncollected tax with the cohort, emits stable linked WAGE_PAYMENT and positive WAGE_TAX_WITHHELD transactions, and persists wallets only through the shared canonical actor-wallet transition seam. getPostWageSpendableBalance exposes the same accepted Phase-5 deltas to later current-tick affordability without mutating WorldState. Focused regressions in src/simulation/wageSettlement.test.ts prove PCL-I9/PCL-I10/PCL-T6 conservation, partial/zero withholding, uncontrolled jurisdiction, cap/cash refusal, malformed/stale/duplicate/cross-provenance rejection, insertion-order determinism, input-world immutability and current-tick spendable-balance visibility. Phase-10 duplicate wage taxation, production/output execution and mutable M6 fiscal/transfer/debt/review behavior are not introduced. |
+>>>>>>> REPLACE
+
+### FILE: docs/spec/IMPLEMENTATION_STATUS.md
+<<<<<<< FIND
+**Summary: 36 of 49 requirement identifiers implemented.**
+=======
+**Summary: 37 of 49 requirement identifiers implemented.**
+>>>>>>> REPLACE
