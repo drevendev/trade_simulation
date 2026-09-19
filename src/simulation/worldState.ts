@@ -808,17 +808,25 @@ function buildRegionState(seed: RegionSeed, idMap: IdMaps): RegionState {
   if (!settlementCurrencyId) {
     throw new Error(`Region ${seed.key} references missing currency ${seed.settlementCurrencyKey}`);
   }
+
+  // RegionState is the single live finite-resource authority. RegionSeed.deposits is
+  // provenance/initialization data and may contain more than one entry for the same
+  // resource identity, so preserve the full opening stock by aggregating in stable
+  // resource order rather than letting Map construction overwrite an earlier entry.
+  const resourceDeposits = new Map<string, number>();
+  for (const deposit of stableOrderBy(seed.deposits ?? [], (candidate) => candidate.resourceId)) {
+    resourceDeposits.set(
+      deposit.resourceId,
+      (resourceDeposits.get(deposit.resourceId) ?? 0) + deposit.initialQuantity,
+    );
+  }
+
   return {
     regionId: idMap.regionIds.get(seed.key)!,
     seed,
     controllerStateId: null,
     settlementCurrencyId,
-    resourceDeposits: new Map(
-      stableOrderBy(seed.deposits ?? [], (deposit) => deposit.resourceId).map((deposit) => [
-        deposit.resourceId,
-        deposit.initialQuantity,
-      ] as const),
-    ),
+    resourceDeposits,
   };
 }
 

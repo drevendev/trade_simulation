@@ -404,24 +404,25 @@ describe("reconcileGenesisStocks", () => {
 
       const worldState = buildInitialWorld(scenario, baselineDefinitionPack, config, 42);
 
-      // Find a region with deposits
+      // Find a region with authoritative live resource stock.
       const regionWithDeposits = Array.from(worldState.regions.values()).find(
-        (r) => r.seed.deposits && r.seed.deposits.length > 0,
+        (region) => Array.from(region.resourceDeposits.values()).some((quantity) => quantity > 0),
       );
       expect(regionWithDeposits).toBeDefined();
       if (!regionWithDeposits) return;
 
-      // Create a modified world state with reduced deposits
+      // Reduce only the live authority. RegionSeed.deposits is immutable genesis
+      // provenance and must not remain a parallel reconciliation authority.
+      const modifiedResources = new Map(regionWithDeposits.resourceDeposits);
+      const resourceId = Array.from(modifiedResources.entries()).find(([, quantity]) => quantity > 0)?.[0];
+      expect(resourceId).toBeDefined();
+      if (resourceId === undefined) return;
+      modifiedResources.set(resourceId, modifiedResources.get(resourceId)! / 2);
+
       const modifiedRegions = new Map(worldState.regions);
       const modifiedRegion = {
         ...regionWithDeposits,
-        seed: {
-          ...regionWithDeposits.seed,
-          deposits: (regionWithDeposits.seed.deposits ?? []).map((d) => ({
-            ...d,
-            initialQuantity: d.initialQuantity / 2,
-          })),
-        },
+        resourceDeposits: modifiedResources,
       };
       modifiedRegions.set(regionWithDeposits.regionId, modifiedRegion);
 
