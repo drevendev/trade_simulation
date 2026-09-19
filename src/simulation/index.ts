@@ -49,6 +49,17 @@ export {
 } from "./laborSupplyPlanning";
 
 export {
+  createPhase2HouseholdConsumptionPlanningHandler,
+  getHouseholdBudgetEnvelopeName,
+  planHouseholdConsumptionPhase2,
+  type HouseholdCategoryBudget,
+  type HouseholdConsumptionPlan,
+  type HouseholdConsumptionPlanningOptions,
+  type HouseholdConsumptionPlanningResult,
+  type HouseholdSubstitutionShare,
+} from "./householdConsumptionPlanning";
+
+export {
   allocateLaborPhase3,
   createPhase3LaborAllocationHandler,
   type LaborAllocation,
