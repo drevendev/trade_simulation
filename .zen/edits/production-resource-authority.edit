@@ -1,0 +1,135 @@
+### FILE: src/simulation/worldState.ts
+<<<<<<< FIND
+export interface RegionState {
+  readonly regionId: RegionId;
+  readonly seed: RegionSeed;
+  readonly controllerStateId: StateId | null;
+  readonly settlementCurrencyId: CurrencyId;
+}
+=======
+export interface RegionState {
+  readonly regionId: RegionId;
+  readonly seed: RegionSeed;
+  readonly controllerStateId: StateId | null;
+  readonly settlementCurrencyId: CurrencyId;
+  /** Authoritative mutable finite-resource stock, initialized once from RegionSeed deposits. */
+  readonly resourceDeposits: ReadonlyMap<string, number>;
+}
+>>>>>>> REPLACE
+
+### FILE: src/simulation/worldState.ts
+<<<<<<< FIND
+  return {
+    regionId: idMap.regionIds.get(seed.key)!,
+    seed,
+    controllerStateId: null,
+    settlementCurrencyId,
+  };
+}
+=======
+  return {
+    regionId: idMap.regionIds.get(seed.key)!,
+    seed,
+    controllerStateId: null,
+    settlementCurrencyId,
+    resourceDeposits: new Map(
+      stableOrderBy(seed.deposits ?? [], (deposit) => deposit.resourceId).map((deposit) => [
+        deposit.resourceId,
+        deposit.initialQuantity,
+      ] as const),
+    ),
+  };
+}
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionExecution.ts
+<<<<<<< FIND
+/**
+ * Compatibility seam for the first persistent finite-resource consumer.
+ *
+ * Genesis continues to own immutable opening deposits on RegionSeed. Once Phase 5 first
+ * executes, the returned WorldState carries the authoritative remaining balance here.
+ * Keeping the field optional lets pre-M4 worlds remain loadable while ensuring subsequent
+ * production ticks read the live balance rather than resetting to the scenario seed.
+ */
+declare module "./worldState" {
+  interface RegionState {
+    readonly resourceDeposits?: ReadonlyMap<string, number>;
+  }
+}
+
+export interface ProductionExecution {
+=======
+export interface ProductionExecution {
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionExecution.ts
+<<<<<<< FIND
+/** Resolve authoritative remaining resource balances without mutating the Region seed. */
+export function resolveRegionResourceDeposits(region: RegionState): ReadonlyMap<string, number> {
+  if (region.resourceDeposits !== undefined) {
+    const live = new Map<string, number>();
+    for (const [resourceId, quantity] of stableOrderBy([...region.resourceDeposits.entries()], ([id]) => id)) {
+      live.set(resourceId, requireNonNegative(`Region ${String(region.regionId)} resource ${resourceId}`, quantity));
+    }
+    return live;
+  }
+
+  const opening = new Map<string, number>();
+  for (const deposit of stableOrderBy(region.seed.deposits ?? [], (candidate) => candidate.resourceId)) {
+    if (opening.has(deposit.resourceId)) {
+      throw new Error(`Region ${String(region.regionId)} has duplicate resource deposit ${deposit.resourceId}`);
+    }
+    opening.set(
+      deposit.resourceId,
+      requireNonNegative(
+        `Region ${String(region.regionId)} opening resource ${deposit.resourceId}`,
+        deposit.initialQuantity,
+      ),
+    );
+  }
+  return opening;
+}
+=======
+/** Resolve authoritative remaining resource balances without mutating RegionState. */
+export function resolveRegionResourceDeposits(region: RegionState): ReadonlyMap<string, number> {
+  const live = new Map<string, number>();
+  for (const [resourceId, quantity] of stableOrderBy([...region.resourceDeposits.entries()], ([id]) => id)) {
+    live.set(resourceId, requireNonNegative(`Region ${String(region.regionId)} resource ${resourceId}`, quantity));
+  }
+  return live;
+}
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionExecution.test.ts
+<<<<<<< FIND
+describe("REQ-PRODUCTION-005 Phase-5 production/extraction", () => {
+  it("uses the tightest INPUT bound, consumes exact inputs once, credits OUTPUT once, and leaves the input world unchanged", () => {
+=======
+describe("REQ-PRODUCTION-005 Phase-5 production/extraction", () => {
+  it("materializes immutable seed deposits into authoritative live Region resource stock at genesis", () => {
+    const world = baselineWorld();
+    const unit = activeUnit(world, "recipe:iron-mine");
+    const region = regionFor(world, unit);
+    const opening = region.seed.deposits.find((deposit) => deposit.resourceId === "resource:iron-ore")?.initialQuantity;
+    expect(opening).toBeDefined();
+    expect(resolveRegionResourceDeposits(region).get("resource:iron-ore")).toBe(opening);
+    expect(region.resourceDeposits).not.toBe(region.seed.deposits);
+  });
+
+  it("uses the tightest INPUT bound, consumes exact inputs once, credits OUTPUT once, and leaves the input world unchanged", () => {
+>>>>>>> REPLACE
+
+### FILE: docs/spec/implementation_status.csv
+<<<<<<< FIND
+Region finite-resource balance is a persistent live compatibility seam initialized from immutable RegionSeed deposits on first Phase-5 use and thereafter carried only through the explicit immutable WorldState transition, so depletion cannot reset to scenario seed.
+=======
+RegionState now owns the persistent live finite-resource balance, initialized once at genesis from immutable RegionSeed deposits and thereafter carried only through explicit immutable WorldState transitions, so depletion cannot reset to scenario seed.
+>>>>>>> REPLACE
+
+### FILE: docs/spec/IMPLEMENTATION_STATUS.md
+<<<<<<< FIND
+Region finite-resource balance is a persistent live compatibility seam initialized from immutable RegionSeed deposits on first Phase-5 use and thereafter carried only through the explicit immutable WorldState transition, so depletion cannot reset to scenario seed.
+=======
+RegionState now owns the persistent live finite-resource balance, initialized once at genesis from immutable RegionSeed deposits and thereafter carried only through explicit immutable WorldState transitions, so depletion cannot reset to scenario seed.
+>>>>>>> REPLACE
