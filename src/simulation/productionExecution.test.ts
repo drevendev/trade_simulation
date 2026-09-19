@@ -121,6 +121,16 @@ function cloneUnitInventories(
 }
 
 describe("REQ-PRODUCTION-005 Phase-5 production/extraction", () => {
+  it("materializes immutable seed deposits into authoritative live Region resource stock at genesis", () => {
+    const world = baselineWorld();
+    const unit = activeUnit(world, "recipe:iron-mine");
+    const region = regionFor(world, unit);
+    const opening = region.seed.deposits.find((deposit) => deposit.resourceId === "resource:iron-ore")?.initialQuantity;
+    expect(opening).toBeDefined();
+    expect(resolveRegionResourceDeposits(region).get("resource:iron-ore")).toBe(opening);
+    expect(region.resourceDeposits).not.toBe(region.seed.deposits);
+  });
+
   it("uses the tightest INPUT bound, consumes exact inputs once, credits OUTPUT once, and leaves the input world unchanged", () => {
     let world = baselineWorld();
     const original = activeUnit(world, "recipe:tools-craft");

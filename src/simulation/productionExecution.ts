@@ -23,20 +23,6 @@ import type { ProductionPlan } from "./productionPlanning";
 import type { PhaseHandler } from "./tickOrchestrator";
 import type { ProductionUnitState, RegionState, WorldState } from "./worldState";
 
-/**
- * Compatibility seam for the first persistent finite-resource consumer.
- *
- * Genesis continues to own immutable opening deposits on RegionSeed. Once Phase 5 first
- * executes, the returned WorldState carries the authoritative remaining balance here.
- * Keeping the field optional lets pre-M4 worlds remain loadable while ensuring subsequent
- * production ticks read the live balance rather than resetting to the scenario seed.
- */
-declare module "./worldState" {
-  interface RegionState {
-    readonly resourceDeposits?: ReadonlyMap<string, number>;
-  }
-}
-
 export interface ProductionExecution {
   readonly tick: number;
   readonly productionPlanId: string;
@@ -111,30 +97,13 @@ function resolveRegionForUnit(world: WorldState, unit: ProductionUnitState): Reg
   return matches[0]!;
 }
 
-/** Resolve authoritative remaining resource balances without mutating the Region seed. */
+/** Resolve authoritative remaining resource balances without mutating RegionState. */
 export function resolveRegionResourceDeposits(region: RegionState): ReadonlyMap<string, number> {
-  if (region.resourceDeposits !== undefined) {
-    const live = new Map<string, number>();
-    for (const [resourceId, quantity] of stableOrderBy([...region.resourceDeposits.entries()], ([id]) => id)) {
-      live.set(resourceId, requireNonNegative(`Region ${String(region.regionId)} resource ${resourceId}`, quantity));
-    }
-    return live;
+  const live = new Map<string, number>();
+  for (const [resourceId, quantity] of stableOrderBy([...region.resourceDeposits.entries()], ([id]) => id)) {
+    live.set(resourceId, requireNonNegative(`Region ${String(region.regionId)} resource ${resourceId}`, quantity));
   }
-
-  const opening = new Map<string, number>();
-  for (const deposit of stableOrderBy(region.seed.deposits ?? [], (candidate) => candidate.resourceId)) {
-    if (opening.has(deposit.resourceId)) {
-      throw new Error(`Region ${String(region.regionId)} has duplicate resource deposit ${deposit.resourceId}`);
-    }
-    opening.set(
-      deposit.resourceId,
-      requireNonNegative(
-        `Region ${String(region.regionId)} opening resource ${deposit.resourceId}`,
-        deposit.initialQuantity,
-      ),
-    );
-  }
-  return opening;
+  return live;
 }
 
 function validatePlan(plan: ProductionPlan, unit: ProductionUnitState, recipe: RecipeDefinition, tick: number): void {
