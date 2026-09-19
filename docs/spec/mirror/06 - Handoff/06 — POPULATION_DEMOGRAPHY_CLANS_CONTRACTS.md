@@ -166,11 +166,17 @@ participationRate \= clamp(
   maxParticipation  
 )
 
-Recommended healthParticipationFactor range \[0.75,1.02\]. weakOpportunityFactor must be EMA-based and tightly bounded, e.g. \[0.9,1.05\], so participation does not become a volatile labor-leisure optimizer.
+For core-v1 M4 the participation factors are exact deterministic projections of existing cohort state and PopulationConfig; implementations must not invent another curve or EMA.  
+healthScore \= clamp01(healthIndex)  
+healthParticipationFactor \= minHealthParticipationFactor \+ healthScore × (maxHealthParticipationFactor \- minHealthParticipationFactor)  
+opportunityScore \= clamp01(employmentRateEma)  
+weakOpportunityFactor \= minWeakOpportunityFactor \+ opportunityScore × (maxWeakOpportunityFactor \- minWeakOpportunityFactor)  
+The configured bounds are the sole factor bounds. Phase-2 reads the opening/prior-close employmentRateEma, so same-tick allocation cannot feed back into current labor supply. Non-finite source state is an invariant failure, not a special participation case.
 
-CHILD and ELDER normal labor supply is zero in baseline scenarios. Laws may alter workingEligibility but must not mutate ageBand.
+For M4 before mutable M6 law dynamics, workingEligibility \= 1 and lawParticipationFactor \= 1 for WORKING cohorts. CHILD and ELDER do not emit normal LaborSupplyPlan entries. These are explicit neutral staging values, not new config aliases or mutable policy state. A later law-owned Phase-1 effective query may replace the neutral factors without changing the LaborSupplyPlan contract; REQ-POPULATION-002 must not instantiate FiscalPolicyState, law review, transfers or any other M6 behavior.
 
-Population emits the canonical LaborSupplyPlan already defined by PRODUCTION\_CAPITAL\_LABOR\_CONTRACTS. No second labor-market object is introduced.
+Population emits the canonical LaborSupplyPlan already defined by PRODUCTION\_CAPITAL\_LABOR\_CONTRACTS. For each positive-population WORKING cohort, process cohorts in lexicographically ascending cohortId order and emit exactly one plan with cohortId \= cohort.id, regionId \= cohort.regionId, laborCategory \= cohort.laborCategory and planId \= "labor-supply:" \+ tick \+ ":" \+ cohort.id. Plan generation is pure/read-only: it consumes live opening cohort state plus resolved config, uses no RNG, mutates no cohort field and creates no persistent employer linkage. Shuffling registry insertion order must therefore produce the same normalized plan array and plan IDs. No second labor-market object is introduced.  
+REQ-POPULATION-002 proof must cover factor endpoints/bounds, prior-close opportunity evidence, CHILD/ELDER exclusion, availableWorkerEquivalents \<= population, zero/near-zero positive-population handling under NumericConfig.quantityEpsilon where applicable, deterministic plan IDs/order under shuffled cohort enumeration, and no PopulationState mutation.
 
 9\. Wage signal update
 

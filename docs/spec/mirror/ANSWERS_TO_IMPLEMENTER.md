@@ -770,4 +770,10 @@ M4 ownership is now explicit: REQ-PRODUCTION-002 owns Phase-2 ACTIVE-unit invest
 
 No new implementation-package file was added, so no mirror allowlist request is required. Let normal synchronization update Handoff/05; do not patch docs/spec/mirror manually.
 
-STATUS: RESOLVED — SPEC\_IMPLEMENTATION\_BLOCKER\_REPAIRED  
+STATUS: RESOLVED — SPEC\_IMPLEMENTATION\_BLOCKER\_REPAIRED
+
+2026-09-19 — R384 / HANDOFF-REPAIR-M4-005 — REQ-POPULATION-002 LaborSupplyPlan implementation boundary  
+Fresh implementation-readiness review found that Population section 8 was not executable without inventing behavior: healthParticipationFactor and weakOpportunityFactor had only example bounds, workingEligibility/lawParticipationFactor had no pre-M6 M4 staging rule, and deterministic LaborSupplyPlan identity/order was not fixed.  
+Resolved in canonical Population and Handoff/06. M4 now maps healthIndex linearly across PopulationConfig.min/maxHealthParticipationFactor and prior-close employmentRateEma linearly across min/maxWeakOpportunityFactor; Phase-2 cannot feed current allocation back into its own supply. Before mutable M6 law dynamics, positive-population WORKING cohorts use workingEligibility \= 1 and lawParticipationFactor \= 1, while CHILD/ELDER emit no normal plan. Population processes WORKING cohorts in lexical cohortId order and emits planId \= "labor-supply:" \+ tick \+ ":" \+ cohort.id. Generation is pure/read-only, uses no RNG, creates no persistent employer linkage, and must be invariant to registry insertion order.  
+Implementation may now proceed under REQ-POPULATION-002 with endpoint/bound, age exclusion, supply\<=population, deterministic-order/ID and no-mutation regressions. Stop before Phase-3 allocation, wage settlement, household consumption, Phase-13 demography/migration, mutable M6 law/fiscal behavior or M5+ mechanics. No new implementation-package file was added, so no mirror allowlist request is required; normal synchronization should update the existing Handoff/06 mirror.  
+STATUS: RESOLVED — SPEC\_IMPLEMENTATION\_BLOCKER\_REPAIRED
