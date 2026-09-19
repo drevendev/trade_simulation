@@ -1,0 +1,40 @@
+### FILE: src/simulation/wageSettlement.test.ts
+<<<<<<< FIND
+    const first = allocation({
+      unitId: base.unit.productionUnitId,
+      cohortId: base.cohorts[0]!.cohortId,
+      regionId: base.region.regionId,
+      laborCategory: base.laborCategory,
+      workers: 6,
+      suffix: "a",
+    });
+    const second = allocation({
+      unitId: base.unit.productionUnitId,
+      cohortId: base.cohorts[1]!.cohortId,
+      regionId: base.region.regionId,
+      laborCategory: base.laborCategory,
+      workers: 5,
+      suffix: "b",
+    });
+    expect(() => planWageSettlementsPhase5({
+      tick: 9,
+      world: base.world,
+      laborDemandPlans: [base.laborDemand],
+      laborAllocations: [first, second],
+      effectiveJurisdictionByRegion: jurisdiction(base.region.regionId, base.stateId),
+      taxPolicy: policy(),
+    })).toThrow(/exceeds grossPayrollCap/);
+=======
+    const undercappedDemand: LaborDemandPlan = {
+      ...base.laborDemand,
+      grossPayrollCap: 99,
+    };
+    expect(() => planWageSettlementsPhase5({
+      tick: 9,
+      world: base.world,
+      laborDemandPlans: [undercappedDemand],
+      laborAllocations: [base.laborAllocation],
+      effectiveJurisdictionByRegion: jurisdiction(base.region.regionId, base.stateId),
+      taxPolicy: policy(),
+    })).toThrow(/requested payroll exceeds grossPayrollCap/);
+>>>>>>> REPLACE
