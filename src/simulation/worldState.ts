@@ -108,6 +108,8 @@ export interface RegionState {
   readonly seed: RegionSeed;
   readonly controllerStateId: StateId | null;
   readonly settlementCurrencyId: CurrencyId;
+  /** Authoritative mutable finite-resource stock, initialized once from RegionSeed deposits. */
+  readonly resourceDeposits: ReadonlyMap<string, number>;
 }
 
 /**
@@ -811,6 +813,12 @@ function buildRegionState(seed: RegionSeed, idMap: IdMaps): RegionState {
     seed,
     controllerStateId: null,
     settlementCurrencyId,
+    resourceDeposits: new Map(
+      stableOrderBy(seed.deposits ?? [], (deposit) => deposit.resourceId).map((deposit) => [
+        deposit.resourceId,
+        deposit.initialQuantity,
+      ] as const),
+    ),
   };
 }
 
