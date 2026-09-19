@@ -387,15 +387,16 @@ export function reconcileGenesisStocks(
     }
   });
 
-  // Sum resources by the region they sit in plus the resource good they hold. The
-  // region is read as the registry's own RegionId, not reconstructed from the seed
-  // key, so a record naming the wrong region cannot match a correct deposit.
+  // Sum resources from the authoritative live RegionState balance, not from immutable
+  // RegionSeed provenance. This makes opening reconciliation sensitive to any genesis
+  // materialization error (including duplicate-resource overwrite) before tick 0.
+  // The region is the registry's own RegionId, so typed location identity remains load-bearing.
   worldState.regions.forEach((region, regionId) => {
-    (region.seed.deposits ?? []).forEach((deposit) => {
-      if (deposit.initialQuantity > 0) {
-        const granularity = `RES:${String(regionId)}:${String(deposit.resourceId)}`;
+    region.resourceDeposits.forEach((quantity, resourceId) => {
+      if (quantity > 0) {
+        const granularity = `RES:${String(regionId)}:${String(resourceId)}`;
         const current = actualResourcesByGranularity.get(granularity) ?? 0;
-        actualResourcesByGranularity.set(granularity, current + deposit.initialQuantity);
+        actualResourcesByGranularity.set(granularity, current + quantity);
       }
     });
   });
