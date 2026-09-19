@@ -62,7 +62,7 @@ export interface HouseholdConsumptionPlanningResult {
 
 export interface HouseholdConsumptionPlanningOptions {
   readonly startingBudgetLedger?: BudgetCommitmentLedger;
-  readonly taxPolicy?: TaxPolicyProvider;
+  readonly taxPolicy?: TaxPolicyProvider | undefined;
 }
 
 interface ResolvedNeedCategory {
@@ -162,7 +162,7 @@ function resolveExpectedGrossBuyerPrice(args: {
   readonly goodId: GoodId;
   readonly sellerNetPrice: number;
   readonly moneyEpsilon: number;
-  readonly taxPolicy?: TaxPolicyProvider;
+  readonly taxPolicy?: TaxPolicyProvider | undefined;
 }): number {
   const sellerNetPrice = requireNonNegative(
     `Prior-close price for ${String(args.goodId)}`,
@@ -208,7 +208,7 @@ function normalizedSubstitutionShares(args: {
   readonly market: LocalMarketState;
   readonly region: RegionState;
   readonly moneyEpsilon: number;
-  readonly taxPolicy?: TaxPolicyProvider;
+  readonly taxPolicy?: TaxPolicyProvider | undefined;
 }): readonly HouseholdSubstitutionShare[] {
   const { category, market, moneyEpsilon } = args;
   requireNonNegative(`NeedCategory ${category.id} perCapitaTarget`, category.perCapitaTarget);
@@ -281,7 +281,7 @@ function resolveNeedCategory(args: {
   readonly market: LocalMarketState;
   readonly region: RegionState;
   readonly moneyEpsilon: number;
-  readonly taxPolicy?: TaxPolicyProvider;
+  readonly taxPolicy?: TaxPolicyProvider | undefined;
 }): ResolvedNeedCategory {
   const substitutionShares = normalizedSubstitutionShares(args);
   const targetUsefulConsumption = requireNonNegative(
@@ -348,7 +348,7 @@ function buildCohortPlan(args: {
   readonly tick: number;
   readonly startingBudgetLedger: BudgetCommitmentLedger;
   readonly categories: readonly NeedCategoryDefinition[];
-  readonly taxPolicy?: TaxPolicyProvider;
+  readonly taxPolicy?: TaxPolicyProvider | undefined;
 }): { readonly plan: HouseholdConsumptionPlan; readonly intents: readonly MarketIntent[]; readonly budgetLedger: BudgetCommitmentLedger } | null {
   const { world, cohort, tick, categories } = args;
   const population = requireNonNegative(`Cohort ${String(cohort.cohortId)} population`, cohort.seed.population);
@@ -510,7 +510,7 @@ export function planHouseholdConsumptionPhase2(
  * state carried forward here is the immutable planner budget commitment ledger.
  */
 export function createPhase2HouseholdConsumptionPlanningHandler(options?: {
-  readonly taxPolicy?: TaxPolicyProvider;
+  readonly taxPolicy?: TaxPolicyProvider | undefined;
 }): PhaseHandler {
   return (world: WorldState, context: TickContext, _pendingTransitions: PendingTransitions): TickContext => {
     if (context.phase !== 2) return context;
