@@ -50,7 +50,9 @@ export interface HouseholdConsumptionPlan {
   readonly expectedCurrentTickIncome: number;
   readonly liquidityFloor: number;
   readonly planningCashEnvelope: number;
-  readonly categoryBudgets: readonly HouseholdCategoryBudget[];
+  readonly categoryBudgets: Record<string, number>;
+  readonly intendedUsefulConsumption: Record<string, number>;
+  readonly categoryDetails: readonly HouseholdCategoryBudget[];
   readonly marketIntentIds: readonly MarketIntentId[];
 }
 
@@ -392,12 +394,14 @@ function buildCohortPlan(args: {
 
   let budgetLedger = args.startingBudgetLedger;
   const intents: MarketIntent[] = [];
-  const categoryBudgets: HouseholdCategoryBudget[] = [];
+  const categoryBudgets: Record<string, number> = {};
+  const intendedUsefulConsumption: Record<string, number> = {};
+  const categoryDetails: HouseholdCategoryBudget[] = [];
 
   for (const categoryId of BASELINE_NEED_CATEGORY_IDS) {
     const category = resolved.get(categoryId)!;
     const budget = budgets.get(categoryId) ?? 0;
-    const intendedUsefulConsumption = category.targetCost <= controls.moneyEpsilon
+    const intendedUsefulConsumptionForCategory = category.targetCost <= controls.moneyEpsilon
       ? category.targetUsefulConsumption
       : category.targetUsefulConsumption * Math.min(1, budget / category.targetCost);
     const intentIds: MarketIntentId[] = [];
@@ -445,11 +449,13 @@ function buildCohortPlan(args: {
       intentIds.push(intent.id);
     });
 
-    categoryBudgets.push({
+    categoryBudgets[categoryId] = budget;
+    intendedUsefulConsumption[categoryId] = intendedUsefulConsumptionForCategory;
+    categoryDetails.push({
       categoryId,
       budget,
       targetUsefulConsumption: category.targetUsefulConsumption,
-      intendedUsefulConsumption,
+      intendedUsefulConsumption: intendedUsefulConsumptionForCategory,
       substitutionShares: category.substitutionShares,
     });
   }
@@ -465,6 +471,8 @@ function buildCohortPlan(args: {
       liquidityFloor,
       planningCashEnvelope,
       categoryBudgets,
+      intendedUsefulConsumption,
+      categoryDetails,
       marketIntentIds: intents.map((intent) => intent.id),
     },
     intents,

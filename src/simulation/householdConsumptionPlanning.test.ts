@@ -176,7 +176,7 @@ function makeWorld(args?: {
 
 function categoryBudget(world: WorldState, categoryId: string): number {
   const result = planHouseholdConsumptionPhase2(world, 7);
-  return result.plans[0]!.categoryBudgets.find((entry) => entry.categoryId === categoryId)!.budget;
+  return result.plans[0]!.categoryBudgets[categoryId]!;
 }
 
 describe("REQ-POPULATION-001 household consumption planning", () => {
@@ -200,10 +200,34 @@ describe("REQ-POPULATION-001 household consumption planning", () => {
     expect(plan.marketIntentIds).toEqual(result.intents.map((intent) => intent.id));
   });
 
+  it("exposes canonical keyed category budgets and a separate top-level intended-consumption record", () => {
+    const plan = planHouseholdConsumptionPhase2(makeWorld(), 7).plans[0]!;
+
+    expect(Array.isArray(plan.categoryBudgets)).toBe(false);
+    expect(plan.categoryBudgets).toEqual({
+      ESSENTIAL_FOOD: 50,
+      BASIC_GOODS: 17.5,
+      SERVICES: 7.5,
+      COMFORT: 0,
+    });
+    expect(plan.intendedUsefulConsumption).toEqual({
+      ESSENTIAL_FOOD: 50,
+      BASIC_GOODS: 17.5,
+      SERVICES: 7.5,
+      COMFORT: 0,
+    });
+    expect(plan.categoryDetails.map((entry) => entry.categoryId)).toEqual([
+      "ESSENTIAL_FOOD",
+      "BASIC_GOODS",
+      "SERVICES",
+      "COMFORT",
+    ]);
+  });
+
   it("normalizes substitution finitely in log space even when observed prices are below moneyEpsilon", () => {
     const world = makeWorld({ market: makeMarket({ "food-a": 0, "food-b": Number.MIN_VALUE }) });
     const result = planHouseholdConsumptionPhase2(world, 3);
-    const essential = result.plans[0]!.categoryBudgets[0]!;
+    const essential = result.plans[0]!.categoryDetails[0]!;
     const shareSum = essential.substitutionShares.reduce((sum, candidate) => sum + candidate.share, 0);
 
     expect(shareSum).toBeCloseTo(1, 15);
@@ -225,7 +249,7 @@ describe("REQ-POPULATION-001 household consumption planning", () => {
         getCollectionEfficiency: () => 0.5,
       },
     });
-    const essential = result.plans[0]!.categoryBudgets[0]!;
+    const essential = result.plans[0]!.categoryDetails[0]!;
     const foodA = essential.substitutionShares.find((entry) => entry.goodId === goodId("food-a"))!;
     const foodB = essential.substitutionShares.find((entry) => entry.goodId === goodId("food-b"))!;
 
