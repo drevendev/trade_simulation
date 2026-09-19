@@ -1,0 +1,325 @@
+### FILE: src/simulation/householdConsumptionPlanning.ts
+<<<<<<< FIND
+import { createEmptyBudgetCommitmentLedger } from "./marketIntent";
+import type { PhaseHandler, TickContext } from "./tickOrchestrator";
+=======
+import { createEmptyBudgetCommitmentLedger } from "./marketIntent";
+import type { TaxPolicyProvider } from "./marketSettlement";
+import type { PhaseHandler, TickContext } from "./tickOrchestrator";
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+export interface HouseholdConsumptionPlanningResult {
+  readonly plans: readonly HouseholdConsumptionPlan[];
+  readonly intents: readonly MarketIntent[];
+  readonly budgetLedger: BudgetCommitmentLedger;
+}
+=======
+export interface HouseholdConsumptionPlanningResult {
+  readonly plans: readonly HouseholdConsumptionPlan[];
+  readonly intents: readonly MarketIntent[];
+  readonly budgetLedger: BudgetCommitmentLedger;
+}
+
+export interface HouseholdConsumptionPlanningOptions {
+  readonly startingBudgetLedger?: BudgetCommitmentLedger;
+  readonly taxPolicy?: TaxPolicyProvider;
+}
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+function normalizedSubstitutionShares(args: {
+  readonly category: NeedCategoryDefinition;
+  readonly market: LocalMarketState;
+  readonly moneyEpsilon: number;
+}): readonly HouseholdSubstitutionShare[] {
+  const { category, market, moneyEpsilon } = args;
+=======
+function resolveExpectedGrossBuyerPrice(args: {
+  readonly region: RegionState;
+  readonly goodId: GoodId;
+  readonly sellerNetPrice: number;
+  readonly moneyEpsilon: number;
+  readonly taxPolicy?: TaxPolicyProvider;
+}): number {
+  const sellerNetPrice = requireNonNegative(
+    `Prior-close price for ${String(args.goodId)}`,
+    args.sellerNetPrice,
+  );
+
+  if (args.region.controllerStateId === null) {
+    return Math.max(sellerNetPrice, args.moneyEpsilon);
+  }
+  if (args.taxPolicy === undefined) {
+    throw new Error(
+      `Controlled Region ${String(args.region.regionId)} requires an explicit TaxPolicyProvider for household gross-price planning`,
+    );
+  }
+
+  const assessedTaxRate = requireNonNegative(
+    `Consumption tax rate for ${String(args.goodId)}`,
+    args.taxPolicy.getConsumptionTaxRate(args.region.controllerStateId, args.goodId),
+  );
+  if (assessedTaxRate > 1) {
+    throw new Error(`Consumption tax rate for ${String(args.goodId)} must be in [0, 1], got ${assessedTaxRate}`);
+  }
+  const collectionEfficiency = requireNonNegative(
+    `Consumption tax collection efficiency for ${String(args.region.controllerStateId)}`,
+    args.taxPolicy.getCollectionEfficiency(args.region.controllerStateId),
+  );
+  if (collectionEfficiency > 1) {
+    throw new Error(
+      `Consumption tax collection efficiency for ${String(args.region.controllerStateId)} must be in [0, 1], got ${collectionEfficiency}`,
+    );
+  }
+
+  // Match Phase-8 semantics exactly: only collected tax is part of buyer gross price.
+  const grossPrice = requireNonNegative(
+    `Expected gross buyer price for ${String(args.goodId)}`,
+    sellerNetPrice * (1 + assessedTaxRate * collectionEfficiency),
+  );
+  return Math.max(grossPrice, args.moneyEpsilon);
+}
+
+function normalizedSubstitutionShares(args: {
+  readonly category: NeedCategoryDefinition;
+  readonly market: LocalMarketState;
+  readonly region: RegionState;
+  readonly moneyEpsilon: number;
+  readonly taxPolicy?: TaxPolicyProvider;
+}): readonly HouseholdSubstitutionShare[] {
+  const { category, market, moneyEpsilon } = args;
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const price = requireNonNegative(
+      `Prior-close price for ${String(candidate.goodId)}`,
+      observedPrice,
+    );
+    const effectivePrice = Math.max(price, moneyEpsilon);
+=======
+    const effectivePrice = resolveExpectedGrossBuyerPrice({
+      region: args.region,
+      goodId: candidate.goodId,
+      sellerNetPrice: observedPrice,
+      moneyEpsilon,
+      taxPolicy: args.taxPolicy,
+    });
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+function resolveNeedCategory(args: {
+  readonly category: NeedCategoryDefinition;
+  readonly population: number;
+  readonly market: LocalMarketState;
+  readonly moneyEpsilon: number;
+}): ResolvedNeedCategory {
+=======
+function resolveNeedCategory(args: {
+  readonly category: NeedCategoryDefinition;
+  readonly population: number;
+  readonly market: LocalMarketState;
+  readonly region: RegionState;
+  readonly moneyEpsilon: number;
+  readonly taxPolicy?: TaxPolicyProvider;
+}): ResolvedNeedCategory {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  readonly startingBudgetLedger: BudgetCommitmentLedger;
+  readonly categories: readonly NeedCategoryDefinition[];
+}): { readonly plan: HouseholdConsumptionPlan; readonly intents: readonly MarketIntent[]; readonly budgetLedger: BudgetCommitmentLedger } | null {
+=======
+  readonly startingBudgetLedger: BudgetCommitmentLedger;
+  readonly categories: readonly NeedCategoryDefinition[];
+  readonly taxPolicy?: TaxPolicyProvider;
+}): { readonly plan: HouseholdConsumptionPlan; readonly intents: readonly MarketIntent[]; readonly budgetLedger: BudgetCommitmentLedger } | null {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  for (const category of categories) {
+    resolved.set(category.id, resolveNeedCategory({ category, population, market, moneyEpsilon: controls.moneyEpsilon }));
+  }
+=======
+  for (const category of categories) {
+    resolved.set(category.id, resolveNeedCategory({
+      category,
+      population,
+      market,
+      region,
+      moneyEpsilon: controls.moneyEpsilon,
+      taxPolicy: args.taxPolicy,
+    }));
+  }
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+export function planHouseholdConsumptionPhase2(
+  world: WorldState,
+  tick: number,
+  startingBudgetLedger: BudgetCommitmentLedger = createEmptyBudgetCommitmentLedger(),
+): HouseholdConsumptionPlanningResult {
+=======
+export function planHouseholdConsumptionPhase2(
+  world: WorldState,
+  tick: number,
+  options: HouseholdConsumptionPlanningOptions = {},
+): HouseholdConsumptionPlanningResult {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  const plans: HouseholdConsumptionPlan[] = [];
+  const intents: MarketIntent[] = [];
+  let budgetLedger = startingBudgetLedger;
+
+  for (const cohort of cohorts) {
+    const result = buildCohortPlan({ world, cohort, tick, startingBudgetLedger: budgetLedger, categories });
+=======
+  const plans: HouseholdConsumptionPlan[] = [];
+  const intents: MarketIntent[] = [];
+  let budgetLedger = options.startingBudgetLedger ?? createEmptyBudgetCommitmentLedger();
+
+  for (const cohort of cohorts) {
+    const result = buildCohortPlan({
+      world,
+      cohort,
+      tick,
+      startingBudgetLedger: budgetLedger,
+      categories,
+      taxPolicy: options.taxPolicy,
+    });
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+export function createPhase2HouseholdConsumptionPlanningHandler(): PhaseHandler {
+  return (world: WorldState, context: TickContext, _pendingTransitions: PendingTransitions): TickContext => {
+    if (context.phase !== 2) return context;
+    const result = planHouseholdConsumptionPhase2(world, context.tick, context.budgetLedger);
+=======
+export function createPhase2HouseholdConsumptionPlanningHandler(options?: {
+  readonly taxPolicy?: TaxPolicyProvider;
+}): PhaseHandler {
+  return (world: WorldState, context: TickContext, _pendingTransitions: PendingTransitions): TickContext => {
+    if (context.phase !== 2) return context;
+    const result = planHouseholdConsumptionPhase2(world, context.tick, {
+      startingBudgetLedger: context.budgetLedger,
+      taxPolicy: options?.taxPolicy,
+    });
+>>>>>>> REPLACE
+
+### FILE: src/simulation/householdConsumptionPlanning.test.ts
+<<<<<<< FIND
+import type { ClanId, CohortId, CurrencyId, GoodId, MarketId, RegionId } from "../domain/id";
+=======
+import type { ClanId, CohortId, CurrencyId, GoodId, MarketId, RegionId, StateId } from "../domain/id";
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+const marketId = (value: string) => value as MarketId;
+const goodId = (value: string) => value as GoodId;
+=======
+const marketId = (value: string) => value as MarketId;
+const goodId = (value: string) => value as GoodId;
+const stateId = (value: string) => value as StateId;
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+function makeRegion(): RegionState {
+  return {
+    regionId: regionId("region:1"),
+    seed: {
+      key: "region-a",
+      name: "Region A",
+      controllerStateKey: null,
+=======
+function makeRegion(controllerStateId: StateId | null = null): RegionState {
+  return {
+    regionId: regionId("region:1"),
+    seed: {
+      key: "region-a",
+      name: "Region A",
+      controllerStateKey: controllerStateId === null ? null : "state-a",
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    controllerStateId: null,
+=======
+    controllerStateId,
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  readonly categories?: Readonly<Record<string, NeedCategoryDefinition>>;
+  readonly market?: LocalMarketState;
+}): WorldState {
+  const config = createDefaultSimulationConfig();
+  const region = makeRegion();
+=======
+  readonly categories?: Readonly<Record<string, NeedCategoryDefinition>>;
+  readonly market?: LocalMarketState;
+  readonly region?: RegionState;
+}): WorldState {
+  const config = createDefaultSimulationConfig();
+  const region = args?.region ?? makeRegion();
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  it("fails fast on missing/non-finite price and malformed need evidence", () => {
+=======
+  it("uses the Phase-8 collected-tax semantics for expected gross buyer prices in controlled Regions", () => {
+    const controlledWorld = makeWorld({ region: makeRegion(stateId("state:1")) });
+
+    expect(() => planHouseholdConsumptionPhase2(controlledWorld, 3)).toThrow(
+      /requires an explicit TaxPolicyProvider/,
+    );
+
+    const result = planHouseholdConsumptionPhase2(controlledWorld, 3, {
+      taxPolicy: {
+        getConsumptionTaxRate: (_stateId, good) => good === goodId("food-a") ? 0.5 : 0,
+        getCollectionEfficiency: () => 0.5,
+      },
+    });
+    const essential = result.plans[0]!.categoryBudgets[0]!;
+    const foodA = essential.substitutionShares.find((entry) => entry.goodId === goodId("food-a"))!;
+    const foodB = essential.substitutionShares.find((entry) => entry.goodId === goodId("food-b"))!;
+
+    expect(foodA.expectedGrossBuyerPrice).toBe(1.25);
+    expect(foodB.expectedGrossBuyerPrice).toBe(1);
+    expect(foodA.share).toBeCloseTo(2 / 7, 12);
+    expect(foodB.share).toBeCloseTo(5 / 7, 12);
+
+    expect(() => planHouseholdConsumptionPhase2(controlledWorld, 3, {
+      taxPolicy: {
+        getConsumptionTaxRate: () => Number.NaN,
+        getCollectionEfficiency: () => 1,
+      },
+    })).toThrow(/Consumption tax rate.*must be finite/);
+  });
+
+  it("fails fast on missing/non-finite price and malformed need evidence", () => {
+>>>>>>> REPLACE
+
+### FILE: src/simulation/index.ts
+<<<<<<< FIND
+  type HouseholdConsumptionPlan,
+  type HouseholdConsumptionPlanningResult,
+  type HouseholdSubstitutionShare,
+=======
+  type HouseholdConsumptionPlan,
+  type HouseholdConsumptionPlanningOptions,
+  type HouseholdConsumptionPlanningResult,
+  type HouseholdSubstitutionShare,
+>>>>>>> REPLACE
+
+### FILE: docs/spec/implementation_status.csv
+<<<<<<< FIND
+Substitution uses stable log-space normalization of basePreference × qualityFactor / max(prior-close gross buyer price, moneyEpsilon)^priceSensitivity, then emits canonical Cohort BUY/CONSUMPTION intents
+=======
+Substitution uses stable log-space normalization of basePreference × qualityFactor / max(expected prior-close gross buyer price, moneyEpsilon)^priceSensitivity; uncontrolled Regions use zero State consumption tax, while controlled Regions require the same explicit read-only TaxPolicyProvider semantics as Phase 8 so gross price includes collected consumption tax before substitution and quantity planning. It then emits canonical Cohort BUY/CONSUMPTION intents
+>>>>>>> REPLACE
+
+### FILE: docs/spec/IMPLEMENTATION_STATUS.md
+<<<<<<< FIND
+Substitution uses stable log-space normalization of basePreference × qualityFactor / max(prior-close gross buyer price, moneyEpsilon)^priceSensitivity, then emits canonical Cohort BUY/CONSUMPTION intents
+=======
+Substitution uses stable log-space normalization of basePreference × qualityFactor / max(expected prior-close gross buyer price, moneyEpsilon)^priceSensitivity; uncontrolled Regions use zero State consumption tax, while controlled Regions require the same explicit read-only TaxPolicyProvider semantics as Phase 8 so gross price includes collected consumption tax before substitution and quantity planning. It then emits canonical Cohort BUY/CONSUMPTION intents
+>>>>>>> REPLACE
