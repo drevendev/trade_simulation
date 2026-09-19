@@ -65,7 +65,7 @@ export interface WageSettlement {
   readonly netWage: number;
   readonly bundleId: TransactionBundleId;
   readonly wagePaymentTransaction: WagePaymentTransaction;
-  readonly wageTaxWithheldTransaction?: WageTaxWithheldTransaction;
+  readonly wageTaxWithheldTransaction: WageTaxWithheldTransaction | undefined;
 }
 
 function requireFinite(name: string, value: number): number {
