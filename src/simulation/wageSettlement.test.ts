@@ -223,30 +223,18 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
 
   it("PCL-I10 preflights the whole unit payroll against the Phase-3 cap and available settlement cash", () => {
     const base = baseEvidence();
-    const first = allocation({
-      unitId: base.unit.productionUnitId,
-      cohortId: base.cohorts[0]!.cohortId,
-      regionId: base.region.regionId,
-      laborCategory: base.laborCategory,
-      workers: 6,
-      suffix: "a",
-    });
-    const second = allocation({
-      unitId: base.unit.productionUnitId,
-      cohortId: base.cohorts[1]!.cohortId,
-      regionId: base.region.regionId,
-      laborCategory: base.laborCategory,
-      workers: 5,
-      suffix: "b",
-    });
+    const undercappedDemand: LaborDemandPlan = {
+      ...base.laborDemand,
+      grossPayrollCap: 99,
+    };
     expect(() => planWageSettlementsPhase5({
       tick: 9,
       world: base.world,
-      laborDemandPlans: [base.laborDemand],
-      laborAllocations: [first, second],
+      laborDemandPlans: [undercappedDemand],
+      laborAllocations: [base.laborAllocation],
       effectiveJurisdictionByRegion: jurisdiction(base.region.regionId, base.stateId),
       taxPolicy: policy(),
-    })).toThrow(/exceeds grossPayrollCap/);
+    })).toThrow(/requested payroll exceeds grossPayrollCap/);
 
     const lowWallet = new Map(base.unit.wallet);
     lowWallet.set(base.currencyId, 99);
