@@ -420,6 +420,48 @@ describe("REQ-POPULATION-003 Phase-9 household realization", () => {
     })).toThrow(/does not match Phase-5 settlement evidence/);
   });
 
+  it("consumes for CHILD/ELDER cohorts with zero employment evidence and rejects phantom labor artifacts", () => {
+    const opening = world({
+      inventory: [[FOOD, 2]],
+      categories: categories({ foodTarget: 2 }),
+    });
+    const existing = opening.cohorts.get(COHORT)!;
+    const childWorld: WorldState = {
+      ...opening,
+      cohorts: new Map([[COHORT, { ...existing, seed: { ...existing.seed, ageBand: "CHILD" } }]]),
+    };
+
+    const result = planHouseholdConsumptionPhase9({
+      world: childWorld,
+      tick: 7,
+      marketAllocations: [],
+      laborSupplyPlans: [],
+      laborAllocations: [],
+      wageSettlements: [],
+      transactions: [],
+    });
+    expect(result.executions[0]!.consumedByGood[FOOD]).toBe(2);
+    expect(result.executions[0]!.economic).toEqual({
+      cohortId: COHORT,
+      availableWorkerEquivalents: 0,
+      employedWorkerEquivalents: 0,
+      employmentRate: 0,
+      grossWageIncome: 0,
+      netWageReceipt: 0,
+      wageTaxWithheld: 0,
+    });
+
+    expect(() => planHouseholdConsumptionPhase9({
+      world: childWorld,
+      tick: 7,
+      marketAllocations: [],
+      laborSupplyPlans: [supply(1)],
+      laborAllocations: [],
+      wageSettlements: [],
+      transactions: [],
+    })).toThrow(/Non-WORKING Cohort.*must not have/);
+  });
+
   it("is insertion-order deterministic and the Phase-9 handler mutates only TickContext", () => {
     const evidence = wageEvidence();
     const firstWorld = world({ inventory: [[FOOD, 4], [BASIC, 2]] });

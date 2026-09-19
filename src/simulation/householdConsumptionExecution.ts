@@ -260,6 +260,39 @@ function buildEconomicEvidence(args: {
   const { cohort, tick, controls } = args;
   const regionId = resolveRegionIdForCohort(args.world, cohort);
   const supply = args.laborSupplyPlans.filter((plan) => plan.cohortId === cohort.cohortId);
+  const allocations = stableOrderBy(
+    args.laborAllocations.filter((allocation) => allocation.cohortId === cohort.cohortId),
+    (allocation) => allocation.allocationId,
+  );
+
+  // REQ-POPULATION-002 deliberately emits no normal LaborSupplyPlan for CHILD/ELDER
+  // cohorts. Phase 9 still consumes their household inventory, so their economic
+  // evidence is the explicit zero-employment case rather than a missing-plan error.
+  // Any labor/wage artifact against a non-WORKING cohort is contradictory evidence.
+  if (cohort.seed.ageBand !== "WORKING") {
+    const settlements = args.wageSettlements.filter((settlement) => settlement.cohortId === cohort.cohortId);
+    const wageTransactions = args.transactions.filter(
+      (transaction) =>
+        transaction.type === "WAGE_PAYMENT" &&
+        transaction.destination?.type === "COHORT" &&
+        transaction.destination.cohortId === cohort.cohortId,
+    );
+    if (supply.length !== 0 || allocations.length !== 0 || settlements.length !== 0 || wageTransactions.length !== 0) {
+      throw new Error(
+        `Non-WORKING Cohort ${String(cohort.cohortId)} must not have LaborSupplyPlan, LaborAllocation, WageSettlement, or WAGE_PAYMENT evidence`,
+      );
+    }
+    return {
+      cohortId: cohort.cohortId,
+      availableWorkerEquivalents: 0,
+      employedWorkerEquivalents: 0,
+      employmentRate: 0,
+      grossWageIncome: 0,
+      netWageReceipt: 0,
+      wageTaxWithheld: 0,
+    };
+  }
+
   if (supply.length !== 1) {
     throw new Error(`Cohort ${String(cohort.cohortId)} must have exactly one current LaborSupplyPlan, got ${supply.length}`);
   }
@@ -270,11 +303,6 @@ function buildEconomicEvidence(args: {
   const availableWorkerEquivalents = requireNonNegative(
     `LaborSupplyPlan ${supplyPlan.planId} availableWorkerEquivalents`,
     supplyPlan.availableWorkerEquivalents,
-  );
-
-  const allocations = stableOrderBy(
-    args.laborAllocations.filter((allocation) => allocation.cohortId === cohort.cohortId),
-    (allocation) => allocation.allocationId,
   );
   const allocationIds = new Set<string>();
   let employedWorkerEquivalents = 0;
