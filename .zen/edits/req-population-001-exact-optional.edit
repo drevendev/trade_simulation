@@ -1,0 +1,48 @@
+### FILE: src/simulation/householdConsumptionPlanning.ts
+<<<<<<< FIND
+  readonly taxPolicy?: TaxPolicyProvider;
+=======
+  readonly taxPolicy?: TaxPolicyProvider | undefined;
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  readonly taxPolicy?: TaxPolicyProvider;
+}): number {
+=======
+  readonly taxPolicy?: TaxPolicyProvider | undefined;
+}): number {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  readonly taxPolicy?: TaxPolicyProvider;
+}): readonly HouseholdSubstitutionShare[] {
+=======
+  readonly taxPolicy?: TaxPolicyProvider | undefined;
+}): readonly HouseholdSubstitutionShare[] {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  readonly taxPolicy?: TaxPolicyProvider;
+}): ResolvedNeedCategory {
+=======
+  readonly taxPolicy?: TaxPolicyProvider | undefined;
+}): ResolvedNeedCategory {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  readonly taxPolicy?: TaxPolicyProvider;
+}): { readonly plan: HouseholdConsumptionPlan; readonly intents: readonly MarketIntent[]; readonly budgetLedger: BudgetCommitmentLedger } | null {
+=======
+  readonly taxPolicy?: TaxPolicyProvider | undefined;
+}): { readonly plan: HouseholdConsumptionPlan; readonly intents: readonly MarketIntent[]; readonly budgetLedger: BudgetCommitmentLedger } | null {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+export function createPhase2HouseholdConsumptionPlanningHandler(options?: {
+  readonly taxPolicy?: TaxPolicyProvider;
+}): PhaseHandler {
+=======
+export function createPhase2HouseholdConsumptionPlanningHandler(options?: {
+  readonly taxPolicy?: TaxPolicyProvider | undefined;
+}): PhaseHandler {
+>>>>>>> REPLACE
