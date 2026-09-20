@@ -1,0 +1,185 @@
+### FILE: src/simulation/capitalFormation.ts
+<<<<<<< FIND
+function planOneUnit(
+  unit: ProductionUnitState,
+  recipe: RecipeDefinition,
+  tick: number,
+): CapitalFormationExecution {
+=======
+function resolveQuantityEpsilon(world: WorldState): number {
+  return requirePositive(
+    "NumericConfig.quantityEpsilon",
+    world.simulationConfig.numeric.quantityEpsilon ?? 1e-9,
+  );
+}
+
+function planOneUnit(
+  unit: ProductionUnitState,
+  recipe: RecipeDefinition,
+  tick: number,
+  quantityEpsilon: number,
+): CapitalFormationExecution {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  for (const [goodId, coefficient] of investmentGoods) {
+    const consumed = requireNonNegative(
+      `ProductionUnit ${String(unit.productionUnitId)} consumed INVESTMENT ${String(goodId)}`,
+      capitalBuilt * coefficient,
+    );
+    const opening = unit.investmentInventory.get(goodId) ?? 0;
+    if (consumed > opening) {
+      throw new Error(
+        `ProductionUnit ${String(unit.productionUnitId)} capital formation consumes more ${String(goodId)} than INVESTMENT inventory`,
+      );
+    }
+    consumedEntries.push([goodId, consumed]);
+  }
+=======
+  for (const [goodId, coefficient] of investmentGoods) {
+    const rawConsumed = requireNonNegative(
+      `ProductionUnit ${String(unit.productionUnitId)} consumed INVESTMENT ${String(goodId)}`,
+      capitalBuilt * coefficient,
+    );
+    const opening = unit.investmentInventory.get(goodId) ?? 0;
+    if (rawConsumed > opening && rawConsumed - opening > quantityEpsilon) {
+      throw new Error(
+        `ProductionUnit ${String(unit.productionUnitId)} capital formation consumes more ${String(goodId)} than INVESTMENT inventory`,
+      );
+    }
+    // The limiting inventory/coefficient ratio can multiply back a few ulps above
+    // the opening quantity (for example 0.7 / 0.3). Canonical quantity epsilon owns
+    // that physical-stock tolerance; clamp only the within-epsilon overshoot so the
+    // evidence and persisted remainder agree exactly and stock never becomes negative.
+    const consumed = rawConsumed > opening ? opening : rawConsumed;
+    consumedEntries.push([goodId, consumed]);
+  }
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+export function planCapitalFormationPhase12(args: {
+  readonly world: WorldState;
+  readonly tick: number;
+}): CapitalFormationPlanResult {
+  const { world, tick } = args;
+  if (!Number.isInteger(tick) || tick < 0) {
+    throw new Error(`Phase-12 capital tick must be a non-negative integer, got ${String(tick)}`);
+  }
+
+  const executions: CapitalFormationExecution[] = [];
+  for (const unit of stableOrderBy(world.productionUnits.values(), (candidate) => String(candidate.productionUnitId))) {
+    const recipe = world.definitionRegistry.recipes[unit.seed.recipeId];
+    if (!recipe) {
+      throw new Error(
+        `ProductionUnit ${String(unit.productionUnitId)} references missing recipe ${unit.seed.recipeId}`,
+      );
+    }
+    executions.push(planOneUnit(unit, recipe, tick));
+  }
+  return { executions };
+}
+=======
+export function planCapitalFormationPhase12(args: {
+  readonly world: WorldState;
+  readonly tick: number;
+}): CapitalFormationPlanResult {
+  const { world, tick } = args;
+  if (!Number.isInteger(tick) || tick < 0) {
+    throw new Error(`Phase-12 capital tick must be a non-negative integer, got ${String(tick)}`);
+  }
+
+  const quantityEpsilon = resolveQuantityEpsilon(world);
+  const executions: CapitalFormationExecution[] = [];
+  for (const unit of stableOrderBy(world.productionUnits.values(), (candidate) => String(candidate.productionUnitId))) {
+    const recipe = world.definitionRegistry.recipes[unit.seed.recipeId];
+    if (!recipe) {
+      throw new Error(
+        `ProductionUnit ${String(unit.productionUnitId)} references missing recipe ${unit.seed.recipeId}`,
+      );
+    }
+    executions.push(planOneUnit(unit, recipe, tick, quantityEpsilon));
+  }
+  return { executions };
+}
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+export function applyCapitalFormationTransition(
+  world: WorldState,
+  executions: readonly CapitalFormationExecution[],
+): WorldState {
+  const executionByUnit = new Map<ProductionUnitId, CapitalFormationExecution>();
+=======
+export function applyCapitalFormationTransition(
+  world: WorldState,
+  executions: readonly CapitalFormationExecution[],
+): WorldState {
+  const quantityEpsilon = resolveQuantityEpsilon(world);
+  const executionByUnit = new Map<ProductionUnitId, CapitalFormationExecution>();
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const expected = planOneUnit(unit, recipe, execution.tick);
+=======
+    const expected = planOneUnit(unit, recipe, execution.tick, quantityEpsilon);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+      if (consumed > opening) {
+        throw new Error(
+          `Phase-12 capital execution over-consumes ${String(goodId)} for ProductionUnit ${String(unit.productionUnitId)}`,
+        );
+      }
+      nextInvestmentInventory.set(goodId, Math.max(0, opening - consumed));
+=======
+      if (consumed > opening && consumed - opening > quantityEpsilon) {
+        throw new Error(
+          `Phase-12 capital execution over-consumes ${String(goodId)} for ProductionUnit ${String(unit.productionUnitId)}`,
+        );
+      }
+      const remaining = opening - consumed;
+      nextInvestmentInventory.set(goodId, remaining < 0 ? 0 : remaining);
+>>>>>>> REPLACE
+
+### FILE: src/simulation/capitalFormation.test.ts
+<<<<<<< FIND
+  it("keeps incomplete investment bundles as inventory instead of creating capital", () => {
+=======
+  it("clamps a within-epsilon decimal-ratio overshoot to zero stock without rejecting valid capital", () => {
+    const recipe = capitalRecipe({
+      investmentGoodsPerCapitalUnit: { [TOOLS]: 0.3 } as Readonly<Record<GoodId, number>>,
+      depreciationRatePerTick: 0,
+    });
+    const { world, unit } = oneUnitWorld({ recipe, investment: [[TOOLS, 0.7]] });
+
+    const execution = planCapitalFormationPhase12({ world, tick: 2 }).executions[0]!;
+    expect(execution.capitalBuilt).toBe(0.7 / 0.3);
+    expect(execution.investmentGoodsConsumedByGood[TOOLS]).toBe(0.7);
+
+    const nextWorld = applyCapitalFormationTransition(world, [execution]);
+    expect(nextWorld.productionUnits.get(unit.productionUnitId)!.investmentInventory.get(TOOLS)).toBe(0);
+    expect(world.productionUnits.get(unit.productionUnitId)!.investmentInventory.get(TOOLS)).toBe(0.7);
+  });
+
+  it("rejects a genuine investment-stock overdraw instead of hiding it behind quantity epsilon", () => {
+    const recipe = capitalRecipe({
+      investmentGoodsPerCapitalUnit: { [TOOLS]: 0.3 } as Readonly<Record<GoodId, number>>,
+      depreciationRatePerTick: 0,
+    });
+    const { world } = oneUnitWorld({ recipe, investment: [[TOOLS, 0.7]] });
+    const execution = planCapitalFormationPhase12({ world, tick: 2 }).executions[0]!;
+    const overdrawn: CapitalFormationExecution = {
+      ...execution,
+      investmentGoodsConsumedByGood: {
+        ...execution.investmentGoodsConsumedByGood,
+        [TOOLS]: 0.7 + 2e-9,
+      },
+    };
+
+    expect(() => applyCapitalFormationTransition(world, [overdrawn])).toThrow(
+      /does not match current authoritative stock\/evidence|over-consumes/,
+    );
+  });
+
+  it("keeps incomplete investment bundles as inventory instead of creating capital", () => {
+>>>>>>> REPLACE
