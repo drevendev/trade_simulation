@@ -1,0 +1,10 @@
+### FILE: src/simulation/capitalFormation.test.ts
+<<<<<<< FIND
+    expect(() => planCapitalFormationPhase12({ world: nonFinite.world, tick: 1 })).toThrow(
+      /INVESTMENT.*must be >= 0/,
+    );
+=======
+    expect(() => planCapitalFormationPhase12({ world: nonFinite.world, tick: 1 })).toThrow(
+      /INVESTMENT.*must be finite/,
+    );
+>>>>>>> REPLACE
