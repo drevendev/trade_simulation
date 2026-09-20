@@ -270,7 +270,7 @@ describe("Issue #590 resource genesis authority", () => {
       },
     };
 
-    const after = applyProductionExecutionTransition(world, [execution]);
+    const after = applyProductionExecutionTransition(world, [execution], execution.tick);
     expect(after.regions.get(region!.regionId)!.resourceDeposits.get("resource:iron-ore")).toBe(0);
     expect(world.regions.get(region!.regionId)!.resourceDeposits.get("resource:iron-ore")).toBe(30);
 

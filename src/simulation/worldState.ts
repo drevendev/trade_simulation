@@ -100,6 +100,8 @@ export interface WorldState {
   readonly productionUnits: ReadonlyMap<ProductionUnitId, ProductionUnitState>;
   readonly markets: ReadonlyMap<MarketId, LocalMarketState>;
   readonly transportLinks: ReadonlyMap<TransportLinkId, TransportLinkState>;
+  /** Last canonical tick whose Phase-5 physical production transition was persisted; -1 at genesis. */
+  readonly lastProductionExecutionTransitionTick: number;
   /** Last canonical tick whose Phase-12 capital transition was persisted; -1 at genesis. */
   readonly lastCapitalFormationTransitionTick: number;
   readonly pendingTransitions: PendingTransitions;
@@ -671,6 +673,7 @@ export function buildInitialWorld(
     seed,
     definitionRegistry,
     simulationConfig: frozenConfig,
+    lastProductionExecutionTransitionTick: -1,
     lastCapitalFormationTransitionTick: -1,
     // Empty, like the WorldState this reconciliation precedes: genesis queues no
     // transition, and reconciliation reads stocks, never the queue.
@@ -716,6 +719,7 @@ export function buildInitialWorld(
     productionUnits: productionUnitRegistry,
     markets: marketRegistry,
     transportLinks: transportLinkRegistry,
+    lastProductionExecutionTransitionTick: -1,
     lastCapitalFormationTransitionTick: -1,
     pendingTransitions: createEmptyPendingTransitions(),
   };

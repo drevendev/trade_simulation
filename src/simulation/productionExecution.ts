@@ -459,7 +459,23 @@ function validateExecutionPhysicalContract(
 export function applyProductionExecutionTransition(
   world: WorldState,
   executions: readonly ProductionExecution[],
+  currentTick: number,
 ): WorldState {
+  if (!Number.isInteger(currentTick) || currentTick < 0) {
+    throw new Error(`Phase-5 production transition tick must be a non-negative integer, got ${String(currentTick)}`);
+  }
+  const lastAppliedTick = world.lastProductionExecutionTransitionTick;
+  if (!Number.isInteger(lastAppliedTick) || lastAppliedTick < -1) {
+    throw new Error(
+      `WorldState.lastProductionExecutionTransitionTick must be an integer >= -1, got ${String(lastAppliedTick)}`,
+    );
+  }
+  if (lastAppliedTick >= currentTick) {
+    throw new Error(
+      `Phase-5 production transition for tick ${currentTick} cannot persist after tick ${lastAppliedTick}; each canonical tick may persist Phase 5 once`,
+    );
+  }
+
   const quantityEpsilon = requirePositive(
     "SimulationConfig.numeric.quantityEpsilon",
     world.simulationConfig.numeric.quantityEpsilon ?? createDefaultSimulationConfig().numeric.quantityEpsilon!,
@@ -469,6 +485,11 @@ export function applyProductionExecutionTransition(
   const seenUnits = new Set<ProductionUnitId>();
 
   for (const execution of stableOrderBy(executions, (candidate) => String(candidate.unitId))) {
+    if (execution.tick !== currentTick) {
+      throw new Error(
+        `ProductionExecution for ${String(execution.unitId)} is for tick ${execution.tick}, expected ${currentTick}`,
+      );
+    }
     if (seenUnits.has(execution.unitId)) throw new Error(`Duplicate ProductionExecution for unit ${String(execution.unitId)}`);
     seenUnits.add(execution.unitId);
     const unit = productionUnits.get(execution.unitId);
@@ -543,6 +564,7 @@ export function applyProductionExecutionTransition(
     ...world,
     productionUnits,
     regions,
+    lastProductionExecutionTransitionTick: currentTick,
   };
 }
 
@@ -603,7 +625,7 @@ export function createPhase5ProductionExecutionHandler(): PhaseHandler {
       productionPlans,
       laborAllocations,
     });
-    const projectedWorld = applyProductionExecutionTransition(world, executions);
+    const projectedWorld = applyProductionExecutionTransition(world, executions, context.tick);
     const outputIntents = buildProductionOutputSellIntentsPhase5(projectedWorld, executions);
     return {
       ...context,

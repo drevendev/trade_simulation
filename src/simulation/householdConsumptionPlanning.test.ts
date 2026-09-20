@@ -165,6 +165,7 @@ function makeWorld(args?: {
     productionUnits: new Map(),
     markets: new Map([[market.marketId, market]]),
     transportLinks: new Map(),
+    lastProductionExecutionTransitionTick: -1,
     lastCapitalFormationTransitionTick: -1,
     pendingTransitions: {
       jurisdictionChanges: [],
