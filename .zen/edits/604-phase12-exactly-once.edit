@@ -1,0 +1,114 @@
+### FILE: src/simulation/worldState.ts
+<<<<<<< FIND
+  readonly productionUnits: ReadonlyMap<ProductionUnitId, ProductionUnitState>;
+  readonly markets: ReadonlyMap<MarketId, LocalMarketState>;
+  readonly transportLinks: ReadonlyMap<TransportLinkId, TransportLinkState>;
+  readonly pendingTransitions: PendingTransitions;
+}
+=======
+  readonly productionUnits: ReadonlyMap<ProductionUnitId, ProductionUnitState>;
+  readonly markets: ReadonlyMap<MarketId, LocalMarketState>;
+  readonly transportLinks: ReadonlyMap<TransportLinkId, TransportLinkState>;
+  /** Last canonical tick whose Phase-12 capital transition was persisted; -1 at genesis. */
+  readonly lastCapitalFormationTransitionTick: number;
+  readonly pendingTransitions: PendingTransitions;
+}
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    simulationConfig: frozenConfig,
+    // Empty, like the WorldState this reconciliation precedes: genesis queues no
+    // transition, and reconciliation reads stocks, never the queue.
+    pendingTransitions: createEmptyPendingTransitions(),
+=======
+    simulationConfig: frozenConfig,
+    lastCapitalFormationTransitionTick: -1,
+    // Empty, like the WorldState this reconciliation precedes: genesis queues no
+    // transition, and reconciliation reads stocks, never the queue.
+    pendingTransitions: createEmptyPendingTransitions(),
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    productionUnits: productionUnitRegistry,
+    markets: marketRegistry,
+    transportLinks: transportLinkRegistry,
+    pendingTransitions: createEmptyPendingTransitions(),
+  };
+=======
+    productionUnits: productionUnitRegistry,
+    markets: marketRegistry,
+    transportLinks: transportLinkRegistry,
+    lastCapitalFormationTransitionTick: -1,
+    pendingTransitions: createEmptyPendingTransitions(),
+  };
+>>>>>>> REPLACE
+
+### FILE: src/simulation/capitalFormation.ts
+<<<<<<< FIND
+  if (!Number.isInteger(currentTick) || currentTick < 0) {
+    throw new Error(`Phase-12 capital transition tick must be a non-negative integer, got ${String(currentTick)}`);
+  }
+  const quantityEpsilon = resolveQuantityEpsilon(world);
+=======
+  if (!Number.isInteger(currentTick) || currentTick < 0) {
+    throw new Error(`Phase-12 capital transition tick must be a non-negative integer, got ${String(currentTick)}`);
+  }
+  const lastAppliedTick = world.lastCapitalFormationTransitionTick;
+  if (!Number.isInteger(lastAppliedTick) || lastAppliedTick < -1) {
+    throw new Error(
+      `WorldState.lastCapitalFormationTransitionTick must be an integer >= -1, got ${String(lastAppliedTick)}`,
+    );
+  }
+  if (lastAppliedTick >= currentTick) {
+    throw new Error(
+      `Phase-12 capital transition for tick ${currentTick} cannot persist after tick ${lastAppliedTick}; each canonical tick may persist Phase 12 once`,
+    );
+  }
+  const quantityEpsilon = resolveQuantityEpsilon(world);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  return {
+    ...world,
+    productionUnits: nextProductionUnits,
+  };
+}
+=======
+  return {
+    ...world,
+    productionUnits: nextProductionUnits,
+    lastCapitalFormationTransitionTick: currentTick,
+  };
+}
+>>>>>>> REPLACE
+
+### FILE: src/simulation/capitalFormation.test.ts
+<<<<<<< FIND
+  it("rejects stale or tampered Phase-12 evidence, including a stale execution tick", () => {
+=======
+  it("rejects fresh same-tick replanning after persistence and allows the next tick once", () => {
+    const recipe = {
+      ...baselineDefinitionPack.recipes["recipe:food-harvest"]!,
+      depreciationRatePerTick: 0.1,
+    };
+    const { world, unit } = oneUnitWorld({ recipe, installedCapital: 20, investment: [[TOOLS, 7]] });
+
+    const tick7Execution = planCapitalFormationPhase12({ world, tick: 7 }).executions[0]!;
+    const afterTick7 = applyCapitalFormationTransition(world, [tick7Execution], 7);
+    expect(afterTick7.productionUnits.get(unit.productionUnitId)!.installedCapital).toBe(18);
+    expect(afterTick7.lastCapitalFormationTransitionTick).toBe(7);
+
+    const repeatedTick7Execution = planCapitalFormationPhase12({ world: afterTick7, tick: 7 }).executions[0]!;
+    expect(() => applyCapitalFormationTransition(afterTick7, [repeatedTick7Execution], 7)).toThrow(
+      /each canonical tick may persist Phase 12 once/,
+    );
+    expect(afterTick7.productionUnits.get(unit.productionUnitId)!.installedCapital).toBe(18);
+
+    const tick8Execution = planCapitalFormationPhase12({ world: afterTick7, tick: 8 }).executions[0]!;
+    const afterTick8 = applyCapitalFormationTransition(afterTick7, [tick8Execution], 8);
+    expect(afterTick8.productionUnits.get(unit.productionUnitId)!.installedCapital).toBeCloseTo(16.2, 12);
+    expect(afterTick8.lastCapitalFormationTransitionTick).toBe(8);
+  });
+
+  it("rejects stale or tampered Phase-12 evidence, including a stale execution tick", () => {
+>>>>>>> REPLACE
