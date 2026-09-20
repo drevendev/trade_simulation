@@ -238,6 +238,19 @@ export function applyCapitalFormationTransition(
     executionByUnit.set(execution.unitId, execution);
   }
 
+  if (executionByUnit.size !== world.productionUnits.size) {
+    throw new Error(
+      `Phase-12 capital transition must cover every ProductionUnit exactly once: expected ${world.productionUnits.size}, got ${executionByUnit.size}`,
+    );
+  }
+  for (const unitId of world.productionUnits.keys()) {
+    if (!executionByUnit.has(unitId)) {
+      throw new Error(
+        `Phase-12 capital transition must cover every ProductionUnit exactly once; missing ${String(unitId)}`,
+      );
+    }
+  }
+
   const nextProductionUnits = new Map(world.productionUnits);
   for (const execution of stableOrderBy(executions, (candidate) => String(candidate.unitId))) {
     const unit = world.productionUnits.get(execution.unitId);
