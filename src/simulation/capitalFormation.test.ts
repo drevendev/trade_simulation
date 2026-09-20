@@ -191,6 +191,30 @@ describe("REQ-PRODUCTION-006 Phase-12 capital formation", () => {
     expect(execution.installedCapitalNext).toBe(18);
   });
 
+  it("rejects fresh same-tick replanning after persistence and allows the next tick once", () => {
+    const recipe = {
+      ...baselineDefinitionPack.recipes["recipe:food-harvest"]!,
+      depreciationRatePerTick: 0.1,
+    };
+    const { world, unit } = oneUnitWorld({ recipe, installedCapital: 20, investment: [[TOOLS, 7]] });
+
+    const tick7Execution = planCapitalFormationPhase12({ world, tick: 7 }).executions[0]!;
+    const afterTick7 = applyCapitalFormationTransition(world, [tick7Execution], 7);
+    expect(afterTick7.productionUnits.get(unit.productionUnitId)!.installedCapital).toBe(18);
+    expect(afterTick7.lastCapitalFormationTransitionTick).toBe(7);
+
+    const repeatedTick7Execution = planCapitalFormationPhase12({ world: afterTick7, tick: 7 }).executions[0]!;
+    expect(() => applyCapitalFormationTransition(afterTick7, [repeatedTick7Execution], 7)).toThrow(
+      /each canonical tick may persist Phase 12 once/,
+    );
+    expect(afterTick7.productionUnits.get(unit.productionUnitId)!.installedCapital).toBe(18);
+
+    const tick8Execution = planCapitalFormationPhase12({ world: afterTick7, tick: 8 }).executions[0]!;
+    const afterTick8 = applyCapitalFormationTransition(afterTick7, [tick8Execution], 8);
+    expect(afterTick8.productionUnits.get(unit.productionUnitId)!.installedCapital).toBeCloseTo(16.2, 12);
+    expect(afterTick8.lastCapitalFormationTransitionTick).toBe(8);
+  });
+
   it("rejects stale or tampered Phase-12 evidence, including a stale execution tick", () => {
     const { world } = oneUnitWorld();
     const execution = planCapitalFormationPhase12({ world, tick: 7 }).executions[0]!;

@@ -248,6 +248,17 @@ export function applyCapitalFormationTransition(
   if (!Number.isInteger(currentTick) || currentTick < 0) {
     throw new Error(`Phase-12 capital transition tick must be a non-negative integer, got ${String(currentTick)}`);
   }
+  const lastAppliedTick = world.lastCapitalFormationTransitionTick;
+  if (!Number.isInteger(lastAppliedTick) || lastAppliedTick < -1) {
+    throw new Error(
+      `WorldState.lastCapitalFormationTransitionTick must be an integer >= -1, got ${String(lastAppliedTick)}`,
+    );
+  }
+  if (lastAppliedTick >= currentTick) {
+    throw new Error(
+      `Phase-12 capital transition for tick ${currentTick} cannot persist after tick ${lastAppliedTick}; each canonical tick may persist Phase 12 once`,
+    );
+  }
   const quantityEpsilon = resolveQuantityEpsilon(world);
   const executionByUnit = new Map<ProductionUnitId, CapitalFormationExecution>();
   for (const execution of executions) {
@@ -317,6 +328,7 @@ export function applyCapitalFormationTransition(
   return {
     ...world,
     productionUnits: nextProductionUnits,
+    lastCapitalFormationTransitionTick: currentTick,
   };
 }
 
