@@ -1,0 +1,98 @@
+### FILE: src/simulation/capitalFormation.ts
+<<<<<<< FIND
+export function applyCapitalFormationTransition(
+  world: WorldState,
+  executions: readonly CapitalFormationExecution[],
+): WorldState {
+  const quantityEpsilon = resolveQuantityEpsilon(world);
+=======
+export function applyCapitalFormationTransition(
+  world: WorldState,
+  executions: readonly CapitalFormationExecution[],
+  currentTick: number,
+): WorldState {
+  if (!Number.isInteger(currentTick) || currentTick < 0) {
+    throw new Error(`Phase-12 capital transition tick must be a non-negative integer, got ${String(currentTick)}`);
+  }
+  const quantityEpsilon = resolveQuantityEpsilon(world);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const expected = planOneUnit(unit, recipe, execution.tick, quantityEpsilon);
+=======
+    const expected = planOneUnit(unit, recipe, currentTick, quantityEpsilon);
+>>>>>>> REPLACE
+
+### FILE: src/simulation/capitalFormation.test.ts
+<<<<<<< FIND
+    const nextWorld = applyCapitalFormationTransition(world, executions);
+=======
+    const nextWorld = applyCapitalFormationTransition(world, executions, 7);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const nextWorld = applyCapitalFormationTransition(world, [execution]);
+    expect(nextWorld.productionUnits.get(unit.productionUnitId)!.investmentInventory.get(TOOLS)).toBe(0);
+=======
+    const nextWorld = applyCapitalFormationTransition(world, [execution], 2);
+    expect(nextWorld.productionUnits.get(unit.productionUnitId)!.investmentInventory.get(TOOLS)).toBe(0);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    expect(() => applyCapitalFormationTransition(world, [overdrawn])).toThrow(
+=======
+    expect(() => applyCapitalFormationTransition(world, [overdrawn], 2)).toThrow(
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const nextWorld = applyCapitalFormationTransition(world, [execution]);
+    const nextUnit = nextWorld.productionUnits.get(unit.productionUnitId)!;
+    expect(nextUnit.installedCapital).toBe(unit.installedCapital);
+=======
+    const nextWorld = applyCapitalFormationTransition(world, [execution], 3);
+    const nextUnit = nextWorld.productionUnits.get(unit.productionUnitId)!;
+    expect(nextUnit.installedCapital).toBe(unit.installedCapital);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  it("rejects re-applying stale Phase-12 evidence so formation and depreciation cannot run twice", () => {
+    const { world } = oneUnitWorld();
+    const execution = planCapitalFormationPhase12({ world, tick: 7 }).executions[0]!;
+    const nextWorld = applyCapitalFormationTransition(world, [execution]);
+
+    expect(() => applyCapitalFormationTransition(nextWorld, [execution])).toThrow(
+      /does not match current authoritative stock\/evidence/,
+    );
+    expect(() =>
+      applyCapitalFormationTransition(world, [{ ...execution, capitalBuilt: execution.capitalBuilt + 1 }]),
+    ).toThrow(/does not match current authoritative stock\/evidence/);
+  });
+=======
+  it("rejects stale or tampered Phase-12 evidence, including a stale execution tick", () => {
+    const { world } = oneUnitWorld();
+    const execution = planCapitalFormationPhase12({ world, tick: 7 }).executions[0]!;
+    const nextWorld = applyCapitalFormationTransition(world, [execution], 7);
+
+    expect(() => applyCapitalFormationTransition(nextWorld, [execution], 7)).toThrow(
+      /does not match current authoritative stock\/evidence/,
+    );
+    expect(() =>
+      applyCapitalFormationTransition(world, [{ ...execution, capitalBuilt: execution.capitalBuilt + 1 }], 7),
+    ).toThrow(/does not match current authoritative stock\/evidence/);
+    expect(() =>
+      applyCapitalFormationTransition(world, [{ ...execution, tick: 6 }], 7),
+    ).toThrow(/does not match current authoritative stock\/evidence/);
+  });
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    expect(() => applyCapitalFormationTransition(world, [])).toThrow(/must cover every ProductionUnit/);
+=======
+    expect(() => applyCapitalFormationTransition(world, [], 7)).toThrow(/must cover every ProductionUnit/);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const persisted = applyCapitalFormationTransition(world, after.capitalFormationExecutions!);
+=======
+    const persisted = applyCapitalFormationTransition(world, after.capitalFormationExecutions!, 5);
+>>>>>>> REPLACE
