@@ -306,6 +306,11 @@ function buildEconomicEvidence(args: {
   if (supplyPlan.regionId !== regionId) {
     throw new Error(`LaborSupplyPlan ${supplyPlan.planId} region does not match Cohort ${String(cohort.cohortId)}`);
   }
+  if (supplyPlan.laborCategory !== cohort.seed.laborCategory) {
+    throw new Error(
+      `LaborSupplyPlan ${supplyPlan.planId} labor category does not match Cohort ${String(cohort.cohortId)}`,
+    );
+  }
   const availableWorkerEquivalents = requireNonNegative(
     `LaborSupplyPlan ${supplyPlan.planId} availableWorkerEquivalents`,
     supplyPlan.availableWorkerEquivalents,
@@ -320,6 +325,11 @@ function buildEconomicEvidence(args: {
     allocationIds.add(allocation.allocationId);
     if (allocation.tick !== tick || allocation.regionId !== regionId) {
       throw new Error(`LaborAllocation ${allocation.allocationId} tick/region provenance mismatch`);
+    }
+    if (allocation.laborCategory !== supplyPlan.laborCategory) {
+      throw new Error(
+        `LaborAllocation ${allocation.allocationId} labor category does not match LaborSupplyPlan ${supplyPlan.planId}`,
+      );
     }
     employedWorkerEquivalents += requireNonNegative(
       `LaborAllocation ${allocation.allocationId} workerEquivalents`,

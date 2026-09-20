@@ -480,6 +480,45 @@ describe("REQ-POPULATION-003 Phase-9 household realization", () => {
     expect(economic.employmentRate).toBeCloseTo(0.4);
   });
 
+  it("rejects cross-category Phase-3 allocation evidence before attributing employment or wages", () => {
+    const evidence = wageEvidence();
+    const crossCategoryAllocation: LaborAllocation = {
+      ...evidence.allocation,
+      laborCategory: "SPECIALIST",
+    };
+
+    expect(() => plan({
+      world: world(),
+      supply: supply(10),
+      allocations: [crossCategoryAllocation],
+      settlements: [evidence.settlement],
+      transactions: [evidence.transaction],
+    })).toThrow(/labor category does not match LaborSupplyPlan labor-supply:7:cohort:a/);
+
+    const economic = plan({
+      world: world(),
+      supply: supply(10),
+      allocations: [evidence.allocation],
+      settlements: [evidence.settlement],
+      transactions: [evidence.transaction],
+    }).executions[0]!.economic;
+    expect(economic.availableWorkerEquivalents).toBe(10);
+    expect(economic.employedWorkerEquivalents).toBe(4);
+    expect(economic.employmentRate).toBeCloseTo(0.4);
+  });
+
+  it("rejects a current LaborSupplyPlan whose category differs from the cohort's canonical category", () => {
+    const mismatchedSupply: LaborSupplyPlan = {
+      ...supply(10),
+      laborCategory: "SPECIALIST",
+    };
+
+    expect(() => plan({
+      world: world(),
+      supply: mismatchedSupply,
+    })).toThrow(/labor category does not match Cohort cohort:a/);
+  });
+
   it("consumes for CHILD/ELDER cohorts with zero employment evidence and rejects phantom labor artifacts", () => {
     const opening = world({
       inventory: [[FOOD, 2]],
