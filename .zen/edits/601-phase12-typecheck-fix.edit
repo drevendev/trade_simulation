@@ -1,0 +1,15 @@
+### FILE: src/simulation/capitalFormation.test.ts
+<<<<<<< FIND
+import {
+  applyCapitalFormationTransition,
+  createPhase12CapitalFormationHandler,
+  planCapitalFormationPhase12,
+} from "./capitalFormation";
+=======
+import {
+  applyCapitalFormationTransition,
+  createPhase12CapitalFormationHandler,
+  planCapitalFormationPhase12,
+  type CapitalFormationExecution,
+} from "./capitalFormation";
+>>>>>>> REPLACE
