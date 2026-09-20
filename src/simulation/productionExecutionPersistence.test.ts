@@ -43,6 +43,16 @@ function withProductionUnit(world: WorldState, unit: ProductionUnitState): World
   return { ...world, productionUnits };
 }
 
+function withOnlyActiveUnit(world: WorldState, activeUnitId: ProductionUnitId): WorldState {
+  const productionUnits = new Map(world.productionUnits);
+  for (const [unitId, unit] of productionUnits) {
+    if (unit.seed.status === "ACTIVE" && unitId !== activeUnitId) {
+      productionUnits.set(unitId, { ...unit, seed: { ...unit.seed, status: "MOTHBALLED" } });
+    }
+  }
+  return { ...world, productionUnits };
+}
+
 function plan(unit: ProductionUnitState, tick: number): ProductionPlan {
   return {
     planId: `production-plan:${tick}:${String(unit.productionUnitId)}`,
@@ -110,7 +120,7 @@ describe("REQ-PRODUCTION-005 Phase-5 persistence provenance", () => {
       ]),
       outputInventory: new Map<GoodId, number>([["good:tools" as GoodId, 5]]),
     };
-    world = withProductionUnit(world, unit);
+    world = withOnlyActiveUnit(withProductionUnit(world, unit), unit.productionUnitId);
 
     const first = oneExecution(world, unit, TICK, "first");
     const afterFirst = applyProductionExecutionTransition(world, [first], TICK);
@@ -149,7 +159,7 @@ describe("REQ-PRODUCTION-005 Phase-5 persistence provenance", () => {
         ["good:wood" as GoodId, 100],
       ]),
     };
-    world = withProductionUnit(world, unit);
+    world = withOnlyActiveUnit(withProductionUnit(world, unit), unit.productionUnitId);
     const execution = oneExecution(world, unit, TICK, "tick-mismatch");
 
     expect(() => applyProductionExecutionTransition(world, [execution], TICK + 1)).toThrow(

@@ -45,6 +45,17 @@ function withUnit(world: WorldState, unit: ProductionUnitState): WorldState {
   return { ...world, productionUnits };
 }
 
+function withOnlyActiveUnits(world: WorldState, activeUnitIds: readonly ProductionUnitId[]): WorldState {
+  const activeSet = new Set(activeUnitIds);
+  const productionUnits = new Map(world.productionUnits);
+  for (const [unitId, unit] of productionUnits) {
+    if (unit.seed.status === "ACTIVE" && !activeSet.has(unitId)) {
+      productionUnits.set(unitId, { ...unit, seed: { ...unit.seed, status: "MOTHBALLED" } });
+    }
+  }
+  return { ...world, productionUnits };
+}
+
 function withRegionResources(
   world: WorldState,
   regionId: RegionId,
@@ -142,7 +153,7 @@ describe("REQ-PRODUCTION-005 Phase-5 production/extraction", () => {
       ],
       [["good:tools" as GoodId, 7]],
     );
-    world = withUnit(world, unit);
+    world = withOnlyActiveUnits(withUnit(world, unit), [unit.productionUnitId]);
     const region = regionFor(world, unit);
     const labor = allocation(unit, region.regionId, "GENERAL", 300);
 
@@ -209,7 +220,10 @@ describe("REQ-PRODUCTION-005 Phase-5 production/extraction", () => {
     let world = baselineWorld();
     const unit = activeUnit(world, "recipe:iron-mine");
     const region = regionFor(world, unit);
-    world = withRegionResources(world, region.regionId, [["resource:iron-ore", 450]]);
+    world = withOnlyActiveUnits(
+      withRegionResources(world, region.regionId, [["resource:iron-ore", 450]]),
+      [unit.productionUnitId],
+    );
 
     const first = planProductionExecutionsPhase5({
       world,
@@ -294,13 +308,13 @@ describe("REQ-PRODUCTION-005 Phase-5 production/extraction", () => {
       signals: { ...original.signals, outputSalesEma: 4 },
     };
     const defaults = createDefaultSimulationConfig();
-    world = {
+    world = withOnlyActiveUnits({
       ...withUnit(world, unit),
       simulationConfig: {
         ...world.simulationConfig,
         production: { ...defaults.production, outputCoverageTicks: 2 },
       },
-    };
+    }, [unit.productionUnitId]);
     const region = regionFor(world, unit);
     const execution = planProductionExecutionsPhase5({
       world,
@@ -370,7 +384,7 @@ describe("REQ-PRODUCTION-005 Phase-5 production/extraction", () => {
         ["good:wood" as GoodId, 100],
       ],
     );
-    world = withUnit(world, unit);
+    world = withOnlyActiveUnits(withUnit(world, unit), [unit.productionUnitId]);
     const region = regionFor(world, unit);
     const execution = planProductionExecutionsPhase5({
       world,
