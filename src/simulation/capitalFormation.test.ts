@@ -9,6 +9,7 @@ import {
   applyCapitalFormationTransition,
   createPhase12CapitalFormationHandler,
   planCapitalFormationPhase12,
+  type CapitalFormationExecution,
 } from "./capitalFormation";
 import { deriveNameplateCapacity } from "./productionUnitState";
 import { initializeTickContext } from "./tickOrchestrator";
