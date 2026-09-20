@@ -1,0 +1,6 @@
+### FILE: src/simulation/resourceGenesisAuthority.test.ts
+<<<<<<< FIND
+    const after = applyProductionExecutionTransition(world, [execution]);
+=======
+    const after = applyProductionExecutionTransition(world, [execution], execution.tick);
+>>>>>>> REPLACE
