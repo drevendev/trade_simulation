@@ -1,0 +1,109 @@
+### FILE: src/simulation/worldState.ts
+<<<<<<< FIND
+  readonly transportLinks: ReadonlyMap<TransportLinkId, TransportLinkState>;
+  /** Last canonical tick whose Phase-12 capital transition was persisted; -1 at genesis. */
+  readonly lastCapitalFormationTransitionTick: number;
+  readonly pendingTransitions: PendingTransitions;
+=======
+  readonly transportLinks: ReadonlyMap<TransportLinkId, TransportLinkState>;
+  /** Last canonical tick whose Phase-5 physical production transition was persisted; -1 at genesis. */
+  readonly lastProductionExecutionTransitionTick: number;
+  /** Last canonical tick whose Phase-12 capital transition was persisted; -1 at genesis. */
+  readonly lastCapitalFormationTransitionTick: number;
+  readonly pendingTransitions: PendingTransitions;
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    definitionRegistry,
+    simulationConfig: frozenConfig,
+    lastCapitalFormationTransitionTick: -1,
+    // Empty, like the WorldState this reconciliation precedes: genesis queues no
+=======
+    definitionRegistry,
+    simulationConfig: frozenConfig,
+    lastProductionExecutionTransitionTick: -1,
+    lastCapitalFormationTransitionTick: -1,
+    // Empty, like the WorldState this reconciliation precedes: genesis queues no
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    markets: marketRegistry,
+    transportLinks: transportLinkRegistry,
+    lastCapitalFormationTransitionTick: -1,
+    pendingTransitions: createEmptyPendingTransitions(),
+=======
+    markets: marketRegistry,
+    transportLinks: transportLinkRegistry,
+    lastProductionExecutionTransitionTick: -1,
+    lastCapitalFormationTransitionTick: -1,
+    pendingTransitions: createEmptyPendingTransitions(),
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionExecution.ts
+<<<<<<< FIND
+export function applyProductionExecutionTransition(
+  world: WorldState,
+  executions: readonly ProductionExecution[],
+): WorldState {
+  const quantityEpsilon = requirePositive(
+=======
+export function applyProductionExecutionTransition(
+  world: WorldState,
+  executions: readonly ProductionExecution[],
+  currentTick: number,
+): WorldState {
+  if (!Number.isInteger(currentTick) || currentTick < 0) {
+    throw new Error(`Phase-5 production transition tick must be a non-negative integer, got ${String(currentTick)}`);
+  }
+  const lastAppliedTick = world.lastProductionExecutionTransitionTick;
+  if (!Number.isInteger(lastAppliedTick) || lastAppliedTick < -1) {
+    throw new Error(
+      `WorldState.lastProductionExecutionTransitionTick must be an integer >= -1, got ${String(lastAppliedTick)}`,
+    );
+  }
+  if (lastAppliedTick >= currentTick) {
+    throw new Error(
+      `Phase-5 production transition for tick ${currentTick} cannot persist after tick ${lastAppliedTick}; each canonical tick may persist Phase 5 once`,
+    );
+  }
+
+  const quantityEpsilon = requirePositive(
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  for (const execution of stableOrderBy(executions, (candidate) => String(candidate.unitId))) {
+    if (seenUnits.has(execution.unitId)) throw new Error(`Duplicate ProductionExecution for unit ${String(execution.unitId)}`);
+=======
+  for (const execution of stableOrderBy(executions, (candidate) => String(candidate.unitId))) {
+    if (execution.tick !== currentTick) {
+      throw new Error(
+        `ProductionExecution for ${String(execution.unitId)} is for tick ${execution.tick}, expected ${currentTick}`,
+      );
+    }
+    if (seenUnits.has(execution.unitId)) throw new Error(`Duplicate ProductionExecution for unit ${String(execution.unitId)}`);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  return {
+    ...world,
+    productionUnits,
+    regions,
+  };
+}
+=======
+  return {
+    ...world,
+    productionUnits,
+    regions,
+    lastProductionExecutionTransitionTick: currentTick,
+  };
+}
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const projectedWorld = applyProductionExecutionTransition(world, executions);
+    const outputIntents = buildProductionOutputSellIntentsPhase5(projectedWorld, executions);
+=======
+    const projectedWorld = applyProductionExecutionTransition(world, executions, context.tick);
+    const outputIntents = buildProductionOutputSellIntentsPhase5(projectedWorld, executions);
+>>>>>>> REPLACE
