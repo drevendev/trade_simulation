@@ -116,6 +116,42 @@ describe("REQ-PRODUCTION-006 Phase-12 capital formation", () => {
     expect(unit.investmentInventory.get(IRON)).toBe(8);
   });
 
+  it("clamps a within-epsilon decimal-ratio overshoot to zero stock without rejecting valid capital", () => {
+    const recipe = capitalRecipe({
+      investmentGoodsPerCapitalUnit: { [TOOLS]: 0.3 } as Readonly<Record<GoodId, number>>,
+      depreciationRatePerTick: 0,
+    });
+    const { world, unit } = oneUnitWorld({ recipe, investment: [[TOOLS, 0.7]] });
+
+    const execution = planCapitalFormationPhase12({ world, tick: 2 }).executions[0]!;
+    expect(execution.capitalBuilt).toBe(0.7 / 0.3);
+    expect(execution.investmentGoodsConsumedByGood[TOOLS]).toBe(0.7);
+
+    const nextWorld = applyCapitalFormationTransition(world, [execution]);
+    expect(nextWorld.productionUnits.get(unit.productionUnitId)!.investmentInventory.get(TOOLS)).toBe(0);
+    expect(world.productionUnits.get(unit.productionUnitId)!.investmentInventory.get(TOOLS)).toBe(0.7);
+  });
+
+  it("rejects a genuine investment-stock overdraw instead of hiding it behind quantity epsilon", () => {
+    const recipe = capitalRecipe({
+      investmentGoodsPerCapitalUnit: { [TOOLS]: 0.3 } as Readonly<Record<GoodId, number>>,
+      depreciationRatePerTick: 0,
+    });
+    const { world } = oneUnitWorld({ recipe, investment: [[TOOLS, 0.7]] });
+    const execution = planCapitalFormationPhase12({ world, tick: 2 }).executions[0]!;
+    const overdrawn: CapitalFormationExecution = {
+      ...execution,
+      investmentGoodsConsumedByGood: {
+        ...execution.investmentGoodsConsumedByGood,
+        [TOOLS]: 0.7 + 2e-9,
+      },
+    };
+
+    expect(() => applyCapitalFormationTransition(world, [overdrawn])).toThrow(
+      /does not match current authoritative stock\/evidence|over-consumes/,
+    );
+  });
+
   it("keeps incomplete investment bundles as inventory instead of creating capital", () => {
     const recipe = capitalRecipe({ depreciationRatePerTick: 0 });
     const { world, unit } = oneUnitWorld({

@@ -67,10 +67,18 @@ function orderedRecord(entries: readonly (readonly [GoodId, number])[]): Readonl
   return result as Readonly<Record<GoodId, number>>;
 }
 
+function resolveQuantityEpsilon(world: WorldState): number {
+  return requirePositive(
+    "NumericConfig.quantityEpsilon",
+    world.simulationConfig.numeric.quantityEpsilon ?? 1e-9,
+  );
+}
+
 function planOneUnit(
   unit: ProductionUnitState,
   recipe: RecipeDefinition,
   tick: number,
+  quantityEpsilon: number,
 ): CapitalFormationExecution {
   if (unit.seed.recipeId !== recipe.id) {
     throw new Error(
@@ -126,16 +134,21 @@ function planOneUnit(
   const capitalBuilt = possibleCapitalFromGoods;
 
   for (const [goodId, coefficient] of investmentGoods) {
-    const consumed = requireNonNegative(
+    const rawConsumed = requireNonNegative(
       `ProductionUnit ${String(unit.productionUnitId)} consumed INVESTMENT ${String(goodId)}`,
       capitalBuilt * coefficient,
     );
     const opening = unit.investmentInventory.get(goodId) ?? 0;
-    if (consumed > opening) {
+    if (rawConsumed > opening && rawConsumed - opening > quantityEpsilon) {
       throw new Error(
         `ProductionUnit ${String(unit.productionUnitId)} capital formation consumes more ${String(goodId)} than INVESTMENT inventory`,
       );
     }
+    // The limiting inventory/coefficient ratio can multiply back a few ulps above
+    // the opening quantity (for example 0.7 / 0.3). Canonical quantity epsilon owns
+    // that physical-stock tolerance; clamp only the within-epsilon overshoot so the
+    // evidence and persisted remainder agree exactly and stock never becomes negative.
+    const consumed = rawConsumed > opening ? opening : rawConsumed;
     consumedEntries.push([goodId, consumed]);
   }
 
@@ -182,6 +195,7 @@ export function planCapitalFormationPhase12(args: {
     throw new Error(`Phase-12 capital tick must be a non-negative integer, got ${String(tick)}`);
   }
 
+  const quantityEpsilon = resolveQuantityEpsilon(world);
   const executions: CapitalFormationExecution[] = [];
   for (const unit of stableOrderBy(world.productionUnits.values(), (candidate) => String(candidate.productionUnitId))) {
     const recipe = world.definitionRegistry.recipes[unit.seed.recipeId];
@@ -190,7 +204,7 @@ export function planCapitalFormationPhase12(args: {
         `ProductionUnit ${String(unit.productionUnitId)} references missing recipe ${unit.seed.recipeId}`,
       );
     }
-    executions.push(planOneUnit(unit, recipe, tick));
+    executions.push(planOneUnit(unit, recipe, tick, quantityEpsilon));
   }
   return { executions };
 }
@@ -230,6 +244,7 @@ export function applyCapitalFormationTransition(
   world: WorldState,
   executions: readonly CapitalFormationExecution[],
 ): WorldState {
+  const quantityEpsilon = resolveQuantityEpsilon(world);
   const executionByUnit = new Map<ProductionUnitId, CapitalFormationExecution>();
   for (const execution of executions) {
     if (executionByUnit.has(execution.unitId)) {
@@ -264,7 +279,7 @@ export function applyCapitalFormationTransition(
       );
     }
 
-    const expected = planOneUnit(unit, recipe, execution.tick);
+    const expected = planOneUnit(unit, recipe, execution.tick, quantityEpsilon);
     if (!executionMatches(expected, execution)) {
       throw new Error(
         `Phase-12 capital execution for ProductionUnit ${String(execution.unitId)} does not match current authoritative stock/evidence`,
@@ -277,12 +292,13 @@ export function applyCapitalFormationTransition(
         `ProductionUnit ${String(unit.productionUnitId)} INVESTMENT ${String(goodId)}`,
         nextInvestmentInventory.get(goodId) ?? 0,
       );
-      if (consumed > opening) {
+      if (consumed > opening && consumed - opening > quantityEpsilon) {
         throw new Error(
           `Phase-12 capital execution over-consumes ${String(goodId)} for ProductionUnit ${String(unit.productionUnitId)}`,
         );
       }
-      nextInvestmentInventory.set(goodId, Math.max(0, opening - consumed));
+      const remaining = opening - consumed;
+      nextInvestmentInventory.set(goodId, remaining < 0 ? 0 : remaining);
     }
 
     const nextUnit: ProductionUnitState = {
