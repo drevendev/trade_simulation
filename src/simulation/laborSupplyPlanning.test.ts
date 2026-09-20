@@ -90,6 +90,7 @@ function makeWorld(cohorts: readonly CohortState[], config = createDefaultSimula
     productionUnits: new Map(),
     markets: new Map(),
     transportLinks: new Map(),
+    lastCapitalFormationTransitionTick: -1,
     pendingTransitions: {
       jurisdictionChanges: [],
       stateCreations: [],

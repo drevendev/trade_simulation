@@ -190,6 +190,7 @@ function world(args?: {
     productionUnits: new Map(),
     markets: new Map(),
     transportLinks: new Map(),
+    lastCapitalFormationTransitionTick: -1,
     pendingTransitions: {
       jurisdictionChanges: [],
       stateCreations: [],
