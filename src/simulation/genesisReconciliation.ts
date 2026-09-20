@@ -393,11 +393,12 @@ export function reconcileGenesisStocks(
   // The region is the registry's own RegionId, so typed location identity remains load-bearing.
   worldState.regions.forEach((region, regionId) => {
     region.resourceDeposits.forEach((quantity, resourceId) => {
-      if (quantity > 0) {
-        const granularity = `RES:${String(regionId)}:${String(resourceId)}`;
-        const current = actualResourcesByGranularity.get(granularity) ?? 0;
-        actualResourcesByGranularity.set(granularity, current + quantity);
-      }
+      // Project every live balance before reconciliation classification. Filtering on
+      // `quantity > 0` here would hide NaN, -Infinity, and negative corruption before
+      // the fail-closed numeric boundary below can inspect it.
+      const granularity = `RES:${String(regionId)}:${String(resourceId)}`;
+      const current = actualResourcesByGranularity.get(granularity) ?? 0;
+      actualResourcesByGranularity.set(granularity, current + quantity);
     });
   });
 

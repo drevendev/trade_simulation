@@ -183,6 +183,30 @@ describe("Issue #590 resource genesis authority", () => {
     expect(Number.isNaN(result.details?.residual)).toBe(true);
   });
 
+  it("rejects actual-only NaN and negative-Infinity resource balances before they can disappear from reconciliation", () => {
+    const { scenario, regionKey } = scenarioWithDuplicateMineDeposits();
+    const config = createDefaultSimulationConfig();
+    const world = buildInitialWorld(scenario, baselineDefinitionPack, config, 598);
+    const regionEntry = [...world.regions.entries()].find(([, region]) => region.seed.key === regionKey);
+    expect(regionEntry).toBeDefined();
+    const [regionId, region] = regionEntry!;
+
+    for (const nonFiniteQuantity of [Number.NaN, Number.NEGATIVE_INFINITY]) {
+      const resourceDeposits = new Map(region.resourceDeposits);
+      resourceDeposits.set("resource:phantom", nonFiniteQuantity);
+      const regions = new Map(world.regions);
+      regions.set(regionId, { ...region, resourceDeposits });
+
+      const result = reconcileGenesisStocks({ ...world, regions }, world.worldGenesisLedger, config);
+      expect(result.success).toBe(false);
+      expect(result.errorMessage).toMatch(/non-finite reconciliation evidence/);
+      expect(result.details?.category).toBe("RESOURCE");
+      expect(result.details?.key).toContain("resource:phantom");
+      expect(result.details?.expected).toBe(0);
+      expect(Number.isFinite(result.details?.actual)).toBe(false);
+    }
+  });
+
   it("rejects a non-finite resource reconciliation tolerance even when stock matches", () => {
     const { scenario } = scenarioWithDuplicateMineDeposits();
     const config = createDefaultSimulationConfig();
