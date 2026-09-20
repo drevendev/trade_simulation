@@ -163,7 +163,7 @@ describe("REQ-PRODUCTION-005 Phase-5 production/extraction", () => {
     expect(execution.inputConsumedByGood["good:wood" as GoodId]).toBeCloseTo(17.5, 12);
     expect(execution.outputProducedQuantity).toBeCloseTo(175, 12);
 
-    const transitioned = applyProductionExecutionTransition(world, result.executions);
+    const transitioned = applyProductionExecutionTransition(world, result.executions, TICK);
     const after = transitioned.productionUnits.get(unit.productionUnitId)!;
     expect(after.inputInventory.get("good:iron" as GoodId)).toBe(0);
     expect(after.inputInventory.get("good:wood" as GoodId)).toBeCloseTo(82.5, 12);
@@ -222,7 +222,7 @@ describe("REQ-PRODUCTION-005 Phase-5 production/extraction", () => {
     expect(first.resourceConsumption?.quantity).toBeCloseTo(450, 12);
     expect(first.outputProducedQuantity).toBeCloseTo(450, 12);
 
-    const afterFirst = applyProductionExecutionTransition(world, [first]);
+    const afterFirst = applyProductionExecutionTransition(world, [first], TICK);
     expect(resolveRegionResourceDeposits(afterFirst.regions.get(region.regionId)!).get("resource:iron-ore")).toBe(0);
     expect(afterFirst.productionUnits.get(unit.productionUnitId)!.outputInventory.get("good:iron" as GoodId)).toBeCloseTo(
       (unit.outputInventory.get("good:iron" as GoodId) ?? 0) + 450,
@@ -308,7 +308,7 @@ describe("REQ-PRODUCTION-005 Phase-5 production/extraction", () => {
       productionPlans: [plan(unit, { planned: 1, capacity: 1 })],
       laborAllocations: [allocation(unit, region.regionId, "GENERAL", 30)],
     }).executions[0]!;
-    const after = applyProductionExecutionTransition(world, [execution]);
+    const after = applyProductionExecutionTransition(world, [execution], TICK);
     const intents = buildProductionOutputSellIntentsPhase5(after, [execution]);
 
     expect(execution.outputProducedQuantity).toBe(50);
@@ -383,12 +383,12 @@ describe("REQ-PRODUCTION-005 Phase-5 production/extraction", () => {
       ...execution,
       outputProducedQuantity: execution.outputProducedQuantity + 1,
       postProductionOutputQuantity: execution.postProductionOutputQuantity + 1,
-    }])).toThrow(/output quantity does not equal recipe output/);
+    }], TICK)).toThrow(/output quantity does not equal recipe output/);
 
     expect(() => applyProductionExecutionTransition(world, [{
       ...execution,
       inputConsumedByGood: { "good:iron": execution.inputConsumedByGood["good:iron" as GoodId] ?? 0 } as Readonly<Record<GoodId, number>>,
-    }])).toThrow(/input-good set does not match recipe/);
+    }], TICK)).toThrow(/input-good set does not match recipe/);
   });
 
   it("fails fast on duplicate, stale, cross-region and cross-category labor evidence", () => {
