@@ -815,10 +815,13 @@ function buildRegionState(seed: RegionSeed, idMap: IdMaps): RegionState {
   // resource order rather than letting Map construction overwrite an earlier entry.
   const resourceDeposits = new Map<string, number>();
   for (const deposit of stableOrderBy(seed.deposits ?? [], (candidate) => candidate.resourceId)) {
-    resourceDeposits.set(
-      deposit.resourceId,
-      (resourceDeposits.get(deposit.resourceId) ?? 0) + deposit.initialQuantity,
+    const aggregateQuantity =
+      (resourceDeposits.get(deposit.resourceId) ?? 0) + deposit.initialQuantity;
+    assertFiniteCanonicalNumber(
+      aggregateQuantity,
+      `Region ${seed.key} resource ${deposit.resourceId} aggregate initial quantity`,
     );
+    resourceDeposits.set(deposit.resourceId, aggregateQuantity);
   }
 
   return {

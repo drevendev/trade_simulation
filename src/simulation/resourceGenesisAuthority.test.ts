@@ -110,6 +110,97 @@ describe("Issue #590 resource genesis authority", () => {
     });
   });
 
+  it("rejects finite duplicate seed quantities when their aggregate would overflow canonical live stock", () => {
+    const { scenario, regionKey } = scenarioWithDuplicateMineDeposits();
+    const geography = (scenario.geography ?? []).map((region) =>
+      region.key === regionKey
+        ? {
+            ...region,
+            deposits: [
+              {
+                resourceId: "resource:iron-ore",
+                initialQuantity: Number.MAX_VALUE,
+                initiallyKnown: true,
+              },
+              {
+                resourceId: "resource:iron-ore",
+                initialQuantity: Number.MAX_VALUE,
+                initiallyKnown: true,
+              },
+            ],
+          }
+        : region,
+    );
+
+    expect(Number.isFinite(Number.MAX_VALUE)).toBe(true);
+    expect(Number.MAX_VALUE + Number.MAX_VALUE).toBe(Number.POSITIVE_INFINITY);
+    expect(() =>
+      buildInitialWorld(
+        { ...scenario, geography },
+        baselineDefinitionPack,
+        createDefaultSimulationConfig(),
+        595,
+      ),
+    ).toThrow(
+      `Region ${regionKey} resource resource:iron-ore aggregate initial quantity must be a finite number`,
+    );
+  });
+
+  it("rejects Infinity-versus-Infinity resource evidence instead of accepting a NaN residual", () => {
+    const { scenario, regionKey } = scenarioWithDuplicateMineDeposits();
+    const config = createDefaultSimulationConfig();
+    const world = buildInitialWorld(scenario, baselineDefinitionPack, config, 596);
+    const regionEntry = [...world.regions.entries()].find(([, region]) => region.seed.key === regionKey);
+    expect(regionEntry).toBeDefined();
+    const [regionId, region] = regionEntry!;
+
+    const regions = new Map(world.regions);
+    regions.set(regionId, {
+      ...region,
+      resourceDeposits: new Map(region.resourceDeposits).set(
+        "resource:iron-ore",
+        Number.POSITIVE_INFINITY,
+      ),
+    });
+    const ledger = {
+      records: world.worldGenesisLedger.records.map((record) =>
+        record.type === "RESOURCE_ENDOWMENT" &&
+        record.regionId === regionId &&
+        String(record.goodId) === "resource:iron-ore"
+          ? { ...record, amount: Number.MAX_VALUE }
+          : record,
+      ),
+    };
+
+    const result = reconcileGenesisStocks({ ...world, regions }, ledger, config);
+    expect(result.success).toBe(false);
+    expect(result.errorMessage).toMatch(/non-finite reconciliation evidence/);
+    expect(result.details).toMatchObject({
+      category: "RESOURCE",
+      expected: Number.POSITIVE_INFINITY,
+      actual: Number.POSITIVE_INFINITY,
+    });
+    expect(Number.isNaN(result.details?.residual)).toBe(true);
+  });
+
+  it("rejects a non-finite resource reconciliation tolerance even when stock matches", () => {
+    const { scenario } = scenarioWithDuplicateMineDeposits();
+    const config = createDefaultSimulationConfig();
+    const world = buildInitialWorld(scenario, baselineDefinitionPack, config, 597);
+    const nonFiniteToleranceConfig = {
+      ...config,
+      numeric: {
+        ...config.numeric,
+        reconciliationRelativeTolerance: Number.POSITIVE_INFINITY,
+      },
+    };
+
+    const result = reconcileGenesisStocks(world, world.worldGenesisLedger, nonFiniteToleranceConfig);
+    expect(result.success).toBe(false);
+    expect(result.errorMessage).toMatch(/non-finite reconciliation evidence/);
+    expect(result.details).toMatchObject({ category: "RESOURCE" });
+  });
+
   it("depletes the aggregated live deposit once and the depleted authority binds later extraction to zero", () => {
     const { scenario, regionKey } = scenarioWithDuplicateMineDeposits();
     const world = buildInitialWorld(

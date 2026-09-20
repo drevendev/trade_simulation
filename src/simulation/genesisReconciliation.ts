@@ -557,12 +557,36 @@ export function reconcileGenesisStocks(
     }
   }
 
-  // Check resources by granularity
-  for (const key of expectedResourcesByGranularity.keys()) {
+  // Check resources by granularity. Resource reconciliation is also the final
+  // fail-closed numeric boundary for the canonical finite-resource stock: neither an
+  // overflowing expected aggregate nor a corrupted live balance/tolerance may turn a
+  // NaN residual into a false success.
+  const checkResourceReconciliation = (key: string): ReconciliationResult | null => {
     const expected = expectedResourcesByGranularity.get(key) ?? 0;
     const actual = actualResourcesByGranularity.get(key) ?? 0;
     const residual = Math.abs(expected - actual);
     const relativeTolerance = tolerance * Math.max(Math.abs(expected), Math.abs(actual), 1);
+
+    if (
+      !Number.isFinite(tolerance) ||
+      !Number.isFinite(expected) ||
+      !Number.isFinite(actual) ||
+      !Number.isFinite(relativeTolerance) ||
+      !Number.isFinite(residual)
+    ) {
+      return {
+        success: false,
+        errorMessage: `Resource reconciliation failed for ${key}: non-finite reconciliation evidence`,
+        details: {
+          category: "RESOURCE",
+          key,
+          expected,
+          actual,
+          tolerance: relativeTolerance,
+          residual,
+        },
+      };
+    }
 
     if (residual > relativeTolerance) {
       return {
@@ -578,28 +602,17 @@ export function reconcileGenesisStocks(
         },
       };
     }
+    return null;
+  };
+
+  for (const key of expectedResourcesByGranularity.keys()) {
+    const failure = checkResourceReconciliation(key);
+    if (failure) return failure;
   }
   for (const key of actualResourcesByGranularity.keys()) {
     if (!expectedResourcesByGranularity.has(key)) {
-      const expected = expectedResourcesByGranularity.get(key) ?? 0;
-      const actual = actualResourcesByGranularity.get(key) ?? 0;
-      const residual = Math.abs(expected - actual);
-      const relativeTolerance = tolerance * Math.max(Math.abs(expected), Math.abs(actual), 1);
-
-      if (residual > relativeTolerance) {
-        return {
-          success: false,
-          errorMessage: `Resource reconciliation failed for ${key}`,
-          details: {
-            category: "RESOURCE",
-            key,
-            expected,
-            actual,
-            tolerance: relativeTolerance,
-            residual,
-          },
-        };
-      }
+      const failure = checkResourceReconciliation(key);
+      if (failure) return failure;
     }
   }
 
