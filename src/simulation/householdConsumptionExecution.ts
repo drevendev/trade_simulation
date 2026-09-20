@@ -297,6 +297,12 @@ function buildEconomicEvidence(args: {
     throw new Error(`Cohort ${String(cohort.cohortId)} must have exactly one current LaborSupplyPlan, got ${supply.length}`);
   }
   const supplyPlan = supply[0]!;
+  const expectedSupplyPlanId = `labor-supply:${tick}:${String(cohort.cohortId)}`;
+  if (supplyPlan.planId !== expectedSupplyPlanId) {
+    throw new Error(
+      `LaborSupplyPlan ${supplyPlan.planId} is not the canonical current plan ${expectedSupplyPlanId}`,
+    );
+  }
   if (supplyPlan.regionId !== regionId) {
     throw new Error(`LaborSupplyPlan ${supplyPlan.planId} region does not match Cohort ${String(cohort.cohortId)}`);
   }

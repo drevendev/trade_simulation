@@ -450,6 +450,35 @@ describe("REQ-POPULATION-003 Phase-9 household realization", () => {
     })).toThrow(/does not match Phase-5 settlement evidence/);
   });
 
+  it("rejects stale LaborSupplyPlan provenance while same-tick Phase-3/5 evidence remains valid", () => {
+    const evidence = wageEvidence();
+    const currentSupply = supply(10);
+    const staleSupply: LaborSupplyPlan = {
+      ...currentSupply,
+      planId: "labor-supply:6:cohort:a",
+      availableWorkerEquivalents: 100,
+    };
+
+    expect(() => plan({
+      world: world(),
+      supply: staleSupply,
+      allocations: [evidence.allocation],
+      settlements: [evidence.settlement],
+      transactions: [evidence.transaction],
+    })).toThrow(/is not the canonical current plan labor-supply:7:cohort:a/);
+
+    const economic = plan({
+      world: world(),
+      supply: currentSupply,
+      allocations: [evidence.allocation],
+      settlements: [evidence.settlement],
+      transactions: [evidence.transaction],
+    }).executions[0]!.economic;
+    expect(economic.availableWorkerEquivalents).toBe(10);
+    expect(economic.employedWorkerEquivalents).toBe(4);
+    expect(economic.employmentRate).toBeCloseTo(0.4);
+  });
+
   it("consumes for CHILD/ELDER cohorts with zero employment evidence and rejects phantom labor artifacts", () => {
     const opening = world({
       inventory: [[FOOD, 2]],
