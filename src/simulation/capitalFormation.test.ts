@@ -224,7 +224,7 @@ describe("REQ-PRODUCTION-006 Phase-12 capital formation", () => {
   it("rejects non-finite stock and invalid investment/depreciation coefficients", () => {
     const nonFinite = oneUnitWorld({ investment: [[TOOLS, Number.NaN], [IRON, 8]] });
     expect(() => planCapitalFormationPhase12({ world: nonFinite.world, tick: 1 })).toThrow(
-      /INVESTMENT.*must be >= 0/,
+      /INVESTMENT.*must be finite/,
     );
 
     const zeroCoefficient = oneUnitWorld({
