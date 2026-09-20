@@ -100,7 +100,7 @@ describe("REQ-PRODUCTION-006 Phase-12 capital formation", () => {
     expect(execution.installedCapitalNext).toBe(9);
     expect(execution.nameplateCapacityNext).toBe(18);
 
-    const nextWorld = applyCapitalFormationTransition(world, executions);
+    const nextWorld = applyCapitalFormationTransition(world, executions, 7);
     const nextUnit = nextWorld.productionUnits.get(unit.productionUnitId)!;
     expect(nextUnit.investmentInventory.get(TOOLS)).toBe(2);
     expect(nextUnit.investmentInventory.get(IRON)).toBe(0);
@@ -128,7 +128,7 @@ describe("REQ-PRODUCTION-006 Phase-12 capital formation", () => {
     expect(execution.capitalBuilt).toBe(0.7 / 0.3);
     expect(execution.investmentGoodsConsumedByGood[TOOLS]).toBe(0.7);
 
-    const nextWorld = applyCapitalFormationTransition(world, [execution]);
+    const nextWorld = applyCapitalFormationTransition(world, [execution], 2);
     expect(nextWorld.productionUnits.get(unit.productionUnitId)!.investmentInventory.get(TOOLS)).toBe(0);
     expect(world.productionUnits.get(unit.productionUnitId)!.investmentInventory.get(TOOLS)).toBe(0.7);
   });
@@ -148,7 +148,7 @@ describe("REQ-PRODUCTION-006 Phase-12 capital formation", () => {
       },
     };
 
-    expect(() => applyCapitalFormationTransition(world, [overdrawn])).toThrow(
+    expect(() => applyCapitalFormationTransition(world, [overdrawn], 2)).toThrow(
       /does not match current authoritative stock\/evidence|over-consumes/,
     );
   });
@@ -168,7 +168,7 @@ describe("REQ-PRODUCTION-006 Phase-12 capital formation", () => {
       [TOOLS]: 0,
     });
 
-    const nextWorld = applyCapitalFormationTransition(world, [execution]);
+    const nextWorld = applyCapitalFormationTransition(world, [execution], 3);
     const nextUnit = nextWorld.productionUnits.get(unit.productionUnitId)!;
     expect(nextUnit.installedCapital).toBe(unit.installedCapital);
     expect(nextUnit.investmentInventory.get(TOOLS)).toBe(100);
@@ -191,22 +191,25 @@ describe("REQ-PRODUCTION-006 Phase-12 capital formation", () => {
     expect(execution.installedCapitalNext).toBe(18);
   });
 
-  it("rejects re-applying stale Phase-12 evidence so formation and depreciation cannot run twice", () => {
+  it("rejects stale or tampered Phase-12 evidence, including a stale execution tick", () => {
     const { world } = oneUnitWorld();
     const execution = planCapitalFormationPhase12({ world, tick: 7 }).executions[0]!;
-    const nextWorld = applyCapitalFormationTransition(world, [execution]);
+    const nextWorld = applyCapitalFormationTransition(world, [execution], 7);
 
-    expect(() => applyCapitalFormationTransition(nextWorld, [execution])).toThrow(
+    expect(() => applyCapitalFormationTransition(nextWorld, [execution], 7)).toThrow(
       /does not match current authoritative stock\/evidence/,
     );
     expect(() =>
-      applyCapitalFormationTransition(world, [{ ...execution, capitalBuilt: execution.capitalBuilt + 1 }]),
+      applyCapitalFormationTransition(world, [{ ...execution, capitalBuilt: execution.capitalBuilt + 1 }], 7),
+    ).toThrow(/does not match current authoritative stock\/evidence/);
+    expect(() =>
+      applyCapitalFormationTransition(world, [{ ...execution, tick: 6 }], 7),
     ).toThrow(/does not match current authoritative stock\/evidence/);
   });
 
   it("fails closed when the transition omits a unit that must receive Phase-12 depreciation", () => {
     const { world } = oneUnitWorld();
-    expect(() => applyCapitalFormationTransition(world, [])).toThrow(/must cover every ProductionUnit/);
+    expect(() => applyCapitalFormationTransition(world, [], 7)).toThrow(/must cover every ProductionUnit/);
   });
 
   it("is deterministic under investment-inventory and ProductionUnit insertion reordering", () => {
@@ -249,7 +252,7 @@ describe("REQ-PRODUCTION-006 Phase-12 capital formation", () => {
     expect(world.productionUnits.get(unit.productionUnitId)!.installedCapital).toBe(10);
     expect(deriveNameplateCapacity(world.productionUnits.get(unit.productionUnitId)!, recipe)).toBe(beforeCapacity);
 
-    const persisted = applyCapitalFormationTransition(world, after.capitalFormationExecutions!);
+    const persisted = applyCapitalFormationTransition(world, after.capitalFormationExecutions!, 5);
     expect(
       deriveNameplateCapacity(persisted.productionUnits.get(unit.productionUnitId)!, recipe),
     ).toBeGreaterThan(beforeCapacity);

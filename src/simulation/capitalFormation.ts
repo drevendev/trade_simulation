@@ -243,7 +243,11 @@ function executionMatches(expected: CapitalFormationExecution, actual: CapitalFo
 export function applyCapitalFormationTransition(
   world: WorldState,
   executions: readonly CapitalFormationExecution[],
+  currentTick: number,
 ): WorldState {
+  if (!Number.isInteger(currentTick) || currentTick < 0) {
+    throw new Error(`Phase-12 capital transition tick must be a non-negative integer, got ${String(currentTick)}`);
+  }
   const quantityEpsilon = resolveQuantityEpsilon(world);
   const executionByUnit = new Map<ProductionUnitId, CapitalFormationExecution>();
   for (const execution of executions) {
@@ -279,7 +283,7 @@ export function applyCapitalFormationTransition(
       );
     }
 
-    const expected = planOneUnit(unit, recipe, execution.tick, quantityEpsilon);
+    const expected = planOneUnit(unit, recipe, currentTick, quantityEpsilon);
     if (!executionMatches(expected, execution)) {
       throw new Error(
         `Phase-12 capital execution for ProductionUnit ${String(execution.unitId)} does not match current authoritative stock/evidence`,
