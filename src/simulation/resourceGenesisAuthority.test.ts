@@ -270,7 +270,17 @@ describe("Issue #590 resource genesis authority", () => {
       },
     };
 
-    const after = applyProductionExecutionTransition(world, [execution], execution.tick);
+    const productionUnits = new Map(world.productionUnits);
+    for (const [unitId, candidate] of productionUnits) {
+      if (candidate.seed.status === "ACTIVE" && unitId !== unit!.productionUnitId) {
+        productionUnits.set(unitId, {
+          ...candidate,
+          seed: { ...candidate.seed, status: "MOTHBALLED" },
+        });
+      }
+    }
+    const persistenceWorld = { ...world, productionUnits };
+    const after = applyProductionExecutionTransition(persistenceWorld, [execution], execution.tick);
     expect(after.regions.get(region!.regionId)!.resourceDeposits.get("resource:iron-ore")).toBe(0);
     expect(world.regions.get(region!.regionId)!.resourceDeposits.get("resource:iron-ore")).toBe(30);
 

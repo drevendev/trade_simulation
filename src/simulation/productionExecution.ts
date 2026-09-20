@@ -455,6 +455,52 @@ function validateExecutionPhysicalContract(
   }
 }
 
+function validateProductionExecutionCoverage(
+  world: WorldState,
+  executions: readonly ProductionExecution[],
+  currentTick: number,
+): void {
+  const expectedActiveUnitIds = stableOrderBy(
+    [...world.productionUnits.values()]
+      .filter((unit) => unit.seed.status === "ACTIVE")
+      .map((unit) => unit.productionUnitId),
+    String,
+  );
+  const submittedActiveUnitIds = new Set<ProductionUnitId>();
+  const seenUnitIds = new Set<ProductionUnitId>();
+
+  for (const execution of executions) {
+    if (execution.tick !== currentTick) {
+      throw new Error(
+        `ProductionExecution for ${String(execution.unitId)} is for tick ${execution.tick}, expected ${currentTick}`,
+      );
+    }
+    if (seenUnitIds.has(execution.unitId)) {
+      throw new Error(`Duplicate ProductionExecution for unit ${String(execution.unitId)}`);
+    }
+    seenUnitIds.add(execution.unitId);
+
+    const unit = world.productionUnits.get(execution.unitId);
+    if (!unit) throw new Error(`ProductionExecution references unknown unit ${String(execution.unitId)}`);
+    const expectedPlanId = `production-plan:${currentTick}:${String(execution.unitId)}`;
+    if (execution.productionPlanId !== expectedPlanId) {
+      throw new Error(
+        `ProductionExecution plan provenance mismatch for ${String(execution.unitId)}: expected ${expectedPlanId}`,
+      );
+    }
+    if (unit.seed.status === "ACTIVE") submittedActiveUnitIds.add(execution.unitId);
+  }
+
+  const missingActiveUnitIds = expectedActiveUnitIds.filter((unitId) => !submittedActiveUnitIds.has(unitId));
+  if (missingActiveUnitIds.length > 0) {
+    throw new Error(
+      `Phase-5 production execution coverage is incomplete for tick ${currentTick}; missing ACTIVE units: ${missingActiveUnitIds
+        .map(String)
+        .join(", ")}`,
+    );
+  }
+}
+
 /** Persist exact Phase-5 physical deltas without mutating the input WorldState. */
 export function applyProductionExecutionTransition(
   world: WorldState,
@@ -475,6 +521,8 @@ export function applyProductionExecutionTransition(
       `Phase-5 production transition for tick ${currentTick} cannot persist after tick ${lastAppliedTick}; each canonical tick may persist Phase 5 once`,
     );
   }
+
+  validateProductionExecutionCoverage(world, executions, currentTick);
 
   const quantityEpsilon = requirePositive(
     "SimulationConfig.numeric.quantityEpsilon",
