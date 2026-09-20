@@ -105,6 +105,14 @@ export {
 } from "./productionExecution";
 
 export {
+  applyCapitalFormationTransition,
+  createPhase12CapitalFormationHandler,
+  planCapitalFormationPhase12,
+  type CapitalFormationExecution,
+  type CapitalFormationPlanResult,
+} from "./capitalFormation";
+
+export {
   TOTAL_PHASES,
   PHASE_NAMES,
   initializeTickContext,
