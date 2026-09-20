@@ -221,7 +221,7 @@ describe("REQ-PRODUCTION-006 Phase-12 capital formation", () => {
     const nextWorld = applyCapitalFormationTransition(world, [execution], 7);
 
     expect(() => applyCapitalFormationTransition(nextWorld, [execution], 7)).toThrow(
-      /does not match current authoritative stock\/evidence/,
+      /each canonical tick may persist Phase 12 once/,
     );
     expect(() =>
       applyCapitalFormationTransition(world, [{ ...execution, capitalBuilt: execution.capitalBuilt + 1 }], 7),
