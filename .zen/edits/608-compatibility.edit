@@ -1,0 +1,112 @@
+### FILE: src/simulation/productionExecution.test.ts
+<<<<<<< FIND
+    const transitioned = applyProductionExecutionTransition(world, result.executions);
+=======
+    const transitioned = applyProductionExecutionTransition(world, result.executions, TICK);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const afterFirst = applyProductionExecutionTransition(world, [first]);
+=======
+    const afterFirst = applyProductionExecutionTransition(world, [first], TICK);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const after = applyProductionExecutionTransition(world, [execution]);
+    const intents = buildProductionOutputSellIntentsPhase5(after, [execution]);
+=======
+    const after = applyProductionExecutionTransition(world, [execution], TICK);
+    const intents = buildProductionOutputSellIntentsPhase5(after, [execution]);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    expect(() => applyProductionExecutionTransition(world, [{
+      ...execution,
+      outputProducedQuantity: execution.outputProducedQuantity + 1,
+      postProductionOutputQuantity: execution.postProductionOutputQuantity + 1,
+    }])).toThrow(/output quantity does not equal recipe output/);
+
+    expect(() => applyProductionExecutionTransition(world, [{
+      ...execution,
+      inputConsumedByGood: { "good:iron": execution.inputConsumedByGood["good:iron" as GoodId] ?? 0 } as Readonly<Record<GoodId, number>>,
+    }])).toThrow(/input-good set does not match recipe/);
+=======
+    expect(() => applyProductionExecutionTransition(world, [{
+      ...execution,
+      outputProducedQuantity: execution.outputProducedQuantity + 1,
+      postProductionOutputQuantity: execution.postProductionOutputQuantity + 1,
+    }], TICK)).toThrow(/output quantity does not equal recipe output/);
+
+    expect(() => applyProductionExecutionTransition(world, [{
+      ...execution,
+      inputConsumedByGood: { "good:iron": execution.inputConsumedByGood["good:iron" as GoodId] ?? 0 } as Readonly<Record<GoodId, number>>,
+    }], TICK)).toThrow(/input-good set does not match recipe/);
+>>>>>>> REPLACE
+
+### FILE: src/simulation/householdConsumptionExecution.test.ts
+<<<<<<< FIND
+    productionUnits: new Map(),
+    markets: new Map(),
+    transportLinks: new Map(),
+    lastCapitalFormationTransitionTick: -1,
+=======
+    productionUnits: new Map(),
+    markets: new Map(),
+    transportLinks: new Map(),
+    lastProductionExecutionTransitionTick: -1,
+    lastCapitalFormationTransitionTick: -1,
+>>>>>>> REPLACE
+
+### FILE: src/simulation/householdConsumptionPlanning.test.ts
+<<<<<<< FIND
+    productionUnits: new Map(),
+    markets: new Map([[market.marketId, market]]),
+    transportLinks: new Map(),
+    lastCapitalFormationTransitionTick: -1,
+=======
+    productionUnits: new Map(),
+    markets: new Map([[market.marketId, market]]),
+    transportLinks: new Map(),
+    lastProductionExecutionTransitionTick: -1,
+    lastCapitalFormationTransitionTick: -1,
+>>>>>>> REPLACE
+
+### FILE: src/simulation/laborAllocation.test.ts
+<<<<<<< FIND
+      cohorts: new Map([[cohort.cohortId, cohort]]), productionUnits: new Map(), markets: new Map(), transportLinks: new Map(),
+      lastCapitalFormationTransitionTick: -1,
+=======
+      cohorts: new Map([[cohort.cohortId, cohort]]), productionUnits: new Map(), markets: new Map(), transportLinks: new Map(),
+      lastProductionExecutionTransitionTick: -1,
+      lastCapitalFormationTransitionTick: -1,
+>>>>>>> REPLACE
+
+### FILE: src/simulation/laborSupplyPlanning.test.ts
+<<<<<<< FIND
+    productionUnits: new Map(),
+    markets: new Map(),
+    transportLinks: new Map(),
+    lastCapitalFormationTransitionTick: -1,
+=======
+    productionUnits: new Map(),
+    markets: new Map(),
+    transportLinks: new Map(),
+    lastProductionExecutionTransitionTick: -1,
+    lastCapitalFormationTransitionTick: -1,
+>>>>>>> REPLACE
+
+### FILE: src/simulation/tickOrchestrator.test.ts
+<<<<<<< FIND
+    productionUnits: new Map(),
+    markets: new Map(),
+    transportLinks: new Map(),
+    lastCapitalFormationTransitionTick: -1,
+    pendingTransitions: createEmptyPendingTransitions(),
+=======
+    productionUnits: new Map(),
+    markets: new Map(),
+    transportLinks: new Map(),
+    lastProductionExecutionTransitionTick: -1,
+    lastCapitalFormationTransitionTick: -1,
+    pendingTransitions: createEmptyPendingTransitions(),
+>>>>>>> REPLACE
