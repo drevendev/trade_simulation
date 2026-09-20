@@ -202,6 +202,7 @@ describe("REQ-PRODUCTION-003 Phase-3 labor allocation slice", () => {
       worldGenesisLedger: {} as never,
       regions: new Map(), states: new Map(), currencies: new Map(), monetaryAuthorities: new Map(), clans: new Map(),
       cohorts: new Map([[cohort.cohortId, cohort]]), productionUnits: new Map(), markets: new Map(), transportLinks: new Map(),
+      lastCapitalFormationTransitionTick: -1,
       pendingTransitions: { jurisdictionChanges: [], stateCreations: [], policyChanges: [], monetaryPolicyChanges: [] },
     };
     const before = JSON.stringify(cohort.seed);
