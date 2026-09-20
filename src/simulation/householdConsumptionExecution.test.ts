@@ -396,6 +396,31 @@ describe("REQ-POPULATION-003 Phase-9 household realization", () => {
     expect(transitioned.cohorts.get(COHORT)!.householdInventory.get(FOOD)).toBeCloseTo(1);
   });
 
+  it("rejects a tampered ending inventory instead of persisting an unproved Phase-9 stock delta", () => {
+    const input = world({ inventory: [[FOOD, 4]], categories: categories({ foodTarget: 10 }) });
+    const execution = plan({ world: input }).executions[0]!;
+    const beforeInventory = input.cohorts.get(COHORT)!.householdInventory;
+
+    const mismatchedLossDelta = {
+      ...execution,
+      endingInventoryByGood: { ...execution.endingInventoryByGood, [FOOD]: 3 },
+    };
+    expect(() => applyHouseholdConsumptionTransition(input, [mismatchedLossDelta])).toThrow(
+      /ending inventory does not match declared consumption\/spoilage/,
+    );
+    expect(input.cohorts.get(COHORT)!.householdInventory).toBe(beforeInventory);
+    expect(input.cohorts.get(COHORT)!.householdInventory.get(FOOD)).toBe(4);
+
+    const unexpectedEndingGood = {
+      ...execution,
+      endingInventoryByGood: { ...execution.endingInventoryByGood, [SERVICE]: 1 },
+    };
+    expect(() => applyHouseholdConsumptionTransition(input, [unexpectedEndingGood])).toThrow(
+      /ending inventory does not match declared consumption\/spoilage/,
+    );
+    expect(input.cohorts.get(COHORT)!.householdInventory).toBe(beforeInventory);
+  });
+
   it("reconciles employment and net wage receipts to existing Phase-3/5 evidence without recomputing tax", () => {
     const evidence = wageEvidence();
     const result = plan({

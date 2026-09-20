@@ -728,12 +728,57 @@ export function applyHouseholdConsumptionTransition(
       }
     }
 
-    const ending = new Map<GoodId, number>();
-    for (const [goodId, quantity] of stableOrderBy(
+    const declaredEnding = new Map(
       Object.entries(execution.endingInventoryByGood) as [GoodId, number][],
-      ([id]) => String(id),
-    )) {
-      ending.set(goodId, requireNonNegative(`Household ending inventory ${String(goodId)}`, quantity));
+    );
+    const consumed = new Map(
+      Object.entries(execution.consumedByGood) as [GoodId, number][],
+    );
+    const spoiled = new Map(
+      Object.entries(execution.spoiledByGood) as [GoodId, number][],
+    );
+    const deltaKeys = new Set<GoodId>([
+      ...declaredOpening.keys(),
+      ...declaredEnding.keys(),
+      ...consumed.keys(),
+      ...spoiled.keys(),
+    ]);
+    for (const goodId of stableOrderBy([...deltaKeys], String)) {
+      const opening = requireNonNegative(
+        `HouseholdConsumptionExecution postMarketInventory ${String(goodId)}`,
+        declaredOpening.get(goodId) ?? 0,
+      );
+      const consumedQuantity = requireNonNegative(
+        `HouseholdConsumptionExecution consumedByGood ${String(goodId)}`,
+        consumed.get(goodId) ?? 0,
+      );
+      const spoiledQuantity = requireNonNegative(
+        `HouseholdConsumptionExecution spoiledByGood ${String(goodId)}`,
+        spoiled.get(goodId) ?? 0,
+      );
+      const endingQuantity = requireNonNegative(
+        `HouseholdConsumptionExecution endingInventory ${String(goodId)}`,
+        declaredEnding.get(goodId) ?? 0,
+      );
+      const expectedEnding = opening - consumedQuantity - spoiledQuantity;
+      if (expectedEnding < -quantityEpsilon) {
+        throw new Error(
+          `Cohort ${String(cohort.cohortId)} Phase-9 declared losses exceed settled inventory for ${String(goodId)}: ` +
+            `opening=${opening} consumed=${consumedQuantity} spoiled=${spoiledQuantity}`,
+        );
+      }
+      const normalizedExpectedEnding = Math.max(0, expectedEnding);
+      if (Math.abs(endingQuantity - normalizedExpectedEnding) > quantityEpsilon) {
+        throw new Error(
+          `Cohort ${String(cohort.cohortId)} Phase-9 ending inventory does not match declared consumption/spoilage for ` +
+            `${String(goodId)}: ending=${endingQuantity} expected=${normalizedExpectedEnding}`,
+        );
+      }
+    }
+
+    const ending = new Map<GoodId, number>();
+    for (const [goodId, quantity] of stableOrderBy([...declaredEnding.entries()], ([id]) => String(id))) {
+      ending.set(goodId, quantity);
     }
     cohorts.set(execution.cohortId, { ...cohort, householdInventory: ending });
   }
