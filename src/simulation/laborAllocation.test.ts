@@ -166,7 +166,7 @@ describe("REQ-PRODUCTION-003 Phase-3 labor allocation slice", () => {
     for (const row of result) expect(row.workerEquivalents).toBeGreaterThan(0);
   });
 
-  it("Phase-3 handler writes only ephemeral allocations and does not mutate WorldState", () => {
+  it("Phase-3 handler requires complete Phase-2 actor coverage and does not mutate WorldState", () => {
     const cohort: CohortState = {
       cohortId: cohortId("cohort:a"),
       clanId: "clan:1" as never,
@@ -211,10 +211,11 @@ describe("REQ-PRODUCTION-003 Phase-3 labor allocation slice", () => {
       ...initializeTickContext(7, 1),
       phase: 3,
       laborSupplyPlans: [supply("cohort:a", 5)],
-      laborDemandPlans: [demand("unit:a", 5, 12)],
+      laborDemandPlans: [],
     };
-    const result = createPhase3LaborAllocationHandler()(world, context, world.pendingTransitions);
-    expect(result.laborAllocations?.reduce((sum, row) => sum + row.workerEquivalents, 0)).toBeCloseTo(5, 12);
+    expect(() =>
+      createPhase3LaborAllocationHandler()(world, context, world.pendingTransitions),
+    ).toThrow(/not issued by the canonical Phase-2 handler/);
     expect(JSON.stringify(cohort.seed)).toBe(before);
     expect(world.cohorts.get(cohort.cohortId)).toBe(cohort);
   });

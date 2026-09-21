@@ -10,8 +10,14 @@ import { createDefaultSimulationConfig, type SimulationConfig } from "../config/
 import type { CohortId, ProductionUnitId, RegionId } from "../domain/id";
 import { isFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
-import type { LaborSupplyPlan } from "./laborSupplyPlanning";
-import type { LaborDemandPlan } from "./productionPlanning";
+import {
+  requireCanonicalPhase2LaborSupplyPlans,
+  type LaborSupplyPlan,
+} from "./laborSupplyPlanning";
+import {
+  requireCanonicalPhase2LaborDemandPlans,
+  type LaborDemandPlan,
+} from "./productionPlanning";
 import type { PhaseHandler, TickContext } from "./tickOrchestrator";
 import type { PendingTransitions, WorldState } from "./worldState";
 
@@ -26,6 +32,23 @@ export interface LaborAllocation {
   readonly grossWagePerWorker: number;
   readonly grossWageObligation: number;
 }
+
+interface Phase3LaborAllocationAuthorityRecord {
+  readonly tick: number;
+  readonly world: WorldState;
+  readonly laborAllocations: readonly LaborAllocation[];
+}
+
+/**
+ * Runtime provenance for completed Phase-3 results. The key is the exact frozen
+ * allocation batch issued by the canonical Phase-3 handler. That batch reference survives
+ * normal TickContext copies at later phase boundaries, while a caller-created lookalike
+ * array cannot manufacture authority.
+ */
+const phase3LaborAllocationAuthorities = new WeakMap<
+  readonly LaborAllocation[],
+  Phase3LaborAllocationAuthorityRecord
+>();
 
 interface ResolvedLaborAllocationConfig {
   readonly quantityEpsilon: number;
@@ -393,23 +416,166 @@ export function allocateLaborPhase3(args: {
   );
 }
 
-/** Phase-3 handler: consume Phase-2 plans and expose only ephemeral labor allocations. */
+/**
+ * Resolve a completeness-proven Phase-3 authority issued by the canonical handler.
+ * Plain TickContext-shaped objects are deliberately insufficient authority even when
+ * they claim phase 3 and carry a plausible allocation array.
+ */
+export function requireCompletePhase3LaborAllocationAuthority(
+  world: WorldState,
+  context: TickContext,
+  currentTick: number,
+): readonly LaborAllocation[] {
+  if (context.tick !== currentTick) {
+    throw new Error(
+      `Phase-3 labor-allocation authority is for tick ${context.tick}, expected authoritative Phase-5 tick ${currentTick}`,
+    );
+  }
+  if (context.laborAllocations === undefined) {
+    throw new Error(
+      `Phase-5 wage persistence requires completed Phase-3 labor-allocation authority for tick ${currentTick}`,
+    );
+  }
+  if (!Number.isInteger(context.phase) || context.phase < 3) {
+    throw new Error(
+      `Phase-3 labor-allocation authority for tick ${currentTick} is incomplete before Phase 3`,
+    );
+  }
+
+  const authority = phase3LaborAllocationAuthorities.get(context.laborAllocations);
+  if (
+    authority === undefined ||
+    authority.tick !== currentTick ||
+    authority.world !== world ||
+    authority.laborAllocations !== context.laborAllocations
+  ) {
+    throw new Error(
+      `Phase-3 labor-allocation authority for tick ${currentTick} was not issued by the canonical Phase-3 handler`,
+    );
+  }
+  return authority.laborAllocations;
+}
+
+/**
+ * Prove that Phase 3 received complete current-tick Phase-2 labor planning batches.
+ *
+ * Handler provenance alone is insufficient: callers can invoke a public handler over an
+ * incomplete TickContext. Completeness is therefore checked independently against the
+ * live canonical actor set. Phase 2 emits exactly one LaborSupplyPlan for every positive
+ * WORKING cohort and exactly one LaborDemandPlan for every ProductionUnit (inactive units
+ * carry zero demand). Stable plan IDs bind both batches to this tick and actor identity.
+ */
+function requireCompletePhase2LaborPlanningEvidence(
+  world: WorldState,
+  context: TickContext,
+): { readonly laborSupplyPlans: readonly LaborSupplyPlan[]; readonly laborDemandPlans: readonly LaborDemandPlan[] } {
+  const laborSupplyPlans = context.laborSupplyPlans;
+  const laborDemandPlans = context.laborDemandPlans;
+  if (laborSupplyPlans === undefined || laborDemandPlans === undefined) {
+    throw new Error(
+      `Phase-3 labor-allocation authority for tick ${context.tick} requires complete Phase-2 labor supply and demand evidence`,
+    );
+  }
+
+  const expectedCohorts = stableOrderBy(
+    [...world.cohorts.values()].filter((cohort) => {
+      if (!isFiniteCanonicalNumber(cohort.seed.population) || cohort.seed.population < 0) {
+        throw new Error(`Cohort ${String(cohort.cohortId)} population must be finite and >= 0`);
+      }
+      return cohort.seed.ageBand === "WORKING" && cohort.seed.population > 0;
+    }),
+    (cohort) => String(cohort.cohortId),
+  );
+  if (laborSupplyPlans.length !== expectedCohorts.length) {
+    throw new Error(
+      `Phase-3 labor-allocation authority for tick ${context.tick} has incomplete Phase-2 labor-supply evidence: got ${laborSupplyPlans.length}, expected ${expectedCohorts.length}`,
+    );
+  }
+  const supplyByCohort = new Map<CohortId, LaborSupplyPlan>();
+  for (const plan of laborSupplyPlans) {
+    if (supplyByCohort.has(plan.cohortId)) {
+      throw new Error(`Phase-2 labor-supply evidence duplicates Cohort ${String(plan.cohortId)}`);
+    }
+    supplyByCohort.set(plan.cohortId, plan);
+  }
+  for (const cohort of expectedCohorts) {
+    const plan = supplyByCohort.get(cohort.cohortId);
+    if (plan === undefined) {
+      throw new Error(`Phase-2 labor-supply evidence is missing Cohort ${String(cohort.cohortId)}`);
+    }
+    const expectedPlanId = `labor-supply:${context.tick}:${String(cohort.cohortId)}`;
+    if (plan.planId !== expectedPlanId || plan.laborCategory !== cohort.seed.laborCategory) {
+      throw new Error(
+        `Phase-2 labor-supply evidence for Cohort ${String(cohort.cohortId)} does not match canonical current-tick identity`,
+      );
+    }
+  }
+
+  const expectedUnits = stableOrderBy(
+    [...world.productionUnits.values()],
+    (unit) => String(unit.productionUnitId),
+  );
+  if (laborDemandPlans.length !== expectedUnits.length) {
+    throw new Error(
+      `Phase-3 labor-allocation authority for tick ${context.tick} has incomplete Phase-2 labor-demand evidence: got ${laborDemandPlans.length}, expected ${expectedUnits.length}`,
+    );
+  }
+  const demandByUnit = new Map<ProductionUnitId, LaborDemandPlan>();
+  for (const plan of laborDemandPlans) {
+    if (demandByUnit.has(plan.unitId)) {
+      throw new Error(`Phase-2 labor-demand evidence duplicates ProductionUnit ${String(plan.unitId)}`);
+    }
+    demandByUnit.set(plan.unitId, plan);
+  }
+  for (const unit of expectedUnits) {
+    const plan = demandByUnit.get(unit.productionUnitId);
+    if (plan === undefined) {
+      throw new Error(`Phase-2 labor-demand evidence is missing ProductionUnit ${String(unit.productionUnitId)}`);
+    }
+    const expectedPlanId = `labor-demand-plan:${context.tick}:${String(unit.productionUnitId)}`;
+    const expectedProductionPlanId = `production-plan:${context.tick}:${String(unit.productionUnitId)}`;
+    if (plan.planId !== expectedPlanId || plan.productionPlanId !== expectedProductionPlanId) {
+      throw new Error(
+        `Phase-2 labor-demand evidence for ProductionUnit ${String(unit.productionUnitId)} does not match canonical current-tick identity`,
+      );
+    }
+  }
+
+  // Identity/coverage checks above defend the actor set; exact handler provenance below
+  // authenticates every decision-bearing value (region/category/quantities/wage/cap) and
+  // binds both batches to this exact opening WorldState and tick.
+  requireCanonicalPhase2LaborSupplyPlans(world, laborSupplyPlans, context.tick);
+  requireCanonicalPhase2LaborDemandPlans(world, laborDemandPlans, context.tick);
+
+  return { laborSupplyPlans, laborDemandPlans };
+}
+
+/** Phase-3 handler: consume complete Phase-2 plans and expose only ephemeral labor allocations. */
 export function createPhase3LaborAllocationHandler(): PhaseHandler {
   return (world: WorldState, context: TickContext, _pendingTransitions: PendingTransitions): TickContext => {
     if (context.phase !== 3) return context;
 
+    const { laborSupplyPlans, laborDemandPlans } = requireCompletePhase2LaborPlanningEvidence(world, context);
     const wageSignalByCohort = new Map<CohortId, number>();
     for (const cohort of world.cohorts.values()) {
       wageSignalByCohort.set(cohort.cohortId, cohort.seed.wageSignal);
     }
 
-    const laborAllocations = allocateLaborPhase3({
+    const laborAllocations = Object.freeze(
+      allocateLaborPhase3({
+        tick: context.tick,
+        config: world.simulationConfig,
+        laborSupplyPlans,
+        laborDemandPlans,
+        wageSignalByCohort,
+      }).map((allocation) => Object.freeze({ ...allocation })),
+    );
+    const completedContext: TickContext = { ...context, laborAllocations };
+    phase3LaborAllocationAuthorities.set(laborAllocations, {
       tick: context.tick,
-      config: world.simulationConfig,
-      laborSupplyPlans: context.laborSupplyPlans ?? [],
-      laborDemandPlans: context.laborDemandPlans ?? [],
-      wageSignalByCohort,
+      world,
+      laborAllocations,
     });
-    return { ...context, laborAllocations };
+    return completedContext;
   };
 }
