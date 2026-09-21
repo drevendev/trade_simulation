@@ -354,16 +354,43 @@ function moneyDeltasForSettlement(settlement: WageSettlement): readonly ActorMon
   return deltas;
 }
 
-/** Persist all accepted Phase-5 wage bundles as one preflighted immutable wallet transition. */
+/** Persist all accepted Phase-5 wage bundles exactly once for one authoritative tick. */
 export function applyWageSettlementTransition(
   world: WorldState,
   settlements: readonly WageSettlement[],
+  currentTick: number,
 ): WorldState {
-  return applyActorMoneyDeltas(
+  if (!Number.isInteger(currentTick) || currentTick < 0) {
+    throw new Error(`Phase-5 wage settlement transition tick must be a non-negative integer, got ${String(currentTick)}`);
+  }
+  const lastAppliedTick = world.lastWageSettlementTransitionTick ?? -1;
+  if (!Number.isInteger(lastAppliedTick) || lastAppliedTick < -1) {
+    throw new Error(
+      `WorldState.lastWageSettlementTransitionTick must be an integer >= -1, got ${String(lastAppliedTick)}`,
+    );
+  }
+  if (lastAppliedTick >= currentTick) {
+    throw new Error(
+      `Phase-5 wage settlement transition for tick ${currentTick} cannot persist after tick ${lastAppliedTick}; each canonical tick may persist wages once`,
+    );
+  }
+  for (const settlement of settlements) {
+    if (settlement.tick !== currentTick) {
+      throw new Error(
+        `WageSettlement ${settlement.settlementId} is for tick ${settlement.tick}, expected ${currentTick}`,
+      );
+    }
+  }
+
+  const transitionedWorld = applyActorMoneyDeltas(
     world,
     settlements.flatMap((settlement) => moneyDeltasForSettlement(settlement)),
     "Phase-5 wage settlement",
   );
+  return {
+    ...transitionedWorld,
+    lastWageSettlementTransitionTick: currentTick,
+  };
 }
 
 /**
