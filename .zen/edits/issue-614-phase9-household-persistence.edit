@@ -1,0 +1,291 @@
+### FILE: src/simulation/worldState.ts
+<<<<<<< FIND
+  /** Last canonical tick whose Phase-5 physical production transition was persisted; -1 at genesis. */
+  readonly lastProductionExecutionTransitionTick: number;
+  /** Last canonical tick whose Phase-12 capital transition was persisted; -1 at genesis. */
+  readonly lastCapitalFormationTransitionTick: number;
+  readonly pendingTransitions: PendingTransitions;
+=======
+  /** Last canonical tick whose Phase-5 physical production transition was persisted; -1 at genesis. */
+  readonly lastProductionExecutionTransitionTick: number;
+  /**
+   * Last canonical tick whose Phase-9 household-consumption transition was persisted.
+   * Canonical worlds initialize this to -1; undefined is accepted only for older/manual fixtures.
+   */
+  readonly lastHouseholdConsumptionTransitionTick?: number;
+  /** Last canonical tick whose Phase-12 capital transition was persisted; -1 at genesis. */
+  readonly lastCapitalFormationTransitionTick: number;
+  readonly pendingTransitions: PendingTransitions;
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    simulationConfig: frozenConfig,
+    lastProductionExecutionTransitionTick: -1,
+    lastCapitalFormationTransitionTick: -1,
+    // Empty, like the WorldState this reconciliation precedes: genesis queues no
+=======
+    simulationConfig: frozenConfig,
+    lastProductionExecutionTransitionTick: -1,
+    lastHouseholdConsumptionTransitionTick: -1,
+    lastCapitalFormationTransitionTick: -1,
+    // Empty, like the WorldState this reconciliation precedes: genesis queues no
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    transportLinks: transportLinkRegistry,
+    lastProductionExecutionTransitionTick: -1,
+    lastCapitalFormationTransitionTick: -1,
+    pendingTransitions: createEmptyPendingTransitions(),
+=======
+    transportLinks: transportLinkRegistry,
+    lastProductionExecutionTransitionTick: -1,
+    lastHouseholdConsumptionTransitionTick: -1,
+    lastCapitalFormationTransitionTick: -1,
+    pendingTransitions: createEmptyPendingTransitions(),
+>>>>>>> REPLACE
+
+### FILE: src/simulation/householdConsumptionExecution.ts
+<<<<<<< FIND
+export function applyHouseholdConsumptionTransition(
+  worldAfterMarketSettlement: WorldState,
+  executions: readonly HouseholdConsumptionExecution[],
+): WorldState {
+  const quantityEpsilon = resolveControls(worldAfterMarketSettlement).quantityEpsilon;
+  const cohorts = new Map(worldAfterMarketSettlement.cohorts);
+  const seen = new Set<CohortId>();
+
+  for (const execution of stableOrderBy(executions, (item) => String(item.cohortId))) {
+    if (seen.has(execution.cohortId)) {
+      throw new Error(`Duplicate HouseholdConsumptionExecution for Cohort ${String(execution.cohortId)}`);
+    }
+    seen.add(execution.cohortId);
+    const cohort = cohorts.get(execution.cohortId);
+    if (cohort === undefined) {
+      throw new Error(`HouseholdConsumptionExecution references unknown Cohort ${String(execution.cohortId)}`);
+    }
+=======
+export function applyHouseholdConsumptionTransition(
+  worldAfterMarketSettlement: WorldState,
+  executions: readonly HouseholdConsumptionExecution[],
+  currentTick: number,
+): WorldState {
+  if (!Number.isInteger(currentTick) || currentTick < 0) {
+    throw new Error(`Phase-9 household transition tick must be a non-negative integer, got ${String(currentTick)}`);
+  }
+  const lastAppliedTick = worldAfterMarketSettlement.lastHouseholdConsumptionTransitionTick ?? -1;
+  if (!Number.isInteger(lastAppliedTick) || lastAppliedTick < -1) {
+    throw new Error(
+      `WorldState.lastHouseholdConsumptionTransitionTick must be an integer >= -1, got ${String(lastAppliedTick)}`,
+    );
+  }
+  if (lastAppliedTick >= currentTick) {
+    throw new Error(
+      `Phase-9 household transition for tick ${currentTick} cannot persist after tick ${lastAppliedTick}; each canonical tick may persist Phase 9 once`,
+    );
+  }
+
+  const requiredCohortIds = stableOrderBy(
+    [...worldAfterMarketSettlement.cohorts.values()]
+      .filter(
+        (cohort) =>
+          requireNonNegative(`Cohort ${String(cohort.cohortId)} population`, cohort.seed.population) > 0,
+      )
+      .map((cohort) => cohort.cohortId),
+    String,
+  );
+  const requiredCohortSet = new Set(requiredCohortIds);
+  const executionByCohort = new Map<CohortId, HouseholdConsumptionExecution>();
+  for (const execution of executions) {
+    if (execution.tick !== currentTick) {
+      throw new Error(
+        `HouseholdConsumptionExecution for Cohort ${String(execution.cohortId)} execution tick ${execution.tick} does not match authoritative tick ${currentTick}`,
+      );
+    }
+    if (executionByCohort.has(execution.cohortId)) {
+      throw new Error(`Duplicate HouseholdConsumptionExecution for Cohort ${String(execution.cohortId)}`);
+    }
+    const cohort = worldAfterMarketSettlement.cohorts.get(execution.cohortId);
+    if (cohort === undefined) {
+      throw new Error(`HouseholdConsumptionExecution references unknown Cohort ${String(execution.cohortId)}`);
+    }
+    if (!requiredCohortSet.has(execution.cohortId)) {
+      throw new Error(
+        `HouseholdConsumptionExecution references non-positive-population Cohort ${String(execution.cohortId)}`,
+      );
+    }
+    executionByCohort.set(execution.cohortId, execution);
+  }
+  if (executionByCohort.size !== requiredCohortIds.length) {
+    throw new Error(
+      `Phase-9 household transition must cover every positive-population Cohort exactly once: expected ${requiredCohortIds.length}, got ${executionByCohort.size}`,
+    );
+  }
+  for (const cohortId of requiredCohortIds) {
+    if (!executionByCohort.has(cohortId)) {
+      throw new Error(
+        `Phase-9 household transition must cover every positive-population Cohort exactly once; missing ${String(cohortId)}`,
+      );
+    }
+  }
+
+  const quantityEpsilon = resolveControls(worldAfterMarketSettlement).quantityEpsilon;
+  const cohorts = new Map(worldAfterMarketSettlement.cohorts);
+
+  for (const execution of stableOrderBy(executions, (item) => String(item.cohortId))) {
+    const cohort = cohorts.get(execution.cohortId)!;
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  return { ...worldAfterMarketSettlement, cohorts };
+}
+=======
+  return {
+    ...worldAfterMarketSettlement,
+    cohorts,
+    lastHouseholdConsumptionTransitionTick: currentTick,
+  };
+}
+>>>>>>> REPLACE
+
+### FILE: src/simulation/householdConsumptionExecution.test.ts
+<<<<<<< FIND
+    lastProductionExecutionTransitionTick: -1,
+    lastCapitalFormationTransitionTick: -1,
+    pendingTransitions: {
+=======
+    lastProductionExecutionTransitionTick: -1,
+    lastHouseholdConsumptionTransitionTick: -1,
+    lastCapitalFormationTransitionTick: -1,
+    pendingTransitions: {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const transitioned = applyHouseholdConsumptionTransition(input, result.executions);
+=======
+    const transitioned = applyHouseholdConsumptionTransition(input, result.executions, 7);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    expect(() => applyHouseholdConsumptionTransition(opening, result.executions)).toThrow(/requires canonical Phase-8 settlement first/);
+=======
+    expect(() => applyHouseholdConsumptionTransition(opening, result.executions, 7)).toThrow(/requires canonical Phase-8 settlement first/);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const transitioned = applyHouseholdConsumptionTransition(settled, result.executions);
+=======
+    const transitioned = applyHouseholdConsumptionTransition(settled, result.executions, 7);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    expect(() => applyHouseholdConsumptionTransition(input, [mismatchedLossDelta])).toThrow(
+=======
+    expect(() => applyHouseholdConsumptionTransition(input, [mismatchedLossDelta], 7)).toThrow(
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    expect(() => applyHouseholdConsumptionTransition(input, [unexpectedEndingGood])).toThrow(
+=======
+    expect(() => applyHouseholdConsumptionTransition(input, [unexpectedEndingGood], 7)).toThrow(
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  it("is insertion-order deterministic and the Phase-9 handler mutates only TickContext", () => {
+=======
+  it("persists complete Phase-9 household work exactly once per authoritative tick", () => {
+    const opening = world({
+      inventory: [[FOOD, 10]],
+      categories: categories({ foodTarget: 2, foodCarryover: 10 }),
+      foodSpoilage: 0,
+    });
+    const original = opening.cohorts.get(COHORT)!;
+    const firstChild: CohortState = {
+      ...original,
+      seed: { ...original.seed, ageBand: "CHILD" },
+    };
+    const childWorld: WorldState = {
+      ...opening,
+      cohorts: new Map([[COHORT, firstChild]]),
+    };
+    const planAt = (candidateWorld: WorldState, tick: number) =>
+      planHouseholdConsumptionPhase9({
+        world: candidateWorld,
+        tick,
+        marketAllocations: [],
+        laborSupplyPlans: [],
+        laborAllocations: [],
+        wageSettlements: [],
+        transactions: [],
+      });
+
+    const tick7 = planAt(childWorld, 7);
+    const persisted7 = applyHouseholdConsumptionTransition(childWorld, tick7.executions, 7);
+    expect(persisted7.cohorts.get(COHORT)!.householdInventory.get(FOOD)).toBe(8);
+    expect(persisted7.lastHouseholdConsumptionTransitionTick).toBe(7);
+
+    const replayInventory = persisted7.cohorts.get(COHORT)!.householdInventory;
+    const freshSameTick = planAt(persisted7, 7);
+    expect(() => applyHouseholdConsumptionTransition(persisted7, freshSameTick.executions, 7)).toThrow(
+      /each canonical tick may persist Phase 9 once/,
+    );
+    expect(persisted7.cohorts.get(COHORT)!.householdInventory).toBe(replayInventory);
+    expect(persisted7.cohorts.get(COHORT)!.householdInventory.get(FOOD)).toBe(8);
+    expect(persisted7.lastHouseholdConsumptionTransitionTick).toBe(7);
+
+    const staleInventory = childWorld.cohorts.get(COHORT)!.householdInventory;
+    expect(() => applyHouseholdConsumptionTransition(childWorld, tick7.executions, 8)).toThrow(
+      /execution tick 7 does not match authoritative tick 8/,
+    );
+    expect(childWorld.cohorts.get(COHORT)!.householdInventory).toBe(staleInventory);
+    expect(childWorld.cohorts.get(COHORT)!.householdInventory.get(FOOD)).toBe(10);
+    expect(childWorld.lastHouseholdConsumptionTransitionTick).toBe(-1);
+
+    const tick8 = planAt(persisted7, 8);
+    const persisted8 = applyHouseholdConsumptionTransition(persisted7, tick8.executions, 8);
+    expect(persisted8.cohorts.get(COHORT)!.householdInventory.get(FOOD)).toBe(6);
+    expect(persisted8.lastHouseholdConsumptionTransitionTick).toBe(8);
+
+    const secondId = cohortId("cohort:b");
+    const secondChild: CohortState = {
+      ...firstChild,
+      cohortId: secondId,
+      seed: { ...firstChild.seed, key: "cohort-b" },
+      householdInventory: new Map([[FOOD, 10]]),
+    };
+    const multiWorld: WorldState = {
+      ...childWorld,
+      cohorts: new Map([
+        [COHORT, firstChild],
+        [secondId, secondChild],
+      ]),
+    };
+    const complete = planAt(multiWorld, 7);
+    expect(complete.executions).toHaveLength(2);
+    const firstInventory = multiWorld.cohorts.get(COHORT)!.householdInventory;
+    const secondInventory = multiWorld.cohorts.get(secondId)!.householdInventory;
+
+    expect(() => applyHouseholdConsumptionTransition(multiWorld, [], 7)).toThrow(
+      /expected 2, got 0/,
+    );
+    expect(() => applyHouseholdConsumptionTransition(multiWorld, [complete.executions[0]!], 7)).toThrow(
+      /expected 2, got 1/,
+    );
+    expect(() =>
+      applyHouseholdConsumptionTransition(
+        multiWorld,
+        [complete.executions[0]!, complete.executions[0]!],
+        7,
+      ),
+    ).toThrow(/Duplicate HouseholdConsumptionExecution/);
+    expect(multiWorld.cohorts.get(COHORT)!.householdInventory).toBe(firstInventory);
+    expect(multiWorld.cohorts.get(secondId)!.householdInventory).toBe(secondInventory);
+    expect(multiWorld.lastHouseholdConsumptionTransitionTick).toBe(-1);
+
+    const persistedMulti = applyHouseholdConsumptionTransition(multiWorld, complete.executions, 7);
+    expect(persistedMulti.cohorts.get(COHORT)!.householdInventory.get(FOOD)).toBe(8);
+    expect(persistedMulti.cohorts.get(secondId)!.householdInventory.get(FOOD)).toBe(8);
+    expect(persistedMulti.lastHouseholdConsumptionTransitionTick).toBe(7);
+  });
+
+  it("is insertion-order deterministic and the Phase-9 handler mutates only TickContext", () => {
+>>>>>>> REPLACE
