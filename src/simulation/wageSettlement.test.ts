@@ -218,7 +218,9 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
     expect(settled9.lastWageSettlementTransitionTick).toBe(9);
     expect(() => applyWageSettlementTransition(settled9, settlements9, 9, [base.laborAllocation])).toThrow(/cannot persist after tick 9/);
     expect(() => applyWageSettlementTransition(settled9, [], 8, [])).toThrow(/cannot persist after tick 9/);
-    expect(() => applyWageSettlementTransition(settled9, settlements9, 10, [base.laborAllocation])).toThrow(/is for tick 9, expected 10/);
+    expect(() =>
+      applyWageSettlementTransition(settled9, settlements9, 10, [{ ...base.laborAllocation, tick: 10 }]),
+    ).toThrow(/is for tick 9, expected 10/);
     expect(settled9.lastWageSettlementTransitionTick).toBe(9);
     expect(settled9.productionUnits.get(base.unit.productionUnitId)!.wallet.get(base.currencyId)).toBe(unitCashAfter9);
     expect(settled9.cohorts.get(base.cohorts[0]!.cohortId)!.wallet.get(base.currencyId)).toBe(cohortCashAfter9);
