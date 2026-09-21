@@ -259,6 +259,10 @@ function buildEconomicEvidence(args: {
 }): HouseholdEconomicEvidence {
   const { cohort, tick, controls } = args;
   const regionId = resolveRegionIdForCohort(args.world, cohort);
+  const region = args.world.regions.get(regionId);
+  if (region === undefined) {
+    throw new Error(`Resolved Region ${String(regionId)} is missing from WorldState`);
+  }
   const supply = args.laborSupplyPlans.filter((plan) => plan.cohortId === cohort.cohortId);
   const allocations = stableOrderBy(
     args.laborAllocations.filter((allocation) => allocation.cohortId === cohort.cohortId),
@@ -370,6 +374,12 @@ function buildEconomicEvidence(args: {
     const settlement = settlementByAllocation.get(allocation.allocationId);
     if (settlement === undefined) {
       throw new Error(`Missing WageSettlement for LaborAllocation ${allocation.allocationId}`);
+    }
+    if (settlement.unitId !== allocation.unitId) {
+      throw new Error(`WageSettlement ${settlement.settlementId} employer does not match Phase-3 allocation`);
+    }
+    if (settlement.currencyId !== region.settlementCurrencyId) {
+      throw new Error(`WageSettlement ${settlement.settlementId} currency does not match Region settlement currency`);
     }
     const gross = requireNonNegative(`WageSettlement ${settlement.settlementId} grossWage`, settlement.grossWage);
     const net = requireNonNegative(`WageSettlement ${settlement.settlementId} netWage`, settlement.netWage);
