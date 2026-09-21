@@ -280,7 +280,26 @@ describe("Issue #590 resource genesis authority", () => {
       }
     }
     const persistenceWorld = { ...world, productionUnits };
-    const after = applyProductionExecutionTransition(persistenceWorld, [execution], execution.tick);
+    const currentPlan: ProductionPlan = {
+      ...productionPlan(unit!.productionUnitId, recipe.id, execution.tick),
+      plannedBatches: realizedBatches,
+      effectiveCapacityBatches: realizedBatches,
+    };
+    const currentLabor: LaborAllocation = {
+      allocationId: `labor-allocation:${execution.tick}:${String(unit!.productionUnitId)}:resource-deplete`,
+      tick: execution.tick,
+      regionId: region!.regionId,
+      laborCategory: recipe.laborCategory,
+      cohortId: "Cohort:resource-deplete" as CohortId,
+      unitId: unit!.productionUnitId,
+      workerEquivalents: recipe.laborPerBatch * realizedBatches,
+      grossWagePerWorker: 1,
+      grossWageObligation: recipe.laborPerBatch * realizedBatches,
+    };
+    const after = applyProductionExecutionTransition(persistenceWorld, [execution], execution.tick, {
+      productionPlans: [currentPlan],
+      laborAllocations: [currentLabor],
+    });
     expect(after.regions.get(region!.regionId)!.resourceDeposits.get("resource:iron-ore")).toBe(0);
     expect(world.regions.get(region!.regionId)!.resourceDeposits.get("resource:iron-ore")).toBe(30);
 
