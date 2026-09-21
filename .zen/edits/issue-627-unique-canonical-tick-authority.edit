@@ -1,0 +1,371 @@
+### FILE: src/simulation/productionPlanning.ts
+<<<<<<< FIND
+import { isCanonicalTickPhaseExecution, type PhaseHandler, type TickContext } from "./tickOrchestrator";
+=======
+import type { PhaseHandler, TickContext } from "./tickOrchestrator";
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+function sameLaborDemandBatch(
+=======
+function canonicalPhase2ProductionPlanningEvidence(
+  world: WorldState,
+  unit: ProductionUnitState,
+  region: RegionState,
+  recipe: RecipeDefinition,
+): ProductionPlanningEvidence {
+  const localMarkets = stableOrderBy(
+    [...world.markets.values()].filter((market) => market.seed.regionKey === region.seed.key),
+    (market) => String(market.marketId),
+  );
+  if (localMarkets.length !== 1) {
+    throw new Error(
+      `Canonical Phase-2 planning requires exactly one local market for Region ${String(region.regionId)}, got ${localMarkets.length}`,
+    );
+  }
+  const localMarket = localMarkets[0]!;
+  const priceRecord = (goodIds: readonly GoodId[]): Readonly<Record<GoodId, number>> => {
+    const result: Record<string, number> = {};
+    for (const goodId of stableOrderBy(goodIds, String)) {
+      const price = localMarket.priceByGood.get(String(goodId));
+      if (price === undefined) {
+        throw new Error(
+          `Canonical Phase-2 planning is missing prior-close local price for ${String(goodId)} in Region ${String(region.regionId)}`,
+        );
+      }
+      result[goodId] = requirePositive(
+        `LocalMarket prior-close price[${String(goodId)}]`,
+        price,
+      );
+    }
+    return result as Readonly<Record<GoodId, number>>;
+  };
+
+  const infrastructureFactor = recipe.infrastructureCategory === undefined
+    ? 1
+    : requireRange(
+        `Region infrastructure[${recipe.infrastructureCategory}]`,
+        region.seed.infrastructure[recipe.infrastructureCategory] ?? 0,
+        0,
+        1,
+      );
+  const resourceAccessFactor = recipe.extractionResourceId === undefined
+    ? 1
+    : (() => {
+        const deposit = region.seed.deposits.find(
+          (candidate) => candidate.resourceId === recipe.extractionResourceId,
+        );
+        return deposit?.initiallyKnown === true &&
+          (region.resourceDeposits.get(recipe.extractionResourceId) ?? 0) > 0
+          ? 1
+          : 0;
+      })();
+
+  return {
+    // M4 has no mutable fiscal subsystem yet. Absent an explicit applicable rule,
+    // the contract supplies no mandatory pre-payroll charge and no minimum-wage floor.
+    mandatoryKnownCash: 0,
+    legalMinimumWageFloor: 0,
+    priorCloseGrossInputPriceByGood: priceRecord(
+      Object.keys(recipe.inputsPerBatch) as GoodId[],
+    ),
+    priorCloseGrossInvestmentPriceByGood: priceRecord(
+      Object.keys(recipe.investmentGoodsPerCapitalUnit) as GoodId[],
+    ),
+    infrastructureFactor,
+    resourceAccessFactor,
+    // The production contract explicitly defines 1 as the default until a Population-owned
+    // health productivity factor is wired into the canonical tick.
+    healthLaborProductivityFactor: 1,
+  };
+}
+
+function sameLaborDemandBatch(
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+export function createPhase2ProductionPlanningHandler(options: {
+  readonly evidenceByUnit: ReadonlyMap<ProductionUnitId, ProductionPlanningEvidence>;
+}): PhaseHandler {
+  return (world: WorldState, context: TickContext, _pendingTransitions: PendingTransitions): TickContext => {
+=======
+function createPhase2ProductionPlanningHandlerInternal(
+  options: { readonly evidenceByUnit: ReadonlyMap<ProductionUnitId, ProductionPlanningEvidence> } | undefined,
+  authoritative: boolean,
+): PhaseHandler {
+  return (world: WorldState, context: TickContext, _pendingTransitions: PendingTransitions): TickContext => {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const productionPlans: ProductionPlan[] = [];
+    const laborDemandPlans: LaborDemandPlan[] = [];
+    const productionMarketIntents: MarketIntent[] = [];
+    let budgetLedger = context.budgetLedger;
+
+    for (const unit of stableOrderBy(world.productionUnits.values(), (candidate) => String(candidate.productionUnitId))) {
+=======
+    const productionPlans: ProductionPlan[] = [];
+    const laborDemandPlans: LaborDemandPlan[] = [];
+    const productionMarketIntents: MarketIntent[] = [];
+    const resolvedEvidenceByUnit = new Map<ProductionUnitId, ProductionPlanningEvidence>();
+    let budgetLedger = context.budgetLedger;
+
+    for (const unit of stableOrderBy(world.productionUnits.values(), (candidate) => String(candidate.productionUnitId))) {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+      const region = regionForUnit(world, unit);
+      const planningEvidence = options.evidenceByUnit.get(unit.productionUnitId);
+      const result = planProductionUnitPhase2({
+=======
+      const region = regionForUnit(world, unit);
+      const planningEvidence = authoritative
+        ? canonicalPhase2ProductionPlanningEvidence(world, unit, region, recipe)
+        : options?.evidenceByUnit.get(unit.productionUnitId);
+      if (planningEvidence !== undefined) {
+        resolvedEvidenceByUnit.set(unit.productionUnitId, planningEvidence);
+      }
+      const result = planProductionUnitPhase2({
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    // A public planner invocation is useful for pure planning/tests, but it is not payroll
+    // authority. Only the Phase-2 invocation that flows through executeTick's canonical
+    // phase pipeline may claim or replay the authoritative demand batch for this world/tick.
+    // This prevents a caller-selected zero-productivity invocation from winning merely by
+    // arriving before the real tick execution.
+    if (!isCanonicalTickPhaseExecution(world, context, 2)) {
+=======
+    // A caller-supplied evidence map is useful for pure planning/tests, but it is never
+    // payroll authority. Only the fixed canonical planner below may register a demand batch;
+    // its decision-bearing evidence is derived from the opening WorldState rather than from
+    // whichever public executeTick/executePhase invocation happened to arrive first.
+    if (!authoritative) {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const evidenceFingerprint = productionPlanningEvidenceFingerprint(world, options.evidenceByUnit);
+=======
+    const evidenceFingerprint = productionPlanningEvidenceFingerprint(world, resolvedEvidenceByUnit);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    return {
+      ...context,
+      budgetLedger,
+      productionPlans,
+      laborDemandPlans: canonicalLaborDemandPlans,
+      productionMarketIntents,
+    };
+  };
+}
+=======
+    return {
+      ...context,
+      budgetLedger,
+      productionPlans,
+      laborDemandPlans: canonicalLaborDemandPlans,
+      productionMarketIntents,
+    };
+  };
+}
+
+/**
+ * Pure/planning entry point. Caller-supplied evidence can never mint payroll authority,
+ * even when this handler is invoked through executeTick().
+ */
+export function createPhase2ProductionPlanningHandler(options: {
+  readonly evidenceByUnit: ReadonlyMap<ProductionUnitId, ProductionPlanningEvidence>;
+}): PhaseHandler {
+  return createPhase2ProductionPlanningHandlerInternal(options, false);
+}
+
+/**
+ * Canonical M4 Phase-2 payroll-driving planner. Its evidence is derived from the exact
+ * opening WorldState, so calling executeTick() with a different public planner cannot win
+ * an authority race by choosing alternate productivity/policy/price inputs.
+ */
+export function createCanonicalPhase2ProductionPlanningHandler(): PhaseHandler {
+  return createPhase2ProductionPlanningHandlerInternal(undefined, true);
+}
+>>>>>>> REPLACE
+
+### FILE: src/simulation/tickOrchestrator.ts
+<<<<<<< FIND
+const CANONICAL_TICK_PHASE_EXECUTION = Symbol("canonical-tick-phase-execution");
+
+interface CanonicalTickPhaseExecutionRecord {
+  readonly world: WorldState;
+  readonly phase: number;
+}
+
+type CanonicalTickPhaseContext = TickContext & {
+  readonly [CANONICAL_TICK_PHASE_EXECUTION]?: CanonicalTickPhaseExecutionRecord;
+};
+
+/**
+ * True only for a context currently flowing through executeTick's one canonical phase
+ * pipeline. Public executePhase()/handler calls deliberately do not mint this authority.
+ * The private symbol is enumerable so ordinary handler spreads preserve the authority
+ * through a composed phase without exposing a public constructor for it.
+ */
+export function isCanonicalTickPhaseExecution(
+  world: WorldState,
+  context: TickContext,
+  phase: number,
+): boolean {
+  const authority = (context as CanonicalTickPhaseContext)[CANONICAL_TICK_PHASE_EXECUTION];
+  return authority?.world === world && authority.phase === phase;
+}
+
+function stampCanonicalTickPhaseExecution(
+  world: WorldState,
+  context: TickContext,
+  phase: number,
+): TickContext {
+  Object.defineProperty(context, CANONICAL_TICK_PHASE_EXECUTION, {
+    value: { world, phase } satisfies CanonicalTickPhaseExecutionRecord,
+    enumerable: true,
+    configurable: false,
+    writable: false,
+  });
+  return context;
+}
+
+/**
+ * Compose several PhaseHandlers into the single handler `executeTick` accepts.
+=======
+/**
+ * Compose several PhaseHandlers into the single handler `executeTick` accepts.
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+function executeCanonicalTickPhase(
+  phaseNumber: number,
+  handler: PhaseHandler,
+  world: WorldState,
+  context: TickContext,
+  pendingTransitions: PendingTransitions,
+): TickContext {
+  return executePhase(
+    phaseNumber,
+    (authoritativeWorld, phaseContext, transitions) =>
+      handler(
+        authoritativeWorld,
+        stampCanonicalTickPhaseExecution(authoritativeWorld, phaseContext, phaseNumber),
+        transitions,
+      ),
+    world,
+    context,
+    pendingTransitions,
+  );
+}
+
+/**
+ * Validate phase-level invariants after tick completion.
+=======
+/**
+ * Validate phase-level invariants after tick completion.
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    context = executeCanonicalTickPhase(phase, noOpHandler, world, context, pendingTransitions);
+=======
+    context = executePhase(phase, noOpHandler, world, context, pendingTransitions);
+>>>>>>> REPLACE
+
+### FILE: src/simulation/wageSettlement.test.ts
+<<<<<<< FIND
+  createPhase2ProductionPlanningHandler,
+  type LaborDemandPlan,
+=======
+  createCanonicalPhase2ProductionPlanningHandler,
+  createPhase2ProductionPlanningHandler,
+  type LaborDemandPlan,
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+      createPhase2ProductionPlanningHandler({
+        evidenceByUnit: productionPlanningEvidenceByUnit(world),
+      }),
+=======
+      createCanonicalPhase2ProductionPlanningHandler(),
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    // Changed evidence cannot replace an already-authoritative canonical tick execution.
+=======
+    // Caller-selected evidence is non-authoritative even when routed through executeTick.
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    ).toThrow(/alternate same-world\/tick planning evidence is not authoritative/);
+=======
+    ).toThrow(/not issued by the canonical Phase-2 handler/);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    // Reverse-order control for #627: a public alternate planner invocation arriving
+    // first is not the canonical tick execution and therefore cannot mint Phase-3 payroll
+    // authority. The subsequent real tick still derives the positive obligation.
+    const reverse = fixture();
+    const reverseAlternateEvidence = new Map<ProductionUnitId, ProductionPlanningEvidence>(
+      [...productionPlanningEvidenceByUnit(reverse.world)].map(([unitId, evidence]) => [
+        unitId,
+        {
+          ...evidence,
+          infrastructureFactor: 0,
+          resourceAccessFactor: 0,
+        },
+      ]),
+    );
+    const reverseAlternatePhase2 = executePhase(
+      2,
+      composePhaseHandlers(
+        createPhase2LaborSupplyPlanningHandler(),
+        createPhase2ProductionPlanningHandler({ evidenceByUnit: reverseAlternateEvidence }),
+      ),
+      reverse.world,
+      initializeTickContext(9, reverse.world.seed),
+      reverse.world.pendingTransitions,
+    );
+    expect(() =>
+      executePhase(
+        3,
+        createPhase3LaborAllocationHandler(),
+        reverse.world,
+        reverseAlternatePhase2,
+        reverse.world.pendingTransitions,
+      ),
+    ).toThrow(/not issued by the canonical Phase-2 handler/);
+    const reverseCanonical = completedPhase3Authority(reverse.world, 9);
+=======
+    // Direct SLOPSTER reverse-order control for #627: even an alternate public executeTick
+    // invocation arriving first cannot mint payroll authority from caller-selected
+    // zero-productivity evidence. The subsequent fixed canonical planner still derives the
+    // positive obligation from the same opening WorldState.
+    const reverse = fixture();
+    const reverseAlternateEvidence = new Map<ProductionUnitId, ProductionPlanningEvidence>(
+      [...productionPlanningEvidenceByUnit(reverse.world)].map(([unitId, evidence]) => [
+        unitId,
+        {
+          ...evidence,
+          infrastructureFactor: 0,
+          resourceAccessFactor: 0,
+        },
+      ]),
+    );
+    expect(() =>
+      executeTick(
+        reverse.world,
+        9,
+        reverse.world.pendingTransitions,
+        composePhaseHandlers(
+          createPhase2LaborSupplyPlanningHandler(),
+          createPhase2ProductionPlanningHandler({ evidenceByUnit: reverseAlternateEvidence }),
+          createPhase3LaborAllocationHandler(),
+        ),
+      ),
+    ).toThrow(/not issued by the canonical Phase-2 handler/);
+    const reverseCanonical = completedPhase3Authority(reverse.world, 9);
+>>>>>>> REPLACE
