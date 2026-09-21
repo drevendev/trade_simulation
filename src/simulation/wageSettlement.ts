@@ -359,6 +359,7 @@ export function applyWageSettlementTransition(
   world: WorldState,
   settlements: readonly WageSettlement[],
   currentTick: number,
+  phase3LaborAllocations: readonly LaborAllocation[],
 ): WorldState {
   if (!Number.isInteger(currentTick) || currentTick < 0) {
     throw new Error(`Phase-5 wage settlement transition tick must be a non-negative integer, got ${String(currentTick)}`);
@@ -374,10 +375,69 @@ export function applyWageSettlementTransition(
       `Phase-5 wage settlement transition for tick ${currentTick} cannot persist after tick ${lastAppliedTick}; each canonical tick may persist wages once`,
     );
   }
+
+  const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
+  if (!isFiniteCanonicalNumber(moneyEpsilon) || moneyEpsilon <= 0) {
+    throw new Error(`SimulationConfig.numeric.moneyEpsilon must be finite and > 0, got ${String(moneyEpsilon)}`);
+  }
+
+  const allocationById = new Map<string, LaborAllocation>();
+  for (const allocation of phase3LaborAllocations) {
+    if (allocation.tick !== currentTick) {
+      throw new Error(
+        `LaborAllocation ${allocation.allocationId} is for tick ${allocation.tick}, expected authoritative Phase-5 tick ${currentTick}`,
+      );
+    }
+    if (allocationById.has(allocation.allocationId)) {
+      throw new Error(`Duplicate canonical LaborAllocation ${allocation.allocationId} at Phase-5 persistence`);
+    }
+    requireNonNegative(
+      `LaborAllocation ${allocation.allocationId} grossWageObligation`,
+      allocation.grossWageObligation,
+    );
+    allocationById.set(allocation.allocationId, allocation);
+  }
+
+  const persistedAllocationIds = new Set<string>();
   for (const settlement of settlements) {
     if (settlement.tick !== currentTick) {
       throw new Error(
         `WageSettlement ${settlement.settlementId} is for tick ${settlement.tick}, expected ${currentTick}`,
+      );
+    }
+    if (persistedAllocationIds.has(settlement.allocationId)) {
+      throw new Error(`Duplicate WageSettlement for LaborAllocation ${settlement.allocationId}`);
+    }
+    const allocation = allocationById.get(settlement.allocationId);
+    if (!allocation) {
+      throw new Error(
+        `WageSettlement ${settlement.settlementId} has no canonical current-tick LaborAllocation ${settlement.allocationId}`,
+      );
+    }
+    if (
+      settlement.unitId !== allocation.unitId ||
+      settlement.cohortId !== allocation.cohortId ||
+      settlement.regionId !== allocation.regionId
+    ) {
+      throw new Error(
+        `WageSettlement ${settlement.settlementId} identity does not match canonical LaborAllocation ${allocation.allocationId}`,
+      );
+    }
+    if (Math.abs(settlement.grossWage - allocation.grossWageObligation) > moneyEpsilon) {
+      throw new Error(
+        `WageSettlement ${settlement.settlementId} gross wage does not match canonical LaborAllocation ${allocation.allocationId}`,
+      );
+    }
+    persistedAllocationIds.add(settlement.allocationId);
+  }
+
+  for (const allocation of allocationById.values()) {
+    if (
+      allocation.grossWageObligation > moneyEpsilon &&
+      !persistedAllocationIds.has(allocation.allocationId)
+    ) {
+      throw new Error(
+        `Phase-5 wage settlement batch is missing canonical LaborAllocation ${allocation.allocationId} with gross wage obligation ${allocation.grossWageObligation}`,
       );
     }
   }
