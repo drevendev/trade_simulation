@@ -19,14 +19,14 @@ export function requireCompletePhase3LaborAllocationAuthority(
       `Phase-3 labor-allocation authority is for tick ${context.tick}, expected authoritative Phase-5 tick ${currentTick}`,
     );
   }
-  if (!Number.isInteger(context.phase) || context.phase < 3) {
-    throw new Error(
-      `Phase-3 labor-allocation authority for tick ${currentTick} is incomplete before Phase 3`,
-    );
-  }
   if (context.laborAllocations === undefined) {
     throw new Error(
       `Phase-5 wage persistence requires completed Phase-3 labor-allocation authority for tick ${currentTick}`,
+    );
+  }
+  if (!Number.isInteger(context.phase) || context.phase < 3) {
+    throw new Error(
+      `Phase-3 labor-allocation authority for tick ${currentTick} is incomplete before Phase 3`,
     );
   }
   return context.laborAllocations;
