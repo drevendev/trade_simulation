@@ -13,6 +13,7 @@ import { actorRefKey } from "../domain/genesisLedger";
 import { isFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
 import type { LaborAllocation } from "./laborAllocation";
+import { requireCompletePhase3LaborAllocationAuthority } from "./laborAllocationAuthority";
 import type { LaborDemandPlan } from "./productionPlanning";
 import {
   applyActorMoneyDeltas,
@@ -359,7 +360,7 @@ export function applyWageSettlementTransition(
   world: WorldState,
   settlements: readonly WageSettlement[],
   currentTick: number,
-  phase3LaborAllocations: readonly LaborAllocation[],
+  phase3AuthorityContext: TickContext,
 ): WorldState {
   if (!Number.isInteger(currentTick) || currentTick < 0) {
     throw new Error(`Phase-5 wage settlement transition tick must be a non-negative integer, got ${String(currentTick)}`);
@@ -381,6 +382,10 @@ export function applyWageSettlementTransition(
     throw new Error(`SimulationConfig.numeric.moneyEpsilon must be finite and > 0, got ${String(moneyEpsilon)}`);
   }
 
+  const phase3LaborAllocations = requireCompletePhase3LaborAllocationAuthority(
+    phase3AuthorityContext,
+    currentTick,
+  );
   const allocationById = new Map<string, LaborAllocation>();
   for (const allocation of phase3LaborAllocations) {
     if (allocation.tick !== currentTick) {
