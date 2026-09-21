@@ -69,12 +69,14 @@ function demand(args: {
   requested?: number;
   wage?: number;
   cap?: number;
+  tick?: number;
 }): LaborDemandPlan {
   const requested = args.requested ?? 10;
   const wage = args.wage ?? 10;
+  const tick = args.tick ?? 9;
   return {
-    planId: `labor-demand-plan:9:${String(args.unitId)}`,
-    productionPlanId: `production-plan:9:${String(args.unitId)}`,
+    planId: `labor-demand-plan:${tick}:${String(args.unitId)}`,
+    productionPlanId: `production-plan:${tick}:${String(args.unitId)}`,
     unitId: args.unitId,
     regionId: args.regionId,
     laborCategory: args.laborCategory,
@@ -170,7 +172,8 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
     );
     expect(settlement.wageTaxWithheldTransaction?.bundleId).toBe(settlement.bundleId);
 
-    const settledWorld = applyWageSettlementTransition(base.world, settlements);
+    const settledWorld = applyWageSettlementTransition(base.world, settlements, 9);
+    expect(settledWorld.lastWageSettlementTransitionTick).toBe(9);
     expect(settledWorld.productionUnits.get(base.unit.productionUnitId)!.wallet.get(base.currencyId)).toBe(
       originalUnitCash - 100,
     );
@@ -195,6 +198,100 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
         base.currencyId,
       ),
     ).toBe(originalCohortCash + 90);
+  });
+
+  it("persists wage settlements exactly once and rejects stale tick provenance atomically", () => {
+    const base = baseEvidence();
+    const settlements9 = planWageSettlementsPhase5({
+      tick: 9,
+      world: base.world,
+      laborDemandPlans: [base.laborDemand],
+      laborAllocations: [base.laborAllocation],
+      effectiveJurisdictionByRegion: jurisdiction(base.region.regionId, base.stateId),
+      taxPolicy: policy(0.2, 0.5),
+    });
+    const settled9 = applyWageSettlementTransition(base.world, settlements9, 9);
+    const unitCashAfter9 = settled9.productionUnits.get(base.unit.productionUnitId)!.wallet.get(base.currencyId);
+    const cohortCashAfter9 = settled9.cohorts.get(base.cohorts[0]!.cohortId)!.wallet.get(base.currencyId);
+    const stateCashAfter9 = settled9.states.get(base.stateId)!.treasury.get(base.currencyId);
+
+    expect(settled9.lastWageSettlementTransitionTick).toBe(9);
+    expect(() => applyWageSettlementTransition(settled9, settlements9, 9)).toThrow(/cannot persist after tick 9/);
+    expect(() => applyWageSettlementTransition(settled9, [], 8)).toThrow(/cannot persist after tick 9/);
+    expect(() => applyWageSettlementTransition(settled9, settlements9, 10)).toThrow(/is for tick 9, expected 10/);
+    expect(settled9.lastWageSettlementTransitionTick).toBe(9);
+    expect(settled9.productionUnits.get(base.unit.productionUnitId)!.wallet.get(base.currencyId)).toBe(unitCashAfter9);
+    expect(settled9.cohorts.get(base.cohorts[0]!.cohortId)!.wallet.get(base.currencyId)).toBe(cohortCashAfter9);
+    expect(settled9.states.get(base.stateId)!.treasury.get(base.currencyId)).toBe(stateCashAfter9);
+
+    const laborDemand10 = demand({
+      unitId: base.unit.productionUnitId,
+      regionId: base.region.regionId,
+      laborCategory: base.laborCategory,
+      tick: 10,
+    });
+    const laborAllocation10 = allocation({
+      unitId: base.unit.productionUnitId,
+      cohortId: base.cohorts[0]!.cohortId,
+      regionId: base.region.regionId,
+      laborCategory: base.laborCategory,
+      tick: 10,
+    });
+    const settlements10 = planWageSettlementsPhase5({
+      tick: 10,
+      world: settled9,
+      laborDemandPlans: [laborDemand10],
+      laborAllocations: [laborAllocation10],
+      effectiveJurisdictionByRegion: jurisdiction(base.region.regionId, base.stateId),
+      taxPolicy: policy(0.2, 0.5),
+    });
+    const settled10 = applyWageSettlementTransition(settled9, settlements10, 10);
+    expect(settled10.lastWageSettlementTransitionTick).toBe(10);
+    expect(settled10.productionUnits.get(base.unit.productionUnitId)!.wallet.get(base.currencyId)).toBe(unitCashAfter9! - 100);
+    expect(settled10.cohorts.get(base.cohorts[0]!.cohortId)!.wallet.get(base.currencyId)).toBe(cohortCashAfter9! + 90);
+    expect(settled10.states.get(base.stateId)!.treasury.get(base.currencyId)).toBe(stateCashAfter9! + 10);
+  });
+
+  it("closes a zero-payroll tick so later same-tick wage evidence cannot be persisted", () => {
+    const base = baseEvidence();
+    const closed = applyWageSettlementTransition(base.world, [], 9);
+    expect(closed.lastWageSettlementTransitionTick).toBe(9);
+    expect(closed.productionUnits.get(base.unit.productionUnitId)!.wallet).toEqual(base.world.productionUnits.get(base.unit.productionUnitId)!.wallet);
+    expect(closed.cohorts.get(base.cohorts[0]!.cohortId)!.wallet).toEqual(base.world.cohorts.get(base.cohorts[0]!.cohortId)!.wallet);
+    expect(closed.states.get(base.stateId)!.treasury).toEqual(base.world.states.get(base.stateId)!.treasury);
+
+    const settlements = planWageSettlementsPhase5({
+      tick: 9,
+      world: base.world,
+      laborDemandPlans: [base.laborDemand],
+      laborAllocations: [base.laborAllocation],
+      effectiveJurisdictionByRegion: jurisdiction(base.region.regionId, base.stateId),
+      taxPolicy: policy(0.2, 0.5),
+    });
+    expect(() => applyWageSettlementTransition(closed, settlements, 9)).toThrow(/cannot persist after tick 9/);
+    expect(closed.lastWageSettlementTransitionTick).toBe(9);
+    expect(closed.productionUnits.get(base.unit.productionUnitId)!.wallet).toEqual(base.world.productionUnits.get(base.unit.productionUnitId)!.wallet);
+  });
+
+  it("does not advance the wage marker when wallet preflight rejects the batch", () => {
+    const base = baseEvidence();
+    const settlements = planWageSettlementsPhase5({
+      tick: 9,
+      world: base.world,
+      laborDemandPlans: [base.laborDemand],
+      laborAllocations: [base.laborAllocation],
+      effectiveJurisdictionByRegion: jurisdiction(base.region.regionId, base.stateId),
+      taxPolicy: policy(0.2, 0.5),
+    });
+    const wallet = new Map(base.unit.wallet);
+    wallet.set(base.currencyId, 99);
+    const productionUnits = new Map(base.world.productionUnits);
+    productionUnits.set(base.unit.productionUnitId, { ...base.unit, wallet });
+    const poorWorld: WorldState = { ...base.world, productionUnits };
+
+    expect(() => applyWageSettlementTransition(poorWorld, settlements, 9)).toThrow();
+    expect(poorWorld.lastWageSettlementTransitionTick).toBe(-1);
+    expect(poorWorld.productionUnits.get(base.unit.productionUnitId)!.wallet.get(base.currencyId)).toBe(99);
   });
 
   it("uncontrolled Regions assess and collect zero State wage tax without consulting the provider", () => {

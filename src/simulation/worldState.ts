@@ -103,6 +103,11 @@ export interface WorldState {
   /** Last canonical tick whose Phase-5 physical production transition was persisted; -1 at genesis. */
   readonly lastProductionExecutionTransitionTick: number;
   /**
+   * Last canonical tick whose Phase-5 wage-settlement transition was persisted.
+   * Canonical worlds initialize this to -1; undefined is accepted only for older/manual fixtures.
+   */
+  readonly lastWageSettlementTransitionTick?: number;
+  /**
    * Last canonical tick whose Phase-9 household-consumption transition was persisted.
    * Canonical worlds initialize this to -1; undefined is accepted only for older/manual fixtures.
    */
@@ -679,6 +684,7 @@ export function buildInitialWorld(
     definitionRegistry,
     simulationConfig: frozenConfig,
     lastProductionExecutionTransitionTick: -1,
+    lastWageSettlementTransitionTick: -1,
     lastHouseholdConsumptionTransitionTick: -1,
     lastCapitalFormationTransitionTick: -1,
     // Empty, like the WorldState this reconciliation precedes: genesis queues no
@@ -726,6 +732,7 @@ export function buildInitialWorld(
     markets: marketRegistry,
     transportLinks: transportLinkRegistry,
     lastProductionExecutionTransitionTick: -1,
+    lastWageSettlementTransitionTick: -1,
     lastHouseholdConsumptionTransitionTick: -1,
     lastCapitalFormationTransitionTick: -1,
     pendingTransitions: createEmptyPendingTransitions(),
