@@ -7,6 +7,7 @@ import type { CohortId, CurrencyId, GoodId, ProductionUnitId, RegionId, StateId 
 import { createPhase3LaborAllocationHandler, type LaborAllocation } from "./laborAllocation";
 import { createPhase2LaborSupplyPlanningHandler } from "./laborSupplyPlanning";
 import {
+  createCanonicalPhase2ProductionPlanningHandler,
   createPhase2ProductionPlanningHandler,
   type LaborDemandPlan,
   type ProductionPlanningEvidence,
@@ -223,9 +224,7 @@ function completedPhase3Authority(world: WorldState, tick: number) {
     world.pendingTransitions,
     composePhaseHandlers(
       createPhase2LaborSupplyPlanningHandler(),
-      createPhase2ProductionPlanningHandler({
-        evidenceByUnit: productionPlanningEvidenceByUnit(world),
-      }),
+      createCanonicalPhase2ProductionPlanningHandler(),
       createPhase3LaborAllocationHandler(),
     ),
   );
@@ -443,7 +442,7 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
       ),
     ).toThrow(/not issued by the canonical Phase-2 handler/);
 
-    // Changed evidence cannot replace an already-authoritative canonical tick execution.
+    // Caller-selected evidence is non-authoritative even when routed through executeTick.
     const alternateEvidenceByUnit = new Map<ProductionUnitId, ProductionPlanningEvidence>(
       [...productionPlanningEvidenceByUnit(base.world)].map(([unitId, evidence]) => [
         unitId,
@@ -465,11 +464,12 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
           createPhase3LaborAllocationHandler(),
         ),
       ),
-    ).toThrow(/alternate same-world\/tick planning evidence is not authoritative/);
+    ).toThrow(/not issued by the canonical Phase-2 handler/);
 
-    // Reverse-order control for #627: a public alternate planner invocation arriving
-    // first is not the canonical tick execution and therefore cannot mint Phase-3 payroll
-    // authority. The subsequent real tick still derives the positive obligation.
+    // Direct SLOPSTER reverse-order control for #627: even an alternate public executeTick
+    // invocation arriving first cannot mint payroll authority from caller-selected
+    // zero-productivity evidence. The subsequent fixed canonical planner still derives the
+    // positive obligation from the same opening WorldState.
     const reverse = fixture();
     const reverseAlternateEvidence = new Map<ProductionUnitId, ProductionPlanningEvidence>(
       [...productionPlanningEvidenceByUnit(reverse.world)].map(([unitId, evidence]) => [
@@ -481,23 +481,16 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
         },
       ]),
     );
-    const reverseAlternatePhase2 = executePhase(
-      2,
-      composePhaseHandlers(
-        createPhase2LaborSupplyPlanningHandler(),
-        createPhase2ProductionPlanningHandler({ evidenceByUnit: reverseAlternateEvidence }),
-      ),
-      reverse.world,
-      initializeTickContext(9, reverse.world.seed),
-      reverse.world.pendingTransitions,
-    );
     expect(() =>
-      executePhase(
-        3,
-        createPhase3LaborAllocationHandler(),
+      executeTick(
         reverse.world,
-        reverseAlternatePhase2,
+        9,
         reverse.world.pendingTransitions,
+        composePhaseHandlers(
+          createPhase2LaborSupplyPlanningHandler(),
+          createPhase2ProductionPlanningHandler({ evidenceByUnit: reverseAlternateEvidence }),
+          createPhase3LaborAllocationHandler(),
+        ),
       ),
     ).toThrow(/not issued by the canonical Phase-2 handler/);
     const reverseCanonical = completedPhase3Authority(reverse.world, 9);
