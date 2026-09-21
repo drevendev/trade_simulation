@@ -503,6 +503,66 @@ describe("REQ-POPULATION-003 Phase-9 household realization", () => {
     })).toThrow(/does not match Phase-5 settlement evidence/);
   });
 
+  it("rejects WAGE_PAYMENT identity and provenance that disagree with the matched Phase-5 settlement", () => {
+    const evidence = wageEvidence();
+    const forgedTransactions: readonly EconomicTransaction[] = [
+      {
+        ...evidence.transaction,
+        source: { type: "PRODUCTION_UNIT", productionUnitId: unitId("unit:forged") },
+      },
+      {
+        ...evidence.transaction,
+        currencyId: currencyId("currency:forged"),
+      },
+      {
+        ...evidence.transaction,
+        bundleId: createTransactionBundleId("tb:7:5:wage:forged"),
+      },
+      {
+        ...evidence.transaction,
+        sourceRegionId: regionId("region:forged"),
+      },
+      {
+        ...evidence.transaction,
+        destinationRegionId: regionId("region:forged"),
+      },
+      {
+        ...evidence.transaction,
+        reason: "labor-allocation:7:forged",
+      },
+    ];
+
+    for (const transaction of forgedTransactions) {
+      expect(() => plan({
+        world: world(),
+        supply: supply(10),
+        allocations: [evidence.allocation],
+        settlements: [evidence.settlement],
+        transactions: [transaction],
+      })).toThrow(/provenance mismatch/);
+    }
+
+    const forgedAssessedTax = { ...evidence.transaction, assessedTaxAmount: 3 };
+    expect(() => plan({
+      world: world(),
+      supply: supply(10),
+      allocations: [evidence.allocation],
+      settlements: [evidence.settlement],
+      transactions: [forgedAssessedTax],
+    })).toThrow(/does not match Phase-5 settlement evidence/);
+
+    const canonical = plan({
+      world: world(),
+      supply: supply(10),
+      allocations: [evidence.allocation],
+      settlements: [evidence.settlement],
+      transactions: [evidence.transaction],
+    }).executions[0]!.economic;
+    expect(canonical.grossWageIncome).toBe(20);
+    expect(canonical.netWageReceipt).toBe(18);
+    expect(canonical.wageTaxWithheld).toBe(2);
+  });
+
   it("rejects stale LaborSupplyPlan provenance while same-tick Phase-3/5 evidence remains valid", () => {
     const evidence = wageEvidence();
     const currentSupply = supply(10);
