@@ -1,0 +1,218 @@
+### FILE: src/simulation/householdConsumptionExecution.ts
+<<<<<<< FIND
+    const transaction = matchingTransactions[0]!;
+    if (
+      transaction.type !== "WAGE_PAYMENT" ||
+      transaction.tick !== tick ||
+      transaction.phase !== 5 ||
+      transaction.destination?.type !== "COHORT" ||
+      transaction.destination.cohortId !== cohort.cohortId
+    ) {
+      throw new Error(`WAGE_PAYMENT ${String(transaction.transactionId)} provenance mismatch`);
+    }
+=======
+    const canonicalPayment = settlement.wagePaymentTransaction;
+    if (
+      canonicalPayment.type !== "WAGE_PAYMENT" ||
+      canonicalPayment.tick !== settlement.tick ||
+      canonicalPayment.phase !== 5 ||
+      canonicalPayment.bundleId !== settlement.bundleId ||
+      canonicalPayment.source?.type !== "PRODUCTION_UNIT" ||
+      canonicalPayment.source.productionUnitId !== settlement.unitId ||
+      canonicalPayment.destination?.type !== "COHORT" ||
+      canonicalPayment.destination.cohortId !== settlement.cohortId ||
+      canonicalPayment.currencyId !== settlement.currencyId ||
+      canonicalPayment.sourceRegionId !== settlement.regionId ||
+      canonicalPayment.destinationRegionId !== settlement.regionId ||
+      canonicalPayment.reason !== settlement.allocationId
+    ) {
+      throw new Error(`WageSettlement ${settlement.settlementId} canonical WAGE_PAYMENT provenance mismatch`);
+    }
+
+    const transaction = matchingTransactions[0]!;
+    if (
+      transaction.type !== "WAGE_PAYMENT" ||
+      transaction.tick !== settlement.tick ||
+      transaction.phase !== 5 ||
+      transaction.bundleId !== settlement.bundleId ||
+      transaction.source?.type !== "PRODUCTION_UNIT" ||
+      transaction.source.productionUnitId !== settlement.unitId ||
+      transaction.destination?.type !== "COHORT" ||
+      transaction.destination.cohortId !== settlement.cohortId ||
+      transaction.currencyId !== settlement.currencyId ||
+      transaction.sourceRegionId !== settlement.regionId ||
+      transaction.destinationRegionId !== settlement.regionId ||
+      transaction.reason !== settlement.allocationId
+    ) {
+      throw new Error(`WAGE_PAYMENT ${String(transaction.transactionId)} provenance mismatch`);
+    }
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const transactionAmount = requireNonNegative(
+      `WAGE_PAYMENT ${String(transaction.transactionId)} moneyAmount`,
+      transaction.moneyAmount ?? Number.NaN,
+    );
+    const transactionGross = requireNonNegative(
+      `WAGE_PAYMENT ${String(transaction.transactionId)} grossMoneyAmount`,
+      transaction.grossMoneyAmount ?? Number.NaN,
+    );
+    const transactionTax = requireNonNegative(
+      `WAGE_PAYMENT ${String(transaction.transactionId)} taxAmount`,
+      transaction.taxAmount ?? Number.NaN,
+    );
+    if (
+      Math.abs(transactionAmount - net) > controls.moneyEpsilon ||
+      Math.abs(transactionGross - gross) > controls.moneyEpsilon ||
+      Math.abs(transactionTax - tax) > controls.moneyEpsilon
+    ) {
+      throw new Error(`WAGE_PAYMENT ${String(transaction.transactionId)} does not match Phase-5 settlement evidence`);
+    }
+=======
+    const canonicalTransactionAmount = requireNonNegative(
+      `canonical WAGE_PAYMENT ${String(canonicalPayment.transactionId)} moneyAmount`,
+      canonicalPayment.moneyAmount ?? Number.NaN,
+    );
+    const canonicalTransactionGross = requireNonNegative(
+      `canonical WAGE_PAYMENT ${String(canonicalPayment.transactionId)} grossMoneyAmount`,
+      canonicalPayment.grossMoneyAmount,
+    );
+    const canonicalAssessedTax = requireNonNegative(
+      `canonical WAGE_PAYMENT ${String(canonicalPayment.transactionId)} assessedTaxAmount`,
+      canonicalPayment.assessedTaxAmount,
+    );
+    const canonicalTransactionTax = requireNonNegative(
+      `canonical WAGE_PAYMENT ${String(canonicalPayment.transactionId)} taxAmount`,
+      canonicalPayment.taxAmount ?? Number.NaN,
+    );
+    const canonicalRecordedAmount = requireNonNegative(
+      `canonical WAGE_PAYMENT ${String(canonicalPayment.transactionId)} amount`,
+      canonicalPayment.amount,
+    );
+    if (
+      Math.abs(canonicalTransactionAmount - net) > controls.moneyEpsilon ||
+      Math.abs(canonicalTransactionGross - gross) > controls.moneyEpsilon ||
+      Math.abs(canonicalAssessedTax - settlement.assessedTax) > controls.moneyEpsilon ||
+      Math.abs(canonicalTransactionTax - tax) > controls.moneyEpsilon ||
+      Math.abs(canonicalRecordedAmount - net) > controls.moneyEpsilon
+    ) {
+      throw new Error(`WageSettlement ${settlement.settlementId} canonical WAGE_PAYMENT does not match settlement evidence`);
+    }
+
+    const transactionAmount = requireNonNegative(
+      `WAGE_PAYMENT ${String(transaction.transactionId)} moneyAmount`,
+      transaction.moneyAmount ?? Number.NaN,
+    );
+    const transactionGross = requireNonNegative(
+      `WAGE_PAYMENT ${String(transaction.transactionId)} grossMoneyAmount`,
+      transaction.grossMoneyAmount ?? Number.NaN,
+    );
+    const transactionAssessedTax = requireNonNegative(
+      `WAGE_PAYMENT ${String(transaction.transactionId)} assessedTaxAmount`,
+      transaction.assessedTaxAmount ?? Number.NaN,
+    );
+    const transactionTax = requireNonNegative(
+      `WAGE_PAYMENT ${String(transaction.transactionId)} taxAmount`,
+      transaction.taxAmount ?? Number.NaN,
+    );
+    const transactionRecordedAmount = requireNonNegative(
+      `WAGE_PAYMENT ${String(transaction.transactionId)} amount`,
+      transaction.amount,
+    );
+    if (
+      Math.abs(transactionAmount - canonicalTransactionAmount) > controls.moneyEpsilon ||
+      Math.abs(transactionGross - canonicalTransactionGross) > controls.moneyEpsilon ||
+      Math.abs(transactionAssessedTax - canonicalAssessedTax) > controls.moneyEpsilon ||
+      Math.abs(transactionTax - canonicalTransactionTax) > controls.moneyEpsilon ||
+      Math.abs(transactionRecordedAmount - canonicalRecordedAmount) > controls.moneyEpsilon
+    ) {
+      throw new Error(`WAGE_PAYMENT ${String(transaction.transactionId)} does not match Phase-5 settlement evidence`);
+    }
+>>>>>>> REPLACE
+
+### FILE: src/simulation/householdConsumptionExecution.test.ts
+<<<<<<< FIND
+    const malformed = { ...evidence.transaction, moneyAmount: 17, amount: 17 };
+    expect(() => plan({
+      world: world(),
+      supply: supply(10),
+      allocations: [evidence.allocation],
+      settlements: [evidence.settlement],
+      transactions: [malformed],
+    })).toThrow(/does not match Phase-5 settlement evidence/);
+  });
+
+  it("rejects stale LaborSupplyPlan provenance while same-tick Phase-3/5 evidence remains valid", () => {
+=======
+    const malformed = { ...evidence.transaction, moneyAmount: 17, amount: 17 };
+    expect(() => plan({
+      world: world(),
+      supply: supply(10),
+      allocations: [evidence.allocation],
+      settlements: [evidence.settlement],
+      transactions: [malformed],
+    })).toThrow(/does not match Phase-5 settlement evidence/);
+  });
+
+  it("rejects WAGE_PAYMENT identity and provenance that disagree with the matched Phase-5 settlement", () => {
+    const evidence = wageEvidence();
+    const forgedTransactions: readonly EconomicTransaction[] = [
+      {
+        ...evidence.transaction,
+        source: { type: "PRODUCTION_UNIT", productionUnitId: unitId("unit:forged") },
+      },
+      {
+        ...evidence.transaction,
+        currencyId: currencyId("currency:forged"),
+      },
+      {
+        ...evidence.transaction,
+        bundleId: createTransactionBundleId("tb:7:5:wage:forged"),
+      },
+      {
+        ...evidence.transaction,
+        sourceRegionId: regionId("region:forged"),
+      },
+      {
+        ...evidence.transaction,
+        destinationRegionId: regionId("region:forged"),
+      },
+      {
+        ...evidence.transaction,
+        reason: "labor-allocation:7:forged",
+      },
+    ];
+
+    for (const transaction of forgedTransactions) {
+      expect(() => plan({
+        world: world(),
+        supply: supply(10),
+        allocations: [evidence.allocation],
+        settlements: [evidence.settlement],
+        transactions: [transaction],
+      })).toThrow(/provenance mismatch/);
+    }
+
+    const forgedAssessedTax = { ...evidence.transaction, assessedTaxAmount: 3 };
+    expect(() => plan({
+      world: world(),
+      supply: supply(10),
+      allocations: [evidence.allocation],
+      settlements: [evidence.settlement],
+      transactions: [forgedAssessedTax],
+    })).toThrow(/does not match Phase-5 settlement evidence/);
+
+    const canonical = plan({
+      world: world(),
+      supply: supply(10),
+      allocations: [evidence.allocation],
+      settlements: [evidence.settlement],
+      transactions: [evidence.transaction],
+    }).executions[0]!.economic;
+    expect(canonical.grossWageIncome).toBe(20);
+    expect(canonical.netWageReceipt).toBe(18);
+    expect(canonical.wageTaxWithheld).toBe(2);
+  });
+
+  it("rejects stale LaborSupplyPlan provenance while same-tick Phase-3/5 evidence remains valid", () => {
+>>>>>>> REPLACE
