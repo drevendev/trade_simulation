@@ -154,6 +154,46 @@ export type PhaseHandler = (
   pendingTransitions: PendingTransitions,
 ) => TickContext;
 
+const CANONICAL_TICK_PHASE_EXECUTION = Symbol("canonical-tick-phase-execution");
+
+interface CanonicalTickPhaseExecutionRecord {
+  readonly world: WorldState;
+  readonly phase: number;
+}
+
+type CanonicalTickPhaseContext = TickContext & {
+  readonly [CANONICAL_TICK_PHASE_EXECUTION]?: CanonicalTickPhaseExecutionRecord;
+};
+
+/**
+ * True only for a context currently flowing through executeTick's one canonical phase
+ * pipeline. Public executePhase()/handler calls deliberately do not mint this authority.
+ * The private symbol is enumerable so ordinary handler spreads preserve the authority
+ * through a composed phase without exposing a public constructor for it.
+ */
+export function isCanonicalTickPhaseExecution(
+  world: WorldState,
+  context: TickContext,
+  phase: number,
+): boolean {
+  const authority = (context as CanonicalTickPhaseContext)[CANONICAL_TICK_PHASE_EXECUTION];
+  return authority?.world === world && authority.phase === phase;
+}
+
+function stampCanonicalTickPhaseExecution(
+  world: WorldState,
+  context: TickContext,
+  phase: number,
+): TickContext {
+  Object.defineProperty(context, CANONICAL_TICK_PHASE_EXECUTION, {
+    value: { world, phase } satisfies CanonicalTickPhaseExecutionRecord,
+    enumerable: true,
+    configurable: false,
+    writable: false,
+  });
+  return context;
+}
+
 /**
  * Compose several PhaseHandlers into the single handler `executeTick` accepts.
  * Each handler already self-guards on `context.phase` (see `createPhase6Handler`,
@@ -219,6 +259,27 @@ export function executePhase(
   return handler(world, newContext, pendingTransitions);
 }
 
+function executeCanonicalTickPhase(
+  phaseNumber: number,
+  handler: PhaseHandler,
+  world: WorldState,
+  context: TickContext,
+  pendingTransitions: PendingTransitions,
+): TickContext {
+  return executePhase(
+    phaseNumber,
+    (authoritativeWorld, phaseContext, transitions) =>
+      handler(
+        authoritativeWorld,
+        stampCanonicalTickPhaseExecution(authoritativeWorld, phaseContext, phaseNumber),
+        transitions,
+      ),
+    world,
+    context,
+    pendingTransitions,
+  );
+}
+
 /**
  * Validate phase-level invariants after tick completion.
  * M2: Checks zero-flow reconciliation for the accumulated ledger.
@@ -254,7 +315,7 @@ export function executeTick(
   const tolerance = world.simulationConfig.numeric.reconciliationRelativeTolerance;
 
   for (let phase = 0; phase < TOTAL_PHASES; phase++) {
-    context = executePhase(phase, noOpHandler, world, context, pendingTransitions);
+    context = executeCanonicalTickPhase(phase, noOpHandler, world, context, pendingTransitions);
     phaseTrace.push(phase);
 
     // Validate phase-boundary invariants before proceeding to next phase

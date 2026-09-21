@@ -40,11 +40,15 @@ interface Phase3LaborAllocationAuthorityRecord {
 }
 
 /**
- * Runtime provenance for completed Phase-3 results. The key is the exact TickContext
- * object returned by the canonical Phase-3 handler; callers cannot manufacture an
- * accepted authority by copying `phase` and `laborAllocations` into another object.
+ * Runtime provenance for completed Phase-3 results. The key is the exact frozen
+ * allocation batch issued by the canonical Phase-3 handler. That batch reference survives
+ * normal TickContext copies at later phase boundaries, while a caller-created lookalike
+ * array cannot manufacture authority.
  */
-const phase3LaborAllocationAuthorities = new WeakMap<TickContext, Phase3LaborAllocationAuthorityRecord>();
+const phase3LaborAllocationAuthorities = new WeakMap<
+  readonly LaborAllocation[],
+  Phase3LaborAllocationAuthorityRecord
+>();
 
 interface ResolvedLaborAllocationConfig {
   readonly quantityEpsilon: number;
@@ -438,7 +442,7 @@ export function requireCompletePhase3LaborAllocationAuthority(
     );
   }
 
-  const authority = phase3LaborAllocationAuthorities.get(context);
+  const authority = phase3LaborAllocationAuthorities.get(context.laborAllocations);
   if (
     authority === undefined ||
     authority.tick !== currentTick ||
@@ -567,7 +571,7 @@ export function createPhase3LaborAllocationHandler(): PhaseHandler {
       }).map((allocation) => Object.freeze({ ...allocation })),
     );
     const completedContext: TickContext = { ...context, laborAllocations };
-    phase3LaborAllocationAuthorities.set(completedContext, {
+    phase3LaborAllocationAuthorities.set(laborAllocations, {
       tick: context.tick,
       world,
       laborAllocations,

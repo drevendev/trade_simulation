@@ -26,7 +26,7 @@ import {
   type MarketIntentId,
 } from "./marketIntent";
 import { deriveNameplateCapacity } from "./productionUnitState";
-import type { PhaseHandler, TickContext } from "./tickOrchestrator";
+import { isCanonicalTickPhaseExecution, type PhaseHandler, type TickContext } from "./tickOrchestrator";
 import type { PendingTransitions, ProductionUnitState, RegionState, WorldState } from "./worldState";
 
 export interface ProductionPlan {
@@ -833,6 +833,22 @@ export function createPhase2ProductionPlanningHandler(options: {
     const proposedLaborDemandPlans = Object.freeze(
       laborDemandPlans.map((plan) => Object.freeze({ ...plan })),
     );
+
+    // A public planner invocation is useful for pure planning/tests, but it is not payroll
+    // authority. Only the Phase-2 invocation that flows through executeTick's canonical
+    // phase pipeline may claim or replay the authoritative demand batch for this world/tick.
+    // This prevents a caller-selected zero-productivity invocation from winning merely by
+    // arriving before the real tick execution.
+    if (!isCanonicalTickPhaseExecution(world, context, 2)) {
+      return {
+        ...context,
+        budgetLedger,
+        productionPlans,
+        laborDemandPlans: proposedLaborDemandPlans,
+        productionMarketIntents,
+      };
+    }
+
     const evidenceFingerprint = productionPlanningEvidenceFingerprint(world, options.evidenceByUnit);
     let authorityByTick = canonicalPhase2ProductionPlanningByWorld.get(world);
     if (authorityByTick === undefined) {

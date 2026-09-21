@@ -11,7 +11,7 @@ import {
   type LaborDemandPlan,
   type ProductionPlanningEvidence,
 } from "./productionPlanning";
-import { composePhaseHandlers, executePhase, initializeTickContext } from "./tickOrchestrator";
+import { composePhaseHandlers, executePhase, executeTick, initializeTickContext } from "./tickOrchestrator";
 import {
   applyWageSettlementTransition,
   createPhase5WageSettlementHandler,
@@ -217,25 +217,22 @@ function productionPlanningEvidenceByUnit(
 }
 
 function completedPhase3Authority(world: WorldState, tick: number) {
-  const phase2 = executePhase(
-    2,
+  const result = executeTick(
+    world,
+    tick,
+    world.pendingTransitions,
     composePhaseHandlers(
       createPhase2LaborSupplyPlanningHandler(),
       createPhase2ProductionPlanningHandler({
         evidenceByUnit: productionPlanningEvidenceByUnit(world),
       }),
+      createPhase3LaborAllocationHandler(),
     ),
-    world,
-    initializeTickContext(tick, world.seed),
-    world.pendingTransitions,
   );
-  return executePhase(
-    3,
-    createPhase3LaborAllocationHandler(),
-    world,
-    phase2,
-    world.pendingTransitions,
-  );
+  if (result.phaseBoundaryError !== undefined) {
+    throw new Error(`Canonical tick fixture failed at phase ${result.phaseBoundaryError.phase}`);
+  }
+  return result.context;
 }
 
 describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
@@ -446,9 +443,7 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
       ),
     ).toThrow(/not issued by the canonical Phase-2 handler/);
 
-    // A second public Phase-2 invocation cannot replace the already-issued positive
-    // production plan with caller-selected zero-productivity evidence for the same
-    // exact opening WorldState/tick and thereby mint an empty Phase-3 payroll authority.
+    // Changed evidence cannot replace an already-authoritative canonical tick execution.
     const alternateEvidenceByUnit = new Map<ProductionUnitId, ProductionPlanningEvidence>(
       [...productionPlanningEvidenceByUnit(base.world)].map(([unitId, evidence]) => [
         unitId,
@@ -460,17 +455,55 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
       ]),
     );
     expect(() =>
-      executePhase(
-        2,
+      executeTick(
+        base.world,
+        9,
+        base.world.pendingTransitions,
         composePhaseHandlers(
           createPhase2LaborSupplyPlanningHandler(),
           createPhase2ProductionPlanningHandler({ evidenceByUnit: alternateEvidenceByUnit }),
+          createPhase3LaborAllocationHandler(),
         ),
-        base.world,
-        initializeTickContext(9, base.world.seed),
-        base.world.pendingTransitions,
       ),
     ).toThrow(/alternate same-world\/tick planning evidence is not authoritative/);
+
+    // Reverse-order control for #627: a public alternate planner invocation arriving
+    // first is not the canonical tick execution and therefore cannot mint Phase-3 payroll
+    // authority. The subsequent real tick still derives the positive obligation.
+    const reverse = fixture();
+    const reverseAlternateEvidence = new Map<ProductionUnitId, ProductionPlanningEvidence>(
+      [...productionPlanningEvidenceByUnit(reverse.world)].map(([unitId, evidence]) => [
+        unitId,
+        {
+          ...evidence,
+          infrastructureFactor: 0,
+          resourceAccessFactor: 0,
+        },
+      ]),
+    );
+    const reverseAlternatePhase2 = executePhase(
+      2,
+      composePhaseHandlers(
+        createPhase2LaborSupplyPlanningHandler(),
+        createPhase2ProductionPlanningHandler({ evidenceByUnit: reverseAlternateEvidence }),
+      ),
+      reverse.world,
+      initializeTickContext(9, reverse.world.seed),
+      reverse.world.pendingTransitions,
+    );
+    expect(() =>
+      executePhase(
+        3,
+        createPhase3LaborAllocationHandler(),
+        reverse.world,
+        reverseAlternatePhase2,
+        reverse.world.pendingTransitions,
+      ),
+    ).toThrow(/not issued by the canonical Phase-2 handler/);
+    const reverseCanonical = completedPhase3Authority(reverse.world, 9);
+    expect(
+      reverseCanonical.laborAllocations?.some((candidate) => candidate.grossWageObligation > 0),
+    ).toBe(true);
 
     expect(() =>
       applyWageSettlementTransition(base.world, [], 9, base.phase3Authority),
