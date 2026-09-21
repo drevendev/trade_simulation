@@ -705,20 +705,72 @@ export function planHouseholdConsumptionPhase9(input: HouseholdConsumptionPhase9
 export function applyHouseholdConsumptionTransition(
   worldAfterMarketSettlement: WorldState,
   executions: readonly HouseholdConsumptionExecution[],
+  currentTick: number,
 ): WorldState {
-  const quantityEpsilon = resolveControls(worldAfterMarketSettlement).quantityEpsilon;
-  const cohorts = new Map(worldAfterMarketSettlement.cohorts);
-  const seen = new Set<CohortId>();
+  if (!Number.isInteger(currentTick) || currentTick < 0) {
+    throw new Error(`Phase-9 household transition tick must be a non-negative integer, got ${String(currentTick)}`);
+  }
+  const lastAppliedTick = worldAfterMarketSettlement.lastHouseholdConsumptionTransitionTick ?? -1;
+  if (!Number.isInteger(lastAppliedTick) || lastAppliedTick < -1) {
+    throw new Error(
+      `WorldState.lastHouseholdConsumptionTransitionTick must be an integer >= -1, got ${String(lastAppliedTick)}`,
+    );
+  }
+  if (lastAppliedTick >= currentTick) {
+    throw new Error(
+      `Phase-9 household transition for tick ${currentTick} cannot persist after tick ${lastAppliedTick}; each canonical tick may persist Phase 9 once`,
+    );
+  }
 
-  for (const execution of stableOrderBy(executions, (item) => String(item.cohortId))) {
-    if (seen.has(execution.cohortId)) {
+  const requiredCohortIds = stableOrderBy(
+    [...worldAfterMarketSettlement.cohorts.values()]
+      .filter(
+        (cohort) =>
+          requireNonNegative(`Cohort ${String(cohort.cohortId)} population`, cohort.seed.population) > 0,
+      )
+      .map((cohort) => cohort.cohortId),
+    String,
+  );
+  const requiredCohortSet = new Set(requiredCohortIds);
+  const executionByCohort = new Map<CohortId, HouseholdConsumptionExecution>();
+  for (const execution of executions) {
+    if (execution.tick !== currentTick) {
+      throw new Error(
+        `HouseholdConsumptionExecution for Cohort ${String(execution.cohortId)} execution tick ${execution.tick} does not match authoritative tick ${currentTick}`,
+      );
+    }
+    if (executionByCohort.has(execution.cohortId)) {
       throw new Error(`Duplicate HouseholdConsumptionExecution for Cohort ${String(execution.cohortId)}`);
     }
-    seen.add(execution.cohortId);
-    const cohort = cohorts.get(execution.cohortId);
+    const cohort = worldAfterMarketSettlement.cohorts.get(execution.cohortId);
     if (cohort === undefined) {
       throw new Error(`HouseholdConsumptionExecution references unknown Cohort ${String(execution.cohortId)}`);
     }
+    if (!requiredCohortSet.has(execution.cohortId)) {
+      throw new Error(
+        `HouseholdConsumptionExecution references non-positive-population Cohort ${String(execution.cohortId)}`,
+      );
+    }
+    executionByCohort.set(execution.cohortId, execution);
+  }
+  if (executionByCohort.size !== requiredCohortIds.length) {
+    throw new Error(
+      `Phase-9 household transition must cover every positive-population Cohort exactly once: expected ${requiredCohortIds.length}, got ${executionByCohort.size}`,
+    );
+  }
+  for (const cohortId of requiredCohortIds) {
+    if (!executionByCohort.has(cohortId)) {
+      throw new Error(
+        `Phase-9 household transition must cover every positive-population Cohort exactly once; missing ${String(cohortId)}`,
+      );
+    }
+  }
+
+  const quantityEpsilon = resolveControls(worldAfterMarketSettlement).quantityEpsilon;
+  const cohorts = new Map(worldAfterMarketSettlement.cohorts);
+
+  for (const execution of stableOrderBy(executions, (item) => String(item.cohortId))) {
+    const cohort = cohorts.get(execution.cohortId)!;
 
     const declaredOpening = new Map(
       Object.entries(execution.postMarketInventoryByGood) as [GoodId, number][],
@@ -799,7 +851,11 @@ export function applyHouseholdConsumptionTransition(
     cohorts.set(execution.cohortId, { ...cohort, householdInventory: ending });
   }
 
-  return { ...worldAfterMarketSettlement, cohorts };
+  return {
+    ...worldAfterMarketSettlement,
+    cohorts,
+    lastHouseholdConsumptionTransitionTick: currentTick,
+  };
 }
 
 /** Phase-9 handler: emits execution/economic/loss evidence into TickContext only. */
