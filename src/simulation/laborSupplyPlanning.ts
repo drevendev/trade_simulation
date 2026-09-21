@@ -22,6 +22,40 @@ export interface LaborSupplyPlan {
   readonly availableWorkerEquivalents: number;
 }
 
+interface Phase2LaborSupplyAuthorityRecord {
+  readonly tick: number;
+  readonly world: WorldState;
+  readonly laborSupplyPlans: readonly LaborSupplyPlan[];
+}
+
+/**
+ * Runtime provenance for the exact supply batch emitted by the canonical Phase-2 handler.
+ * Actor IDs alone are not authority: decision-bearing participation and availability values
+ * must come from the handler that derived them from this exact opening WorldState.
+ */
+const phase2LaborSupplyAuthorities = new WeakMap<
+  readonly LaborSupplyPlan[],
+  Phase2LaborSupplyAuthorityRecord
+>();
+
+export function requireCanonicalPhase2LaborSupplyPlans(
+  world: WorldState,
+  laborSupplyPlans: readonly LaborSupplyPlan[],
+  currentTick: number,
+): void {
+  const authority = phase2LaborSupplyAuthorities.get(laborSupplyPlans);
+  if (
+    authority === undefined ||
+    authority.tick !== currentTick ||
+    authority.world !== world ||
+    authority.laborSupplyPlans !== laborSupplyPlans
+  ) {
+    throw new Error(
+      `Phase-2 labor-supply evidence for tick ${currentTick} was not issued by the canonical Phase-2 handler for this WorldState`,
+    );
+  }
+}
+
 interface ResolvedLaborSupplyConfig {
   readonly baseParticipationByStratum: Readonly<Record<string, number>>;
   readonly minParticipation: number;
@@ -265,9 +299,17 @@ export function createPhase2LaborSupplyPlanningHandler(): PhaseHandler {
     if (context.phase !== 2) {
       return context;
     }
+    const laborSupplyPlans = Object.freeze(
+      generateLaborSupplyPlansPhase2(world, context.tick).map((plan) => Object.freeze({ ...plan })),
+    );
+    phase2LaborSupplyAuthorities.set(laborSupplyPlans, {
+      tick: context.tick,
+      world,
+      laborSupplyPlans,
+    });
     return {
       ...context,
-      laborSupplyPlans: generateLaborSupplyPlansPhase2(world, context.tick),
+      laborSupplyPlans,
     };
   };
 }

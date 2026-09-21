@@ -383,6 +383,7 @@ export function applyWageSettlementTransition(
   }
 
   const phase3LaborAllocations = requireCompletePhase3LaborAllocationAuthority(
+    world,
     phase3AuthorityContext,
     currentTick,
   );

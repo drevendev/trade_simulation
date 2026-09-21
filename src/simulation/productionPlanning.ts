@@ -65,6 +65,36 @@ export interface LaborDemandPlan {
   readonly grossPayrollCap: number;
 }
 
+interface Phase2LaborDemandAuthorityRecord {
+  readonly tick: number;
+  readonly world: WorldState;
+  readonly laborDemandPlans: readonly LaborDemandPlan[];
+}
+
+/** Exact handler-issued provenance for decision-bearing Phase-2 employer labor demand. */
+const phase2LaborDemandAuthorities = new WeakMap<
+  readonly LaborDemandPlan[],
+  Phase2LaborDemandAuthorityRecord
+>();
+
+export function requireCanonicalPhase2LaborDemandPlans(
+  world: WorldState,
+  laborDemandPlans: readonly LaborDemandPlan[],
+  currentTick: number,
+): void {
+  const authority = phase2LaborDemandAuthorities.get(laborDemandPlans);
+  if (
+    authority === undefined ||
+    authority.tick !== currentTick ||
+    authority.world !== world ||
+    authority.laborDemandPlans !== laborDemandPlans
+  ) {
+    throw new Error(
+      `Phase-2 labor-demand evidence for tick ${currentTick} was not issued by the canonical Phase-2 handler for this WorldState`,
+    );
+  }
+}
+
 /**
  * Read-only Phase-2 evidence whose provenance must be Phase-1/opening/prior-close state.
  * Productivity factors other than condition are supplied explicitly because their later
@@ -723,11 +753,20 @@ export function createPhase2ProductionPlanningHandler(options: {
       productionMarketIntents.push(...result.inputIntents, ...result.investmentIntents);
     }
 
+    const canonicalLaborDemandPlans = Object.freeze(
+      laborDemandPlans.map((plan) => Object.freeze({ ...plan })),
+    );
+    phase2LaborDemandAuthorities.set(canonicalLaborDemandPlans, {
+      tick: context.tick,
+      world,
+      laborDemandPlans: canonicalLaborDemandPlans,
+    });
+
     return {
       ...context,
       budgetLedger,
       productionPlans,
-      laborDemandPlans,
+      laborDemandPlans: canonicalLaborDemandPlans,
       productionMarketIntents,
     };
   };

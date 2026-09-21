@@ -10,8 +10,14 @@ import { createDefaultSimulationConfig, type SimulationConfig } from "../config/
 import type { CohortId, ProductionUnitId, RegionId } from "../domain/id";
 import { isFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
-import type { LaborSupplyPlan } from "./laborSupplyPlanning";
-import type { LaborDemandPlan } from "./productionPlanning";
+import {
+  requireCanonicalPhase2LaborSupplyPlans,
+  type LaborSupplyPlan,
+} from "./laborSupplyPlanning";
+import {
+  requireCanonicalPhase2LaborDemandPlans,
+  type LaborDemandPlan,
+} from "./productionPlanning";
 import type { PhaseHandler, TickContext } from "./tickOrchestrator";
 import type { PendingTransitions, WorldState } from "./worldState";
 
@@ -29,6 +35,7 @@ export interface LaborAllocation {
 
 interface Phase3LaborAllocationAuthorityRecord {
   readonly tick: number;
+  readonly world: WorldState;
   readonly laborAllocations: readonly LaborAllocation[];
 }
 
@@ -411,6 +418,7 @@ export function allocateLaborPhase3(args: {
  * they claim phase 3 and carry a plausible allocation array.
  */
 export function requireCompletePhase3LaborAllocationAuthority(
+  world: WorldState,
   context: TickContext,
   currentTick: number,
 ): readonly LaborAllocation[] {
@@ -434,6 +442,7 @@ export function requireCompletePhase3LaborAllocationAuthority(
   if (
     authority === undefined ||
     authority.tick !== currentTick ||
+    authority.world !== world ||
     authority.laborAllocations !== context.laborAllocations
   ) {
     throw new Error(
@@ -528,6 +537,12 @@ function requireCompletePhase2LaborPlanningEvidence(
     }
   }
 
+  // Identity/coverage checks above defend the actor set; exact handler provenance below
+  // authenticates every decision-bearing value (region/category/quantities/wage/cap) and
+  // binds both batches to this exact opening WorldState and tick.
+  requireCanonicalPhase2LaborSupplyPlans(world, laborSupplyPlans, context.tick);
+  requireCanonicalPhase2LaborDemandPlans(world, laborDemandPlans, context.tick);
+
   return { laborSupplyPlans, laborDemandPlans };
 }
 
@@ -554,6 +569,7 @@ export function createPhase3LaborAllocationHandler(): PhaseHandler {
     const completedContext: TickContext = { ...context, laborAllocations };
     phase3LaborAllocationAuthorities.set(completedContext, {
       tick: context.tick,
+      world,
       laborAllocations,
     });
     return completedContext;

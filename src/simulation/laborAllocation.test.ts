@@ -213,8 +213,9 @@ describe("REQ-PRODUCTION-003 Phase-3 labor allocation slice", () => {
       laborSupplyPlans: [supply("cohort:a", 5)],
       laborDemandPlans: [],
     };
-    const result = createPhase3LaborAllocationHandler()(world, context, world.pendingTransitions);
-    expect(result.laborAllocations).toEqual([]);
+    expect(() =>
+      createPhase3LaborAllocationHandler()(world, context, world.pendingTransitions),
+    ).toThrow(/not issued by the canonical Phase-2 handler/);
     expect(JSON.stringify(cohort.seed)).toBe(before);
     expect(world.cohorts.get(cohort.cohortId)).toBe(cohort);
   });
