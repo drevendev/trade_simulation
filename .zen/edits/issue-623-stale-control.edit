@@ -1,0 +1,8 @@
+### FILE: src/simulation/wageSettlement.test.ts
+<<<<<<< FIND
+    expect(() => applyWageSettlementTransition(settled9, settlements9, 10, [base.laborAllocation])).toThrow(/is for tick 9, expected 10/);
+=======
+    expect(() =>
+      applyWageSettlementTransition(settled9, settlements9, 10, [{ ...base.laborAllocation, tick: 10 }]),
+    ).toThrow(/is for tick 9, expected 10/);
+>>>>>>> REPLACE
