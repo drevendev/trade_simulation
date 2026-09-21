@@ -1,0 +1,303 @@
+### FILE: src/simulation/productionExecution.ts
+<<<<<<< FIND
+export interface ProductionExecutionPlanResult {
+  readonly executions: readonly ProductionExecution[];
+}
+
+function requireFinite(name: string, value: number): number {
+=======
+export interface ProductionExecutionPlanResult {
+  readonly executions: readonly ProductionExecution[];
+}
+
+export interface ProductionExecutionAuthority {
+  readonly productionPlans: readonly ProductionPlan[];
+  readonly laborAllocations: readonly LaborAllocation[];
+}
+
+function requireFinite(name: string, value: number): number {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  if (missingActiveUnitIds.length > 0) {
+    throw new Error(
+      `Phase-5 production execution coverage is incomplete for tick ${currentTick}; missing ACTIVE units: ${missingActiveUnitIds
+        .map(String)
+        .join(", ")}`,
+    );
+  }
+}
+
+/** Persist exact Phase-5 physical deltas without mutating the input WorldState. */
+export function applyProductionExecutionTransition(
+  world: WorldState,
+  executions: readonly ProductionExecution[],
+  currentTick: number,
+): WorldState {
+=======
+  if (missingActiveUnitIds.length > 0) {
+    throw new Error(
+      `Phase-5 production execution coverage is incomplete for tick ${currentTick}; missing ACTIVE units: ${missingActiveUnitIds
+        .map(String)
+        .join(", ")}`,
+    );
+  }
+}
+
+function validateProductionExecutionAuthority(
+  world: WorldState,
+  executions: readonly ProductionExecution[],
+  currentTick: number,
+  authority: ProductionExecutionAuthority,
+  quantityEpsilon: number,
+): void {
+  const canonicalExecutions = planProductionExecutionsPhase5({
+    world,
+    tick: currentTick,
+    productionPlans: authority.productionPlans,
+    laborAllocations: authority.laborAllocations,
+  }).executions;
+  const canonicalByUnit = new Map(
+    canonicalExecutions.map((execution) => [execution.unitId, execution] as const),
+  );
+
+  for (const execution of stableOrderBy(executions, (candidate) => String(candidate.unitId))) {
+    const canonical = canonicalByUnit.get(execution.unitId);
+    if (!canonical) {
+      throw new Error(
+        `ProductionExecution for ${String(execution.unitId)} has no authoritative current-tick ProductionPlan`,
+      );
+    }
+    if (execution.productionPlanId !== canonical.productionPlanId) {
+      throw new Error(
+        `ProductionExecution plan identity for ${String(execution.unitId)} does not match authoritative ProductionPlan`,
+      );
+    }
+
+    const submittedPlannedBatches = requireNonNegative(
+      `ProductionExecution planned batches for ${String(execution.unitId)}`,
+      execution.plannedBatches,
+    );
+    if (Math.abs(submittedPlannedBatches - canonical.plannedBatches) > quantityEpsilon) {
+      throw new Error(
+        `ProductionExecution planned batches for ${String(execution.unitId)} do not match authoritative ProductionPlan`,
+      );
+    }
+
+    const submittedCapitalBound = requireNonNegative(
+      `ProductionExecution capital bound for ${String(execution.unitId)}`,
+      execution.capitalBoundBatches,
+    );
+    if (Math.abs(submittedCapitalBound - canonical.capitalBoundBatches) > quantityEpsilon) {
+      throw new Error(
+        `ProductionExecution capital bound for ${String(execution.unitId)} does not match authoritative ProductionPlan`,
+      );
+    }
+
+    if (canonical.laborBoundBatches === null) {
+      if (execution.laborBoundBatches !== null) {
+        throw new Error(
+          `ProductionExecution labor bound for ${String(execution.unitId)} does not match authoritative Phase-3 labor evidence`,
+        );
+      }
+    } else {
+      if (execution.laborBoundBatches === null) {
+        throw new Error(
+          `ProductionExecution labor bound for ${String(execution.unitId)} does not match authoritative Phase-3 labor evidence`,
+        );
+      }
+      const submittedLaborBound = requireNonNegative(
+        `ProductionExecution labor bound for ${String(execution.unitId)}`,
+        execution.laborBoundBatches,
+      );
+      if (Math.abs(submittedLaborBound - canonical.laborBoundBatches) > quantityEpsilon) {
+        throw new Error(
+          `ProductionExecution labor bound for ${String(execution.unitId)} does not match authoritative Phase-3 labor evidence`,
+        );
+      }
+    }
+
+    const submittedAllocatedLabor = requireNonNegative(
+      `ProductionExecution allocated labor for ${String(execution.unitId)}`,
+      execution.allocatedWorkerEquivalents,
+    );
+    if (Math.abs(submittedAllocatedLabor - canonical.allocatedWorkerEquivalents) > quantityEpsilon) {
+      throw new Error(
+        `ProductionExecution allocated labor for ${String(execution.unitId)} does not match authoritative Phase-3 labor evidence`,
+      );
+    }
+
+    const submittedRealizedBatches = requireNonNegative(
+      `ProductionExecution realized batches for ${String(execution.unitId)}`,
+      execution.realizedBatches,
+    );
+    if (Math.abs(submittedRealizedBatches - canonical.realizedBatches) > quantityEpsilon) {
+      throw new Error(
+        `ProductionExecution realized batches for ${String(execution.unitId)} do not match authoritative Phase-5 recomputation`,
+      );
+    }
+  }
+}
+
+/** Persist exact Phase-5 physical deltas without mutating the input WorldState. */
+export function applyProductionExecutionTransition(
+  world: WorldState,
+  executions: readonly ProductionExecution[],
+  currentTick: number,
+  authority: ProductionExecutionAuthority,
+): WorldState {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  const quantityEpsilon = requirePositive(
+    "SimulationConfig.numeric.quantityEpsilon",
+    world.simulationConfig.numeric.quantityEpsilon ?? createDefaultSimulationConfig().numeric.quantityEpsilon!,
+  );
+  const productionUnits = new Map(world.productionUnits);
+=======
+  const quantityEpsilon = requirePositive(
+    "SimulationConfig.numeric.quantityEpsilon",
+    world.simulationConfig.numeric.quantityEpsilon ?? createDefaultSimulationConfig().numeric.quantityEpsilon!,
+  );
+  validateProductionExecutionAuthority(world, executions, currentTick, authority, quantityEpsilon);
+  const productionUnits = new Map(world.productionUnits);
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionExecution.test.ts
+<<<<<<< FIND
+    const transitioned = applyProductionExecutionTransition(world, result.executions, TICK);
+=======
+    const transitioned = applyProductionExecutionTransition(world, result.executions, TICK, {
+      productionPlans: [plan(unit, { planned: 10, capacity: 10 })],
+      laborAllocations: [labor],
+    });
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const afterFirst = applyProductionExecutionTransition(world, [first], TICK);
+=======
+    const afterFirst = applyProductionExecutionTransition(world, [first], TICK, {
+      productionPlans: [plan(unit, { planned: 10, capacity: 10 })],
+      laborAllocations: [allocation(unit, region.regionId, "GENERAL", 1_000)],
+    });
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const after = applyProductionExecutionTransition(world, [execution], TICK);
+    const intents = buildProductionOutputSellIntentsPhase5(after, [execution]);
+=======
+    const after = applyProductionExecutionTransition(world, [execution], TICK, {
+      productionPlans: [plan(unit, { planned: 1, capacity: 1 })],
+      laborAllocations: [allocation(unit, region.regionId, "GENERAL", 30)],
+    });
+    const intents = buildProductionOutputSellIntentsPhase5(after, [execution]);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    expect(() => applyProductionExecutionTransition(world, [{
+      ...execution,
+      outputProducedQuantity: execution.outputProducedQuantity + 1,
+      postProductionOutputQuantity: execution.postProductionOutputQuantity + 1,
+    }], TICK)).toThrow(/output quantity does not equal recipe output/);
+
+    expect(() => applyProductionExecutionTransition(world, [{
+      ...execution,
+      inputConsumedByGood: { "good:iron": execution.inputConsumedByGood["good:iron" as GoodId] ?? 0 } as Readonly<Record<GoodId, number>>,
+    }], TICK)).toThrow(/input-good set does not match recipe/);
+=======
+    const authority = {
+      productionPlans: [plan(unit, { planned: 1, capacity: 1 })],
+      laborAllocations: [allocation(unit, region.regionId, "GENERAL", 30, "physical")],
+    };
+    expect(() => applyProductionExecutionTransition(world, [{
+      ...execution,
+      outputProducedQuantity: execution.outputProducedQuantity + 1,
+      postProductionOutputQuantity: execution.postProductionOutputQuantity + 1,
+    }], TICK, authority)).toThrow(/output quantity does not equal recipe output/);
+
+    expect(() => applyProductionExecutionTransition(world, [{
+      ...execution,
+      inputConsumedByGood: { "good:iron": execution.inputConsumedByGood["good:iron" as GoodId] ?? 0 } as Readonly<Record<GoodId, number>>,
+    }], TICK, authority)).toThrow(/input-good set does not match recipe/);
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionExecutionPersistence.test.ts
+<<<<<<< FIND
+    const first = oneExecution(world, unit, TICK, "first");
+    const afterFirst = applyProductionExecutionTransition(world, [first], TICK);
+=======
+    const first = oneExecution(world, unit, TICK, "first");
+    const afterFirst = applyProductionExecutionTransition(world, [first], TICK, {
+      productionPlans: [plan(unit, TICK)],
+      laborAllocations: [allocation(unit, regionFor(world, unit).regionId, TICK, "first")],
+    });
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    expect(() => applyProductionExecutionTransition(afterFirst, [freshSameTick], TICK)).toThrow(
+      /each canonical tick may persist Phase 5 once/,
+    );
+=======
+    expect(() => applyProductionExecutionTransition(afterFirst, [freshSameTick], TICK, {
+      productionPlans: [plan(unitAfterFirst, TICK)],
+      laborAllocations: [
+        allocation(unitAfterFirst, regionFor(afterFirst, unitAfterFirst).regionId, TICK, "fresh-same-tick"),
+      ],
+    })).toThrow(/each canonical tick may persist Phase 5 once/);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const nextTick = oneExecution(afterFirst, unitAfterFirst, TICK + 1, "next-tick");
+    const afterNext = applyProductionExecutionTransition(afterFirst, [nextTick], TICK + 1);
+=======
+    const nextTick = oneExecution(afterFirst, unitAfterFirst, TICK + 1, "next-tick");
+    const afterNext = applyProductionExecutionTransition(afterFirst, [nextTick], TICK + 1, {
+      productionPlans: [plan(unitAfterFirst, TICK + 1)],
+      laborAllocations: [
+        allocation(unitAfterFirst, regionFor(afterFirst, unitAfterFirst).regionId, TICK + 1, "next-tick"),
+      ],
+    });
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    expect(() => applyProductionExecutionTransition(world, [execution], TICK + 1)).toThrow(
+      `ProductionExecution for ${String(unit.productionUnitId)} is for tick ${TICK}, expected ${TICK + 1}`,
+    );
+=======
+    expect(() => applyProductionExecutionTransition(world, [execution], TICK + 1, {
+      productionPlans: [plan(unit, TICK + 1)],
+      laborAllocations: [
+        allocation(unit, regionFor(world, unit).regionId, TICK + 1, "tick-mismatch-authority"),
+      ],
+    })).toThrow(
+      `ProductionExecution for ${String(unit.productionUnitId)} is for tick ${TICK}, expected ${TICK + 1}`,
+    );
+>>>>>>> REPLACE
+
+### FILE: src/simulation/resourceGenesisAuthority.test.ts
+<<<<<<< FIND
+    const persistenceWorld = { ...world, productionUnits };
+    const after = applyProductionExecutionTransition(persistenceWorld, [execution], execution.tick);
+=======
+    const persistenceWorld = { ...world, productionUnits };
+    const currentPlan: ProductionPlan = {
+      ...productionPlan(unit!.productionUnitId, recipe.id, execution.tick),
+      plannedBatches: realizedBatches,
+      effectiveCapacityBatches: realizedBatches,
+    };
+    const currentLabor: LaborAllocation = {
+      allocationId: `labor-allocation:${execution.tick}:${String(unit!.productionUnitId)}:resource-deplete`,
+      tick: execution.tick,
+      regionId: region!.regionId,
+      laborCategory: recipe.laborCategory,
+      cohortId: "Cohort:resource-deplete" as CohortId,
+      unitId: unit!.productionUnitId,
+      workerEquivalents: recipe.laborPerBatch * realizedBatches,
+      grossWagePerWorker: 1,
+      grossWageObligation: recipe.laborPerBatch * realizedBatches,
+    };
+    const after = applyProductionExecutionTransition(persistenceWorld, [execution], execution.tick, {
+      productionPlans: [currentPlan],
+      laborAllocations: [currentLabor],
+    });
+>>>>>>> REPLACE
