@@ -1,0 +1,89 @@
+### FILE: src/simulation/householdConsumptionExecution.ts
+<<<<<<< FIND
+  const { cohort, tick, controls } = args;
+  const regionId = resolveRegionIdForCohort(args.world, cohort);
+  const supply = args.laborSupplyPlans.filter((plan) => plan.cohortId === cohort.cohortId);
+=======
+  const { cohort, tick, controls } = args;
+  const regionId = resolveRegionIdForCohort(args.world, cohort);
+  const region = args.world.regions.get(regionId);
+  if (region === undefined) {
+    throw new Error(`Resolved Region ${String(regionId)} is missing from WorldState`);
+  }
+  const supply = args.laborSupplyPlans.filter((plan) => plan.cohortId === cohort.cohortId);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    if (settlement === undefined) {
+      throw new Error(`Missing WageSettlement for LaborAllocation ${allocation.allocationId}`);
+    }
+    const gross = requireNonNegative(`WageSettlement ${settlement.settlementId} grossWage`, settlement.grossWage);
+=======
+    if (settlement === undefined) {
+      throw new Error(`Missing WageSettlement for LaborAllocation ${allocation.allocationId}`);
+    }
+    if (settlement.unitId !== allocation.unitId) {
+      throw new Error(`WageSettlement ${settlement.settlementId} employer does not match Phase-3 allocation`);
+    }
+    if (settlement.currencyId !== region.settlementCurrencyId) {
+      throw new Error(`WageSettlement ${settlement.settlementId} currency does not match Region settlement currency`);
+    }
+    const gross = requireNonNegative(`WageSettlement ${settlement.settlementId} grossWage`, settlement.grossWage);
+>>>>>>> REPLACE
+
+### FILE: src/simulation/householdConsumptionExecution.test.ts
+<<<<<<< FIND
+    expect(canonical.grossWageIncome).toBe(20);
+    expect(canonical.netWageReceipt).toBe(18);
+    expect(canonical.wageTaxWithheld).toBe(2);
+  });
+
+  it("rejects stale LaborSupplyPlan provenance while same-tick Phase-3/5 evidence remains valid", () => {
+=======
+    expect(canonical.grossWageIncome).toBe(20);
+    expect(canonical.netWageReceipt).toBe(18);
+    expect(canonical.wageTaxWithheld).toBe(2);
+  });
+
+  it("rejects coherently forged WageSettlement employer and currency provenance", () => {
+    const evidence = wageEvidence();
+
+    const forgedUnit = unitId("unit:forged");
+    const forgedPayerPayment: EconomicTransaction = {
+      ...evidence.transaction,
+      source: { type: "PRODUCTION_UNIT", productionUnitId: forgedUnit },
+    };
+    const forgedPayerSettlement: WageSettlement = {
+      ...evidence.settlement,
+      unitId: forgedUnit,
+      wagePaymentTransaction: forgedPayerPayment as WageSettlement["wagePaymentTransaction"],
+    };
+    expect(() => plan({
+      world: world(),
+      supply: supply(10),
+      allocations: [evidence.allocation],
+      settlements: [forgedPayerSettlement],
+      transactions: [forgedPayerPayment],
+    })).toThrow(/employer does not match Phase-3 allocation/);
+
+    const forgedCurrency = currencyId("currency:forged");
+    const forgedCurrencyPayment: EconomicTransaction = {
+      ...evidence.transaction,
+      currencyId: forgedCurrency,
+    };
+    const forgedCurrencySettlement: WageSettlement = {
+      ...evidence.settlement,
+      currencyId: forgedCurrency,
+      wagePaymentTransaction: forgedCurrencyPayment as WageSettlement["wagePaymentTransaction"],
+    };
+    expect(() => plan({
+      world: world(),
+      supply: supply(10),
+      allocations: [evidence.allocation],
+      settlements: [forgedCurrencySettlement],
+      transactions: [forgedCurrencyPayment],
+    })).toThrow(/currency does not match Region settlement currency/);
+  });
+
+  it("rejects stale LaborSupplyPlan provenance while same-tick Phase-3/5 evidence remains valid", () => {
+>>>>>>> REPLACE
