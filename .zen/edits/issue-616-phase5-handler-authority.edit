@@ -1,0 +1,11 @@
+### FILE: src/simulation/productionExecution.ts
+<<<<<<< FIND
+    const projectedWorld = applyProductionExecutionTransition(world, executions, context.tick);
+    const outputIntents = buildProductionOutputSellIntentsPhase5(projectedWorld, executions);
+=======
+    const projectedWorld = applyProductionExecutionTransition(world, executions, context.tick, {
+      productionPlans,
+      laborAllocations,
+    });
+    const outputIntents = buildProductionOutputSellIntentsPhase5(projectedWorld, executions);
+>>>>>>> REPLACE
