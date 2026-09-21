@@ -268,6 +268,21 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
     expect(base.world.cohorts.get(base.cohorts[0]!.cohortId)!.wallet).toEqual(originalCohortWallet);
     expect(base.world.states.get(base.stateId)!.treasury).toEqual(originalStateTreasury);
 
+    const moneyEpsilon = base.world.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
+    const tinyPositiveAllocation = allocation({
+      unitId: base.unit.productionUnitId,
+      cohortId: base.cohorts[0]!.cohortId,
+      regionId: base.region.regionId,
+      laborCategory: base.laborCategory,
+      workers: 1,
+      wage: moneyEpsilon / 2,
+      suffix: "tiny-positive",
+    });
+    expect(() =>
+      applyWageSettlementTransition(base.world, [], 9, [tinyPositiveAllocation]),
+    ).toThrow(/missing canonical LaborAllocation/);
+    expect(base.world.lastWageSettlementTransitionTick).toBe(-1);
+
     const settlements = planWageSettlementsPhase5({
       tick: 9,
       world: base.world,

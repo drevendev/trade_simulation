@@ -433,7 +433,7 @@ export function applyWageSettlementTransition(
 
   for (const allocation of allocationById.values()) {
     if (
-      allocation.grossWageObligation > moneyEpsilon &&
+      allocation.grossWageObligation > 0 &&
       !persistedAllocationIds.has(allocation.allocationId)
     ) {
       throw new Error(
