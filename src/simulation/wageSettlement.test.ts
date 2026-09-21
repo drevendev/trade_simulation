@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
-import type { CohortId, GoodId, ProductionUnitId, RegionId, StateId } from "../domain/id";
+import type { CohortId, CurrencyId, GoodId, ProductionUnitId, RegionId, StateId } from "../domain/id";
 import { createPhase3LaborAllocationHandler, type LaborAllocation } from "./laborAllocation";
 import { createPhase2LaborSupplyPlanningHandler } from "./laborSupplyPlanning";
 import {
@@ -597,7 +597,10 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
       taxPolicy: policy(0.2, 0.5),
     });
     const poorBalance = base.laborAllocation.grossWageObligation / 2;
-    base.world.productionUnits.get(base.unit.productionUnitId)!.wallet.set(base.currencyId, poorBalance);
+    // Test-only fault injection after authority issuance: runtime wallets are backed by Map,
+    // while the public WorldState contract exposes them as ReadonlyMap during a tick.
+    (base.world.productionUnits.get(base.unit.productionUnitId)!.wallet as Map<CurrencyId, number>)
+      .set(base.currencyId, poorBalance);
 
     expect(() =>
       applyWageSettlementTransition(
