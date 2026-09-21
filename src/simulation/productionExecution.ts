@@ -775,7 +775,10 @@ export function createPhase5ProductionExecutionHandler(): PhaseHandler {
       productionPlans,
       laborAllocations,
     });
-    const projectedWorld = applyProductionExecutionTransition(world, executions, context.tick);
+    const projectedWorld = applyProductionExecutionTransition(world, executions, context.tick, {
+      productionPlans,
+      laborAllocations,
+    });
     const outputIntents = buildProductionOutputSellIntentsPhase5(projectedWorld, executions);
     return {
       ...context,
