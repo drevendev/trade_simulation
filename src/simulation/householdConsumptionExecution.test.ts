@@ -563,6 +563,46 @@ describe("REQ-POPULATION-003 Phase-9 household realization", () => {
     expect(canonical.wageTaxWithheld).toBe(2);
   });
 
+  it("rejects coherently forged WageSettlement employer and currency provenance", () => {
+    const evidence = wageEvidence();
+
+    const forgedUnit = unitId("unit:forged");
+    const forgedPayerPayment: EconomicTransaction = {
+      ...evidence.transaction,
+      source: { type: "PRODUCTION_UNIT", productionUnitId: forgedUnit },
+    };
+    const forgedPayerSettlement: WageSettlement = {
+      ...evidence.settlement,
+      unitId: forgedUnit,
+      wagePaymentTransaction: forgedPayerPayment as WageSettlement["wagePaymentTransaction"],
+    };
+    expect(() => plan({
+      world: world(),
+      supply: supply(10),
+      allocations: [evidence.allocation],
+      settlements: [forgedPayerSettlement],
+      transactions: [forgedPayerPayment],
+    })).toThrow(/employer does not match Phase-3 allocation/);
+
+    const forgedCurrency = currencyId("currency:forged");
+    const forgedCurrencyPayment: EconomicTransaction = {
+      ...evidence.transaction,
+      currencyId: forgedCurrency,
+    };
+    const forgedCurrencySettlement: WageSettlement = {
+      ...evidence.settlement,
+      currencyId: forgedCurrency,
+      wagePaymentTransaction: forgedCurrencyPayment as WageSettlement["wagePaymentTransaction"],
+    };
+    expect(() => plan({
+      world: world(),
+      supply: supply(10),
+      allocations: [evidence.allocation],
+      settlements: [forgedCurrencySettlement],
+      transactions: [forgedCurrencyPayment],
+    })).toThrow(/currency does not match Region settlement currency/);
+  });
+
   it("rejects stale LaborSupplyPlan provenance while same-tick Phase-3/5 evidence remains valid", () => {
     const evidence = wageEvidence();
     const currentSupply = supply(10);
