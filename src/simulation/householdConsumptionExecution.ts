@@ -389,16 +389,71 @@ function buildEconomicEvidence(args: {
         `WageSettlement ${settlement.settlementId} must have exactly one matching WAGE_PAYMENT transaction, got ${matchingTransactions.length}`,
       );
     }
+    const canonicalPayment = settlement.wagePaymentTransaction;
+    if (
+      canonicalPayment.type !== "WAGE_PAYMENT" ||
+      canonicalPayment.tick !== settlement.tick ||
+      canonicalPayment.phase !== 5 ||
+      canonicalPayment.bundleId !== settlement.bundleId ||
+      canonicalPayment.source?.type !== "PRODUCTION_UNIT" ||
+      canonicalPayment.source.productionUnitId !== settlement.unitId ||
+      canonicalPayment.destination?.type !== "COHORT" ||
+      canonicalPayment.destination.cohortId !== settlement.cohortId ||
+      canonicalPayment.currencyId !== settlement.currencyId ||
+      canonicalPayment.sourceRegionId !== settlement.regionId ||
+      canonicalPayment.destinationRegionId !== settlement.regionId ||
+      canonicalPayment.reason !== settlement.allocationId
+    ) {
+      throw new Error(`WageSettlement ${settlement.settlementId} canonical WAGE_PAYMENT provenance mismatch`);
+    }
+
     const transaction = matchingTransactions[0]!;
     if (
       transaction.type !== "WAGE_PAYMENT" ||
-      transaction.tick !== tick ||
+      transaction.tick !== settlement.tick ||
       transaction.phase !== 5 ||
+      transaction.bundleId !== settlement.bundleId ||
+      transaction.source?.type !== "PRODUCTION_UNIT" ||
+      transaction.source.productionUnitId !== settlement.unitId ||
       transaction.destination?.type !== "COHORT" ||
-      transaction.destination.cohortId !== cohort.cohortId
+      transaction.destination.cohortId !== settlement.cohortId ||
+      transaction.currencyId !== settlement.currencyId ||
+      transaction.sourceRegionId !== settlement.regionId ||
+      transaction.destinationRegionId !== settlement.regionId ||
+      transaction.reason !== settlement.allocationId
     ) {
       throw new Error(`WAGE_PAYMENT ${String(transaction.transactionId)} provenance mismatch`);
     }
+    const canonicalTransactionAmount = requireNonNegative(
+      `canonical WAGE_PAYMENT ${String(canonicalPayment.transactionId)} moneyAmount`,
+      canonicalPayment.moneyAmount ?? Number.NaN,
+    );
+    const canonicalTransactionGross = requireNonNegative(
+      `canonical WAGE_PAYMENT ${String(canonicalPayment.transactionId)} grossMoneyAmount`,
+      canonicalPayment.grossMoneyAmount,
+    );
+    const canonicalAssessedTax = requireNonNegative(
+      `canonical WAGE_PAYMENT ${String(canonicalPayment.transactionId)} assessedTaxAmount`,
+      canonicalPayment.assessedTaxAmount,
+    );
+    const canonicalTransactionTax = requireNonNegative(
+      `canonical WAGE_PAYMENT ${String(canonicalPayment.transactionId)} taxAmount`,
+      canonicalPayment.taxAmount ?? Number.NaN,
+    );
+    const canonicalRecordedAmount = requireNonNegative(
+      `canonical WAGE_PAYMENT ${String(canonicalPayment.transactionId)} amount`,
+      canonicalPayment.amount,
+    );
+    if (
+      Math.abs(canonicalTransactionAmount - net) > controls.moneyEpsilon ||
+      Math.abs(canonicalTransactionGross - gross) > controls.moneyEpsilon ||
+      Math.abs(canonicalAssessedTax - settlement.assessedTax) > controls.moneyEpsilon ||
+      Math.abs(canonicalTransactionTax - tax) > controls.moneyEpsilon ||
+      Math.abs(canonicalRecordedAmount - net) > controls.moneyEpsilon
+    ) {
+      throw new Error(`WageSettlement ${settlement.settlementId} canonical WAGE_PAYMENT does not match settlement evidence`);
+    }
+
     const transactionAmount = requireNonNegative(
       `WAGE_PAYMENT ${String(transaction.transactionId)} moneyAmount`,
       transaction.moneyAmount ?? Number.NaN,
@@ -407,14 +462,24 @@ function buildEconomicEvidence(args: {
       `WAGE_PAYMENT ${String(transaction.transactionId)} grossMoneyAmount`,
       transaction.grossMoneyAmount ?? Number.NaN,
     );
+    const transactionAssessedTax = requireNonNegative(
+      `WAGE_PAYMENT ${String(transaction.transactionId)} assessedTaxAmount`,
+      transaction.assessedTaxAmount ?? Number.NaN,
+    );
     const transactionTax = requireNonNegative(
       `WAGE_PAYMENT ${String(transaction.transactionId)} taxAmount`,
       transaction.taxAmount ?? Number.NaN,
     );
+    const transactionRecordedAmount = requireNonNegative(
+      `WAGE_PAYMENT ${String(transaction.transactionId)} amount`,
+      transaction.amount,
+    );
     if (
-      Math.abs(transactionAmount - net) > controls.moneyEpsilon ||
-      Math.abs(transactionGross - gross) > controls.moneyEpsilon ||
-      Math.abs(transactionTax - tax) > controls.moneyEpsilon
+      Math.abs(transactionAmount - canonicalTransactionAmount) > controls.moneyEpsilon ||
+      Math.abs(transactionGross - canonicalTransactionGross) > controls.moneyEpsilon ||
+      Math.abs(transactionAssessedTax - canonicalAssessedTax) > controls.moneyEpsilon ||
+      Math.abs(transactionTax - canonicalTransactionTax) > controls.moneyEpsilon ||
+      Math.abs(transactionRecordedAmount - canonicalRecordedAmount) > controls.moneyEpsilon
     ) {
       throw new Error(`WAGE_PAYMENT ${String(transaction.transactionId)} does not match Phase-5 settlement evidence`);
     }
