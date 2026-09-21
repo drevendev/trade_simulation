@@ -1,0 +1,307 @@
+### FILE: src/simulation/laborSupplyPlanning.ts
+<<<<<<< FIND
+export interface LaborSupplyPlan {
+  readonly planId: string;
+  readonly cohortId: CohortId;
+  readonly regionId: RegionId;
+  readonly laborCategory: string;
+  readonly availableWorkerEquivalents: number;
+}
+=======
+export interface LaborSupplyPlan {
+  readonly planId: string;
+  readonly cohortId: CohortId;
+  readonly regionId: RegionId;
+  readonly laborCategory: string;
+  readonly availableWorkerEquivalents: number;
+}
+
+interface Phase2LaborSupplyAuthorityRecord {
+  readonly tick: number;
+  readonly world: WorldState;
+  readonly laborSupplyPlans: readonly LaborSupplyPlan[];
+}
+
+/**
+ * Runtime provenance for the exact supply batch emitted by the canonical Phase-2 handler.
+ * Actor IDs alone are not authority: decision-bearing participation and availability values
+ * must come from the handler that derived them from this exact opening WorldState.
+ */
+const phase2LaborSupplyAuthorities = new WeakMap<
+  readonly LaborSupplyPlan[],
+  Phase2LaborSupplyAuthorityRecord
+>();
+
+export function requireCanonicalPhase2LaborSupplyPlans(
+  world: WorldState,
+  laborSupplyPlans: readonly LaborSupplyPlan[],
+  currentTick: number,
+): void {
+  const authority = phase2LaborSupplyAuthorities.get(laborSupplyPlans);
+  if (
+    authority === undefined ||
+    authority.tick !== currentTick ||
+    authority.world !== world ||
+    authority.laborSupplyPlans !== laborSupplyPlans
+  ) {
+    throw new Error(
+      `Phase-2 labor-supply evidence for tick ${currentTick} was not issued by the canonical Phase-2 handler for this WorldState`,
+    );
+  }
+}
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+export function createPhase2LaborSupplyPlanningHandler(): PhaseHandler {
+  return (world: WorldState, context: TickContext, _pendingTransitions: PendingTransitions): TickContext => {
+    if (context.phase !== 2) {
+      return context;
+    }
+    return {
+      ...context,
+      laborSupplyPlans: generateLaborSupplyPlansPhase2(world, context.tick),
+    };
+  };
+}
+=======
+export function createPhase2LaborSupplyPlanningHandler(): PhaseHandler {
+  return (world: WorldState, context: TickContext, _pendingTransitions: PendingTransitions): TickContext => {
+    if (context.phase !== 2) {
+      return context;
+    }
+    const laborSupplyPlans = Object.freeze(
+      generateLaborSupplyPlansPhase2(world, context.tick).map((plan) => Object.freeze({ ...plan })),
+    );
+    phase2LaborSupplyAuthorities.set(laborSupplyPlans, {
+      tick: context.tick,
+      world,
+      laborSupplyPlans,
+    });
+    return {
+      ...context,
+      laborSupplyPlans,
+    };
+  };
+}
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionPlanning.ts
+<<<<<<< FIND
+export interface LaborDemandPlan {
+  readonly planId: string;
+  readonly productionPlanId: string;
+  readonly unitId: ProductionUnitId;
+  readonly regionId: RegionId;
+  readonly laborCategory: string;
+  readonly requestedWorkerEquivalents: number;
+  readonly grossWageOffer: number;
+  readonly grossPayrollCap: number;
+}
+=======
+export interface LaborDemandPlan {
+  readonly planId: string;
+  readonly productionPlanId: string;
+  readonly unitId: ProductionUnitId;
+  readonly regionId: RegionId;
+  readonly laborCategory: string;
+  readonly requestedWorkerEquivalents: number;
+  readonly grossWageOffer: number;
+  readonly grossPayrollCap: number;
+}
+
+interface Phase2LaborDemandAuthorityRecord {
+  readonly tick: number;
+  readonly world: WorldState;
+  readonly laborDemandPlans: readonly LaborDemandPlan[];
+}
+
+/** Exact handler-issued provenance for decision-bearing Phase-2 employer labor demand. */
+const phase2LaborDemandAuthorities = new WeakMap<
+  readonly LaborDemandPlan[],
+  Phase2LaborDemandAuthorityRecord
+>();
+
+export function requireCanonicalPhase2LaborDemandPlans(
+  world: WorldState,
+  laborDemandPlans: readonly LaborDemandPlan[],
+  currentTick: number,
+): void {
+  const authority = phase2LaborDemandAuthorities.get(laborDemandPlans);
+  if (
+    authority === undefined ||
+    authority.tick !== currentTick ||
+    authority.world !== world ||
+    authority.laborDemandPlans !== laborDemandPlans
+  ) {
+    throw new Error(
+      `Phase-2 labor-demand evidence for tick ${currentTick} was not issued by the canonical Phase-2 handler for this WorldState`,
+    );
+  }
+}
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    return {
+      ...context,
+      budgetLedger,
+      productionPlans,
+      laborDemandPlans,
+      productionMarketIntents,
+    };
+  };
+}
+=======
+    const canonicalLaborDemandPlans = Object.freeze(
+      laborDemandPlans.map((plan) => Object.freeze({ ...plan })),
+    );
+    phase2LaborDemandAuthorities.set(canonicalLaborDemandPlans, {
+      tick: context.tick,
+      world,
+      laborDemandPlans: canonicalLaborDemandPlans,
+    });
+
+    return {
+      ...context,
+      budgetLedger,
+      productionPlans,
+      laborDemandPlans: canonicalLaborDemandPlans,
+      productionMarketIntents,
+    };
+  };
+}
+>>>>>>> REPLACE
+
+### FILE: src/simulation/laborAllocation.ts
+<<<<<<< FIND
+import type { LaborSupplyPlan } from "./laborSupplyPlanning";
+import type { LaborDemandPlan } from "./productionPlanning";
+=======
+import {
+  requireCanonicalPhase2LaborSupplyPlans,
+  type LaborSupplyPlan,
+} from "./laborSupplyPlanning";
+import {
+  requireCanonicalPhase2LaborDemandPlans,
+  type LaborDemandPlan,
+} from "./productionPlanning";
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+interface Phase3LaborAllocationAuthorityRecord {
+  readonly tick: number;
+  readonly laborAllocations: readonly LaborAllocation[];
+}
+=======
+interface Phase3LaborAllocationAuthorityRecord {
+  readonly tick: number;
+  readonly world: WorldState;
+  readonly laborAllocations: readonly LaborAllocation[];
+}
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+export function requireCompletePhase3LaborAllocationAuthority(
+  context: TickContext,
+  currentTick: number,
+): readonly LaborAllocation[] {
+=======
+export function requireCompletePhase3LaborAllocationAuthority(
+  world: WorldState,
+  context: TickContext,
+  currentTick: number,
+): readonly LaborAllocation[] {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    authority === undefined ||
+    authority.tick !== currentTick ||
+    authority.laborAllocations !== context.laborAllocations
+=======
+    authority === undefined ||
+    authority.tick !== currentTick ||
+    authority.world !== world ||
+    authority.laborAllocations !== context.laborAllocations
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  for (const unit of expectedUnits) {
+    const plan = demandByUnit.get(unit.productionUnitId);
+    if (plan === undefined) {
+      throw new Error(`Phase-2 labor-demand evidence is missing ProductionUnit ${String(unit.productionUnitId)}`);
+    }
+    const expectedPlanId = `labor-demand-plan:${context.tick}:${String(unit.productionUnitId)}`;
+    const expectedProductionPlanId = `production-plan:${context.tick}:${String(unit.productionUnitId)}`;
+    if (plan.planId !== expectedPlanId || plan.productionPlanId !== expectedProductionPlanId) {
+      throw new Error(
+        `Phase-2 labor-demand evidence for ProductionUnit ${String(unit.productionUnitId)} does not match canonical current-tick identity`,
+      );
+    }
+  }
+
+  return { laborSupplyPlans, laborDemandPlans };
+}
+=======
+  for (const unit of expectedUnits) {
+    const plan = demandByUnit.get(unit.productionUnitId);
+    if (plan === undefined) {
+      throw new Error(`Phase-2 labor-demand evidence is missing ProductionUnit ${String(unit.productionUnitId)}`);
+    }
+    const expectedPlanId = `labor-demand-plan:${context.tick}:${String(unit.productionUnitId)}`;
+    const expectedProductionPlanId = `production-plan:${context.tick}:${String(unit.productionUnitId)}`;
+    if (plan.planId !== expectedPlanId || plan.productionPlanId !== expectedProductionPlanId) {
+      throw new Error(
+        `Phase-2 labor-demand evidence for ProductionUnit ${String(unit.productionUnitId)} does not match canonical current-tick identity`,
+      );
+    }
+  }
+
+  // Identity/coverage checks above defend the actor set; exact handler provenance below
+  // authenticates every decision-bearing value (region/category/quantities/wage/cap) and
+  // binds both batches to this exact opening WorldState and tick.
+  requireCanonicalPhase2LaborSupplyPlans(world, laborSupplyPlans, context.tick);
+  requireCanonicalPhase2LaborDemandPlans(world, laborDemandPlans, context.tick);
+
+  return { laborSupplyPlans, laborDemandPlans };
+}
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    phase3LaborAllocationAuthorities.set(completedContext, {
+      tick: context.tick,
+      laborAllocations,
+    });
+=======
+    phase3LaborAllocationAuthorities.set(completedContext, {
+      tick: context.tick,
+      world,
+      laborAllocations,
+    });
+>>>>>>> REPLACE
+
+### FILE: src/simulation/wageSettlement.ts
+<<<<<<< FIND
+  const phase3LaborAllocations = requireCompletePhase3LaborAllocationAuthority(
+    phase3AuthorityContext,
+    currentTick,
+  );
+=======
+  const phase3LaborAllocations = requireCompletePhase3LaborAllocationAuthority(
+    world,
+    phase3AuthorityContext,
+    currentTick,
+  );
+>>>>>>> REPLACE
+
+### FILE: src/simulation/laborAllocation.test.ts
+<<<<<<< FIND
+    const result = createPhase3LaborAllocationHandler()(world, context, world.pendingTransitions);
+    expect(result.laborAllocations).toEqual([]);
+    expect(JSON.stringify(cohort.seed)).toBe(before);
+    expect(world.cohorts.get(cohort.cohortId)).toBe(cohort);
+=======
+    expect(() =>
+      createPhase3LaborAllocationHandler()(world, context, world.pendingTransitions),
+    ).toThrow(/not issued by the canonical Phase-2 handler/);
+    expect(JSON.stringify(cohort.seed)).toBe(before);
+    expect(world.cohorts.get(cohort.cohortId)).toBe(cohort);
+>>>>>>> REPLACE
