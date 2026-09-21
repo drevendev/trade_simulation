@@ -5,6 +5,7 @@ import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { CohortId, ProductionUnitId, RegionId, StateId } from "../domain/id";
 import { createPhase3LaborAllocationHandler, type LaborAllocation } from "./laborAllocation";
+import type { LaborSupplyPlan } from "./laborSupplyPlanning";
 import type { LaborDemandPlan } from "./productionPlanning";
 import { executePhase, initializeTickContext } from "./tickOrchestrator";
 import {
@@ -100,7 +101,7 @@ function allocation(args: {
   const wage = args.wage ?? 10;
   const tick = args.tick ?? 9;
   return {
-    allocationId: `labor-allocation:${tick}:${String(args.regionId)}:${args.laborCategory}:${String(args.cohortId)}:${String(args.unitId)}:${args.suffix ?? "a"}`,
+    allocationId: `labor-allocation:${tick}:${String(args.regionId)}:${args.laborCategory}:${String(args.cohortId)}:${String(args.unitId)}`,
     tick,
     regionId: args.regionId,
     laborCategory: args.laborCategory,
@@ -144,11 +145,84 @@ function completedPhase3Authority(
   tick: number,
   laborAllocations: readonly LaborAllocation[],
 ) {
-  return {
+  const supplyByCohort = new Map<CohortId, LaborSupplyPlan>();
+  const demandByUnit = new Map<ProductionUnitId, {
+    regionId: RegionId;
+    laborCategory: string;
+    workers: number;
+    wage: number;
+  }>();
+
+  for (const laborAllocation of laborAllocations) {
+    const existingSupply = supplyByCohort.get(laborAllocation.cohortId);
+    if (existingSupply !== undefined) {
+      if (
+        existingSupply.regionId !== laborAllocation.regionId ||
+        existingSupply.laborCategory !== laborAllocation.laborCategory
+      ) {
+        throw new Error("Test authority helper cannot combine one Cohort across labor groups");
+      }
+      supplyByCohort.set(laborAllocation.cohortId, {
+        ...existingSupply,
+        availableWorkerEquivalents:
+          existingSupply.availableWorkerEquivalents + laborAllocation.workerEquivalents,
+      });
+    } else {
+      supplyByCohort.set(laborAllocation.cohortId, {
+        planId: `labor-supply-plan:${tick}:${String(laborAllocation.cohortId)}`,
+        cohortId: laborAllocation.cohortId,
+        regionId: laborAllocation.regionId,
+        laborCategory: laborAllocation.laborCategory,
+        availableWorkerEquivalents: laborAllocation.workerEquivalents,
+      });
+    }
+
+    const existingDemand = demandByUnit.get(laborAllocation.unitId);
+    if (existingDemand !== undefined) {
+      if (
+        existingDemand.regionId !== laborAllocation.regionId ||
+        existingDemand.laborCategory !== laborAllocation.laborCategory ||
+        existingDemand.wage !== laborAllocation.grossWagePerWorker
+      ) {
+        throw new Error("Test authority helper cannot combine one ProductionUnit across incompatible labor allocations");
+      }
+      demandByUnit.set(laborAllocation.unitId, {
+        ...existingDemand,
+        workers: existingDemand.workers + laborAllocation.workerEquivalents,
+      });
+    } else {
+      demandByUnit.set(laborAllocation.unitId, {
+        regionId: laborAllocation.regionId,
+        laborCategory: laborAllocation.laborCategory,
+        workers: laborAllocation.workerEquivalents,
+        wage: laborAllocation.grossWagePerWorker,
+      });
+    }
+  }
+
+  const laborDemandPlans = [...demandByUnit.entries()].map(([unitId, input]) =>
+    demand({
+      unitId,
+      regionId: input.regionId,
+      laborCategory: input.laborCategory,
+      requested: input.workers,
+      wage: input.wage,
+      cap: input.workers * input.wage,
+      tick,
+    }),
+  );
+  const context = {
     ...initializeTickContext(tick, world.seed),
-    phase: 3,
-    laborAllocations,
+    laborSupplyPlans: [...supplyByCohort.values()],
+    laborDemandPlans,
   };
+  return executePhase(
+    3,
+    createPhase3LaborAllocationHandler(),
+    world,
+    context,
+    world.pendingTransitions,
+  );
 }
 
 describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
@@ -293,6 +367,14 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
     expect(() =>
       applyWageSettlementTransition(base.world, [], 9, initializeTickContext(9, base.world.seed)),
     ).toThrow(/requires completed Phase-3 labor-allocation authority/);
+    const fabricatedEmptyAuthority = {
+      ...initializeTickContext(9, base.world.seed),
+      phase: 3,
+      laborAllocations: [],
+    };
+    expect(() =>
+      applyWageSettlementTransition(base.world, [], 9, fabricatedEmptyAuthority),
+    ).toThrow(/not issued by the canonical Phase-3 handler/);
     expect(() =>
       applyWageSettlementTransition(
         base.world,

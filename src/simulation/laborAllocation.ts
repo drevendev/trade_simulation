@@ -27,6 +27,18 @@ export interface LaborAllocation {
   readonly grossWageObligation: number;
 }
 
+interface Phase3LaborAllocationAuthorityRecord {
+  readonly tick: number;
+  readonly laborAllocations: readonly LaborAllocation[];
+}
+
+/**
+ * Runtime provenance for completed Phase-3 results. The key is the exact TickContext
+ * object returned by the canonical Phase-3 handler; callers cannot manufacture an
+ * accepted authority by copying `phase` and `laborAllocations` into another object.
+ */
+const phase3LaborAllocationAuthorities = new WeakMap<TickContext, Phase3LaborAllocationAuthorityRecord>();
+
 interface ResolvedLaborAllocationConfig {
   readonly quantityEpsilon: number;
   readonly moneyEpsilon: number;
@@ -393,6 +405,44 @@ export function allocateLaborPhase3(args: {
   );
 }
 
+/**
+ * Resolve a completeness-proven Phase-3 authority issued by the canonical handler.
+ * Plain TickContext-shaped objects are deliberately insufficient authority even when
+ * they claim phase 3 and carry a plausible allocation array.
+ */
+export function requireCompletePhase3LaborAllocationAuthority(
+  context: TickContext,
+  currentTick: number,
+): readonly LaborAllocation[] {
+  if (context.tick !== currentTick) {
+    throw new Error(
+      `Phase-3 labor-allocation authority is for tick ${context.tick}, expected authoritative Phase-5 tick ${currentTick}`,
+    );
+  }
+  if (context.laborAllocations === undefined) {
+    throw new Error(
+      `Phase-5 wage persistence requires completed Phase-3 labor-allocation authority for tick ${currentTick}`,
+    );
+  }
+  if (!Number.isInteger(context.phase) || context.phase < 3) {
+    throw new Error(
+      `Phase-3 labor-allocation authority for tick ${currentTick} is incomplete before Phase 3`,
+    );
+  }
+
+  const authority = phase3LaborAllocationAuthorities.get(context);
+  if (
+    authority === undefined ||
+    authority.tick !== currentTick ||
+    authority.laborAllocations !== context.laborAllocations
+  ) {
+    throw new Error(
+      `Phase-3 labor-allocation authority for tick ${currentTick} was not issued by the canonical Phase-3 handler`,
+    );
+  }
+  return authority.laborAllocations;
+}
+
 /** Phase-3 handler: consume Phase-2 plans and expose only ephemeral labor allocations. */
 export function createPhase3LaborAllocationHandler(): PhaseHandler {
   return (world: WorldState, context: TickContext, _pendingTransitions: PendingTransitions): TickContext => {
@@ -403,13 +453,20 @@ export function createPhase3LaborAllocationHandler(): PhaseHandler {
       wageSignalByCohort.set(cohort.cohortId, cohort.seed.wageSignal);
     }
 
-    const laborAllocations = allocateLaborPhase3({
+    const laborAllocations = Object.freeze(
+      allocateLaborPhase3({
+        tick: context.tick,
+        config: world.simulationConfig,
+        laborSupplyPlans: context.laborSupplyPlans ?? [],
+        laborDemandPlans: context.laborDemandPlans ?? [],
+        wageSignalByCohort,
+      }).map((allocation) => Object.freeze({ ...allocation })),
+    );
+    const completedContext: TickContext = { ...context, laborAllocations };
+    phase3LaborAllocationAuthorities.set(completedContext, {
       tick: context.tick,
-      config: world.simulationConfig,
-      laborSupplyPlans: context.laborSupplyPlans ?? [],
-      laborDemandPlans: context.laborDemandPlans ?? [],
-      wageSignalByCohort,
+      laborAllocations,
     });
-    return { ...context, laborAllocations };
+    return completedContext;
   };
 }
