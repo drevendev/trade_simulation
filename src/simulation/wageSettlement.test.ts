@@ -445,6 +445,33 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
         base.world.pendingTransitions,
       ),
     ).toThrow(/not issued by the canonical Phase-2 handler/);
+
+    // A second public Phase-2 invocation cannot replace the already-issued positive
+    // production plan with caller-selected zero-productivity evidence for the same
+    // exact opening WorldState/tick and thereby mint an empty Phase-3 payroll authority.
+    const alternateEvidenceByUnit = new Map<ProductionUnitId, ProductionPlanningEvidence>(
+      [...productionPlanningEvidenceByUnit(base.world)].map(([unitId, evidence]) => [
+        unitId,
+        {
+          ...evidence,
+          infrastructureFactor: 0,
+          resourceAccessFactor: 0,
+        },
+      ]),
+    );
+    expect(() =>
+      executePhase(
+        2,
+        composePhaseHandlers(
+          createPhase2LaborSupplyPlanningHandler(),
+          createPhase2ProductionPlanningHandler({ evidenceByUnit: alternateEvidenceByUnit }),
+        ),
+        base.world,
+        initializeTickContext(9, base.world.seed),
+        base.world.pendingTransitions,
+      ),
+    ).toThrow(/alternate same-world\/tick planning evidence is not authoritative/);
+
     expect(() =>
       applyWageSettlementTransition(base.world, [], 9, base.phase3Authority),
     ).toThrow(/missing canonical LaborAllocation/);

@@ -77,6 +77,21 @@ const phase2LaborDemandAuthorities = new WeakMap<
   Phase2LaborDemandAuthorityRecord
 >();
 
+interface CanonicalPhase2ProductionPlanningRecord {
+  readonly evidenceFingerprint: string;
+  readonly laborDemandPlans: readonly LaborDemandPlan[];
+}
+
+/**
+ * Exactly one decision-bearing Phase-2 production-planning result is authoritative for
+ * an opening WorldState/tick pair. Re-running with equivalent evidence resolves to that
+ * same batch; alternate caller-selected evidence cannot mint a second payroll authority.
+ */
+const canonicalPhase2ProductionPlanningByWorld = new WeakMap<
+  WorldState,
+  Map<number, CanonicalPhase2ProductionPlanningRecord>
+>();
+
 export function requireCanonicalPhase2LaborDemandPlans(
   world: WorldState,
   laborDemandPlans: readonly LaborDemandPlan[],
@@ -672,6 +687,68 @@ function regionForUnit(world: WorldState, unit: ProductionUnitState): RegionStat
   return region;
 }
 
+function normalizedEvidenceRecord(
+  record: Readonly<Record<GoodId, number>> | undefined,
+): readonly (readonly [string, number])[] | null {
+  if (record === undefined) return null;
+  return stableOrderBy(
+    Object.entries(record) as [string, number][],
+    ([goodId]) => goodId,
+  ).map(([goodId, value]) => [goodId, value] as const);
+}
+
+/**
+ * Stable fingerprint of every decision-bearing external input consumed by the Phase-2
+ * production planner for live units. This is intentionally content-based rather than
+ * Map/object identity based: equivalent replays are harmless, while a second invocation
+ * that changes cash, policy, prices or physical productivity evidence is not authority.
+ */
+function productionPlanningEvidenceFingerprint(
+  world: WorldState,
+  evidenceByUnit: ReadonlyMap<ProductionUnitId, ProductionPlanningEvidence>,
+): string {
+  return JSON.stringify(
+    stableOrderBy(world.productionUnits.values(), (unit) => String(unit.productionUnitId)).map((unit) => {
+      const evidence = evidenceByUnit.get(unit.productionUnitId);
+      if (evidence === undefined) {
+        return { unitId: String(unit.productionUnitId), evidence: null };
+      }
+      return {
+        unitId: String(unit.productionUnitId),
+        evidence: {
+          mandatoryKnownCash: evidence.mandatoryKnownCash,
+          legalMinimumWageFloor: evidence.legalMinimumWageFloor,
+          priorCloseGrossInputPriceByGood: normalizedEvidenceRecord(evidence.priorCloseGrossInputPriceByGood),
+          priorCloseGrossInvestmentPriceByGood: normalizedEvidenceRecord(
+            evidence.priorCloseGrossInvestmentPriceByGood,
+          ),
+          infrastructureFactor: evidence.infrastructureFactor,
+          resourceAccessFactor: evidence.resourceAccessFactor,
+          healthLaborProductivityFactor: evidence.healthLaborProductivityFactor ?? null,
+        },
+      };
+    }),
+  );
+}
+
+function sameLaborDemandBatch(
+  left: readonly LaborDemandPlan[],
+  right: readonly LaborDemandPlan[],
+): boolean {
+  return left.length === right.length && left.every((candidate, index) => {
+    const other = right[index];
+    return other !== undefined &&
+      candidate.planId === other.planId &&
+      candidate.productionPlanId === other.productionPlanId &&
+      candidate.unitId === other.unitId &&
+      candidate.regionId === other.regionId &&
+      candidate.laborCategory === other.laborCategory &&
+      candidate.requestedWorkerEquivalents === other.requestedWorkerEquivalents &&
+      candidate.grossWageOffer === other.grossWageOffer &&
+      candidate.grossPayrollCap === other.grossPayrollCap;
+  });
+}
+
 /**
  * Build a real Phase-2 handler from a prior-close evidence snapshot. The snapshot is keyed
  * by persistent ProductionUnitId and captured outside TickContext, so market allocations or
@@ -753,9 +830,37 @@ export function createPhase2ProductionPlanningHandler(options: {
       productionMarketIntents.push(...result.inputIntents, ...result.investmentIntents);
     }
 
-    const canonicalLaborDemandPlans = Object.freeze(
+    const proposedLaborDemandPlans = Object.freeze(
       laborDemandPlans.map((plan) => Object.freeze({ ...plan })),
     );
+    const evidenceFingerprint = productionPlanningEvidenceFingerprint(world, options.evidenceByUnit);
+    let authorityByTick = canonicalPhase2ProductionPlanningByWorld.get(world);
+    if (authorityByTick === undefined) {
+      authorityByTick = new Map();
+      canonicalPhase2ProductionPlanningByWorld.set(world, authorityByTick);
+    }
+
+    const existingAuthority = authorityByTick.get(context.tick);
+    let canonicalLaborDemandPlans = proposedLaborDemandPlans;
+    if (existingAuthority === undefined) {
+      authorityByTick.set(context.tick, {
+        evidenceFingerprint,
+        laborDemandPlans: proposedLaborDemandPlans,
+      });
+    } else {
+      if (existingAuthority.evidenceFingerprint !== evidenceFingerprint) {
+        throw new Error(
+          `Phase-2 production-planning authority for tick ${context.tick} already exists for this WorldState; alternate same-world/tick planning evidence is not authoritative`,
+        );
+      }
+      if (!sameLaborDemandBatch(existingAuthority.laborDemandPlans, proposedLaborDemandPlans)) {
+        throw new Error(
+          `Phase-2 production-planning authority for tick ${context.tick} changed under identical authoritative evidence`,
+        );
+      }
+      canonicalLaborDemandPlans = existingAuthority.laborDemandPlans;
+    }
+
     phase2LaborDemandAuthorities.set(canonicalLaborDemandPlans, {
       tick: context.tick,
       world,
