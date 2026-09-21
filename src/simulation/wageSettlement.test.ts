@@ -169,7 +169,7 @@ function completedPhase3Authority(
       });
     } else {
       supplyByCohort.set(laborAllocation.cohortId, {
-        planId: `labor-supply-plan:${tick}:${String(laborAllocation.cohortId)}`,
+        planId: `labor-supply:${tick}:${String(laborAllocation.cohortId)}`,
         cohortId: laborAllocation.cohortId,
         regionId: laborAllocation.regionId,
         laborCategory: laborAllocation.laborCategory,
@@ -200,20 +200,51 @@ function completedPhase3Authority(
     }
   }
 
-  const laborDemandPlans = [...demandByUnit.entries()].map(([unitId, input]) =>
-    demand({
-      unitId,
-      regionId: input.regionId,
-      laborCategory: input.laborCategory,
-      requested: input.workers,
-      wage: input.wage,
-      cap: input.workers * input.wage,
-      tick,
-    }),
-  );
+  for (const cohort of [...world.cohorts.values()].sort((a, b) => String(a.cohortId).localeCompare(String(b.cohortId)))) {
+    if (cohort.seed.ageBand !== "WORKING" || cohort.seed.population <= 0 || supplyByCohort.has(cohort.cohortId)) {
+      continue;
+    }
+    const region = [...world.regions.values()].find((candidate) => candidate.seed.key === cohort.seed.regionKey);
+    if (region === undefined) throw new Error(`Test authority helper cannot resolve Cohort region ${cohort.seed.regionKey}`);
+    supplyByCohort.set(cohort.cohortId, {
+      planId: `labor-supply:${tick}:${String(cohort.cohortId)}`,
+      cohortId: cohort.cohortId,
+      regionId: region.regionId,
+      laborCategory: cohort.seed.laborCategory,
+      availableWorkerEquivalents: 0,
+    });
+  }
+
+  for (const unit of [...world.productionUnits.values()].sort((a, b) => String(a.productionUnitId).localeCompare(String(b.productionUnitId)))) {
+    if (demandByUnit.has(unit.productionUnitId)) continue;
+    const region = [...world.regions.values()].find((candidate) => candidate.seed.key === unit.seed.regionKey);
+    if (region === undefined) throw new Error(`Test authority helper cannot resolve ProductionUnit region ${unit.seed.regionKey}`);
+    const recipe = world.definitionRegistry.recipes[unit.seed.recipeId];
+    if (recipe === undefined) throw new Error(`Test authority helper cannot resolve recipe ${unit.seed.recipeId}`);
+    demandByUnit.set(unit.productionUnitId, {
+      regionId: region.regionId,
+      laborCategory: recipe.laborCategory,
+      workers: 0,
+      wage: 0,
+    });
+  }
+
+  const laborDemandPlans = [...demandByUnit.entries()]
+    .sort(([left], [right]) => String(left).localeCompare(String(right)))
+    .map(([unitId, input]) =>
+      demand({
+        unitId,
+        regionId: input.regionId,
+        laborCategory: input.laborCategory,
+        requested: input.workers,
+        wage: input.wage,
+        cap: input.workers * input.wage,
+        tick,
+      }),
+    );
   const context = {
     ...initializeTickContext(tick, world.seed),
-    laborSupplyPlans: [...supplyByCohort.values()],
+    laborSupplyPlans: [...supplyByCohort.values()].sort((a, b) => String(a.cohortId).localeCompare(String(b.cohortId))),
     laborDemandPlans,
   };
   return executePhase(
@@ -367,6 +398,28 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
     expect(() =>
       applyWageSettlementTransition(base.world, [], 9, initializeTickContext(9, base.world.seed)),
     ).toThrow(/requires completed Phase-3 labor-allocation authority/);
+    expect(() =>
+      executePhase(
+        3,
+        createPhase3LaborAllocationHandler(),
+        base.world,
+        initializeTickContext(9, base.world.seed),
+        base.world.pendingTransitions,
+      ),
+    ).toThrow(/requires complete Phase-2 labor supply and demand evidence/);
+    expect(() =>
+      executePhase(
+        3,
+        createPhase3LaborAllocationHandler(),
+        base.world,
+        {
+          ...initializeTickContext(9, base.world.seed),
+          laborSupplyPlans: [],
+          laborDemandPlans: [],
+        },
+        base.world.pendingTransitions,
+      ),
+    ).toThrow(/incomplete Phase-2 labor-supply evidence/);
     const fabricatedEmptyAuthority = {
       ...initializeTickContext(9, base.world.seed),
       phase: 3,
@@ -478,15 +531,9 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
     expect(base.world.states.get(base.stateId)!.treasury).toEqual(originalStateTreasury);
   });
 
-  it("closes a genuinely zero-payroll tick exactly once only after canonical Phase 3 completes", () => {
+  it("closes a genuinely zero-payroll tick exactly once only after complete Phase-2 evidence reaches canonical Phase 3", () => {
     const base = baseEvidence();
-    const phase3Authority = executePhase(
-      3,
-      createPhase3LaborAllocationHandler(),
-      base.world,
-      initializeTickContext(9, base.world.seed),
-      base.world.pendingTransitions,
-    );
+    const phase3Authority = completedPhase3Authority(base.world, 9, []);
     expect(phase3Authority.laborAllocations).toEqual([]);
 
     const closed = applyWageSettlementTransition(base.world, [], 9, phase3Authority);
