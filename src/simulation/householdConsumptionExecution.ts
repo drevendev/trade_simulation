@@ -696,6 +696,187 @@ export function planHouseholdConsumptionPhase9(input: HouseholdConsumptionPhase9
   return { executions, transactions, physicalLosses };
 }
 
+interface CanonicalHouseholdLossRealization {
+  readonly categories: readonly HouseholdNeedRealization[];
+  readonly essentialCoverage: number;
+  readonly consumedByGood: Readonly<Record<GoodId, number>>;
+  readonly spoiledByGood: Readonly<Record<GoodId, number>>;
+  readonly endingInventoryByGood: Readonly<Record<GoodId, number>>;
+}
+
+function recomputeCanonicalHouseholdLossRealization(
+  world: WorldState,
+  cohort: CohortState,
+  quantityEpsilon: number,
+): CanonicalHouseholdLossRealization {
+  const population = requireNonNegative(`Cohort ${String(cohort.cohortId)} population`, cohort.seed.population);
+  const workingInventory = new Map<GoodId, number>();
+  for (const [goodId, quantity] of stableOrderBy([...cohort.householdInventory.entries()], ([id]) => String(id))) {
+    workingInventory.set(
+      goodId,
+      requireNonNegative(`Cohort ${String(cohort.cohortId)} settled householdInventory ${String(goodId)}`, quantity),
+    );
+  }
+
+  const categoryWork: {
+    runtime: CategoryRuntime;
+    required: number;
+    realized: number;
+    coverage: number;
+    consumed: Map<GoodId, number>;
+    spoiled: Map<GoodId, number>;
+  }[] = [];
+  for (const runtime of resolveCategories(world)) {
+    const consumed = consumeCategory({
+      cohortId: cohort.cohortId,
+      runtime,
+      population,
+      workingInventory,
+      quantityEpsilon,
+    });
+    categoryWork.push({ runtime, ...consumed, spoiled: new Map() });
+  }
+
+  const claimedCarryoverGoods = new Set<GoodId>();
+  for (const item of categoryWork) {
+    item.spoiled = spoilExcessCarryover({
+      cohortId: cohort.cohortId,
+      runtime: item.runtime,
+      required: item.required,
+      workingInventory,
+      claimedGoods: claimedCarryoverGoods,
+      quantityEpsilon,
+    });
+  }
+
+  const consumedByGood = new Map<GoodId, number>();
+  const spoiledByGood = new Map<GoodId, number>();
+  const realizedCategories: HouseholdNeedRealization[] = [];
+  for (const item of categoryWork) {
+    for (const [goodId, quantity] of item.consumed) addQuantity(consumedByGood, goodId, quantity);
+    for (const [goodId, quantity] of item.spoiled) addQuantity(spoiledByGood, goodId, quantity);
+    realizedCategories.push({
+      categoryId: item.runtime.definition.id,
+      requiredUsefulConsumption: item.required,
+      realizedUsefulConsumption: item.realized,
+      coverage: item.coverage,
+      consumedByGood: toOrderedRecord(item.consumed),
+      spoiledByGood: toOrderedRecord(item.spoiled),
+    });
+  }
+
+  const coverageByCategory = new Map(realizedCategories.map((category) => [category.categoryId, category.coverage]));
+  const foodCoverage = coverageByCategory.get("ESSENTIAL_FOOD") ?? 0;
+  const basicCoverage = coverageByCategory.get("BASIC_GOODS") ?? 0;
+  const essentialCoverage = Math.min(foodCoverage, 0.5 * foodCoverage + 0.5 * basicCoverage);
+  requireUnitInterval(`Cohort ${String(cohort.cohortId)} essentialCoverage`, essentialCoverage);
+
+  return {
+    categories: realizedCategories,
+    essentialCoverage,
+    consumedByGood: toOrderedRecord(consumedByGood),
+    spoiledByGood: toOrderedRecord(spoiledByGood),
+    endingInventoryByGood: toOrderedRecord(workingInventory),
+  };
+}
+
+function assertCanonicalQuantityRecord(
+  label: string,
+  submitted: Readonly<Record<GoodId, number>>,
+  canonical: Readonly<Record<GoodId, number>>,
+  quantityEpsilon: number,
+): void {
+  const submittedMap = new Map(Object.entries(submitted) as [GoodId, number][]);
+  const canonicalMap = new Map(Object.entries(canonical) as [GoodId, number][]);
+  const keys = new Set<GoodId>([...submittedMap.keys(), ...canonicalMap.keys()]);
+  for (const goodId of stableOrderBy([...keys], String)) {
+    const actual = requireNonNegative(`${label} ${String(goodId)}`, submittedMap.get(goodId) ?? 0);
+    const expected = requireNonNegative(
+      `canonical ${label} ${String(goodId)}`,
+      canonicalMap.get(goodId) ?? 0,
+    );
+    if (Math.abs(actual - expected) > quantityEpsilon) {
+      throw new Error(
+        `${label} for ${String(goodId)} does not match canonical Phase-9 need realization: actual=${actual} expected=${expected}`,
+      );
+    }
+  }
+}
+
+function validateHouseholdLossAuthority(
+  world: WorldState,
+  cohort: CohortState,
+  execution: HouseholdConsumptionExecution,
+  quantityEpsilon: number,
+): void {
+  const canonical = recomputeCanonicalHouseholdLossRealization(world, cohort, quantityEpsilon);
+  if (execution.categories.length !== canonical.categories.length) {
+    throw new Error(
+      `Cohort ${String(cohort.cohortId)} Phase-9 category count does not match canonical Phase-9 need realization`,
+    );
+  }
+
+  for (let index = 0; index < canonical.categories.length; index += 1) {
+    const submitted = execution.categories[index]!;
+    const expected = canonical.categories[index]!;
+    if (submitted.categoryId !== expected.categoryId) {
+      throw new Error(
+        `Cohort ${String(cohort.cohortId)} Phase-9 category order does not match canonical Phase-9 need realization`,
+      );
+    }
+    const numericEvidence: readonly [string, number, number][] = [
+      ["requiredUsefulConsumption", submitted.requiredUsefulConsumption, expected.requiredUsefulConsumption],
+      ["realizedUsefulConsumption", submitted.realizedUsefulConsumption, expected.realizedUsefulConsumption],
+      ["coverage", submitted.coverage, expected.coverage],
+    ];
+    for (const [field, actual, expectedValue] of numericEvidence) {
+      requireNonNegative(`HouseholdNeedRealization ${submitted.categoryId} ${field}`, actual);
+      if (Math.abs(actual - expectedValue) > quantityEpsilon) {
+        throw new Error(
+          `HouseholdNeedRealization ${submitted.categoryId} ${field} does not match canonical Phase-9 need realization`,
+        );
+      }
+    }
+    assertCanonicalQuantityRecord(
+      `HouseholdNeedRealization ${submitted.categoryId} consumedByGood`,
+      submitted.consumedByGood,
+      expected.consumedByGood,
+      quantityEpsilon,
+    );
+    assertCanonicalQuantityRecord(
+      `HouseholdNeedRealization ${submitted.categoryId} spoiledByGood`,
+      submitted.spoiledByGood,
+      expected.spoiledByGood,
+      quantityEpsilon,
+    );
+  }
+
+  requireUnitInterval(`Cohort ${String(cohort.cohortId)} submitted essentialCoverage`, execution.essentialCoverage);
+  if (Math.abs(execution.essentialCoverage - canonical.essentialCoverage) > quantityEpsilon) {
+    throw new Error(
+      `Cohort ${String(cohort.cohortId)} essentialCoverage does not match canonical Phase-9 need realization`,
+    );
+  }
+  assertCanonicalQuantityRecord(
+    `Cohort ${String(cohort.cohortId)} consumedByGood`,
+    execution.consumedByGood,
+    canonical.consumedByGood,
+    quantityEpsilon,
+  );
+  assertCanonicalQuantityRecord(
+    `Cohort ${String(cohort.cohortId)} spoiledByGood`,
+    execution.spoiledByGood,
+    canonical.spoiledByGood,
+    quantityEpsilon,
+  );
+  assertCanonicalQuantityRecord(
+    `Cohort ${String(cohort.cohortId)} endingInventoryByGood`,
+    execution.endingInventoryByGood,
+    canonical.endingInventoryByGood,
+    quantityEpsilon,
+  );
+}
+
 /**
  * Persist Phase-9 household losses after canonical Phase-8 settlement has been applied.
  * The declared projected opening inventory is checked exactly (within quantity epsilon),
@@ -795,6 +976,13 @@ export function applyHouseholdConsumptionTransition(
         );
       }
     }
+
+    validateHouseholdLossAuthority(
+      worldAfterMarketSettlement,
+      cohort,
+      execution,
+      quantityEpsilon,
+    );
 
     const declaredEnding = new Map(
       Object.entries(execution.endingInventoryByGood) as [GoodId, number][],

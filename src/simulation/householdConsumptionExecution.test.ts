@@ -362,6 +362,57 @@ describe("REQ-POPULATION-003 Phase-9 household realization", () => {
     expect(execution.endingInventoryByGood[FOOD]).toBeCloseTo(8);
   });
 
+  it("rejects forged aggregate and category household losses before Phase-9 persistence", () => {
+    const input = world({
+      inventory: [[FOOD, 10]],
+      categories: categories({ foodTarget: 2, foodCarryover: 10 }),
+      foodSpoilage: 0,
+    });
+    const execution = plan({ world: input }).executions[0]!;
+    expect(execution.consumedByGood[FOOD]).toBeCloseTo(2);
+    expect(execution.endingInventoryByGood[FOOD]).toBeCloseTo(8);
+
+    const beforeInventory = input.cohorts.get(COHORT)!.householdInventory;
+    const forgedAggregate = {
+      ...execution,
+      consumedByGood: { ...execution.consumedByGood, [FOOD]: 10 },
+      endingInventoryByGood: { ...execution.endingInventoryByGood, [FOOD]: 0 },
+    };
+    expect(() => applyHouseholdConsumptionTransition(input, [forgedAggregate], 7)).toThrow(
+      /does not match canonical Phase-9 need realization/,
+    );
+    expect(input.cohorts.get(COHORT)!.householdInventory).toBe(beforeInventory);
+    expect(input.cohorts.get(COHORT)!.householdInventory.get(FOOD)).toBe(10);
+    expect(input.lastHouseholdConsumptionTransitionTick).toBe(-1);
+
+    const forgedCategories = execution.categories.map((category) =>
+      category.categoryId === "ESSENTIAL_FOOD"
+        ? {
+            ...category,
+            realizedUsefulConsumption: 10,
+            coverage: 1,
+            consumedByGood: { ...category.consumedByGood, [FOOD]: 10 },
+          }
+        : category,
+    );
+    const forgedCategoryEvidence = {
+      ...execution,
+      categories: forgedCategories,
+      consumedByGood: { ...execution.consumedByGood, [FOOD]: 10 },
+      endingInventoryByGood: { ...execution.endingInventoryByGood, [FOOD]: 0 },
+    };
+    expect(() => applyHouseholdConsumptionTransition(input, [forgedCategoryEvidence], 7)).toThrow(
+      /does not match canonical Phase-9 need realization/,
+    );
+    expect(input.cohorts.get(COHORT)!.householdInventory).toBe(beforeInventory);
+    expect(input.cohorts.get(COHORT)!.householdInventory.get(FOOD)).toBe(10);
+    expect(input.lastHouseholdConsumptionTransitionTick).toBe(-1);
+
+    const persisted = applyHouseholdConsumptionTransition(input, [execution], 7);
+    expect(persisted.cohorts.get(COHORT)!.householdInventory.get(FOOD)).toBeCloseTo(8);
+    expect(persisted.lastHouseholdConsumptionTransitionTick).toBe(7);
+  });
+
   it("never lets one physical good satisfy two overlapping need categories twice", () => {
     const input = world({
       inventory: [[FOOD, 10]],
