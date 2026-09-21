@@ -749,12 +749,15 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
 
   it("normalizes settlement and transaction order independent of allocation input order", () => {
     const base = baseEvidence();
+    const firstWorkers = base.laborDemand.requestedWorkerEquivalents / 3;
+    const secondWorkers = base.laborDemand.requestedWorkerEquivalents - firstWorkers;
     const first = allocation({
       unitId: base.unit.productionUnitId,
       cohortId: base.cohorts[0]!.cohortId,
       regionId: base.region.regionId,
       laborCategory: base.laborCategory,
-      workers: 4,
+      workers: firstWorkers,
+      wage: base.laborDemand.grossWageOffer,
       suffix: "a",
     });
     const second = allocation({
@@ -762,7 +765,8 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
       cohortId: base.cohorts[1]!.cohortId,
       regionId: base.region.regionId,
       laborCategory: base.laborCategory,
-      workers: 6,
+      workers: secondWorkers,
+      wage: base.laborDemand.grossWageOffer,
       suffix: "b",
     });
     const common = {
