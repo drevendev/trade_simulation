@@ -53,6 +53,11 @@ export interface ProductionExecutionPlanResult {
   readonly executions: readonly ProductionExecution[];
 }
 
+export interface ProductionExecutionAuthority {
+  readonly productionPlans: readonly ProductionPlan[];
+  readonly laborAllocations: readonly LaborAllocation[];
+}
+
 function requireFinite(name: string, value: number): number {
   if (!isFiniteCanonicalNumber(value)) {
     throw new Error(`${name} must be finite, got ${String(value)}`);
@@ -501,11 +506,107 @@ function validateProductionExecutionCoverage(
   }
 }
 
+function validateProductionExecutionAuthority(
+  world: WorldState,
+  executions: readonly ProductionExecution[],
+  currentTick: number,
+  authority: ProductionExecutionAuthority,
+  quantityEpsilon: number,
+): void {
+  const canonicalExecutions = planProductionExecutionsPhase5({
+    world,
+    tick: currentTick,
+    productionPlans: authority.productionPlans,
+    laborAllocations: authority.laborAllocations,
+  }).executions;
+  const canonicalByUnit = new Map(
+    canonicalExecutions.map((execution) => [execution.unitId, execution] as const),
+  );
+
+  for (const execution of stableOrderBy(executions, (candidate) => String(candidate.unitId))) {
+    const canonical = canonicalByUnit.get(execution.unitId);
+    if (!canonical) {
+      throw new Error(
+        `ProductionExecution for ${String(execution.unitId)} has no authoritative current-tick ProductionPlan`,
+      );
+    }
+    if (execution.productionPlanId !== canonical.productionPlanId) {
+      throw new Error(
+        `ProductionExecution plan identity for ${String(execution.unitId)} does not match authoritative ProductionPlan`,
+      );
+    }
+
+    const submittedPlannedBatches = requireNonNegative(
+      `ProductionExecution planned batches for ${String(execution.unitId)}`,
+      execution.plannedBatches,
+    );
+    if (Math.abs(submittedPlannedBatches - canonical.plannedBatches) > quantityEpsilon) {
+      throw new Error(
+        `ProductionExecution planned batches for ${String(execution.unitId)} do not match authoritative ProductionPlan`,
+      );
+    }
+
+    const submittedCapitalBound = requireNonNegative(
+      `ProductionExecution capital bound for ${String(execution.unitId)}`,
+      execution.capitalBoundBatches,
+    );
+    if (Math.abs(submittedCapitalBound - canonical.capitalBoundBatches) > quantityEpsilon) {
+      throw new Error(
+        `ProductionExecution capital bound for ${String(execution.unitId)} does not match authoritative ProductionPlan`,
+      );
+    }
+
+    if (canonical.laborBoundBatches === null) {
+      if (execution.laborBoundBatches !== null) {
+        throw new Error(
+          `ProductionExecution labor bound for ${String(execution.unitId)} does not match authoritative Phase-3 labor evidence`,
+        );
+      }
+    } else {
+      if (execution.laborBoundBatches === null) {
+        throw new Error(
+          `ProductionExecution labor bound for ${String(execution.unitId)} does not match authoritative Phase-3 labor evidence`,
+        );
+      }
+      const submittedLaborBound = requireNonNegative(
+        `ProductionExecution labor bound for ${String(execution.unitId)}`,
+        execution.laborBoundBatches,
+      );
+      if (Math.abs(submittedLaborBound - canonical.laborBoundBatches) > quantityEpsilon) {
+        throw new Error(
+          `ProductionExecution labor bound for ${String(execution.unitId)} does not match authoritative Phase-3 labor evidence`,
+        );
+      }
+    }
+
+    const submittedAllocatedLabor = requireNonNegative(
+      `ProductionExecution allocated labor for ${String(execution.unitId)}`,
+      execution.allocatedWorkerEquivalents,
+    );
+    if (Math.abs(submittedAllocatedLabor - canonical.allocatedWorkerEquivalents) > quantityEpsilon) {
+      throw new Error(
+        `ProductionExecution allocated labor for ${String(execution.unitId)} does not match authoritative Phase-3 labor evidence`,
+      );
+    }
+
+    const submittedRealizedBatches = requireNonNegative(
+      `ProductionExecution realized batches for ${String(execution.unitId)}`,
+      execution.realizedBatches,
+    );
+    if (Math.abs(submittedRealizedBatches - canonical.realizedBatches) > quantityEpsilon) {
+      throw new Error(
+        `ProductionExecution realized batches for ${String(execution.unitId)} do not match authoritative Phase-5 recomputation`,
+      );
+    }
+  }
+}
+
 /** Persist exact Phase-5 physical deltas without mutating the input WorldState. */
 export function applyProductionExecutionTransition(
   world: WorldState,
   executions: readonly ProductionExecution[],
   currentTick: number,
+  authority: ProductionExecutionAuthority,
 ): WorldState {
   if (!Number.isInteger(currentTick) || currentTick < 0) {
     throw new Error(`Phase-5 production transition tick must be a non-negative integer, got ${String(currentTick)}`);
@@ -528,6 +629,7 @@ export function applyProductionExecutionTransition(
     "SimulationConfig.numeric.quantityEpsilon",
     world.simulationConfig.numeric.quantityEpsilon ?? createDefaultSimulationConfig().numeric.quantityEpsilon!,
   );
+  validateProductionExecutionAuthority(world, executions, currentTick, authority, quantityEpsilon);
   const productionUnits = new Map(world.productionUnits);
   const regions = new Map(world.regions);
   const seenUnits = new Set<ProductionUnitId>();
@@ -673,7 +775,10 @@ export function createPhase5ProductionExecutionHandler(): PhaseHandler {
       productionPlans,
       laborAllocations,
     });
-    const projectedWorld = applyProductionExecutionTransition(world, executions, context.tick);
+    const projectedWorld = applyProductionExecutionTransition(world, executions, context.tick, {
+      productionPlans,
+      laborAllocations,
+    });
     const outputIntents = buildProductionOutputSellIntentsPhase5(projectedWorld, executions);
     return {
       ...context,

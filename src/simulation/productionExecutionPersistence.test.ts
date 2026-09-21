@@ -123,7 +123,10 @@ describe("REQ-PRODUCTION-005 Phase-5 persistence provenance", () => {
     world = withOnlyActiveUnit(withProductionUnit(world, unit), unit.productionUnitId);
 
     const first = oneExecution(world, unit, TICK, "first");
-    const afterFirst = applyProductionExecutionTransition(world, [first], TICK);
+    const afterFirst = applyProductionExecutionTransition(world, [first], TICK, {
+      productionPlans: [plan(unit, TICK)],
+      laborAllocations: [allocation(unit, regionFor(world, unit).regionId, TICK, "first")],
+    });
     expect(afterFirst.lastProductionExecutionTransitionTick).toBe(TICK);
 
     const unitAfterFirst = afterFirst.productionUnits.get(unit.productionUnitId)!;
@@ -134,16 +137,24 @@ describe("REQ-PRODUCTION-005 Phase-5 persistence provenance", () => {
     const freshSameTick = oneExecution(afterFirst, unitAfterFirst, TICK, "fresh-same-tick");
     expect(freshSameTick.postProductionOutputQuantity).toBeGreaterThan(first.postProductionOutputQuantity);
 
-    expect(() => applyProductionExecutionTransition(afterFirst, [freshSameTick], TICK)).toThrow(
-      /each canonical tick may persist Phase 5 once/,
-    );
+    expect(() => applyProductionExecutionTransition(afterFirst, [freshSameTick], TICK, {
+      productionPlans: [plan(unitAfterFirst, TICK)],
+      laborAllocations: [
+        allocation(unitAfterFirst, regionFor(afterFirst, unitAfterFirst).regionId, TICK, "fresh-same-tick"),
+      ],
+    })).toThrow(/each canonical tick may persist Phase 5 once/);
     expect(afterFirst.lastProductionExecutionTransitionTick).toBe(TICK);
     expect(afterFirst.productionUnits.get(unit.productionUnitId)!.inputInventory.get("good:iron" as GoodId)).toBe(ironAfterFirst);
     expect(afterFirst.productionUnits.get(unit.productionUnitId)!.inputInventory.get("good:wood" as GoodId)).toBe(woodAfterFirst);
     expect(afterFirst.productionUnits.get(unit.productionUnitId)!.outputInventory.get("good:tools" as GoodId)).toBe(toolsAfterFirst);
 
     const nextTick = oneExecution(afterFirst, unitAfterFirst, TICK + 1, "next-tick");
-    const afterNext = applyProductionExecutionTransition(afterFirst, [nextTick], TICK + 1);
+    const afterNext = applyProductionExecutionTransition(afterFirst, [nextTick], TICK + 1, {
+      productionPlans: [plan(unitAfterFirst, TICK + 1)],
+      laborAllocations: [
+        allocation(unitAfterFirst, regionFor(afterFirst, unitAfterFirst).regionId, TICK + 1, "next-tick"),
+      ],
+    });
     expect(afterNext.lastProductionExecutionTransitionTick).toBe(TICK + 1);
     expect(afterNext.productionUnits.get(unit.productionUnitId)!.inputInventory.get("good:iron" as GoodId)).toBeLessThan(ironAfterFirst);
     expect(afterNext.productionUnits.get(unit.productionUnitId)!.outputInventory.get("good:tools" as GoodId)).toBeGreaterThan(toolsAfterFirst);
@@ -162,7 +173,12 @@ describe("REQ-PRODUCTION-005 Phase-5 persistence provenance", () => {
     world = withOnlyActiveUnit(withProductionUnit(world, unit), unit.productionUnitId);
     const execution = oneExecution(world, unit, TICK, "tick-mismatch");
 
-    expect(() => applyProductionExecutionTransition(world, [execution], TICK + 1)).toThrow(
+    expect(() => applyProductionExecutionTransition(world, [execution], TICK + 1, {
+      productionPlans: [plan(unit, TICK + 1)],
+      laborAllocations: [
+        allocation(unit, regionFor(world, unit).regionId, TICK + 1, "tick-mismatch-authority"),
+      ],
+    })).toThrow(
       `ProductionExecution for ${String(unit.productionUnitId)} is for tick ${TICK}, expected ${TICK + 1}`,
     );
     expect(world.lastProductionExecutionTransitionTick).toBe(-1);

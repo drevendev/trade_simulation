@@ -100,22 +100,29 @@ function allocation(unit: ProductionUnitState, regionId: RegionId, tick: number,
   };
 }
 
-function completeExecutions(
+function completeEvidence(
   world: WorldState,
   unitIds: readonly ProductionUnitId[],
   tick: number,
-): readonly ProductionExecution[] {
+): {
+  readonly productionPlans: readonly ProductionPlan[];
+  readonly laborAllocations: readonly LaborAllocation[];
+  readonly executions: readonly ProductionExecution[];
+} {
   const units = unitIds.map((unitId) => {
     const unit = world.productionUnits.get(unitId);
     expect(unit).toBeDefined();
     return unit!;
   });
-  return planProductionExecutionsPhase5({
+  const productionPlans = units.map((unit) => plan(unit, tick));
+  const laborAllocations = units.map((unit, index) => allocation(unit, regionFor(world, unit).regionId, tick, index));
+  const executions = planProductionExecutionsPhase5({
     world,
     tick,
-    productionPlans: units.map((unit) => plan(unit, tick)),
-    laborAllocations: units.map((unit, index) => allocation(unit, regionFor(world, unit).regionId, tick, index)),
+    productionPlans,
+    laborAllocations,
   }).executions;
+  return { productionPlans, laborAllocations, executions };
 }
 
 function sortedEntries<K extends string>(values: ReadonlyMap<K, number>): readonly (readonly [K, number])[] {
@@ -141,17 +148,21 @@ function stockSnapshot(world: WorldState) {
 describe("Issue #610 Phase-5 complete execution coverage", () => {
   it("rejects empty and partial batches atomically, then permits exactly one complete batch per tick", () => {
     const { world, unitIds } = buildTwoActiveToolsWorld();
-    const executions = completeExecutions(world, unitIds, TICK);
-    expect(executions).toHaveLength(2);
+    const evidence = completeEvidence(world, unitIds, TICK);
+    expect(evidence.executions).toHaveLength(2);
     const opening = stockSnapshot(world);
+    const authority = {
+      productionPlans: evidence.productionPlans,
+      laborAllocations: evidence.laborAllocations,
+    };
 
-    expect(() => applyProductionExecutionTransition(world, [], TICK)).toThrow(/coverage.*incomplete/i);
+    expect(() => applyProductionExecutionTransition(world, [], TICK, authority)).toThrow(/coverage.*incomplete/i);
     expect(stockSnapshot(world)).toEqual(opening);
 
-    expect(() => applyProductionExecutionTransition(world, [executions[0]!], TICK)).toThrow(/coverage.*incomplete/i);
+    expect(() => applyProductionExecutionTransition(world, [evidence.executions[0]!], TICK, authority)).toThrow(/coverage.*incomplete/i);
     expect(stockSnapshot(world)).toEqual(opening);
 
-    const after = applyProductionExecutionTransition(world, executions, TICK);
+    const after = applyProductionExecutionTransition(world, evidence.executions, TICK, authority);
     expect(after.lastProductionExecutionTransitionTick).toBe(TICK);
     for (const unitId of unitIds) {
       const beforeUnit = world.productionUnits.get(unitId)!;
@@ -169,12 +180,57 @@ describe("Issue #610 Phase-5 complete execution coverage", () => {
       );
     }
 
-    expect(() => applyProductionExecutionTransition(after, executions, TICK)).toThrow(
+    expect(() => applyProductionExecutionTransition(after, evidence.executions, TICK, authority)).toThrow(
       /each canonical tick may persist Phase 5 once/,
     );
 
-    const nextExecutions = completeExecutions(after, unitIds, TICK + 1);
-    const afterNext = applyProductionExecutionTransition(after, nextExecutions, TICK + 1);
+    const nextEvidence = completeEvidence(after, unitIds, TICK + 1);
+    const afterNext = applyProductionExecutionTransition(after, nextEvidence.executions, TICK + 1, {
+      productionPlans: nextEvidence.productionPlans,
+      laborAllocations: nextEvidence.laborAllocations,
+    });
     expect(afterNext.lastProductionExecutionTransitionTick).toBe(TICK + 1);
+  });
+});
+
+describe("Issue #616 Phase-5 execution authority", () => {
+  it("rejects forged self-reported plan, labor and capital bounds before physical mutation", () => {
+    const { world, unitIds } = buildTwoActiveToolsWorld();
+    const evidence = completeEvidence(world, unitIds, TICK);
+    const opening = stockSnapshot(world);
+    const target = evidence.executions[0]!;
+    const unit = world.productionUnits.get(target.unitId)!;
+    const recipe = world.definitionRegistry.recipes[target.recipeId]!;
+    const openingOutput = unit.outputInventory.get(recipe.outputGoodId) ?? 0;
+    const forgedInputs = Object.fromEntries(
+      Object.entries(recipe.inputsPerBatch).map(([goodId, perBatch]) => [goodId, perBatch * 2]),
+    ) as Readonly<Record<GoodId, number>>;
+    const forged: ProductionExecution = {
+      ...target,
+      plannedBatches: 2,
+      laborBoundBatches: 2,
+      capitalBoundBatches: 2,
+      realizedBatches: 2,
+      allocatedWorkerEquivalents: recipe.laborPerBatch * 2,
+      inputConsumedByGood: forgedInputs,
+      outputProducedQuantity: recipe.outputPerBatch * 2,
+      postProductionOutputQuantity: openingOutput + recipe.outputPerBatch * 2,
+    };
+    const forgedExecutions = evidence.executions.map((execution) =>
+      execution.unitId === forged.unitId ? forged : execution,
+    );
+    const authority = {
+      productionPlans: evidence.productionPlans,
+      laborAllocations: evidence.laborAllocations,
+    };
+
+    expect(() => applyProductionExecutionTransition(world, forgedExecutions, TICK, authority)).toThrow(
+      /authoritative ProductionPlan/,
+    );
+    expect(stockSnapshot(world)).toEqual(opening);
+
+    const after = applyProductionExecutionTransition(world, evidence.executions, TICK, authority);
+    expect(after.lastProductionExecutionTransitionTick).toBe(TICK);
+    expect(stockSnapshot(after)).not.toEqual(opening);
   });
 });
