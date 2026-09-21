@@ -977,13 +977,6 @@ export function applyHouseholdConsumptionTransition(
       }
     }
 
-    validateHouseholdLossAuthority(
-      worldAfterMarketSettlement,
-      cohort,
-      execution,
-      quantityEpsilon,
-    );
-
     const declaredEnding = new Map(
       Object.entries(execution.endingInventoryByGood) as [GoodId, number][],
     );
@@ -1031,6 +1024,13 @@ export function applyHouseholdConsumptionTransition(
         );
       }
     }
+
+    validateHouseholdLossAuthority(
+      worldAfterMarketSettlement,
+      cohort,
+      execution,
+      quantityEpsilon,
+    );
 
     const ending = new Map<GoodId, number>();
     for (const [goodId, quantity] of stableOrderBy([...declaredEnding.entries()], ([id]) => String(id))) {
