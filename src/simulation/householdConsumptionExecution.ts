@@ -383,6 +383,7 @@ function buildEconomicEvidence(args: {
     }
     const gross = requireNonNegative(`WageSettlement ${settlement.settlementId} grossWage`, settlement.grossWage);
     const net = requireNonNegative(`WageSettlement ${settlement.settlementId} netWage`, settlement.netWage);
+    const assessedTax = requireNonNegative(`WageSettlement ${settlement.settlementId} assessedTax`, settlement.assessedTax);
     const tax = requireNonNegative(`WageSettlement ${settlement.settlementId} collectedTax`, settlement.collectedTax);
     if (Math.abs(gross - allocation.grossWageObligation) > controls.moneyEpsilon) {
       throw new Error(`WageSettlement ${settlement.settlementId} gross wage does not match Phase-3 obligation`);
@@ -457,7 +458,7 @@ function buildEconomicEvidence(args: {
     if (
       Math.abs(canonicalTransactionAmount - net) > controls.moneyEpsilon ||
       Math.abs(canonicalTransactionGross - gross) > controls.moneyEpsilon ||
-      Math.abs(canonicalAssessedTax - settlement.assessedTax) > controls.moneyEpsilon ||
+      Math.abs(canonicalAssessedTax - assessedTax) > controls.moneyEpsilon ||
       Math.abs(canonicalTransactionTax - tax) > controls.moneyEpsilon ||
       Math.abs(canonicalRecordedAmount - net) > controls.moneyEpsilon
     ) {
@@ -492,6 +493,130 @@ function buildEconomicEvidence(args: {
       Math.abs(transactionRecordedAmount - canonicalRecordedAmount) > controls.moneyEpsilon
     ) {
       throw new Error(`WAGE_PAYMENT ${String(transaction.transactionId)} does not match Phase-5 settlement evidence`);
+    }
+
+    if (tax > 0) {
+      if (settlement.controllerStateId === null) {
+        throw new Error(`WageSettlement ${settlement.settlementId} collected tax without a controlling State`);
+      }
+      const canonicalWithholding = settlement.wageTaxWithheldTransaction;
+      if (canonicalWithholding === undefined) {
+        throw new Error(
+          `WageSettlement ${settlement.settlementId} with positive collected tax must include canonical WAGE_TAX_WITHHELD evidence`,
+        );
+      }
+      const matchingWithholdingTransactions = args.transactions.filter(
+        (candidate) => candidate.transactionId === canonicalWithholding.transactionId,
+      );
+      if (matchingWithholdingTransactions.length !== 1) {
+        throw new Error(
+          `WageSettlement ${settlement.settlementId} must have exactly one matching WAGE_TAX_WITHHELD transaction, got ${matchingWithholdingTransactions.length}`,
+        );
+      }
+      if (
+        canonicalWithholding.type !== "WAGE_TAX_WITHHELD" ||
+        canonicalWithholding.tick !== settlement.tick ||
+        canonicalWithholding.phase !== 5 ||
+        canonicalWithholding.bundleId !== settlement.bundleId ||
+        canonicalWithholding.originatingTransactionId !== canonicalPayment.transactionId ||
+        canonicalWithholding.source?.type !== "PRODUCTION_UNIT" ||
+        canonicalWithholding.source.productionUnitId !== settlement.unitId ||
+        canonicalWithholding.destination?.type !== "STATE" ||
+        canonicalWithholding.destination.stateId !== settlement.controllerStateId ||
+        canonicalWithholding.currencyId !== settlement.currencyId ||
+        canonicalWithholding.sourceRegionId !== settlement.regionId ||
+        canonicalWithholding.destinationRegionId !== settlement.regionId ||
+        canonicalWithholding.reason !== settlement.allocationId
+      ) {
+        throw new Error(`WageSettlement ${settlement.settlementId} canonical WAGE_TAX_WITHHELD provenance mismatch`);
+      }
+
+      const withholdingTransaction = matchingWithholdingTransactions[0]!;
+      if (
+        withholdingTransaction.type !== "WAGE_TAX_WITHHELD" ||
+        withholdingTransaction.tick !== settlement.tick ||
+        withholdingTransaction.phase !== 5 ||
+        withholdingTransaction.bundleId !== settlement.bundleId ||
+        withholdingTransaction.originatingTransactionId !== canonicalPayment.transactionId ||
+        withholdingTransaction.source?.type !== "PRODUCTION_UNIT" ||
+        withholdingTransaction.source.productionUnitId !== settlement.unitId ||
+        withholdingTransaction.destination?.type !== "STATE" ||
+        withholdingTransaction.destination.stateId !== settlement.controllerStateId ||
+        withholdingTransaction.currencyId !== settlement.currencyId ||
+        withholdingTransaction.sourceRegionId !== settlement.regionId ||
+        withholdingTransaction.destinationRegionId !== settlement.regionId ||
+        withholdingTransaction.reason !== settlement.allocationId
+      ) {
+        throw new Error(`WAGE_TAX_WITHHELD ${String(withholdingTransaction.transactionId)} provenance mismatch`);
+      }
+
+      const canonicalWithheldAmount = requireNonNegative(
+        `canonical WAGE_TAX_WITHHELD ${String(canonicalWithholding.transactionId)} moneyAmount`,
+        canonicalWithholding.moneyAmount ?? Number.NaN,
+      );
+      const canonicalWithheldGross = requireNonNegative(
+        `canonical WAGE_TAX_WITHHELD ${String(canonicalWithholding.transactionId)} grossMoneyAmount`,
+        canonicalWithholding.grossMoneyAmount,
+      );
+      const canonicalWithheldAssessed = requireNonNegative(
+        `canonical WAGE_TAX_WITHHELD ${String(canonicalWithholding.transactionId)} assessedTaxAmount`,
+        canonicalWithholding.assessedTaxAmount,
+      );
+      const canonicalWithheldTax = requireNonNegative(
+        `canonical WAGE_TAX_WITHHELD ${String(canonicalWithholding.transactionId)} taxAmount`,
+        canonicalWithholding.taxAmount ?? Number.NaN,
+      );
+      const canonicalWithheldRecorded = requireNonNegative(
+        `canonical WAGE_TAX_WITHHELD ${String(canonicalWithholding.transactionId)} amount`,
+        canonicalWithholding.amount,
+      );
+      if (
+        Math.abs(canonicalWithheldAmount - tax) > controls.moneyEpsilon ||
+        Math.abs(canonicalWithheldGross - gross) > controls.moneyEpsilon ||
+        Math.abs(canonicalWithheldAssessed - assessedTax) > controls.moneyEpsilon ||
+        Math.abs(canonicalWithheldTax - tax) > controls.moneyEpsilon ||
+        Math.abs(canonicalWithheldRecorded - tax) > controls.moneyEpsilon
+      ) {
+        throw new Error(
+          `WageSettlement ${settlement.settlementId} canonical WAGE_TAX_WITHHELD does not match settlement evidence`,
+        );
+      }
+
+      const withheldAmount = requireNonNegative(
+        `WAGE_TAX_WITHHELD ${String(withholdingTransaction.transactionId)} moneyAmount`,
+        withholdingTransaction.moneyAmount ?? Number.NaN,
+      );
+      const withheldGross = requireNonNegative(
+        `WAGE_TAX_WITHHELD ${String(withholdingTransaction.transactionId)} grossMoneyAmount`,
+        withholdingTransaction.grossMoneyAmount ?? Number.NaN,
+      );
+      const withheldAssessed = requireNonNegative(
+        `WAGE_TAX_WITHHELD ${String(withholdingTransaction.transactionId)} assessedTaxAmount`,
+        withholdingTransaction.assessedTaxAmount ?? Number.NaN,
+      );
+      const withheldTax = requireNonNegative(
+        `WAGE_TAX_WITHHELD ${String(withholdingTransaction.transactionId)} taxAmount`,
+        withholdingTransaction.taxAmount ?? Number.NaN,
+      );
+      const withheldRecorded = requireNonNegative(
+        `WAGE_TAX_WITHHELD ${String(withholdingTransaction.transactionId)} amount`,
+        withholdingTransaction.amount,
+      );
+      if (
+        Math.abs(withheldAmount - canonicalWithheldAmount) > controls.moneyEpsilon ||
+        Math.abs(withheldGross - canonicalWithheldGross) > controls.moneyEpsilon ||
+        Math.abs(withheldAssessed - canonicalWithheldAssessed) > controls.moneyEpsilon ||
+        Math.abs(withheldTax - canonicalWithheldTax) > controls.moneyEpsilon ||
+        Math.abs(withheldRecorded - canonicalWithheldRecorded) > controls.moneyEpsilon
+      ) {
+        throw new Error(
+          `WAGE_TAX_WITHHELD ${String(withholdingTransaction.transactionId)} does not match Phase-5 settlement evidence`,
+        );
+      }
+    } else if (settlement.wageTaxWithheldTransaction !== undefined) {
+      throw new Error(
+        `WageSettlement ${settlement.settlementId} must not include WAGE_TAX_WITHHELD when collected tax is zero`,
+      );
     }
 
     settlementGross += gross;
