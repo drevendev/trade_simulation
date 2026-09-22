@@ -187,7 +187,7 @@ describe("REQ-POPULATION-003 Phase-9 wage withholding evidence", () => {
     const paymentOnly = [fixture.settlement.wagePaymentTransaction];
 
     expect(() => phase9(fixture, { transactions: paymentOnly })).toThrow(
-      /exactly one matching WAGE_TAX_WITHHELD transaction/,
+      /exactly one actual WAGE_TAX_WITHHELD transaction attributable to its wage bundle\/allocation/,
     );
 
     const missingCanonical: WageSettlement = {
