@@ -1,12 +1,16 @@
 import { isFiniteCanonicalNumber } from "../domain/numeric";
-import type { ScenarioDefinition } from "../config/scenarioDefinition";
+import type {
+  M4ProductionPlanningPolicySeed,
+  ScenarioDefinition,
+} from "../config/scenarioDefinition";
 import { createDefaultSimulationConfig, type LaborConfig } from "../config/simulationConfig";
 
 /**
- * REQ-CONFIG-005 / Issue #633: validate deterministic M4 State policy fixtures at
- * world-genesis step 1 rather than waiting for whichever Phase-2 path happens to
- * read them. These fixtures are scenario inputs, so unknown references and malformed
- * numbers must never become an implicit zero/no-rule fallback.
+ * REQ-CONFIG-005 / Issues #633 and #642: validate deterministic M4 State policy
+ * fixtures at world-genesis step 1 rather than waiting for whichever Phase-2 path
+ * happens to read them. These fixtures are scenario inputs, so missing required maps,
+ * unknown references and malformed numbers must never become an implicit zero/no-rule
+ * fallback.
  */
 export function validateM4ProductionPolicyGenesis(
   scenario: ScenarioDefinition,
@@ -25,8 +29,23 @@ export function validateM4ProductionPolicyGenesis(
     const policy = state.policy?.m4ProductionPlanning;
     if (!policy) continue;
 
+    const minimumWageFloorByRegionKey = requirePolicyMap<
+      M4ProductionPlanningPolicySeed["minimumWageFloorByRegionKey"]
+    >(
+      state.key,
+      "minimumWageFloorByRegionKey",
+      policy.minimumWageFloorByRegionKey,
+    );
+    const mandatoryKnownCashByProductionUnitKey = requirePolicyMap<
+      M4ProductionPlanningPolicySeed["mandatoryKnownCashByProductionUnitKey"]
+    >(
+      state.key,
+      "mandatoryKnownCashByProductionUnitKey",
+      policy.mandatoryKnownCashByProductionUnitKey,
+    );
+
     for (const [regionKey, floorsByLaborCategory] of Object.entries(
-      policy.minimumWageFloorByRegionKey ?? {},
+      minimumWageFloorByRegionKey,
     )) {
       if (!regionKeys.has(regionKey)) {
         throw new Error(
@@ -50,7 +69,7 @@ export function validateM4ProductionPolicyGenesis(
     }
 
     for (const [productionUnitKey, requiredCash] of Object.entries(
-      policy.mandatoryKnownCashByProductionUnitKey ?? {},
+      mandatoryKnownCashByProductionUnitKey,
     )) {
       if (!productionUnitKeys.has(productionUnitKey)) {
         throw new Error(
@@ -65,6 +84,28 @@ export function validateM4ProductionPolicyGenesis(
       }
     }
   }
+}
+
+function requirePolicyMap<T extends object>(
+  stateKey: string,
+  fieldName:
+    | "minimumWageFloorByRegionKey"
+    | "mandatoryKnownCashByProductionUnitKey",
+  value: unknown,
+): T {
+  if (!isPlainObject(value)) {
+    throw new Error(
+      `StateSeed "${stateKey}": policy.m4ProductionPlanning.${fieldName} must be present as a non-null plain object map`,
+    );
+  }
+
+  return value as T;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function describeNumber(value: unknown): string {
