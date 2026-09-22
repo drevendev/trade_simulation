@@ -1,0 +1,112 @@
+### FILE: src/simulation/worldState.ts
+<<<<<<< FIND
+  readonly productionUnitLifecycleChanges: readonly ProductionUnitLifecycleTransition[];
+=======
+  /** Optional only for older/manual fixtures; canonical genesis always materializes the array. */
+  readonly productionUnitLifecycleChanges?: readonly ProductionUnitLifecycleTransition[];
+>>>>>>> REPLACE
+
+### FILE: src/simulation/pendingTransitions.ts
+<<<<<<< FIND
+    productionUnitLifecycleChanges: pending.productionUnitLifecycleChanges.filter(
+      (change) => change.activateTick === currentTick,
+    ),
+=======
+    productionUnitLifecycleChanges: (pending.productionUnitLifecycleChanges ?? []).filter(
+      (change) => change.activateTick === currentTick,
+    ),
+>>>>>>> REPLACE
+<<<<<<< FIND
+    productionUnitLifecycleChanges: pending.productionUnitLifecycleChanges.filter(
+      (change) => change.activateTick !== currentTick,
+    ),
+=======
+    productionUnitLifecycleChanges: (pending.productionUnitLifecycleChanges ?? []).filter(
+      (change) => change.activateTick !== currentTick,
+    ),
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionUnitLifecycle.ts
+<<<<<<< FIND
+  return !world.pendingTransitions.productionUnitLifecycleChanges.some(
+    (candidate) =>
+      candidate.unitId === unitId &&
+      candidate.transitionId !== ignoredTransitionId,
+  );
+=======
+  return !(world.pendingTransitions.productionUnitLifecycleChanges ?? []).some(
+    (candidate) =>
+      candidate.unitId === unitId &&
+      candidate.transitionId !== ignoredTransitionId,
+  );
+>>>>>>> REPLACE
+<<<<<<< FIND
+    world.pendingTransitions.productionUnitLifecycleChanges.map((candidate) => String(candidate.unitId)),
+=======
+    (world.pendingTransitions.productionUnitLifecycleChanges ?? []).map((candidate) => String(candidate.unitId)),
+>>>>>>> REPLACE
+<<<<<<< FIND
+        ...world.pendingTransitions.productionUnitLifecycleChanges,
+        ...queued,
+=======
+        ...(world.pendingTransitions.productionUnitLifecycleChanges ?? []),
+        ...queued,
+>>>>>>> REPLACE
+<<<<<<< FIND
+  const stale = world.pendingTransitions.productionUnitLifecycleChanges.filter(
+    (candidate) => candidate.activateTick < currentTick,
+  );
+=======
+  const lifecycleChanges = world.pendingTransitions.productionUnitLifecycleChanges ?? [];
+  const stale = lifecycleChanges.filter(
+    (candidate) => candidate.activateTick < currentTick,
+  );
+>>>>>>> REPLACE
+<<<<<<< FIND
+    world.pendingTransitions.productionUnitLifecycleChanges.filter(
+      (candidate) => candidate.activateTick === currentTick,
+    ),
+=======
+    lifecycleChanges.filter(
+      (candidate) => candidate.activateTick === currentTick,
+    ),
+>>>>>>> REPLACE
+<<<<<<< FIND
+      productionUnitLifecycleChanges: world.pendingTransitions.productionUnitLifecycleChanges.filter(
+        (candidate) => !activatedIds.has(candidate.transitionId),
+      ),
+=======
+      productionUnitLifecycleChanges: lifecycleChanges.filter(
+        (candidate) => !activatedIds.has(candidate.transitionId),
+      ),
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionPlanning.ts
+<<<<<<< FIND
+                evidence: {
+                  mandatoryKnownCash: args.evidence.mandatoryKnownCash,
+                  priorCloseGrossInvestmentPriceByGood: args.evidence.priorCloseGrossInvestmentPriceByGood,
+                },
+=======
+                evidence: {
+                  mandatoryKnownCash: args.evidence.mandatoryKnownCash,
+                  ...(args.evidence.priorCloseGrossInvestmentPriceByGood === undefined
+                    ? {}
+                    : {
+                        priorCloseGrossInvestmentPriceByGood:
+                          args.evidence.priorCloseGrossInvestmentPriceByGood,
+                      }),
+                },
+>>>>>>> REPLACE
+
+### FILE: docs/spec/IMPLEMENTATION_STATUS.md
+<<<<<<< FIND
+| REQ-PRODUCTION-007 | `READY` | `NOT_STARTED` | — | — | — |
+=======
+| REQ-PRODUCTION-007 | `READY` | `IMPLEMENTED` | #635 | #636 | PR #636 implements the canonical M4 ProductionUnit lifecycle/startup boundary: one live status authority initialized from immutable seed status; PLANNED startup INVESTMENT intents from opening unit cash; explicit zero-sum owner funding in the Region settlement currency; deterministic cadence-bound Phase-14 reviews for ACTIVE mothballing, MOTHBALLED reactivation/closing and CLOSING retirement; exact next-tick lifecycle activation through pending transitions; fail-closed evidence re-derivation and safe retirement; and live-status gating in Phase-2 planning, Phase-5 execution and Phase-12 capital formation. Focused regressions in src/simulation/productionUnitLifecycle.test.ts and src/simulation/productionStartupPlanning.test.ts cover startup readiness/N+1 activation, same-tick causal isolation, funding conservation, configured consecutive reviews/reset/reactivation/closing, residual-stock retirement refusal/safe retirement, seed/live-status divergence, insertion-order determinism and tampered lifecycle evidence. Merge commit intentionally blank until integration. |
+>>>>>>> REPLACE
+<<<<<<< FIND
+**Summary: 41 of 49 requirement identifiers implemented.**
+=======
+**Summary: 42 of 49 requirement identifiers implemented.**
+>>>>>>> REPLACE
