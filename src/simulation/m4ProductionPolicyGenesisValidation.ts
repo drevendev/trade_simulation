@@ -65,7 +65,7 @@ export function validateM4ProductionPolicyGenesis(
 }
 
 function describeNumber(value: unknown): string {
-  if (typeof value !== "number") return JSON.stringify(value);
+  if (typeof value !== "number") return JSON.stringify(value) ?? String(value);
   if (Number.isNaN(value)) return "NaN";
   if (value === Number.POSITIVE_INFINITY) return "+Infinity";
   if (value === Number.NEGATIVE_INFINITY) return "-Infinity";
