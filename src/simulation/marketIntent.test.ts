@@ -329,7 +329,7 @@ describe("MarketIntent validation", () => {
       expect(() => validateMarketIntent(intent)).toThrow(/BUY\/INVESTMENT must use INVESTMENT bucket/);
     });
 
-    it("rejects ProductionUnit SELL with wrong bucket", () => {
+    it("rejects ProductionUnit SELL with the unspecified GENERAL bucket", () => {
       const intent: MarketIntent = {
         id: createMarketIntentId("mi:pu-sell-wrong-1"),
         actor: { type: "PRODUCTION_UNIT", productionUnitId: testProductionUnitId },
@@ -339,10 +339,10 @@ describe("MarketIntent validation", () => {
         purpose: "INVENTORY_REBALANCE",
         desiredQuantity: 100,
         sourcePlanId: "plan:sell-wrong",
-        inventoryBucket: "INPUT",
+        inventoryBucket: "GENERAL",
       };
 
-      expect(() => validateMarketIntent(intent)).toThrow(/SELL must use OUTPUT bucket/);
+      expect(() => validateMarketIntent(intent)).toThrow(/SELL must use INPUT, OUTPUT, or INVESTMENT bucket/);
     });
   });
 });

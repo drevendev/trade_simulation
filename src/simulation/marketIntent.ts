@@ -144,9 +144,14 @@ export function validateMarketIntent(intent: MarketIntent): void {
         );
       }
     } else if (intent.side === "SELL") {
-      if (intent.inventoryBucket && intent.inventoryBucket !== "OUTPUT") {
+      if (
+        intent.inventoryBucket &&
+        intent.inventoryBucket !== "INPUT" &&
+        intent.inventoryBucket !== "OUTPUT" &&
+        intent.inventoryBucket !== "INVESTMENT"
+      ) {
         throw new Error(
-          `ProductionUnit SELL must use OUTPUT bucket, got ${intent.inventoryBucket}`,
+          `ProductionUnit SELL must use INPUT, OUTPUT, or INVESTMENT bucket, got ${intent.inventoryBucket}`,
         );
       }
     }
