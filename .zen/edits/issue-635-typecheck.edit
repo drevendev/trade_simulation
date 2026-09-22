@@ -1,0 +1,30 @@
+### FILE: src/simulation/productionStartupPlanning.ts
+<<<<<<< FIND
+    recipe.depreciationRate,
+=======
+    recipe.depreciationRatePerTick,
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionStartupPlanning.test.ts
+<<<<<<< FIND
+    const requiredPreDepreciationCapital = recipe.minimumStartupCapital / (1 - recipe.depreciationRate);
+=======
+    const requiredPreDepreciationCapital = recipe.minimumStartupCapital / (1 - recipe.depreciationRatePerTick);
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionUnitLifecycle.test.ts
+<<<<<<< FIND
+    expect(world.pendingTransitions.productionUnitLifecycleChanges[0]?.target).toBe("ACTIVE");
+=======
+    expect(world.pendingTransitions.productionUnitLifecycleChanges?.[0]?.target).toBe("ACTIVE");
+>>>>>>> REPLACE
+<<<<<<< FIND
+    expect(world.pendingTransitions.productionUnitLifecycleChanges[0]?.target).toBe("CLOSING");
+=======
+    expect(world.pendingTransitions.productionUnitLifecycleChanges?.[0]?.target).toBe("CLOSING");
+>>>>>>> REPLACE
+<<<<<<< FIND
+    expect(safeWorld.pendingTransitions.productionUnitLifecycleChanges[0]?.target).toBe("RETIRED");
+=======
+    expect(safeWorld.pendingTransitions.productionUnitLifecycleChanges?.[0]?.target).toBe("RETIRED");
+>>>>>>> REPLACE
