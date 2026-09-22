@@ -216,6 +216,7 @@ function wageEvidence(): {
   readonly allocation: LaborAllocation;
   readonly settlement: WageSettlement;
   readonly transaction: EconomicTransaction;
+  readonly withholdingTransaction: EconomicTransaction;
 } {
   const allocation: LaborAllocation = {
     allocationId: "labor-allocation:7:a",
@@ -248,6 +249,25 @@ function wageEvidence(): {
     amount: 18,
     reason: allocation.allocationId,
   };
+  const withholdingTransaction: EconomicTransaction = {
+    tick: 7,
+    phase: 5,
+    type: "WAGE_TAX_WITHHELD",
+    transactionId: createTransactionId("tx:7:5:wage-tax:labor-allocation:7:a"),
+    bundleId,
+    originatingTransactionId: transactionId,
+    source: { type: "PRODUCTION_UNIT", productionUnitId: UNIT },
+    destination: { type: "STATE", stateId: stateId("state:1") },
+    currencyId: CUR,
+    moneyAmount: 2,
+    grossMoneyAmount: 20,
+    assessedTaxAmount: 2,
+    taxAmount: 2,
+    sourceRegionId: REGION,
+    destinationRegionId: REGION,
+    amount: 2,
+    reason: allocation.allocationId,
+  };
   const settlement: WageSettlement = {
     settlementId: "wage-settlement:7:labor-allocation:7:a",
     allocationId: allocation.allocationId,
@@ -264,9 +284,9 @@ function wageEvidence(): {
     netWage: 18,
     bundleId,
     wagePaymentTransaction: transaction as WageSettlement["wagePaymentTransaction"],
-    wageTaxWithheldTransaction: undefined,
+    wageTaxWithheldTransaction: withholdingTransaction as WageSettlement["wageTaxWithheldTransaction"],
   };
-  return { allocation, settlement, transaction };
+  return { allocation, settlement, transaction, withholdingTransaction };
 }
 
 function plan(args: {
@@ -277,6 +297,16 @@ function plan(args: {
   readonly settlements?: readonly WageSettlement[];
   readonly transactions?: readonly EconomicTransaction[];
 }) {
+  const transactions = [...(args.transactions ?? [])];
+  for (const settlement of args.settlements ?? []) {
+    const withholding = settlement.wageTaxWithheldTransaction;
+    if (
+      withholding !== undefined &&
+      !transactions.some((transaction) => transaction.transactionId === withholding.transactionId)
+    ) {
+      transactions.push(withholding);
+    }
+  }
   return planHouseholdConsumptionPhase9({
     world: args.world,
     tick: 7,
@@ -284,7 +314,7 @@ function plan(args: {
     laborSupplyPlans: [args.supply ?? supply()],
     laborAllocations: args.allocations ?? [],
     wageSettlements: args.settlements ?? [],
-    transactions: args.transactions ?? [],
+    transactions,
   });
 }
 
@@ -836,7 +866,7 @@ describe("REQ-POPULATION-003 Phase-9 household realization", () => {
       laborSupplyPlans: [supply(10)],
       laborAllocations: [evidence.allocation],
       wageSettlements: [evidence.settlement],
-      transactions: [evidence.transaction],
+      transactions: [evidence.transaction, evidence.withholdingTransaction],
     };
     const beforeInventory = firstWorld.cohorts.get(COHORT)!.householdInventory;
     const next = handler(firstWorld, context, firstWorld.pendingTransitions);
