@@ -39,7 +39,7 @@ describe("REQ-PRODUCTION-007 PLANNED startup investment", () => {
   it("buys only real startup INVESTMENT goods from opening unit cash", () => {
     const { config, planned, region, recipe, investmentPrices } = fixture();
     const result = planPlannedStartupInvestmentPhase2({
-      tick: 1,
+      tick: 3,
       unit: planned,
       regionId: region.regionId,
       settlementCurrencyId: region.settlementCurrencyId,
@@ -61,12 +61,30 @@ describe("REQ-PRODUCTION-007 PLANNED startup investment", () => {
     );
   });
 
+  it("emits no startup INVESTMENT intents off the canonical investment-review cadence", () => {
+    const { config, planned, region, recipe, investmentPrices } = fixture();
+    const result = planPlannedStartupInvestmentPhase2({
+      tick: 1,
+      unit: planned,
+      regionId: region.regionId,
+      settlementCurrencyId: region.settlementCurrencyId,
+      recipe,
+      config,
+      evidence: {
+        mandatoryKnownCash: 0,
+        priorCloseGrossInvestmentPriceByGood: investmentPrices,
+      },
+    });
+    expect(result.investmentIntents).toEqual([]);
+    expect(result.investmentBudget).toBe(0);
+  });
+
   it("uses live PLANNED status even when immutable seed status says ACTIVE and emits no labor/input demand", () => {
     const { config, planned, region, recipe, investmentPrices, inputPrices } = fixture();
     expect(planned.seed.status).toBe("ACTIVE");
 
     const result = planProductionUnitPhase2({
-      tick: 1,
+      tick: 3,
       unit: planned,
       regionId: region.regionId,
       settlementCurrencyId: region.settlementCurrencyId,

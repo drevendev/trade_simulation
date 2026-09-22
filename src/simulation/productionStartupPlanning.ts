@@ -80,8 +80,21 @@ export function planPlannedStartupInvestmentPhase2(args: {
     "ProductionConfig.liquidityBufferShare",
     config.production.liquidityBufferShare ?? defaults.production.liquidityBufferShare!,
   );
+  const investmentReviewCadenceTicks = requirePositive(
+    "ProductionConfig.investmentReviewCadenceTicks",
+    config.production.investmentReviewCadenceTicks ?? defaults.production.investmentReviewCadenceTicks!,
+  );
+  if (!Number.isInteger(investmentReviewCadenceTicks)) {
+    throw new Error(
+      `ProductionConfig.investmentReviewCadenceTicks must be an integer, got ${String(investmentReviewCadenceTicks)}`,
+    );
+  }
   if (liquidityBufferShare > 1) {
     throw new Error(`ProductionConfig.liquidityBufferShare must be <= 1, got ${liquidityBufferShare}`);
+  }
+
+  if (tick === 0 || tick % investmentReviewCadenceTicks !== 0) {
+    return { investmentIntents: [], investableCash: 0, investmentBudget: 0 };
   }
 
   const minimumStartupCapital = requireNonNegative(
