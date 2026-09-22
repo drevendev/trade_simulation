@@ -6,7 +6,7 @@ import type {
   M4ProductionPlanningPolicySeed,
   ScenarioDefinition,
 } from "../config/scenarioDefinition";
-import { createDefaultSimulationConfig } from "../config/simulationConfig";
+import { createDefaultSimulationConfig, type SimulationConfig } from "../config/simulationConfig";
 import { buildInitialWorld } from "./worldState";
 
 const targetState = baselineScenario.states[0]!;
@@ -42,13 +42,23 @@ function withTargetPolicy(
   };
 }
 
-function build(scenario: ScenarioDefinition): void {
+function build(
+  scenario: ScenarioDefinition,
+  config: SimulationConfig = createDefaultSimulationConfig(),
+): void {
   buildInitialWorld(
     scenario,
     baselineDefinitionPack,
-    createDefaultSimulationConfig(),
+    config,
     42,
   );
+}
+
+function configWithoutExplicitLaborCategories(): SimulationConfig {
+  return {
+    ...createDefaultSimulationConfig(),
+    labor: {},
+  };
 }
 
 describe("M4 State policy fail-fast genesis validation (#633)", () => {
@@ -84,14 +94,24 @@ describe("M4 State policy fail-fast genesis validation (#633)", () => {
     );
   });
 
-  it("rejects a labor-category key outside the resolved LaborConfig authority", () => {
+  it("resolves an omitted allowedLaborCategories control to the canonical GENERAL default", () => {
+    const scenario = withTargetPolicy({
+      minimumWageFloorByRegionKey: {
+        [targetRegion.key]: { GENERAL: 20 },
+      },
+    });
+
+    expect(() => build(scenario, configWithoutExplicitLaborCategories())).not.toThrow();
+  });
+
+  it("rejects a genuinely unknown labor category after resolving omitted config defaults", () => {
     const scenario = withTargetPolicy({
       minimumWageFloorByRegionKey: {
         [targetRegion.key]: { NOT_A_LABOR_CATEGORY: 20 },
       },
     });
 
-    expect(() => build(scenario)).toThrow(
+    expect(() => build(scenario, configWithoutExplicitLaborCategories())).toThrow(
       /NOT_A_LABOR_CATEGORY.*not allowed by LaborConfig\.allowedLaborCategories/,
     );
   });
