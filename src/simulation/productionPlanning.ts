@@ -131,6 +131,7 @@ export interface ProductionPlanningResult {
   readonly laborDemandPlan: LaborDemandPlan;
   readonly inputIntents: readonly MarketIntent[];
   readonly investmentIntents: readonly MarketIntent[];
+  readonly liquidationIntents: readonly MarketIntent[];
 }
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
@@ -363,6 +364,43 @@ export function planProductionUnitPhase2(args: {
               }),
         })
       : { investmentIntents: [], investableCash: 0, investmentBudget: 0 };
+    const liquidationIntents: MarketIntent[] = [];
+    if (unit.status === "CLOSING") {
+      const liquidationBuckets = [
+        { bucket: "INPUT" as const, inventory: unit.inputInventory },
+        { bucket: "INVESTMENT" as const, inventory: unit.investmentInventory },
+      ];
+      for (const { bucket, inventory } of liquidationBuckets) {
+        for (const [goodId, rawQuantity] of stableOrderBy(
+          inventory.entries(),
+          ([candidateGoodId]) => String(candidateGoodId),
+        )) {
+          const desiredQuantity = requireNonNegative(
+            `ProductionUnit ${String(unit.productionUnitId)} CLOSING ${bucket}[${String(goodId)}]`,
+            rawQuantity,
+          );
+          if (desiredQuantity <= planning.quantityEpsilon) {
+            continue;
+          }
+          const intent: MarketIntent = {
+            id: createMarketIntentId(
+              `mi:${tick}:${String(unit.productionUnitId)}:CLOSING-LIQUIDATION:${bucket}:${String(goodId)}`,
+            ),
+            actor: { type: "PRODUCTION_UNIT", productionUnitId: unit.productionUnitId },
+            regionId,
+            goodId,
+            side: "SELL",
+            purpose: "INVENTORY_REBALANCE",
+            desiredQuantity,
+            minimumReserveQuantity: 0,
+            sourcePlanId: planId,
+            inventoryBucket: bucket,
+          };
+          validateMarketIntent(intent);
+          liquidationIntents.push(intent);
+        }
+      }
+    }
     const zeroInputs = orderedRecord(
       stableOrderBy(Object.keys(recipe.inputsPerBatch) as GoodId[], String).map((goodId) => [goodId, 0] as const),
     );
@@ -407,6 +445,7 @@ export function planProductionUnitPhase2(args: {
       },
       inputIntents: [],
       investmentIntents: startup.investmentIntents,
+      liquidationIntents,
     };
   }
 
@@ -696,7 +735,7 @@ export function planProductionUnitPhase2(args: {
     grossPayrollCap: grossWageCashEnvelope,
   };
 
-  return { productionPlan, laborDemandPlan, inputIntents, investmentIntents };
+  return { productionPlan, laborDemandPlan, inputIntents, investmentIntents, liquidationIntents: [] };
 }
 
 function regionForUnit(world: WorldState, unit: ProductionUnitState): RegionState {
@@ -969,7 +1008,11 @@ function createPhase2ProductionPlanningHandlerInternal(
 
       productionPlans.push(result.productionPlan);
       laborDemandPlans.push(result.laborDemandPlan);
-      productionMarketIntents.push(...result.inputIntents, ...result.investmentIntents);
+      productionMarketIntents.push(
+        ...result.inputIntents,
+        ...result.investmentIntents,
+        ...result.liquidationIntents,
+      );
     }
 
     const proposedLaborDemandPlans = Object.freeze(

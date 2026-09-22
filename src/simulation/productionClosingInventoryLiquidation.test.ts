@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
-import type { GoodId } from "../domain/id";
+import type { CohortId, GoodId } from "../domain/id";
 import { createMarketAllocationId, type MarketAllocation } from "./marketClearing";
 import { createMarketIntentId, type MarketIntent } from "./marketIntent";
 import { executeAllocation } from "./marketSettlementTransition";
@@ -109,7 +109,7 @@ function liquidationShape(intents: readonly MarketIntent[]) {
 function freeFullFillAllocation(
   intent: MarketIntent,
   world: WorldState,
-  buyerCohortId: MarketAllocation["buyer"] extends { type: "COHORT"; cohortId: infer T } ? T : never,
+  buyerCohortId: CohortId,
   currencyId: MarketAllocation["marketCurrencyId"],
   sequence: number,
 ): MarketAllocation {
