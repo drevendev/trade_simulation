@@ -397,7 +397,7 @@ function validateExecutionPhysicalContract(
       throw new Error(`ProductionExecution realized batches exceed ${name} bound for ${String(execution.unitId)}`);
     }
   }
-  if (unit.seed.status !== "ACTIVE" && realized > quantityEpsilon) {
+  if (unit.status !== "ACTIVE" && realized > quantityEpsilon) {
     throw new Error(`Non-ACTIVE ProductionUnit ${String(execution.unitId)} cannot realize production`);
   }
 
@@ -412,7 +412,7 @@ function validateExecutionPhysicalContract(
 
   const actualInputKeys = stableOrderBy(Object.keys(execution.inputConsumedByGood), String);
   const recipeInputKeys = stableOrderBy(Object.keys(recipe.inputsPerBatch), String);
-  if (unit.seed.status === "ACTIVE") {
+  if (unit.status === "ACTIVE") {
     if (actualInputKeys.length !== recipeInputKeys.length || actualInputKeys.some((key, index) => key !== recipeInputKeys[index])) {
       throw new Error(`ProductionExecution input-good set does not match recipe ${recipe.id}`);
     }
@@ -445,7 +445,7 @@ function validateExecutionPhysicalContract(
       recipe.extractedResourcePerBatch ?? Number.NaN,
     );
     const resource = execution.resourceConsumption;
-    if (unit.seed.status === "ACTIVE") {
+    if (unit.status === "ACTIVE") {
       if (resource === undefined || resource.resourceId !== recipe.extractionResourceId) {
         throw new Error(`ProductionExecution extraction resource provenance mismatch for ${String(execution.unitId)}`);
       }
@@ -467,7 +467,7 @@ function validateProductionExecutionCoverage(
 ): void {
   const expectedActiveUnitIds = stableOrderBy(
     [...world.productionUnits.values()]
-      .filter((unit) => unit.seed.status === "ACTIVE")
+      .filter((unit) => unit.status === "ACTIVE")
       .map((unit) => unit.productionUnitId),
     String,
   );
@@ -493,7 +493,7 @@ function validateProductionExecutionCoverage(
         `ProductionExecution plan provenance mismatch for ${String(execution.unitId)}: expected ${expectedPlanId}`,
       );
     }
-    if (unit.seed.status === "ACTIVE") submittedActiveUnitIds.add(execution.unitId);
+    if (unit.status === "ACTIVE") submittedActiveUnitIds.add(execution.unitId);
   }
 
   const missingActiveUnitIds = expectedActiveUnitIds.filter((unitId) => !submittedActiveUnitIds.has(unitId));
@@ -733,7 +733,7 @@ export function buildProductionOutputSellIntentsPhase5(
   for (const execution of stableOrderBy(executions, (candidate) => String(candidate.unitId))) {
     const unit = worldAfterProduction.productionUnits.get(execution.unitId);
     if (!unit) throw new Error(`ProductionExecution references unknown unit ${String(execution.unitId)}`);
-    if (unit.seed.status !== "ACTIVE") continue;
+    if (unit.status !== "ACTIVE" && unit.status !== "CLOSING") continue;
     const region = worldAfterProduction.regions.get(execution.regionId);
     if (!region) throw new Error(`ProductionExecution references unknown region ${String(execution.regionId)}`);
     const outputQuantity = requireNonNegative(

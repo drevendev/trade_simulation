@@ -35,10 +35,7 @@ function buildTwoActiveToolsWorld(): { world: WorldState; unitIds: readonly Prod
     const isTarget = targetSet.has(unit.productionUnitId);
     productionUnits.set(unit.productionUnitId, {
       ...unit,
-      seed:
-        unit.seed.status === "ACTIVE" && !isTarget
-          ? { ...unit.seed, status: "MOTHBALLED" }
-          : unit.seed,
+      status: unit.status === "ACTIVE" && !isTarget ? "MOTHBALLED" : unit.status,
       ...(isTarget
         ? {
             inputInventory: new Map<GoodId, number>([

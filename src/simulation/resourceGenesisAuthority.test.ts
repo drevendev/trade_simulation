@@ -272,10 +272,10 @@ describe("Issue #590 resource genesis authority", () => {
 
     const productionUnits = new Map(world.productionUnits);
     for (const [unitId, candidate] of productionUnits) {
-      if (candidate.seed.status === "ACTIVE" && unitId !== unit!.productionUnitId) {
+      if (candidate.status === "ACTIVE" && unitId !== unit!.productionUnitId) {
         productionUnits.set(unitId, {
           ...candidate,
-          seed: { ...candidate.seed, status: "MOTHBALLED" },
+          status: "MOTHBALLED",
         });
       }
     }
