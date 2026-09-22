@@ -1,0 +1,119 @@
+### FILE: src/simulation/householdConsumptionExecution.ts
+<<<<<<< FIND
+    if (tax > 0) {
+      if (settlement.controllerStateId === null) {
+=======
+    const actualWithholdingTransactions = args.transactions.filter(
+      (candidate) =>
+        candidate.type === "WAGE_TAX_WITHHELD" &&
+        (candidate.bundleId === settlement.bundleId ||
+          candidate.originatingTransactionId === canonicalPayment.transactionId ||
+          candidate.reason === settlement.allocationId),
+    );
+
+    if (tax > 0) {
+      if (settlement.controllerStateId === null) {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+      const matchingWithholdingTransactions = args.transactions.filter(
+        (candidate) => candidate.transactionId === canonicalWithholding.transactionId,
+      );
+      if (matchingWithholdingTransactions.length !== 1) {
+        throw new Error(
+          `WageSettlement ${settlement.settlementId} must have exactly one matching WAGE_TAX_WITHHELD transaction, got ${matchingWithholdingTransactions.length}`,
+        );
+      }
+=======
+      if (actualWithholdingTransactions.length !== 1) {
+        throw new Error(
+          `WageSettlement ${settlement.settlementId} must have exactly one actual WAGE_TAX_WITHHELD transaction attributable to its wage bundle/allocation, got ${actualWithholdingTransactions.length}`,
+        );
+      }
+      const withholdingTransaction = actualWithholdingTransactions[0]!;
+      if (withholdingTransaction.transactionId !== canonicalWithholding.transactionId) {
+        throw new Error(
+          `WageSettlement ${settlement.settlementId} actual WAGE_TAX_WITHHELD transaction does not match canonical transaction id`,
+        );
+      }
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+      const withholdingTransaction = matchingWithholdingTransactions[0]!;
+      if (
+=======
+      if (
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    } else if (settlement.wageTaxWithheldTransaction !== undefined) {
+      throw new Error(
+        `WageSettlement ${settlement.settlementId} must not include WAGE_TAX_WITHHELD when collected tax is zero`,
+      );
+    }
+=======
+    } else {
+      if (settlement.wageTaxWithheldTransaction !== undefined) {
+        throw new Error(
+          `WageSettlement ${settlement.settlementId} must not include WAGE_TAX_WITHHELD when collected tax is zero`,
+        );
+      }
+      if (actualWithholdingTransactions.length !== 0) {
+        throw new Error(
+          `WageSettlement ${settlement.settlementId} with zero collected tax must have zero actual WAGE_TAX_WITHHELD transactions attributable to its wage bundle/allocation`,
+        );
+      }
+    }
+>>>>>>> REPLACE
+
+### FILE: src/simulation/householdConsumptionWageTaxEvidence.test.ts
+<<<<<<< FIND
+  it("rejects a coherently rewritten withholding destination that disagrees with Phase-1 jurisdiction", () => {
+=======
+  it("rejects an extra distinct-ID withholding leg on a positive-tax wage bundle", () => {
+    const fixture = canonicalWageFixture(true);
+    const canonical = fixture.settlement.wageTaxWithheldTransaction;
+    if (canonical === undefined) throw new Error("Expected canonical positive withholding transaction");
+
+    const extraWithholding: EconomicTransaction = {
+      ...canonical,
+      transactionId: createTransactionId("tx:7:5:wage-tax:extra-positive"),
+    };
+
+    expect(() => phase9(fixture, { transactions: [...fixture.transactions, extraWithholding] })).toThrow(
+      /exactly one actual WAGE_TAX_WITHHELD transaction attributable to its wage bundle\/allocation/,
+    );
+  });
+
+  it("rejects an actual same-bundle withholding leg when canonical collected tax is zero", () => {
+    const fixture = canonicalWageFixture(false);
+    const stateId = [...fixture.world.states.keys()][0];
+    if (stateId === undefined) throw new Error("Expected baseline fixture State");
+    const payment = fixture.settlement.wagePaymentTransaction;
+    const extraWithholding: EconomicTransaction = {
+      tick: fixture.settlement.tick,
+      phase: 5,
+      type: "WAGE_TAX_WITHHELD",
+      transactionId: createTransactionId("tx:7:5:wage-tax:extra-zero"),
+      bundleId: fixture.settlement.bundleId,
+      originatingTransactionId: payment.transactionId,
+      source: { type: "PRODUCTION_UNIT", productionUnitId: fixture.settlement.unitId },
+      destination: { type: "STATE", stateId },
+      currencyId: fixture.settlement.currencyId,
+      moneyAmount: 1,
+      grossMoneyAmount: fixture.settlement.grossWage,
+      assessedTaxAmount: 1,
+      taxAmount: 1,
+      sourceRegionId: fixture.settlement.regionId,
+      destinationRegionId: fixture.settlement.regionId,
+      amount: 1,
+      reason: fixture.settlement.allocationId,
+    };
+
+    expect(() => phase9(fixture, { transactions: [...fixture.transactions, extraWithholding] })).toThrow(
+      /zero collected tax must have zero actual WAGE_TAX_WITHHELD transactions attributable to its wage bundle\/allocation/,
+    );
+  });
+
+  it("rejects a coherently rewritten withholding destination that disagrees with Phase-1 jurisdiction", () => {
+>>>>>>> REPLACE
