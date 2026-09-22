@@ -1,0 +1,61 @@
+### FILE: src/simulation/productionExecutionCoverage.test.ts
+<<<<<<< FIND
+    productionUnits.set(unit.productionUnitId, {
+      ...unit,
+      seed:
+        unit.seed.status === "ACTIVE" && !isTarget
+          ? { ...unit.seed, status: "MOTHBALLED" }
+          : unit.seed,
+      ...(isTarget
+=======
+    productionUnits.set(unit.productionUnitId, {
+      ...unit,
+      status: unit.status === "ACTIVE" && !isTarget ? "MOTHBALLED" : unit.status,
+      ...(isTarget
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionExecutionPersistence.test.ts
+<<<<<<< FIND
+function withOnlyActiveUnit(world: WorldState, activeUnitId: ProductionUnitId): WorldState {
+  const productionUnits = new Map(world.productionUnits);
+  for (const [unitId, unit] of productionUnits) {
+    if (unit.seed.status === "ACTIVE" && unitId !== activeUnitId) {
+      productionUnits.set(unitId, { ...unit, seed: { ...unit.seed, status: "MOTHBALLED" } });
+    }
+  }
+  return { ...world, productionUnits };
+}
+=======
+function withOnlyActiveUnit(world: WorldState, activeUnitId: ProductionUnitId): WorldState {
+  const productionUnits = new Map(world.productionUnits);
+  for (const [unitId, unit] of productionUnits) {
+    if (unit.status === "ACTIVE" && unitId !== activeUnitId) {
+      productionUnits.set(unitId, { ...unit, status: "MOTHBALLED" });
+    }
+  }
+  return { ...world, productionUnits };
+}
+>>>>>>> REPLACE
+
+### FILE: src/simulation/resourceGenesisAuthority.test.ts
+<<<<<<< FIND
+    const productionUnits = new Map(world.productionUnits);
+    for (const [unitId, candidate] of productionUnits) {
+      if (candidate.seed.status === "ACTIVE" && unitId !== unit!.productionUnitId) {
+        productionUnits.set(unitId, {
+          ...candidate,
+          seed: { ...candidate.seed, status: "MOTHBALLED" },
+        });
+      }
+    }
+=======
+    const productionUnits = new Map(world.productionUnits);
+    for (const [unitId, candidate] of productionUnits) {
+      if (candidate.status === "ACTIVE" && unitId !== unit!.productionUnitId) {
+        productionUnits.set(unitId, {
+          ...candidate,
+          status: "MOTHBALLED",
+        });
+      }
+    }
+>>>>>>> REPLACE
