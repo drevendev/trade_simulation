@@ -247,7 +247,7 @@ export function isProductionUnitSafeForRetirement(
   if (materiallyPositive(unit.inputInventory.values(), config.quantityEpsilon)) return false;
   if (materiallyPositive(unit.outputInventory.values(), config.quantityEpsilon)) return false;
   if (materiallyPositive(unit.investmentInventory.values(), config.quantityEpsilon)) return false;
-  if (unit.installedCapital > config.minimumLifecycleScale) return false;
+  if (unit.installedCapital > config.quantityEpsilon) return false;
 
   return !(world.pendingTransitions.productionUnitLifecycleChanges ?? []).some(
     (candidate) =>

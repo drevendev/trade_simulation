@@ -1,6 +1,0 @@
-### FILE: src/simulation/productionUnitLifecycle.ts
-<<<<<<< FIND
-  if (unit.installedCapital > config.minimumLifecycleScale) return false;
-=======
-  if (unit.installedCapital > config.quantityEpsilon) return false;
->>>>>>> REPLACE
