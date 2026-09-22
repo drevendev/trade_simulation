@@ -15,6 +15,11 @@ const targetRegion =
   baselineScenario.geography[0]!;
 const targetUnit = baselineScenario.productionUnits[0]!;
 
+type RuntimePolicyFixture = Record<string, unknown>;
+type RequiredPolicyMapField =
+  | "minimumWageFloorByRegionKey"
+  | "mandatoryKnownCashByProductionUnitKey";
+
 function withTargetPolicy(
   patch: Partial<M4ProductionPlanningPolicySeed>,
 ): ScenarioDefinition {
@@ -42,6 +47,30 @@ function withTargetPolicy(
   };
 }
 
+function withRuntimeTargetPolicy(policy: RuntimePolicyFixture): ScenarioDefinition {
+  return {
+    ...baselineScenario,
+    states: baselineScenario.states.map((state) =>
+      state.key === targetState.key
+        ? {
+            ...state,
+            policy: {
+              ...state.policy,
+              m4ProductionPlanning: policy as unknown as M4ProductionPlanningPolicySeed,
+            },
+          }
+        : state,
+    ),
+  };
+}
+
+function emptyRuntimePolicy(): RuntimePolicyFixture {
+  return {
+    minimumWageFloorByRegionKey: {},
+    mandatoryKnownCashByProductionUnitKey: {},
+  };
+}
+
 function build(
   scenario: ScenarioDefinition,
   config: SimulationConfig = createDefaultSimulationConfig(),
@@ -61,7 +90,18 @@ function configWithoutExplicitLaborCategories(): SimulationConfig {
   };
 }
 
-describe("M4 State policy fail-fast genesis validation (#633)", () => {
+function expectPolicyMapShapeFailure(
+  scenario: ScenarioDefinition,
+  field: RequiredPolicyMapField,
+): void {
+  expect(() => build(scenario)).toThrow(
+    new RegExp(
+      `StateSeed "${targetState.key}".*policy\\.m4ProductionPlanning\\.${field}.*present as a non-null plain object map`,
+    ),
+  );
+}
+
+describe("M4 State policy fail-fast genesis validation (#633, #642)", () => {
   it("keeps the unmodified baseline valid", () => {
     expect(() => build(baselineScenario)).not.toThrow();
   });
@@ -144,6 +184,41 @@ describe("M4 State policy fail-fast genesis validation (#633)", () => {
     });
 
     expect(() => build(scenario)).toThrow(/mandatoryKnownCashByProductionUnitKey.*non-negative finite number/);
+  });
+
+  it.each<RequiredPolicyMapField>([
+    "minimumWageFloorByRegionKey",
+    "mandatoryKnownCashByProductionUnitKey",
+  ])("rejects a missing required %s map at genesis", (field) => {
+    const policy = emptyRuntimePolicy();
+    delete policy[field];
+
+    expectPolicyMapShapeFailure(withRuntimeTargetPolicy(policy), field);
+  });
+
+  it.each([
+    ["minimumWageFloorByRegionKey", null],
+    ["minimumWageFloorByRegionKey", 42],
+    ["minimumWageFloorByRegionKey", []],
+    ["mandatoryKnownCashByProductionUnitKey", null],
+    ["mandatoryKnownCashByProductionUnitKey", 42],
+    ["mandatoryKnownCashByProductionUnitKey", []],
+  ] as const)("rejects a malformed required %s map value at genesis", (field, value) => {
+    const policy = emptyRuntimePolicy();
+    policy[field] = value;
+
+    expectPolicyMapShapeFailure(withRuntimeTargetPolicy(policy), field);
+  });
+
+  it("reports the malformed policy field at genesis instead of reaching a later undefined-property path", () => {
+    const policy = emptyRuntimePolicy();
+    delete policy.minimumWageFloorByRegionKey;
+
+    expect(() => build(withRuntimeTargetPolicy(policy))).toThrow(
+      new RegExp(
+        `^StateSeed "${targetState.key}": policy\\.m4ProductionPlanning\\.minimumWageFloorByRegionKey must be present as a non-null plain object map$`,
+      ),
+    );
   });
 
   it("preserves explicit empty maps as no applicable M4 rule", () => {
