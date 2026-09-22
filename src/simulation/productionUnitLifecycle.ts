@@ -249,7 +249,7 @@ export function isProductionUnitSafeForRetirement(
   if (materiallyPositive(unit.investmentInventory.values(), config.quantityEpsilon)) return false;
   if (unit.installedCapital > config.minimumLifecycleScale) return false;
 
-  return !world.pendingTransitions.productionUnitLifecycleChanges.some(
+  return !(world.pendingTransitions.productionUnitLifecycleChanges ?? []).some(
     (candidate) =>
       candidate.unitId === unitId &&
       candidate.transitionId !== ignoredTransitionId,
@@ -366,7 +366,7 @@ export function applyProductionUnitLifecycleReviewTransition(
   if (expected.length === 0) return world;
 
   const existingFutureUnits = new Set(
-    world.pendingTransitions.productionUnitLifecycleChanges.map((candidate) => String(candidate.unitId)),
+    (world.pendingTransitions.productionUnitLifecycleChanges ?? []).map((candidate) => String(candidate.unitId)),
   );
   for (const review of expected) {
     if (review.transition !== undefined && existingFutureUnits.has(String(review.unitId))) {
@@ -397,7 +397,7 @@ export function applyProductionUnitLifecycleReviewTransition(
     pendingTransitions: {
       ...world.pendingTransitions,
       productionUnitLifecycleChanges: [
-        ...world.pendingTransitions.productionUnitLifecycleChanges,
+        ...(world.pendingTransitions.productionUnitLifecycleChanges ?? []),
         ...queued,
       ],
     },
@@ -412,14 +412,15 @@ export function applyProductionUnitLifecycleTransitionsAtPhase1(
   if (!Number.isInteger(currentTick) || currentTick < 0) {
     throw new Error(`Phase-1 lifecycle activation tick must be a non-negative integer, got ${String(currentTick)}`);
   }
-  const stale = world.pendingTransitions.productionUnitLifecycleChanges.filter(
+  const lifecycleChanges = world.pendingTransitions.productionUnitLifecycleChanges ?? [];
+  const stale = lifecycleChanges.filter(
     (candidate) => candidate.activateTick < currentTick,
   );
   if (stale.length > 0) {
     throw new Error(`Stale ProductionUnit lifecycle transition ${stale[0]!.transitionId} was not activated on time`);
   }
   const due = stableOrderBy(
-    world.pendingTransitions.productionUnitLifecycleChanges.filter(
+    lifecycleChanges.filter(
       (candidate) => candidate.activateTick === currentTick,
     ),
     (candidate) => `${String(candidate.unitId)}|${candidate.transitionId}`,
@@ -472,7 +473,7 @@ export function applyProductionUnitLifecycleTransitionsAtPhase1(
     productionUnits: nextUnits,
     pendingTransitions: {
       ...world.pendingTransitions,
-      productionUnitLifecycleChanges: world.pendingTransitions.productionUnitLifecycleChanges.filter(
+      productionUnitLifecycleChanges: lifecycleChanges.filter(
         (candidate) => !activatedIds.has(candidate.transitionId),
       ),
     },

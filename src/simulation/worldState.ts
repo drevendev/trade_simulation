@@ -92,7 +92,8 @@ export interface PendingTransitions {
     readonly patch: unknown;
     readonly activateTick: number;
   }>;
-  readonly productionUnitLifecycleChanges: readonly ProductionUnitLifecycleTransition[];
+  /** Optional only for older/manual fixtures; canonical genesis always materializes the array. */
+  readonly productionUnitLifecycleChanges?: readonly ProductionUnitLifecycleTransition[];
 }
 
 export interface WorldState {

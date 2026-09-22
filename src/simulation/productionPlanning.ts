@@ -353,7 +353,12 @@ export function planProductionUnitPhase2(args: {
             : {
                 evidence: {
                   mandatoryKnownCash: args.evidence.mandatoryKnownCash,
-                  priorCloseGrossInvestmentPriceByGood: args.evidence.priorCloseGrossInvestmentPriceByGood,
+                  ...(args.evidence.priorCloseGrossInvestmentPriceByGood === undefined
+                    ? {}
+                    : {
+                        priorCloseGrossInvestmentPriceByGood:
+                          args.evidence.priorCloseGrossInvestmentPriceByGood,
+                      }),
                 },
               }),
         })

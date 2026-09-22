@@ -96,7 +96,7 @@ export function getActiveTransitionsAtTick(
     monetaryPolicyChanges: pending.monetaryPolicyChanges.filter(
       (m) => m.activateTick === currentTick,
     ),
-    productionUnitLifecycleChanges: pending.productionUnitLifecycleChanges.filter(
+    productionUnitLifecycleChanges: (pending.productionUnitLifecycleChanges ?? []).filter(
       (change) => change.activateTick === currentTick,
     ),
   };
@@ -119,7 +119,7 @@ export function removeActivatedTransitions(
     monetaryPolicyChanges: pending.monetaryPolicyChanges.filter(
       (m) => m.activateTick !== currentTick,
     ),
-    productionUnitLifecycleChanges: pending.productionUnitLifecycleChanges.filter(
+    productionUnitLifecycleChanges: (pending.productionUnitLifecycleChanges ?? []).filter(
       (change) => change.activateTick !== currentTick,
     ),
   };
