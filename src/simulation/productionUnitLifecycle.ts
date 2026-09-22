@@ -24,6 +24,9 @@ import type {
 
 export interface ProductionUnitLifecycleReadiness {
   readonly ownerPresent: boolean;
+  readonly ownershipAllowed: boolean;
+  readonly productionAllowed: boolean;
+  readonly legalEligibilityReady: boolean;
   readonly infrastructureReady: boolean;
   readonly resourceReady: boolean;
   readonly capitalReady: boolean;
@@ -157,6 +160,48 @@ function ownerPresent(world: WorldState, unit: ProductionUnitState): boolean {
   return [...world.states.values()].some((candidate) => candidate.seed.key === unit.seed.owner.key);
 }
 
+function lifecycleLegalEligibility(
+  world: WorldState,
+  unit: ProductionUnitState,
+  region: RegionState,
+): Pick<
+  ProductionUnitLifecycleReadiness,
+  "ownershipAllowed" | "productionAllowed" | "legalEligibilityReady"
+> {
+  if (region.controllerStateId === null) {
+    // The Phase-1 jurisdiction result has no controlling State, so no State ownership or
+    // production prohibition applies at the M4 fixture boundary.
+    return { ownershipAllowed: true, productionAllowed: true, legalEligibilityReady: true };
+  }
+
+  const controller = world.states.get(region.controllerStateId);
+  if (controller === undefined) {
+    throw new Error(
+      `Phase-14 lifecycle Region ${String(region.regionId)} references missing controller State ${String(region.controllerStateId)}`,
+    );
+  }
+  const policy = controller.seed.policy.m4ProductionPlanning;
+  if (policy === undefined) {
+    throw new Error(
+      `Phase-14 lifecycle requires an explicit M4 production-planning policy fixture for controlled Region ${String(region.regionId)}`,
+    );
+  }
+  if (
+    typeof policy.lifecycleOwnershipAllowed !== "boolean" ||
+    typeof policy.lifecycleProductionAllowed !== "boolean"
+  ) {
+    throw new Error(
+      `Phase-14 lifecycle requires explicit ownershipAllowed/productionAllowed M4 policy evidence for controlled Region ${String(region.regionId)} and ProductionUnit ${String(unit.productionUnitId)}`,
+    );
+  }
+
+  return {
+    ownershipAllowed: policy.lifecycleOwnershipAllowed,
+    productionAllowed: policy.lifecycleProductionAllowed,
+    legalEligibilityReady: policy.lifecycleOwnershipAllowed && policy.lifecycleProductionAllowed,
+  };
+}
+
 function lifecycleReadiness(world: WorldState, unit: ProductionUnitState): ProductionUnitLifecycleReadiness {
   const config = resolveLifecycleConfig(world);
   const recipe = world.definitionRegistry.recipes[unit.seed.recipeId];
@@ -193,10 +238,18 @@ function lifecycleReadiness(world: WorldState, unit: ProductionUnitState): Produ
   );
   const operatingCashReady = homeCash + config.moneyEpsilon >= config.minOperatingCash;
   const hasOwner = ownerPresent(world, unit);
-  const ready = hasOwner && infrastructureReady && resourceReady && capitalReady && operatingCashReady;
+  const legalEligibility = lifecycleLegalEligibility(world, unit, region);
+  const ready =
+    hasOwner &&
+    legalEligibility.legalEligibilityReady &&
+    infrastructureReady &&
+    resourceReady &&
+    capitalReady &&
+    operatingCashReady;
 
   return {
     ownerPresent: hasOwner,
+    ...legalEligibility,
     infrastructureReady,
     resourceReady,
     capitalReady,

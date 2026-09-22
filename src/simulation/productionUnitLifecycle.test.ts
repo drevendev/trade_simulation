@@ -44,6 +44,34 @@ function withProductionConfig(world: WorldState, patch: Record<string, number>):
   };
 }
 
+function withLifecycleEligibility(
+  world: WorldState,
+  unit: ProductionUnitState,
+  patch: {
+    readonly lifecycleOwnershipAllowed?: boolean;
+    readonly lifecycleProductionAllowed?: boolean;
+  },
+): WorldState {
+  const region = regionFor(world, unit);
+  if (region.controllerStateId === null) throw new Error("test requires a controlled Region");
+  const controller = world.states.get(region.controllerStateId);
+  if (controller === undefined) throw new Error("test requires a live controller State");
+  const policy = controller.seed.policy.m4ProductionPlanning;
+  if (policy === undefined) throw new Error("test requires the explicit M4 policy fixture");
+  const states = new Map(world.states);
+  states.set(controller.stateId, {
+    ...controller,
+    seed: {
+      ...controller.seed,
+      policy: {
+        ...controller.seed.policy,
+        m4ProductionPlanning: { ...policy, ...patch },
+      },
+    },
+  });
+  return { ...world, states };
+}
+
 function regionFor(world: WorldState, unit: ProductionUnitState) {
   const region = [...world.regions.values()].find((candidate) => candidate.seed.key === unit.seed.regionKey);
   expect(region).toBeDefined();
@@ -102,6 +130,67 @@ describe("REQ-PRODUCTION-007 ProductionUnit lifecycle", () => {
     expect(readyUnit.seed.status).toBe(opening.seed.status);
   });
 
+  it("fails PLANNED activation closed when current M4 legal eligibility is false and preserves the eligible control", () => {
+    let world = baselineWorld();
+    const opening = activeUnit(world);
+    const recipe = world.definitionRegistry.recipes[opening.seed.recipeId]!;
+    const region = regionFor(world, opening);
+    const readyUnit: ProductionUnitState = {
+      ...opening,
+      status: "PLANNED",
+      installedCapital: Math.max(opening.installedCapital, recipe.minimumStartupCapital),
+      wallet: new Map(opening.wallet).set(
+        region.settlementCurrencyId,
+        Math.max(
+          opening.wallet.get(region.settlementCurrencyId) ?? 0,
+          world.simulationConfig.production.minOperatingCash ?? 0,
+        ),
+      ),
+    };
+    world = withUnit(world, readyUnit);
+
+    for (const patch of [
+      { lifecycleOwnershipAllowed: false },
+      { lifecycleProductionAllowed: false },
+    ]) {
+      const denied = withLifecycleEligibility(world, readyUnit, patch);
+      const evidence = planProductionUnitLifecyclePhase14({ world: denied, tick: 3 }).reviews.find(
+        (candidate) => candidate.unitId === readyUnit.productionUnitId,
+      )!;
+      expect(evidence.readiness.legalEligibilityReady).toBe(false);
+      expect(evidence.transition).toBeUndefined();
+    }
+
+    const allowed = planProductionUnitLifecyclePhase14({ world, tick: 3 }).reviews.find(
+      (candidate) => candidate.unitId === readyUnit.productionUnitId,
+    )!;
+    expect(allowed.readiness.ownershipAllowed).toBe(true);
+    expect(allowed.readiness.productionAllowed).toBe(true);
+    expect(allowed.readiness.legalEligibilityReady).toBe(true);
+    expect(allowed.transition?.target).toBe("ACTIVE");
+  });
+
+  it("fails lifecycle review closed when controlled-Region legal evidence is unavailable", () => {
+    let world = baselineWorld();
+    const opening = activeUnit(world);
+    const region = regionFor(world, opening);
+    if (region.controllerStateId === null) throw new Error("test requires a controlled Region");
+    const controller = world.states.get(region.controllerStateId)!;
+    const states = new Map(world.states);
+    states.set(controller.stateId, {
+      ...controller,
+      seed: {
+        ...controller.seed,
+        policy: {},
+      },
+    });
+    world = { ...world, states };
+
+    expect(() => planProductionUnitLifecyclePhase14({ world, tick: 3 })).toThrow(
+      /requires an explicit M4 production-planning policy fixture/,
+    );
+  });
+
   it("requires three configured consecutive nonviable ACTIVE reviews and resets on a viable review", () => {
     let world = baselineWorld();
     const opening = activeUnit(world);
@@ -157,6 +246,35 @@ describe("REQ-PRODUCTION-007 ProductionUnit lifecycle", () => {
     expect(world.pendingTransitions.productionUnitLifecycleChanges?.[0]?.target).toBe("ACTIVE");
     world = applyProductionUnitLifecycleTransitionsAtPhase1(world, 7);
     expect(world.productionUnits.get(opening.productionUnitId)!.status).toBe("ACTIVE");
+  });
+
+  it("does not accrue MOTHBALLED viable reviews while current M4 legal eligibility is false", () => {
+    let world = baselineWorld();
+    const opening = activeUnit(world);
+    const recipe = world.definitionRegistry.recipes[opening.seed.recipeId]!;
+    const mothballed: ProductionUnitState = {
+      ...opening,
+      status: "MOTHBALLED",
+      installedCapital: Math.max(opening.installedCapital, recipe.minimumStartupCapital),
+      signals: {
+        ...opening.signals,
+        marginSignalEma: 0.2,
+        consecutiveNonviableReviews: 0,
+        consecutiveViableReviews: 0,
+      },
+    };
+    world = withUnit(world, mothballed);
+
+    const deniedWorld = withLifecycleEligibility(world, mothballed, {
+      lifecycleProductionAllowed: false,
+    });
+    const denied = review(deniedWorld, 3);
+    expect(denied.productionUnits.get(opening.productionUnitId)!.signals.consecutiveViableReviews).toBe(0);
+    expect(denied.pendingTransitions.productionUnitLifecycleChanges).toHaveLength(0);
+
+    const allowed = review(world, 3);
+    expect(allowed.productionUnits.get(opening.productionUnitId)!.signals.consecutiveViableReviews).toBe(1);
+    expect(allowed.pendingTransitions.productionUnitLifecycleChanges).toHaveLength(0);
   });
 
   it("moves prolonged nonviable MOTHBALLED units to CLOSING only on configured due reviews", () => {
