@@ -217,8 +217,8 @@ describe("Issue #638 Phase-5 live ProductionUnit status authority", () => {
     expect(seededActive.intents[0]).toMatchObject({
       side: "SELL",
       inventoryBucket: "OUTPUT",
-      desiredQuantity: 12,
-      minimumReserveQuantity: 8,
+      desiredQuantity: 20,
+      minimumReserveQuantity: 0,
     });
   });
 
