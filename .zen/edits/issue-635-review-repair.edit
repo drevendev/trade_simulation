@@ -1,0 +1,269 @@
+### FILE: src/simulation/productionPlanning.ts
+<<<<<<< FIND
+    const startup = unit.status === "PLANNED"
+      ? planPlannedStartupInvestmentPhase2({
+=======
+    const startup = unit.status === "PLANNED" || unit.status === "MOTHBALLED"
+      ? planPlannedStartupInvestmentPhase2({
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionStartupPlanning.ts
+<<<<<<< FIND
+/**
+ * Bounded Phase-2 startup investment planning for PLANNED ProductionUnits.
+ *
+ * Startup buys real investment goods with opening unit cash only. It never creates labor
+ * demand, INPUT procurement, capital, credit or owner funding; Phase 12 remains the sole
+ * converter from INVESTMENT inventory to installed capital.
+ */
+=======
+/**
+ * Bounded Phase-2 startup/recapitalization investment planning for PLANNED and viable
+ * MOTHBALLED ProductionUnits.
+ *
+ * The unit buys real investment goods with opening cash only. It never creates labor
+ * demand, INPUT procurement, capital, credit or owner funding; Phase 12 remains the sole
+ * converter from INVESTMENT inventory to installed capital.
+ */
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+/** Plan startup INVESTMENT intents for a PLANNED unit from tick-opening stocks only. */
+=======
+/** Plan startup/recapitalization INVESTMENT intents from tick-opening stocks only. */
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  if (unit.status !== "PLANNED") {
+    return { investmentIntents: [], investableCash: 0, investmentBudget: 0 };
+  }
+=======
+  if (unit.status !== "PLANNED" && unit.status !== "MOTHBALLED") {
+    return { investmentIntents: [], investableCash: 0, investmentBudget: 0 };
+  }
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  const defaults = createDefaultSimulationConfig();
+  const quantityEpsilon = requirePositive(
+=======
+  const defaults = createDefaultSimulationConfig();
+  const reactivateMarginThreshold = requireFinite(
+    "ProductionConfig.reactivateMarginThreshold",
+    config.production.reactivateMarginThreshold ?? defaults.production.reactivateMarginThreshold!,
+  );
+  if (
+    unit.status === "MOTHBALLED" &&
+    requireFinite(
+      `ProductionUnit ${String(unit.productionUnitId)} marginSignalEma`,
+      unit.signals.marginSignalEma,
+    ) <= reactivateMarginThreshold
+  ) {
+    return { investmentIntents: [], investableCash: 0, investmentBudget: 0 };
+  }
+  const quantityEpsilon = requirePositive(
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    throw new Error(`PLANNED startup tick must be a non-negative integer, got ${String(tick)}`);
+=======
+    throw new Error(`ProductionUnit startup/recapitalization tick must be a non-negative integer, got ${String(tick)}`);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+        `PLANNED startup requires prior-close INVESTMENT price for ${String(goodId)}`,
+=======
+        `ProductionUnit startup/recapitalization requires prior-close INVESTMENT price for ${String(goodId)}`,
+>>>>>>> REPLACE
+
+### FILE: src/simulation/capitalFormation.ts
+<<<<<<< FIND
+  // ACTIVE capacity expansion and PLANNED startup may form capital. MOTHBALLED/CLOSING
+  // retain physical stocks but cannot silently re-enter investment while lifecycle review
+  // has them outside normal operation.
+  const capitalFormationAllowed = unit.status === "ACTIVE" || unit.status === "PLANNED";
+=======
+  // ACTIVE capacity expansion, PLANNED startup and MOTHBALLED recapitalization may form
+  // capital from already-owned real INVESTMENT goods. CLOSING units cannot start new
+  // investment while they are resolving stocks for retirement.
+  const capitalFormationAllowed =
+    unit.status === "ACTIVE" || unit.status === "PLANNED" || unit.status === "MOTHBALLED";
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionUnitLifecycle.ts
+<<<<<<< FIND
+  const region = regionForUnit(world, unit);
+  const currencyId: CurrencyId = region.settlementCurrencyId;
+  const moneyEpsilon = resolveLifecycleConfig(world).moneyEpsilon;
+  const nextUnitWallet = new Map(unit.wallet);
+=======
+  const region = regionForUnit(world, unit);
+  const currencyId: CurrencyId = region.settlementCurrencyId;
+  const nextUnitWallet = new Map(unit.wallet);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    if (amount > openingOwnerCash + moneyEpsilon) throw new Error(`ProductionUnit owner funding would overdraw State treasury`);
+    const treasury = new Map(owner.treasury);
+    treasury.set(currencyId, Math.max(0, openingOwnerCash - amount));
+=======
+    if (amount > openingOwnerCash) throw new Error(`ProductionUnit owner funding would overdraw State treasury`);
+    const treasury = new Map(owner.treasury);
+    treasury.set(currencyId, openingOwnerCash - amount);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    if (amount > openingOwnerCash + moneyEpsilon) throw new Error(`ProductionUnit owner funding would overdraw Clan treasury`);
+    const treasury = new Map(owner.treasury);
+    treasury.set(currencyId, Math.max(0, openingOwnerCash - amount));
+=======
+    if (amount > openingOwnerCash) throw new Error(`ProductionUnit owner funding would overdraw Clan treasury`);
+    const treasury = new Map(owner.treasury);
+    treasury.set(currencyId, openingOwnerCash - amount);
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionStartupPlanning.test.ts
+<<<<<<< FIND
+  it("keeps MOTHBALLED/CLOSING outside both ordinary and startup investment flows", () => {
+    const { config, planned, region, recipe, investmentPrices, inputPrices } = fixture();
+    for (const status of ["MOTHBALLED", "CLOSING"] as const) {
+      const unit: ProductionUnitState = { ...planned, status };
+      const result = planProductionUnitPhase2({
+        tick: 1,
+        unit,
+        regionId: region.regionId,
+        settlementCurrencyId: region.settlementCurrencyId,
+        recipe,
+        config,
+        evidence: {
+          mandatoryKnownCash: 0,
+          legalMinimumWageFloor: 0,
+          priorCloseGrossInputPriceByGood: inputPrices,
+          priorCloseGrossInvestmentPriceByGood: investmentPrices,
+          infrastructureFactor: 1,
+          resourceAccessFactor: 1,
+          healthLaborProductivityFactor: 1,
+        },
+      });
+      expect(result.productionPlan.plannedBatches).toBe(0);
+      expect(result.laborDemandPlan.requestedWorkerEquivalents).toBe(0);
+      expect(result.inputIntents).toEqual([]);
+      expect(result.investmentIntents).toEqual([]);
+    }
+  });
+=======
+  it("lets viable MOTHBALLED units recapitalize without re-entering ordinary flows and keeps CLOSING isolated", () => {
+    const { config, planned, region, recipe, investmentPrices, inputPrices } = fixture();
+    const mothballed: ProductionUnitState = {
+      ...planned,
+      status: "MOTHBALLED",
+      signals: { ...planned.signals, marginSignalEma: 0.2 },
+    };
+    const result = planProductionUnitPhase2({
+      tick: 3,
+      unit: mothballed,
+      regionId: region.regionId,
+      settlementCurrencyId: region.settlementCurrencyId,
+      recipe,
+      config,
+      evidence: {
+        mandatoryKnownCash: 0,
+        legalMinimumWageFloor: 0,
+        priorCloseGrossInputPriceByGood: inputPrices,
+        priorCloseGrossInvestmentPriceByGood: investmentPrices,
+        infrastructureFactor: 1,
+        resourceAccessFactor: 1,
+        healthLaborProductivityFactor: 1,
+      },
+    });
+    expect(result.productionPlan.plannedBatches).toBe(0);
+    expect(result.laborDemandPlan.requestedWorkerEquivalents).toBe(0);
+    expect(result.inputIntents).toEqual([]);
+    expect(result.investmentIntents.length).toBeGreaterThan(0);
+
+    const closing = planProductionUnitPhase2({
+      tick: 3,
+      unit: { ...planned, status: "CLOSING" },
+      regionId: region.regionId,
+      settlementCurrencyId: region.settlementCurrencyId,
+      recipe,
+      config,
+      evidence: {
+        mandatoryKnownCash: 0,
+        legalMinimumWageFloor: 0,
+        priorCloseGrossInputPriceByGood: inputPrices,
+        priorCloseGrossInvestmentPriceByGood: investmentPrices,
+        infrastructureFactor: 1,
+        resourceAccessFactor: 1,
+        healthLaborProductivityFactor: 1,
+      },
+    });
+    expect(closing.productionPlan.plannedBatches).toBe(0);
+    expect(closing.laborDemandPlan.requestedWorkerEquivalents).toBe(0);
+    expect(closing.inputIntents).toEqual([]);
+    expect(closing.investmentIntents).toEqual([]);
+  });
+
+  it("forms real capital for a viable MOTHBALLED unit below minimumStartupCapital before reactivation review", () => {
+    const { world, planned, recipe } = fixture();
+    const openingCapital = recipe.minimumStartupCapital / 2;
+    const requiredPreDepreciationCapital = recipe.minimumStartupCapital / (1 - recipe.depreciationRatePerTick);
+    const capitalGap = requiredPreDepreciationCapital - openingCapital;
+    const recapitalizationInventory = new Map(
+      Object.entries(recipe.investmentGoodsPerCapitalUnit).map(([goodId, coefficient]) => [
+        goodId as GoodId,
+        coefficient * capitalGap,
+      ]),
+    );
+    const mothballed: ProductionUnitState = {
+      ...planned,
+      status: "MOTHBALLED",
+      installedCapital: openingCapital,
+      investmentInventory: recapitalizationInventory,
+      signals: { ...planned.signals, marginSignalEma: 0.2 },
+    };
+    const prepared = withOnlyUnit(world, mothballed);
+    const capitalPlan = planCapitalFormationPhase12({ world: prepared, tick: 3 });
+    expect(capitalPlan.executions[0]!.capitalBuilt).toBeGreaterThan(0);
+    const afterPhase12 = applyCapitalFormationTransition(prepared, capitalPlan.executions, 3);
+    const rebuilt = afterPhase12.productionUnits.get(mothballed.productionUnitId)!;
+    expect(rebuilt.status).toBe("MOTHBALLED");
+    expect(rebuilt.installedCapital).toBeGreaterThanOrEqual(recipe.minimumStartupCapital);
+
+    const lifecycle = planProductionUnitLifecyclePhase14({ world: afterPhase12, tick: 3 });
+    const review = lifecycle.reviews.find((candidate) => candidate.unitId === mothballed.productionUnitId)!;
+    expect(review.readiness.capitalReady).toBe(true);
+    expect(review.nextSignals.consecutiveViableReviews).toBe(1);
+  });
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionUnitLifecycle.test.ts
+<<<<<<< FIND
+  it("is deterministic under registry insertion order and rejects tampered/wrong-unit review evidence", () => {
+=======
+  it("rejects owner funding above exact available cash even when the excess is below money epsilon", () => {
+    let world = baselineWorld();
+    const opening = activeUnit(world);
+    const unit: ProductionUnitState = { ...opening, status: "PLANNED" };
+    world = withUnit(world, unit);
+    const region = regionFor(world, unit);
+    expect(unit.seed.owner.type).toBe("CLAN");
+    if (unit.seed.owner.type !== "CLAN") throw new Error("baseline fixture expected Clan-owned unit");
+    const owner = [...world.clans.values()].find((candidate) => candidate.seed.key === unit.seed.owner.key)!;
+    const ownerBefore = owner.treasury.get(region.settlementCurrencyId) ?? 0;
+    const unitBefore = unit.wallet.get(region.settlementCurrencyId) ?? 0;
+    const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
+    expect(ownerBefore).toBeGreaterThan(0);
+
+    expect(() =>
+      applyProductionUnitOwnerFundingTransition(world, {
+        unitId: unit.productionUnitId,
+        amount: ownerBefore + moneyEpsilon / 2,
+      }),
+    ).toThrow(/overdraw Clan treasury/);
+    expect(world.clans.get(owner.clanId)!.treasury.get(region.settlementCurrencyId)).toBe(ownerBefore);
+    expect(world.productionUnits.get(unit.productionUnitId)!.wallet.get(region.settlementCurrencyId)).toBe(unitBefore);
+  });
+
+  it("is deterministic under registry insertion order and rejects tampered/wrong-unit review evidence", () => {
+>>>>>>> REPLACE
