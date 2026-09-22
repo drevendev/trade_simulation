@@ -412,13 +412,22 @@ const monetaryAuthorities: MonetaryAuthoritySeed[] = [
 // States
 // ============================================================================
 
+// M4 policy inputs are explicit scenario fixtures rather than planner defaults. The
+// baseline has no applicable minimum-wage or mandatory pre-payroll-cash rule.
+const noM4ProductionPlanningPolicy = {
+  m4ProductionPlanning: {
+    minimumWageFloorByRegionKey: {},
+    mandatoryKnownCashByProductionUnitKey: {},
+  },
+} as const;
+
 const states: StateSeed[] = [
   {
     key: "state:alpha",
     name: "State Alpha",
     treasury: { "currency:alpha": 100000 },
     publicInventory: { "good:food": 500, "good:wood": 300 },
-    policy: {},
+    policy: noM4ProductionPlanningPolicy,
     effectiveCurrencyRegime: {
       currencyKey: "currency:alpha",
       regimeType: "INDEPENDENT_FLOAT",
@@ -430,7 +439,7 @@ const states: StateSeed[] = [
     name: "State Beta",
     treasury: { "currency:beta": 110000 },
     publicInventory: { "good:food": 400, "good:iron": 200 },
-    policy: {},
+    policy: noM4ProductionPlanningPolicy,
     effectiveCurrencyRegime: {
       currencyKey: "currency:beta",
       regimeType: "INDEPENDENT_FLOAT",
@@ -442,7 +451,7 @@ const states: StateSeed[] = [
     name: "State Gamma",
     treasury: { "currency:gamma": 95000 },
     publicInventory: { "good:wood": 250, "good:tools": 100 },
-    policy: {},
+    policy: noM4ProductionPlanningPolicy,
     effectiveCurrencyRegime: {
       currencyKey: "currency:gamma",
       regimeType: "INDEPENDENT_FLOAT",
@@ -454,7 +463,7 @@ const states: StateSeed[] = [
     name: "State Delta",
     treasury: { "currency:delta": 105000 },
     publicInventory: { "good:food": 450, "good:cloth": 150 },
-    policy: {},
+    policy: noM4ProductionPlanningPolicy,
     effectiveCurrencyRegime: {
       currencyKey: "currency:delta",
       regimeType: "INDEPENDENT_FLOAT",

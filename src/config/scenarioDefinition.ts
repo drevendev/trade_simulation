@@ -39,7 +39,22 @@ export interface TransportLinkSeed {
   readonly feeReceiverStateKey?: string | null;
 }
 
-export interface StatePolicySeed {}
+export interface M4ProductionPlanningPolicySeed {
+  /** Explicit read-only M4 minimum-wage fixtures, keyed by Region seed key then labor category. */
+  readonly minimumWageFloorByRegionKey: Readonly<
+    Record<string, Readonly<Record<string, number>>>
+  >;
+  /** Explicit read-only M4 mandatory pre-payroll cash fixtures, keyed by ProductionUnit seed key. */
+  readonly mandatoryKnownCashByProductionUnitKey: Readonly<Record<string, number>>;
+}
+
+export interface StatePolicySeed {
+  /**
+   * Deterministic M4-only production-planning policy input. Mutable fiscal institutions
+   * remain M6 work; an explicit empty pair of maps means no applicable M4 rule.
+   */
+  readonly m4ProductionPlanning?: M4ProductionPlanningPolicySeed;
+}
 
 export interface StateSeed {
   readonly key: string;
