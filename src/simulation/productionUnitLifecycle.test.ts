@@ -154,7 +154,7 @@ describe("REQ-PRODUCTION-007 ProductionUnit lifecycle", () => {
     expect(world.pendingTransitions.productionUnitLifecycleChanges).toHaveLength(0);
 
     world = review(world, 6);
-    expect(world.pendingTransitions.productionUnitLifecycleChanges[0]?.target).toBe("ACTIVE");
+    expect(world.pendingTransitions.productionUnitLifecycleChanges?.[0]?.target).toBe("ACTIVE");
     world = applyProductionUnitLifecycleTransitionsAtPhase1(world, 7);
     expect(world.productionUnits.get(opening.productionUnitId)!.status).toBe("ACTIVE");
   });
@@ -173,7 +173,7 @@ describe("REQ-PRODUCTION-007 ProductionUnit lifecycle", () => {
 
     world = review(world, 3);
     world = review(world, 6);
-    expect(world.pendingTransitions.productionUnitLifecycleChanges[0]?.target).toBe("CLOSING");
+    expect(world.pendingTransitions.productionUnitLifecycleChanges?.[0]?.target).toBe("CLOSING");
     world = applyProductionUnitLifecycleTransitionsAtPhase1(world, 7);
     expect(world.productionUnits.get(opening.productionUnitId)!.status).toBe("CLOSING");
   });
@@ -200,7 +200,7 @@ describe("REQ-PRODUCTION-007 ProductionUnit lifecycle", () => {
     let safeWorld = withUnit(withProductionConfig(baselineWorld(), { closingGraceReviews: 1 }), cleared);
     expect(isProductionUnitSafeForRetirement(safeWorld, cleared.productionUnitId)).toBe(true);
     safeWorld = review(safeWorld, 3);
-    expect(safeWorld.pendingTransitions.productionUnitLifecycleChanges[0]?.target).toBe("RETIRED");
+    expect(safeWorld.pendingTransitions.productionUnitLifecycleChanges?.[0]?.target).toBe("RETIRED");
     safeWorld = applyProductionUnitLifecycleTransitionsAtPhase1(safeWorld, 4);
     expect(safeWorld.productionUnits.has(cleared.productionUnitId)).toBe(false);
   });

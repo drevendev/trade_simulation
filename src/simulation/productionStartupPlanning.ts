@@ -107,7 +107,7 @@ export function planPlannedStartupInvestmentPhase2(args: {
   );
   const depreciationRate = requireNonNegative(
     `Recipe ${recipe.id} depreciationRate`,
-    recipe.depreciationRate,
+    recipe.depreciationRatePerTick,
   );
   if (depreciationRate >= 1 && minimumStartupCapital > quantityEpsilon) {
     throw new Error(
