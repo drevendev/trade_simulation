@@ -46,6 +46,7 @@ import type {
 import type { DefinitionPack } from "../config/definitionPack";
 import type { SimulationConfig } from "../config/simulationConfig";
 import { validateDefinitionPack, validateLaborConfig, validatePopulationConfig, validateProductionConfig } from "../config/validation";
+import { validateM4ProductionPolicyGenesis } from "./m4ProductionPolicyGenesisValidation";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
 import {
@@ -1011,6 +1012,7 @@ function validateWorldGenesis(
   validateProductionConfig(config.production);
   validateLaborConfig(config.labor);
   validatePopulationConfig(config.population);
+  validateM4ProductionPolicyGenesis(scenario, config.labor);
 
   validateExtractionResourcesPresent(scenario, definitionPack);
 }
