@@ -162,6 +162,9 @@ describe("Issue #644 CLOSING INPUT/INVESTMENT liquidation", () => {
 
     expect(firstPlan.inputIntents).toEqual([]);
     expect(firstPlan.investmentIntents).toEqual([]);
+    for (const intent of firstPlan.liquidationIntents) {
+      expect(intent.maxSpend).toBeUndefined();
+    }
     expect(liquidationShape(firstPlan.liquidationIntents)).toEqual(
       liquidationShape(shuffledPlan.liquidationIntents),
     );
