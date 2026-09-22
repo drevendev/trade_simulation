@@ -29,6 +29,7 @@ export {
   deriveNameplateCapacity,
   validateProductionUnitPersistentState,
   type ProductionSignalState,
+  type ProductionUnitLifecycleStatus,
   type ProductionUnitPersistentStateView,
 } from "./productionUnitState";
 
@@ -111,6 +112,25 @@ export {
   type CapitalFormationExecution,
   type CapitalFormationPlanResult,
 } from "./capitalFormation";
+
+export {
+  applyProductionUnitLifecycleReviewTransition,
+  applyProductionUnitLifecycleTransitionsAtPhase1,
+  applyProductionUnitOwnerFundingTransition,
+  createPhase14ProductionUnitLifecycleHandler,
+  isProductionUnitSafeForRetirement,
+  planProductionUnitLifecyclePhase14,
+  type ProductionUnitLifecyclePlanResult,
+  type ProductionUnitLifecycleReadiness,
+  type ProductionUnitLifecycleReview,
+  type ProductionUnitOwnerFundingRequest,
+} from "./productionUnitLifecycle";
+
+export {
+  planPlannedStartupInvestmentPhase2,
+  type PlannedStartupInvestmentResult,
+  type PlannedStartupPlanningEvidence,
+} from "./productionStartupPlanning";
 
 export {
   TOTAL_PHASES,

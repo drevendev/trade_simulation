@@ -26,6 +26,7 @@ import {
   type MarketIntentId,
 } from "./marketIntent";
 import { deriveNameplateCapacity } from "./productionUnitState";
+import { planPlannedStartupInvestmentPhase2 } from "./productionStartupPlanning";
 import type { PhaseHandler, TickContext } from "./tickOrchestrator";
 import type { PendingTransitions, ProductionUnitState, RegionState, WorldState } from "./worldState";
 
@@ -336,9 +337,27 @@ export function planProductionUnitPhase2(args: {
 
   const planId = `production-plan:${tick}:${String(unit.productionUnitId)}`;
   const laborPlanId = `labor-demand-plan:${tick}:${String(unit.productionUnitId)}`;
-  const isActive = unit.seed.status === "ACTIVE";
+  const isActive = unit.status === "ACTIVE";
 
   if (!isActive) {
+    const startup = unit.status === "PLANNED"
+      ? planPlannedStartupInvestmentPhase2({
+          tick,
+          unit,
+          regionId,
+          settlementCurrencyId,
+          recipe,
+          config,
+          ...(args.evidence === undefined
+            ? {}
+            : {
+                evidence: {
+                  mandatoryKnownCash: args.evidence.mandatoryKnownCash,
+                  priorCloseGrossInvestmentPriceByGood: args.evidence.priorCloseGrossInvestmentPriceByGood,
+                },
+              }),
+        })
+      : { investmentIntents: [], investableCash: 0, investmentBudget: 0 };
     const zeroInputs = orderedRecord(
       stableOrderBy(Object.keys(recipe.inputsPerBatch) as GoodId[], String).map((goodId) => [goodId, 0] as const),
     );
@@ -364,11 +383,11 @@ export function planProductionUnitPhase2(args: {
         grossWageCashEnvelope: 0,
         operatingLiquidityBuffer: 0,
         workingCapitalTarget: 0,
-        investableCash: 0,
+        investableCash: startup.investableCash,
         investmentPressure: 0,
-        investmentBudget: 0,
+        investmentBudget: startup.investmentBudget,
         laborDemandPlanId: laborPlanId,
-        investmentIntentIds: [],
+        investmentIntentIds: startup.investmentIntents.map((intent) => intent.id),
         inputIntentIds: [],
       },
       laborDemandPlan: {
@@ -382,7 +401,7 @@ export function planProductionUnitPhase2(args: {
         grossPayrollCap: 0,
       },
       inputIntents: [],
-      investmentIntents: [],
+      investmentIntents: startup.investmentIntents,
     };
   }
 

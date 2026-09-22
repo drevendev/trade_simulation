@@ -54,7 +54,17 @@ import {
   resolveInitialWageOffer,
   validateProductionUnitPersistentState,
   type ProductionSignalState,
+  type ProductionUnitLifecycleStatus,
 } from "./productionUnitState";
+
+export interface ProductionUnitLifecycleTransition {
+  readonly transitionId: string;
+  readonly unitId: ProductionUnitId;
+  readonly fromStatus: ProductionUnitLifecycleStatus;
+  readonly target: ProductionUnitLifecycleStatus | "RETIRED";
+  readonly decisionTick: number;
+  readonly activateTick: number;
+}
 
 /**
  * Canonical world state: all registries and resolved configuration.
@@ -82,6 +92,7 @@ export interface PendingTransitions {
     readonly patch: unknown;
     readonly activateTick: number;
   }>;
+  readonly productionUnitLifecycleChanges: readonly ProductionUnitLifecycleTransition[];
 }
 
 export interface WorldState {
@@ -196,6 +207,8 @@ export interface CohortState {
 export interface ProductionUnitState {
   readonly productionUnitId: ProductionUnitId;
   readonly seed: ProductionUnitSeed;
+  /** Sole mutable runtime lifecycle authority; seed.status remains immutable starting data. */
+  readonly status: ProductionUnitLifecycleStatus;
   readonly wallet: LiveWallet;
   readonly inputInventory: LiveInventory;
   readonly outputInventory: LiveInventory;
@@ -520,6 +533,7 @@ export function buildInitialWorld(
     productionUnitRegistry.set(productionUnitId, {
       productionUnitId,
       seed: puSeed,
+      status: puSeed.status,
       wallet: new Map(),
       inputInventory: new Map(),
       outputInventory: new Map(),

@@ -242,7 +242,7 @@ export function planProductionExecutionsPhase5(args: {
       unit.outputInventory.get(outputGoodId) ?? 0,
     );
 
-    if (unit.seed.status !== "ACTIVE") {
+    if (unit.status !== "ACTIVE") {
       if (allocatedWorkerEquivalents > quantityEpsilon) {
         throw new Error(
           `Non-ACTIVE ProductionUnit ${String(unit.productionUnitId)} received positive Phase-3 labor allocation`,
