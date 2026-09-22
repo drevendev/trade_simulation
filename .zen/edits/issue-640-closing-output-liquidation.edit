@@ -1,0 +1,31 @@
+### FILE: src/simulation/productionExecution.ts
+<<<<<<< FIND
+    const reserve = requireNonNegative(
+      `ProductionUnit ${String(unit.productionUnitId)} target output reserve`,
+      unit.signals.outputSalesEma * outputCoverageTicks,
+    );
+=======
+    const reserve = unit.status === "CLOSING"
+      ? 0
+      : requireNonNegative(
+        `ProductionUnit ${String(unit.productionUnitId)} target output reserve`,
+        unit.signals.outputSalesEma * outputCoverageTicks,
+      );
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionExecutionLifecycleAuthority.test.ts
+<<<<<<< FIND
+    expect(seededActive.intents[0]).toMatchObject({
+      side: "SELL",
+      inventoryBucket: "OUTPUT",
+      desiredQuantity: 12,
+      minimumReserveQuantity: 8,
+    });
+=======
+    expect(seededActive.intents[0]).toMatchObject({
+      side: "SELL",
+      inventoryBucket: "OUTPUT",
+      desiredQuantity: 20,
+      minimumReserveQuantity: 0,
+    });
+>>>>>>> REPLACE
