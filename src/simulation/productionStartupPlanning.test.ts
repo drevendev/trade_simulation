@@ -119,10 +119,11 @@ describe("REQ-PRODUCTION-007 PLANNED startup investment", () => {
 
   it("allows PLANNED Phase-12 startup capital but does not activate until Phase 14 queues tick+1", () => {
     const { world, planned, recipe } = fixture();
+    const requiredPreDepreciationCapital = recipe.minimumStartupCapital / (1 - recipe.depreciationRate);
     const fullStartupInventory = new Map(
       Object.entries(recipe.investmentGoodsPerCapitalUnit).map(([goodId, coefficient]) => [
         goodId as GoodId,
-        coefficient * recipe.minimumStartupCapital,
+        coefficient * requiredPreDepreciationCapital,
       ]),
     );
     const prepared = withOnlyUnit(world, { ...planned, investmentInventory: fullStartupInventory });

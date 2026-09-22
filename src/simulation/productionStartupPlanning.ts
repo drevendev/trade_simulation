@@ -84,11 +84,30 @@ export function planPlannedStartupInvestmentPhase2(args: {
     throw new Error(`ProductionConfig.liquidityBufferShare must be <= 1, got ${liquidityBufferShare}`);
   }
 
-  const capitalGap = Math.max(
-    0,
-    requireNonNegative(`Recipe ${recipe.id} minimumStartupCapital`, recipe.minimumStartupCapital) -
-      requireNonNegative(`ProductionUnit ${String(unit.productionUnitId)} installedCapital`, unit.installedCapital),
+  const minimumStartupCapital = requireNonNegative(
+    `Recipe ${recipe.id} minimumStartupCapital`,
+    recipe.minimumStartupCapital,
   );
+  const installedCapital = requireNonNegative(
+    `ProductionUnit ${String(unit.productionUnitId)} installedCapital`,
+    unit.installedCapital,
+  );
+  const depreciationRate = requireNonNegative(
+    `Recipe ${recipe.id} depreciationRate`,
+    recipe.depreciationRate,
+  );
+  if (depreciationRate >= 1 && minimumStartupCapital > quantityEpsilon) {
+    throw new Error(
+      `Recipe ${recipe.id} depreciationRate must be < 1 for finite PLANNED startup capital`,
+    );
+  }
+  // Phase 12 depreciates post-formation capital in the same tick. Startup procurement must
+  // therefore target the pre-depreciation stock that leaves minimumStartupCapital alive
+  // after that canonical transition; otherwise a PLANNED unit can buy a full nominal
+  // startup bundle forever and still fail its Phase-14 readiness gate.
+  const requiredPreDepreciationCapital =
+    depreciationRate >= 1 ? 0 : minimumStartupCapital / (1 - depreciationRate);
+  const capitalGap = Math.max(0, requiredPreDepreciationCapital - installedCapital);
   if (capitalGap <= quantityEpsilon) {
     return { investmentIntents: [], investableCash: 0, investmentBudget: 0 };
   }
