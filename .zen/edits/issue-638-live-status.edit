@@ -1,0 +1,87 @@
+### FILE: src/simulation/productionExecution.ts
+<<<<<<< FIND
+  if (unit.seed.status !== "ACTIVE" && realized > quantityEpsilon) {
+    throw new Error(`Non-ACTIVE ProductionUnit ${String(execution.unitId)} cannot realize production`);
+  }
+=======
+  if (unit.status !== "ACTIVE" && realized > quantityEpsilon) {
+    throw new Error(`Non-ACTIVE ProductionUnit ${String(execution.unitId)} cannot realize production`);
+  }
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  const actualInputKeys = stableOrderBy(Object.keys(execution.inputConsumedByGood), String);
+  const recipeInputKeys = stableOrderBy(Object.keys(recipe.inputsPerBatch), String);
+  if (unit.seed.status === "ACTIVE") {
+=======
+  const actualInputKeys = stableOrderBy(Object.keys(execution.inputConsumedByGood), String);
+  const recipeInputKeys = stableOrderBy(Object.keys(recipe.inputsPerBatch), String);
+  if (unit.status === "ACTIVE") {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const resource = execution.resourceConsumption;
+    if (unit.seed.status === "ACTIVE") {
+=======
+    const resource = execution.resourceConsumption;
+    if (unit.status === "ACTIVE") {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  const expectedActiveUnitIds = stableOrderBy(
+    [...world.productionUnits.values()]
+      .filter((unit) => unit.seed.status === "ACTIVE")
+      .map((unit) => unit.productionUnitId),
+    String,
+  );
+=======
+  const expectedActiveUnitIds = stableOrderBy(
+    [...world.productionUnits.values()]
+      .filter((unit) => unit.status === "ACTIVE")
+      .map((unit) => unit.productionUnitId),
+    String,
+  );
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    if (unit.seed.status === "ACTIVE") submittedActiveUnitIds.add(execution.unitId);
+=======
+    if (unit.status === "ACTIVE") submittedActiveUnitIds.add(execution.unitId);
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const unit = worldAfterProduction.productionUnits.get(execution.unitId);
+    if (!unit) throw new Error(`ProductionExecution references unknown unit ${String(execution.unitId)}`);
+    if (unit.seed.status !== "ACTIVE") continue;
+    const region = worldAfterProduction.regions.get(execution.regionId);
+=======
+    const unit = worldAfterProduction.productionUnits.get(execution.unitId);
+    if (!unit) throw new Error(`ProductionExecution references unknown unit ${String(execution.unitId)}`);
+    if (unit.status !== "ACTIVE" && unit.status !== "CLOSING") continue;
+    const region = worldAfterProduction.regions.get(execution.regionId);
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionExecution.test.ts
+<<<<<<< FIND
+function withOnlyActiveUnits(world: WorldState, activeUnitIds: readonly ProductionUnitId[]): WorldState {
+  const activeSet = new Set(activeUnitIds);
+  const productionUnits = new Map(world.productionUnits);
+  for (const [unitId, unit] of productionUnits) {
+    if (unit.seed.status === "ACTIVE" && !activeSet.has(unitId)) {
+      productionUnits.set(unitId, { ...unit, seed: { ...unit.seed, status: "MOTHBALLED" } });
+    }
+  }
+  return { ...world, productionUnits };
+}
+=======
+function withOnlyActiveUnits(world: WorldState, activeUnitIds: readonly ProductionUnitId[]): WorldState {
+  const activeSet = new Set(activeUnitIds);
+  const productionUnits = new Map(world.productionUnits);
+  for (const [unitId, unit] of productionUnits) {
+    if (unit.status === "ACTIVE" && !activeSet.has(unitId)) {
+      productionUnits.set(unitId, { ...unit, status: "MOTHBALLED" });
+    }
+  }
+  return { ...world, productionUnits };
+}
+>>>>>>> REPLACE
