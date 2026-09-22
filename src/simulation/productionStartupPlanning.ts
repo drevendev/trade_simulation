@@ -1,7 +1,8 @@
 /**
- * Bounded Phase-2 startup investment planning for PLANNED ProductionUnits.
+ * Bounded Phase-2 startup/recapitalization investment planning for PLANNED and viable
+ * MOTHBALLED ProductionUnits.
  *
- * Startup buys real investment goods with opening unit cash only. It never creates labor
+ * The unit buys real investment goods with opening cash only. It never creates labor
  * demand, INPUT procurement, capital, credit or owner funding; Phase 12 remains the sole
  * converter from INVESTMENT inventory to installed capital.
  */
@@ -45,7 +46,7 @@ function requirePositive(name: string, value: number): number {
   return value;
 }
 
-/** Plan startup INVESTMENT intents for a PLANNED unit from tick-opening stocks only. */
+/** Plan startup/recapitalization INVESTMENT intents from tick-opening stocks only. */
 export function planPlannedStartupInvestmentPhase2(args: {
   readonly tick: number;
   readonly unit: ProductionUnitState;
@@ -56,14 +57,27 @@ export function planPlannedStartupInvestmentPhase2(args: {
   readonly evidence?: PlannedStartupPlanningEvidence;
 }): PlannedStartupInvestmentResult {
   const { tick, unit, regionId, settlementCurrencyId, recipe, config, evidence } = args;
-  if (unit.status !== "PLANNED") {
+  if (unit.status !== "PLANNED" && unit.status !== "MOTHBALLED") {
     return { investmentIntents: [], investableCash: 0, investmentBudget: 0 };
   }
   if (!Number.isInteger(tick) || tick < 0) {
-    throw new Error(`PLANNED startup tick must be a non-negative integer, got ${String(tick)}`);
+    throw new Error(`ProductionUnit startup/recapitalization tick must be a non-negative integer, got ${String(tick)}`);
   }
 
   const defaults = createDefaultSimulationConfig();
+  const reactivateMarginThreshold = requireFinite(
+    "ProductionConfig.reactivateMarginThreshold",
+    config.production.reactivateMarginThreshold ?? defaults.production.reactivateMarginThreshold!,
+  );
+  if (
+    unit.status === "MOTHBALLED" &&
+    requireFinite(
+      `ProductionUnit ${String(unit.productionUnitId)} marginSignalEma`,
+      unit.signals.marginSignalEma,
+    ) <= reactivateMarginThreshold
+  ) {
+    return { investmentIntents: [], investableCash: 0, investmentBudget: 0 };
+  }
   const quantityEpsilon = requirePositive(
     "NumericConfig.quantityEpsilon",
     config.numeric.quantityEpsilon ?? defaults.numeric.quantityEpsilon!,
@@ -160,7 +174,7 @@ export function planPlannedStartupInvestmentPhase2(args: {
     const expectedPriceValue = evidence?.priorCloseGrossInvestmentPriceByGood?.[goodId];
     if (expectedPriceValue === undefined) {
       throw new Error(
-        `PLANNED startup requires prior-close INVESTMENT price for ${String(goodId)}`,
+        `ProductionUnit startup/recapitalization requires prior-close INVESTMENT price for ${String(goodId)}`,
       );
     }
     const expectedPrice = requirePositive(

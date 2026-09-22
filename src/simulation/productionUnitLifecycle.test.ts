@@ -234,6 +234,30 @@ describe("REQ-PRODUCTION-007 ProductionUnit lifecycle", () => {
     expect(world.productionUnits.get(unit.productionUnitId)!.wallet.get(region.settlementCurrencyId)).toBe(unitBefore);
   });
 
+  it("rejects owner funding above exact available cash even when the excess is below money epsilon", () => {
+    let world = baselineWorld();
+    const opening = activeUnit(world);
+    const unit: ProductionUnitState = { ...opening, status: "PLANNED" };
+    world = withUnit(world, unit);
+    const region = regionFor(world, unit);
+    expect(unit.seed.owner.type).toBe("CLAN");
+    if (unit.seed.owner.type !== "CLAN") throw new Error("baseline fixture expected Clan-owned unit");
+    const owner = [...world.clans.values()].find((candidate) => candidate.seed.key === unit.seed.owner.key)!;
+    const ownerBefore = owner.treasury.get(region.settlementCurrencyId) ?? 0;
+    const unitBefore = unit.wallet.get(region.settlementCurrencyId) ?? 0;
+    const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
+    expect(ownerBefore).toBeGreaterThan(0);
+
+    expect(() =>
+      applyProductionUnitOwnerFundingTransition(world, {
+        unitId: unit.productionUnitId,
+        amount: ownerBefore + moneyEpsilon / 2,
+      }),
+    ).toThrow(/overdraw Clan treasury/);
+    expect(world.clans.get(owner.clanId)!.treasury.get(region.settlementCurrencyId)).toBe(ownerBefore);
+    expect(world.productionUnits.get(unit.productionUnitId)!.wallet.get(region.settlementCurrencyId)).toBe(unitBefore);
+  });
+
   it("is deterministic under registry insertion order and rejects tampered/wrong-unit review evidence", () => {
     let world = baselineWorld();
     const opening = activeUnit(world);

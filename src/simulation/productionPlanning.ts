@@ -340,7 +340,7 @@ export function planProductionUnitPhase2(args: {
   const isActive = unit.status === "ACTIVE";
 
   if (!isActive) {
-    const startup = unit.status === "PLANNED"
+    const startup = unit.status === "PLANNED" || unit.status === "MOTHBALLED"
       ? planPlannedStartupInvestmentPhase2({
           tick,
           unit,

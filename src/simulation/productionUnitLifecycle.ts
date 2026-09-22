@@ -499,7 +499,6 @@ export function applyProductionUnitOwnerFundingTransition(
   }
   const region = regionForUnit(world, unit);
   const currencyId: CurrencyId = region.settlementCurrencyId;
-  const moneyEpsilon = resolveLifecycleConfig(world).moneyEpsilon;
   const nextUnitWallet = new Map(unit.wallet);
   const openingUnitCash = requireNonNegative(
     `ProductionUnit ${String(unit.productionUnitId)} wallet[${String(currencyId)}]`,
@@ -520,9 +519,9 @@ export function applyProductionUnitOwnerFundingTransition(
       `State owner treasury[${String(currencyId)}]`,
       owner.treasury.get(currencyId) ?? 0,
     );
-    if (amount > openingOwnerCash + moneyEpsilon) throw new Error(`ProductionUnit owner funding would overdraw State treasury`);
+    if (amount > openingOwnerCash) throw new Error(`ProductionUnit owner funding would overdraw State treasury`);
     const treasury = new Map(owner.treasury);
-    treasury.set(currencyId, Math.max(0, openingOwnerCash - amount));
+    treasury.set(currencyId, openingOwnerCash - amount);
     const states = new Map(world.states);
     states.set(owner.stateId, { ...owner, treasury });
     nextStates = states;
@@ -537,9 +536,9 @@ export function applyProductionUnitOwnerFundingTransition(
       `Clan owner treasury[${String(currencyId)}]`,
       owner.treasury.get(currencyId) ?? 0,
     );
-    if (amount > openingOwnerCash + moneyEpsilon) throw new Error(`ProductionUnit owner funding would overdraw Clan treasury`);
+    if (amount > openingOwnerCash) throw new Error(`ProductionUnit owner funding would overdraw Clan treasury`);
     const treasury = new Map(owner.treasury);
-    treasury.set(currencyId, Math.max(0, openingOwnerCash - amount));
+    treasury.set(currencyId, openingOwnerCash - amount);
     const clans = new Map(world.clans);
     clans.set(owner.clanId, { ...owner, treasury });
     nextClans = clans;

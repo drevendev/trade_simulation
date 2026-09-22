@@ -109,32 +109,88 @@ describe("REQ-PRODUCTION-007 PLANNED startup investment", () => {
     expect(result.investmentIntents.length).toBeGreaterThan(0);
   });
 
-  it("keeps MOTHBALLED/CLOSING outside both ordinary and startup investment flows", () => {
+  it("lets viable MOTHBALLED units recapitalize without re-entering ordinary flows and keeps CLOSING isolated", () => {
     const { config, planned, region, recipe, investmentPrices, inputPrices } = fixture();
-    for (const status of ["MOTHBALLED", "CLOSING"] as const) {
-      const unit: ProductionUnitState = { ...planned, status };
-      const result = planProductionUnitPhase2({
-        tick: 1,
-        unit,
-        regionId: region.regionId,
-        settlementCurrencyId: region.settlementCurrencyId,
-        recipe,
-        config,
-        evidence: {
-          mandatoryKnownCash: 0,
-          legalMinimumWageFloor: 0,
-          priorCloseGrossInputPriceByGood: inputPrices,
-          priorCloseGrossInvestmentPriceByGood: investmentPrices,
-          infrastructureFactor: 1,
-          resourceAccessFactor: 1,
-          healthLaborProductivityFactor: 1,
-        },
-      });
-      expect(result.productionPlan.plannedBatches).toBe(0);
-      expect(result.laborDemandPlan.requestedWorkerEquivalents).toBe(0);
-      expect(result.inputIntents).toEqual([]);
-      expect(result.investmentIntents).toEqual([]);
-    }
+    const mothballed: ProductionUnitState = {
+      ...planned,
+      status: "MOTHBALLED",
+      signals: { ...planned.signals, marginSignalEma: 0.2 },
+    };
+    const result = planProductionUnitPhase2({
+      tick: 3,
+      unit: mothballed,
+      regionId: region.regionId,
+      settlementCurrencyId: region.settlementCurrencyId,
+      recipe,
+      config,
+      evidence: {
+        mandatoryKnownCash: 0,
+        legalMinimumWageFloor: 0,
+        priorCloseGrossInputPriceByGood: inputPrices,
+        priorCloseGrossInvestmentPriceByGood: investmentPrices,
+        infrastructureFactor: 1,
+        resourceAccessFactor: 1,
+        healthLaborProductivityFactor: 1,
+      },
+    });
+    expect(result.productionPlan.plannedBatches).toBe(0);
+    expect(result.laborDemandPlan.requestedWorkerEquivalents).toBe(0);
+    expect(result.inputIntents).toEqual([]);
+    expect(result.investmentIntents.length).toBeGreaterThan(0);
+
+    const closing = planProductionUnitPhase2({
+      tick: 3,
+      unit: { ...planned, status: "CLOSING" },
+      regionId: region.regionId,
+      settlementCurrencyId: region.settlementCurrencyId,
+      recipe,
+      config,
+      evidence: {
+        mandatoryKnownCash: 0,
+        legalMinimumWageFloor: 0,
+        priorCloseGrossInputPriceByGood: inputPrices,
+        priorCloseGrossInvestmentPriceByGood: investmentPrices,
+        infrastructureFactor: 1,
+        resourceAccessFactor: 1,
+        healthLaborProductivityFactor: 1,
+      },
+    });
+    expect(closing.productionPlan.plannedBatches).toBe(0);
+    expect(closing.laborDemandPlan.requestedWorkerEquivalents).toBe(0);
+    expect(closing.inputIntents).toEqual([]);
+    expect(closing.investmentIntents).toEqual([]);
+  });
+
+  it("forms real capital for a viable MOTHBALLED unit below minimumStartupCapital before reactivation review", () => {
+    const { world, planned, recipe } = fixture();
+    const openingCapital = recipe.minimumStartupCapital / 2;
+    const requiredPreDepreciationCapital = recipe.minimumStartupCapital / (1 - recipe.depreciationRatePerTick);
+    const capitalGap = requiredPreDepreciationCapital - openingCapital;
+    const recapitalizationInventory = new Map(
+      Object.entries(recipe.investmentGoodsPerCapitalUnit).map(([goodId, coefficient]) => [
+        goodId as GoodId,
+        coefficient * capitalGap,
+      ]),
+    );
+    const mothballed: ProductionUnitState = {
+      ...planned,
+      status: "MOTHBALLED",
+      installedCapital: openingCapital,
+      investmentInventory: recapitalizationInventory,
+      signals: { ...planned.signals, marginSignalEma: 0.2 },
+    };
+    const prepared = withOnlyUnit(world, mothballed);
+    const capitalPlan = planCapitalFormationPhase12({ world: prepared, tick: 3 });
+    expect(capitalPlan.executions[0]!.capitalBuilt).toBeGreaterThan(0);
+    const afterPhase12 = applyCapitalFormationTransition(prepared, capitalPlan.executions, 3);
+    const rebuilt = afterPhase12.productionUnits.get(mothballed.productionUnitId)!;
+    expect(rebuilt.status).toBe("MOTHBALLED");
+    expect(rebuilt.installedCapital).toBeGreaterThanOrEqual(recipe.minimumStartupCapital);
+
+    const lifecycle = planProductionUnitLifecyclePhase14({ world: afterPhase12, tick: 3 });
+    const review = lifecycle.reviews.find((candidate) => candidate.unitId === mothballed.productionUnitId)!;
+    expect(review.readiness.capitalReady).toBe(true);
+    expect(review.nextSignals.consecutiveViableReviews).toBe(1);
   });
 
   it("allows PLANNED Phase-12 startup capital but does not activate until Phase 14 queues tick+1", () => {
