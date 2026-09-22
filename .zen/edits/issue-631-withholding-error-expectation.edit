@@ -1,0 +1,10 @@
+### FILE: src/simulation/householdConsumptionWageTaxEvidence.test.ts
+<<<<<<< FIND
+    expect(() => phase9(fixture, { transactions: paymentOnly })).toThrow(
+      /exactly one matching WAGE_TAX_WITHHELD transaction/,
+    );
+=======
+    expect(() => phase9(fixture, { transactions: paymentOnly })).toThrow(
+      /exactly one actual WAGE_TAX_WITHHELD transaction attributable to its wage bundle\/allocation/,
+    );
+>>>>>>> REPLACE
