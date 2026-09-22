@@ -1,6 +1,6 @@
 import { isFiniteCanonicalNumber } from "../domain/numeric";
 import type { ScenarioDefinition } from "../config/scenarioDefinition";
-import type { LaborConfig } from "../config/simulationConfig";
+import { createDefaultSimulationConfig, type LaborConfig } from "../config/simulationConfig";
 
 /**
  * REQ-CONFIG-005 / Issue #633: validate deterministic M4 State policy fixtures at
@@ -16,7 +16,10 @@ export function validateM4ProductionPolicyGenesis(
   const productionUnitKeys = new Set(
     (scenario.productionUnits ?? []).map((unit) => unit.key),
   );
-  const allowedLaborCategories = new Set(laborConfig.allowedLaborCategories ?? []);
+  const defaultLaborConfig = createDefaultSimulationConfig().labor;
+  const allowedLaborCategories = new Set(
+    laborConfig.allowedLaborCategories ?? defaultLaborConfig.allowedLaborCategories ?? [],
+  );
 
   for (const state of scenario.states ?? []) {
     const policy = state.policy?.m4ProductionPlanning;
