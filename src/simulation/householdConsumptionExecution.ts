@@ -495,6 +495,14 @@ function buildEconomicEvidence(args: {
       throw new Error(`WAGE_PAYMENT ${String(transaction.transactionId)} does not match Phase-5 settlement evidence`);
     }
 
+    const actualWithholdingTransactions = args.transactions.filter(
+      (candidate) =>
+        candidate.type === "WAGE_TAX_WITHHELD" &&
+        (candidate.bundleId === settlement.bundleId ||
+          candidate.originatingTransactionId === canonicalPayment.transactionId ||
+          candidate.reason === settlement.allocationId),
+    );
+
     if (tax > 0) {
       if (settlement.controllerStateId === null) {
         throw new Error(`WageSettlement ${settlement.settlementId} collected tax without a controlling State`);
@@ -505,12 +513,15 @@ function buildEconomicEvidence(args: {
           `WageSettlement ${settlement.settlementId} with positive collected tax must include canonical WAGE_TAX_WITHHELD evidence`,
         );
       }
-      const matchingWithholdingTransactions = args.transactions.filter(
-        (candidate) => candidate.transactionId === canonicalWithholding.transactionId,
-      );
-      if (matchingWithholdingTransactions.length !== 1) {
+      if (actualWithholdingTransactions.length !== 1) {
         throw new Error(
-          `WageSettlement ${settlement.settlementId} must have exactly one matching WAGE_TAX_WITHHELD transaction, got ${matchingWithholdingTransactions.length}`,
+          `WageSettlement ${settlement.settlementId} must have exactly one actual WAGE_TAX_WITHHELD transaction attributable to its wage bundle/allocation, got ${actualWithholdingTransactions.length}`,
+        );
+      }
+      const withholdingTransaction = actualWithholdingTransactions[0]!;
+      if (withholdingTransaction.transactionId !== canonicalWithholding.transactionId) {
+        throw new Error(
+          `WageSettlement ${settlement.settlementId} actual WAGE_TAX_WITHHELD transaction does not match canonical transaction id`,
         );
       }
       if (
@@ -531,7 +542,6 @@ function buildEconomicEvidence(args: {
         throw new Error(`WageSettlement ${settlement.settlementId} canonical WAGE_TAX_WITHHELD provenance mismatch`);
       }
 
-      const withholdingTransaction = matchingWithholdingTransactions[0]!;
       if (
         withholdingTransaction.type !== "WAGE_TAX_WITHHELD" ||
         withholdingTransaction.tick !== settlement.tick ||
@@ -613,10 +623,17 @@ function buildEconomicEvidence(args: {
           `WAGE_TAX_WITHHELD ${String(withholdingTransaction.transactionId)} does not match Phase-5 settlement evidence`,
         );
       }
-    } else if (settlement.wageTaxWithheldTransaction !== undefined) {
-      throw new Error(
-        `WageSettlement ${settlement.settlementId} must not include WAGE_TAX_WITHHELD when collected tax is zero`,
-      );
+    } else {
+      if (settlement.wageTaxWithheldTransaction !== undefined) {
+        throw new Error(
+          `WageSettlement ${settlement.settlementId} must not include WAGE_TAX_WITHHELD when collected tax is zero`,
+        );
+      }
+      if (actualWithholdingTransactions.length !== 0) {
+        throw new Error(
+          `WageSettlement ${settlement.settlementId} with zero collected tax must have zero actual WAGE_TAX_WITHHELD transactions attributable to its wage bundle/allocation`,
+        );
+      }
     }
 
     settlementGross += gross;
