@@ -49,8 +49,8 @@ function withOnlyActiveUnits(world: WorldState, activeUnitIds: readonly Producti
   const activeSet = new Set(activeUnitIds);
   const productionUnits = new Map(world.productionUnits);
   for (const [unitId, unit] of productionUnits) {
-    if (unit.seed.status === "ACTIVE" && !activeSet.has(unitId)) {
-      productionUnits.set(unitId, { ...unit, seed: { ...unit.seed, status: "MOTHBALLED" } });
+    if (unit.status === "ACTIVE" && !activeSet.has(unitId)) {
+      productionUnits.set(unitId, { ...unit, status: "MOTHBALLED" });
     }
   }
   return { ...world, productionUnits };
