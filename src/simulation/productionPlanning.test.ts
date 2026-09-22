@@ -229,7 +229,8 @@ describe("REQ-PRODUCTION-002 Phase-2 production planning slice", () => {
     const base = fixture();
     const mothballed: ProductionUnitState = {
       ...base.unit,
-      seed: { ...base.unit.seed, status: "MOTHBALLED" },
+      // Runtime behavior follows live lifecycle status, never immutable scenario seed status.
+      status: "MOTHBALLED",
     };
     const result = planProductionUnitPhase2({
       tick: 7,

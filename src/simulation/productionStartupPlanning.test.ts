@@ -13,7 +13,9 @@ import { buildInitialWorld, type ProductionUnitState, type WorldState } from "./
 function fixture() {
   const config = createDefaultSimulationConfig();
   const world = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 42);
-  const opening = [...world.productionUnits.values()].find((candidate) => candidate.status === "ACTIVE")!;
+  const opening = [...world.productionUnits.values()].find(
+    (candidate) => candidate.status === "ACTIVE" && candidate.seed.recipeId === "recipe:tools-craft",
+  )!;
   const region = [...world.regions.values()].find((candidate) => candidate.seed.key === opening.seed.regionKey)!;
   const recipe = world.definitionRegistry.recipes[opening.seed.recipeId]!;
   const investmentPrices = Object.fromEntries(

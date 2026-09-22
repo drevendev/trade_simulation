@@ -52,6 +52,9 @@ function oneUnitWorld(args: {
       ...baseUnit.seed,
       recipeId: recipe.id,
     },
+    // This fixture exercises Phase-12 mechanics, so opt into the live lifecycle authority
+    // explicitly even when the first baseline seed happens to be MOTHBALLED.
+    status: "ACTIVE",
     installedCapital: args.installedCapital ?? 10,
     investmentInventory: new Map(args.investment ?? [[TOOLS, 6], [IRON, 8]]),
   };
