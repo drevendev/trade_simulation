@@ -1,0 +1,71 @@
+### FILE: src/simulation/productionStartupPlanning.ts
+<<<<<<< FIND
+  const liquidityBufferShare = requireNonNegative(
+    "ProductionConfig.liquidityBufferShare",
+    config.production.liquidityBufferShare ?? defaults.production.liquidityBufferShare!,
+  );
+  if (liquidityBufferShare > 1) {
+=======
+  const liquidityBufferShare = requireNonNegative(
+    "ProductionConfig.liquidityBufferShare",
+    config.production.liquidityBufferShare ?? defaults.production.liquidityBufferShare!,
+  );
+  const investmentReviewCadenceTicks = requirePositive(
+    "ProductionConfig.investmentReviewCadenceTicks",
+    config.production.investmentReviewCadenceTicks ?? defaults.production.investmentReviewCadenceTicks!,
+  );
+  if (!Number.isInteger(investmentReviewCadenceTicks)) {
+    throw new Error(
+      `ProductionConfig.investmentReviewCadenceTicks must be an integer, got ${String(investmentReviewCadenceTicks)}`,
+    );
+  }
+  if (liquidityBufferShare > 1) {
+>>>>>>> REPLACE
+<<<<<<< FIND
+  const minimumStartupCapital = requireNonNegative(
+=======
+  if (tick === 0 || tick % investmentReviewCadenceTicks !== 0) {
+    return { investmentIntents: [], investableCash: 0, investmentBudget: 0 };
+  }
+
+  const minimumStartupCapital = requireNonNegative(
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionStartupPlanning.test.ts
+<<<<<<< FIND
+    const result = planPlannedStartupInvestmentPhase2({
+      tick: 1,
+=======
+    const result = planPlannedStartupInvestmentPhase2({
+      tick: 3,
+>>>>>>> REPLACE
+<<<<<<< FIND
+  it("uses live PLANNED status even when immutable seed status says ACTIVE and emits no labor/input demand", () => {
+=======
+  it("emits no startup INVESTMENT intents off the canonical investment-review cadence", () => {
+    const { config, planned, region, recipe, investmentPrices } = fixture();
+    const result = planPlannedStartupInvestmentPhase2({
+      tick: 1,
+      unit: planned,
+      regionId: region.regionId,
+      settlementCurrencyId: region.settlementCurrencyId,
+      recipe,
+      config,
+      evidence: {
+        mandatoryKnownCash: 0,
+        priorCloseGrossInvestmentPriceByGood: investmentPrices,
+      },
+    });
+    expect(result.investmentIntents).toEqual([]);
+    expect(result.investmentBudget).toBe(0);
+  });
+
+  it("uses live PLANNED status even when immutable seed status says ACTIVE and emits no labor/input demand", () => {
+>>>>>>> REPLACE
+<<<<<<< FIND
+    const result = planProductionUnitPhase2({
+      tick: 1,
+=======
+    const result = planProductionUnitPhase2({
+      tick: 3,
+>>>>>>> REPLACE
