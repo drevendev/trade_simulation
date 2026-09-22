@@ -258,13 +258,13 @@ describe("Issue #630 explicit M4 production-policy authority", () => {
     }
     const missingFixtureWorld: WorldState = { ...base.world, states };
 
-    const result = executeTick(
-      missingFixtureWorld,
-      9,
-      missingFixtureWorld.pendingTransitions,
-      createCanonicalPhase2ProductionPlanningHandler(),
-    );
-    expect(result.phaseBoundaryError?.phase).toBe(2);
-    expect(result.phaseBoundaryError?.message).toMatch(/explicit M4 production-planning policy fixture/);
+    expect(() =>
+      executeTick(
+        missingFixtureWorld,
+        9,
+        missingFixtureWorld.pendingTransitions,
+        createCanonicalPhase2ProductionPlanningHandler(),
+      ),
+    ).toThrow(/explicit M4 production-planning policy fixture/);
   });
 });
