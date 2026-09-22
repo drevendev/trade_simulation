@@ -46,6 +46,14 @@ export interface M4ProductionPlanningPolicySeed {
   >;
   /** Explicit read-only M4 mandatory pre-payroll cash fixtures, keyed by ProductionUnit seed key. */
   readonly mandatoryKnownCashByProductionUnitKey: Readonly<Record<string, number>>;
+  /**
+   * Explicit M4-only current-law answers for ProductionUnit lifecycle readiness.
+   * M6 later replaces these coarse scenario fixtures with the same pure-query semantics.
+   * They are optional in the schema for compatibility with older/manual fixtures, but
+   * controlled-Region lifecycle review fails closed unless both answers are present.
+   */
+  readonly lifecycleOwnershipAllowed?: boolean;
+  readonly lifecycleProductionAllowed?: boolean;
 }
 
 export interface StatePolicySeed {

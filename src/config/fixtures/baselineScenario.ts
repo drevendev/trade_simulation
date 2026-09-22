@@ -413,11 +413,14 @@ const monetaryAuthorities: MonetaryAuthoritySeed[] = [
 // ============================================================================
 
 // M4 policy inputs are explicit scenario fixtures rather than planner defaults. The
-// baseline has no applicable minimum-wage or mandatory pre-payroll-cash rule.
+// baseline has no applicable minimum-wage/mandatory-cash rule and explicitly permits
+// baseline ProductionUnit ownership/production for lifecycle readiness.
 const noM4ProductionPlanningPolicy = {
   m4ProductionPlanning: {
     minimumWageFloorByRegionKey: {},
     mandatoryKnownCashByProductionUnitKey: {},
+    lifecycleOwnershipAllowed: true,
+    lifecycleProductionAllowed: true,
   },
 } as const;
 

@@ -128,10 +128,15 @@ function planOneUnit(
     );
   }
 
+  // ACTIVE capacity expansion, PLANNED startup and MOTHBALLED recapitalization may form
+  // capital from already-owned real INVESTMENT goods. CLOSING units cannot start new
+  // investment while they are resolving stocks for retirement.
+  const capitalFormationAllowed =
+    unit.status === "ACTIVE" || unit.status === "PLANNED" || unit.status === "MOTHBALLED";
   // No separate maxCapitalBuildPerTick exists in the canonical M4 configuration.
-  // Handoff/05 therefore defines the Phase-12 execution cap as +Infinity: every complete
-  // real-goods bundle already present in INVESTMENT inventory may be converted this tick.
-  const capitalBuilt = possibleCapitalFromGoods;
+  // Handoff/05 therefore defines the Phase-12 execution cap as +Infinity when formation is
+  // lifecycle-eligible: every complete real-goods bundle already in INVESTMENT may convert.
+  const capitalBuilt = capitalFormationAllowed ? possibleCapitalFromGoods : 0;
 
   for (const [goodId, coefficient] of investmentGoods) {
     const rawConsumed = requireNonNegative(

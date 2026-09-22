@@ -11,6 +11,8 @@ import { createDefaultSimulationConfig, type LaborConfig, type ProductionConfig 
 import type { GoodId } from "../domain/id";
 import { isFiniteCanonicalNumber } from "../domain/numeric";
 
+export type ProductionUnitLifecycleStatus = "PLANNED" | "ACTIVE" | "MOTHBALLED" | "CLOSING";
+
 export interface ProductionSignalState {
   readonly utilizationEma: number;
   readonly sellThroughEma: number;
@@ -36,6 +38,7 @@ export function resolveInitialWageOffer(seedWageOffer: number | undefined, labor
 }
 
 export interface ProductionUnitPersistentStateView {
+  readonly status: ProductionUnitLifecycleStatus;
   readonly wageOffer: number;
   readonly installedCapital: number;
   readonly inputInventory: ReadonlyMap<GoodId, number>;
@@ -128,6 +131,9 @@ export function deriveNameplateCapacity(
  * Later requirements add behavioral validation at their own execution boundaries.
  */
 export function validateProductionUnitPersistentState(unit: ProductionUnitPersistentStateView): void {
+  if (!["PLANNED", "ACTIVE", "MOTHBALLED", "CLOSING"].includes(unit.status)) {
+    throw new Error(`ProductionUnitState.status must be PLANNED, ACTIVE, MOTHBALLED or CLOSING, got ${String(unit.status)}`);
+  }
   requireNonNegativeFinite("ProductionUnitState.wageOffer", unit.wageOffer);
   requireNonNegativeFinite("ProductionUnitState.installedCapital", unit.installedCapital);
 

@@ -361,7 +361,8 @@ describe("REQ-PRODUCTION-005 Phase-5 production/extraction", () => {
           ["good:wood" as GoodId, 100],
         ],
       ),
-      seed: { ...active.seed, status: "MOTHBALLED" },
+      // Phase-5 suppression is governed by the live lifecycle authority.
+      status: "MOTHBALLED",
     };
     world = withUnit(world, unit);
     const region = regionFor(world, unit);
