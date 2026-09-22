@@ -1,0 +1,296 @@
+### FILE: src/simulation/productionUnitState.ts
+<<<<<<< FIND
+import type { GoodId } from "../domain/id";
+import { isFiniteCanonicalNumber } from "../domain/numeric";
+=======
+import type { GoodId } from "../domain/id";
+import { isFiniteCanonicalNumber } from "../domain/numeric";
+
+export type ProductionUnitLifecycleStatus = "PLANNED" | "ACTIVE" | "MOTHBALLED" | "CLOSING";
+>>>>>>> REPLACE
+<<<<<<< FIND
+export interface ProductionUnitPersistentStateView {
+  readonly wageOffer: number;
+  readonly installedCapital: number;
+=======
+export interface ProductionUnitPersistentStateView {
+  readonly status: ProductionUnitLifecycleStatus;
+  readonly wageOffer: number;
+  readonly installedCapital: number;
+>>>>>>> REPLACE
+<<<<<<< FIND
+export function validateProductionUnitPersistentState(unit: ProductionUnitPersistentStateView): void {
+  requireNonNegativeFinite("ProductionUnitState.wageOffer", unit.wageOffer);
+=======
+export function validateProductionUnitPersistentState(unit: ProductionUnitPersistentStateView): void {
+  if (!["PLANNED", "ACTIVE", "MOTHBALLED", "CLOSING"].includes(unit.status)) {
+    throw new Error(`ProductionUnitState.status must be PLANNED, ACTIVE, MOTHBALLED or CLOSING, got ${String(unit.status)}`);
+  }
+  requireNonNegativeFinite("ProductionUnitState.wageOffer", unit.wageOffer);
+>>>>>>> REPLACE
+
+### FILE: src/simulation/worldState.ts
+<<<<<<< FIND
+  type ProductionSignalState,
+} from "./productionUnitState";
+=======
+  type ProductionSignalState,
+  type ProductionUnitLifecycleStatus,
+} from "./productionUnitState";
+>>>>>>> REPLACE
+<<<<<<< FIND
+/**
+ * Canonical world state: all registries and resolved configuration.
+ * Must be byte-equivalent for the same scenario/config/seed after normalized serialization.
+ */
+export interface PendingTransitions {
+=======
+export interface ProductionUnitLifecycleTransition {
+  readonly transitionId: string;
+  readonly unitId: ProductionUnitId;
+  readonly fromStatus: ProductionUnitLifecycleStatus;
+  readonly target: ProductionUnitLifecycleStatus | "RETIRED";
+  readonly decisionTick: number;
+  readonly activateTick: number;
+}
+
+/**
+ * Canonical world state: all registries and resolved configuration.
+ * Must be byte-equivalent for the same scenario/config/seed after normalized serialization.
+ */
+export interface PendingTransitions {
+>>>>>>> REPLACE
+<<<<<<< FIND
+  readonly monetaryPolicyChanges: ReadonlyArray<{
+    readonly authorityId: MonetaryAuthorityId;
+    readonly patch: unknown;
+    readonly activateTick: number;
+  }>;
+}
+=======
+  readonly monetaryPolicyChanges: ReadonlyArray<{
+    readonly authorityId: MonetaryAuthorityId;
+    readonly patch: unknown;
+    readonly activateTick: number;
+  }>;
+  readonly productionUnitLifecycleChanges: readonly ProductionUnitLifecycleTransition[];
+}
+>>>>>>> REPLACE
+<<<<<<< FIND
+export interface ProductionUnitState {
+  readonly productionUnitId: ProductionUnitId;
+  readonly seed: ProductionUnitSeed;
+  readonly wallet: LiveWallet;
+=======
+export interface ProductionUnitState {
+  readonly productionUnitId: ProductionUnitId;
+  readonly seed: ProductionUnitSeed;
+  /** Sole mutable runtime lifecycle authority; seed.status remains immutable starting data. */
+  readonly status: ProductionUnitLifecycleStatus;
+  readonly wallet: LiveWallet;
+>>>>>>> REPLACE
+<<<<<<< FIND
+    productionUnitRegistry.set(productionUnitId, {
+      productionUnitId,
+      seed: puSeed,
+      wallet: new Map(),
+=======
+    productionUnitRegistry.set(productionUnitId, {
+      productionUnitId,
+      seed: puSeed,
+      status: puSeed.status,
+      wallet: new Map(),
+>>>>>>> REPLACE
+
+### FILE: src/simulation/pendingTransitions.ts
+<<<<<<< FIND
+    policyChanges: [],
+    monetaryPolicyChanges: [],
+  };
+=======
+    policyChanges: [],
+    monetaryPolicyChanges: [],
+    productionUnitLifecycleChanges: [],
+  };
+>>>>>>> REPLACE
+<<<<<<< FIND
+    monetaryPolicyChanges: pending.monetaryPolicyChanges.filter(
+      (m) => m.activateTick === currentTick,
+    ),
+  };
+=======
+    monetaryPolicyChanges: pending.monetaryPolicyChanges.filter(
+      (m) => m.activateTick === currentTick,
+    ),
+    productionUnitLifecycleChanges: pending.productionUnitLifecycleChanges.filter(
+      (change) => change.activateTick === currentTick,
+    ),
+  };
+>>>>>>> REPLACE
+<<<<<<< FIND
+    monetaryPolicyChanges: pending.monetaryPolicyChanges.filter(
+      (m) => m.activateTick !== currentTick,
+    ),
+  };
+=======
+    monetaryPolicyChanges: pending.monetaryPolicyChanges.filter(
+      (m) => m.activateTick !== currentTick,
+    ),
+    productionUnitLifecycleChanges: pending.productionUnitLifecycleChanges.filter(
+      (change) => change.activateTick !== currentTick,
+    ),
+  };
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionPlanning.ts
+<<<<<<< FIND
+import { deriveNameplateCapacity } from "./productionUnitState";
+import type { PhaseHandler, TickContext } from "./tickOrchestrator";
+=======
+import { deriveNameplateCapacity } from "./productionUnitState";
+import { planPlannedStartupInvestmentPhase2 } from "./productionStartupPlanning";
+import type { PhaseHandler, TickContext } from "./tickOrchestrator";
+>>>>>>> REPLACE
+<<<<<<< FIND
+  const planId = `production-plan:${tick}:${String(unit.productionUnitId)}`;
+  const laborPlanId = `labor-demand-plan:${tick}:${String(unit.productionUnitId)}`;
+  const isActive = unit.seed.status === "ACTIVE";
+
+  if (!isActive) {
+    const zeroInputs = orderedRecord(
+=======
+  const planId = `production-plan:${tick}:${String(unit.productionUnitId)}`;
+  const laborPlanId = `labor-demand-plan:${tick}:${String(unit.productionUnitId)}`;
+  const isActive = unit.status === "ACTIVE";
+
+  if (!isActive) {
+    const startup = unit.status === "PLANNED"
+      ? planPlannedStartupInvestmentPhase2({
+          tick,
+          unit,
+          regionId,
+          settlementCurrencyId,
+          recipe,
+          config,
+          ...(args.evidence === undefined
+            ? {}
+            : {
+                evidence: {
+                  mandatoryKnownCash: args.evidence.mandatoryKnownCash,
+                  priorCloseGrossInvestmentPriceByGood: args.evidence.priorCloseGrossInvestmentPriceByGood,
+                },
+              }),
+        })
+      : { investmentIntents: [], investableCash: 0, investmentBudget: 0 };
+    const zeroInputs = orderedRecord(
+>>>>>>> REPLACE
+<<<<<<< FIND
+        workingCapitalTarget: 0,
+        investableCash: 0,
+        investmentPressure: 0,
+        investmentBudget: 0,
+        laborDemandPlanId: laborPlanId,
+        investmentIntentIds: [],
+        inputIntentIds: [],
+=======
+        workingCapitalTarget: 0,
+        investableCash: startup.investableCash,
+        investmentPressure: 0,
+        investmentBudget: startup.investmentBudget,
+        laborDemandPlanId: laborPlanId,
+        investmentIntentIds: startup.investmentIntents.map((intent) => intent.id),
+        inputIntentIds: [],
+>>>>>>> REPLACE
+<<<<<<< FIND
+      },
+      inputIntents: [],
+      investmentIntents: [],
+    };
+  }
+=======
+      },
+      inputIntents: [],
+      investmentIntents: startup.investmentIntents,
+    };
+  }
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionExecution.ts
+<<<<<<< FIND
+    if (unit.seed.status !== "ACTIVE") {
+=======
+    if (unit.status !== "ACTIVE") {
+>>>>>>> REPLACE
+
+### FILE: src/simulation/capitalFormation.ts
+<<<<<<< FIND
+  // No separate maxCapitalBuildPerTick exists in the canonical M4 configuration.
+  // Handoff/05 therefore defines the Phase-12 execution cap as +Infinity: every complete
+  // real-goods bundle already present in INVESTMENT inventory may be converted this tick.
+  const capitalBuilt = possibleCapitalFromGoods;
+=======
+  // ACTIVE capacity expansion and PLANNED startup may form capital. MOTHBALLED/CLOSING
+  // retain physical stocks but cannot silently re-enter investment while lifecycle review
+  // has them outside normal operation.
+  const capitalFormationAllowed = unit.status === "ACTIVE" || unit.status === "PLANNED";
+  // No separate maxCapitalBuildPerTick exists in the canonical M4 configuration.
+  // Handoff/05 therefore defines the Phase-12 execution cap as +Infinity when formation is
+  // lifecycle-eligible: every complete real-goods bundle already in INVESTMENT may convert.
+  const capitalBuilt = capitalFormationAllowed ? possibleCapitalFromGoods : 0;
+>>>>>>> REPLACE
+
+### FILE: src/simulation/index.ts
+<<<<<<< FIND
+  type ProductionSignalState,
+  type ProductionUnitPersistentStateView,
+} from "./productionUnitState";
+=======
+  type ProductionSignalState,
+  type ProductionUnitLifecycleStatus,
+  type ProductionUnitPersistentStateView,
+} from "./productionUnitState";
+>>>>>>> REPLACE
+<<<<<<< FIND
+export {
+  applyCapitalFormationTransition,
+  createPhase12CapitalFormationHandler,
+  planCapitalFormationPhase12,
+  type CapitalFormationExecution,
+  type CapitalFormationPlanResult,
+} from "./capitalFormation";
+=======
+export {
+  applyCapitalFormationTransition,
+  createPhase12CapitalFormationHandler,
+  planCapitalFormationPhase12,
+  type CapitalFormationExecution,
+  type CapitalFormationPlanResult,
+} from "./capitalFormation";
+
+export {
+  applyProductionUnitLifecycleReviewTransition,
+  applyProductionUnitLifecycleTransitionsAtPhase1,
+  applyProductionUnitOwnerFundingTransition,
+  createPhase14ProductionUnitLifecycleHandler,
+  isProductionUnitSafeForRetirement,
+  planProductionUnitLifecyclePhase14,
+  type ProductionUnitLifecyclePlanResult,
+  type ProductionUnitLifecycleReadiness,
+  type ProductionUnitLifecycleReview,
+  type ProductionUnitOwnerFundingRequest,
+} from "./productionUnitLifecycle";
+
+export {
+  planPlannedStartupInvestmentPhase2,
+  type PlannedStartupInvestmentResult,
+  type PlannedStartupPlanningEvidence,
+} from "./productionStartupPlanning";
+>>>>>>> REPLACE
+
+### FILE: docs/spec/implementation_status.csv
+<<<<<<< FIND
+Phase-14 lifecycle, integrated M4 orchestration and M5+ remain separate requirements."
+=======
+Phase-14 lifecycle, integrated M4 orchestration and M5+ remain separate requirements."
+REQ-PRODUCTION-007,IMPLEMENTED,635,636,,"PR #636 implements the canonical M4 ProductionUnit lifecycle/startup boundary: one live status authority initialized from immutable seed status; PLANNED startup INVESTMENT intents from opening unit cash; explicit zero-sum owner funding in the Region settlement currency; deterministic cadence-bound Phase-14 reviews for ACTIVE mothballing, MOTHBALLED reactivation/closing and CLOSING retirement; exact next-tick lifecycle activation through pending transitions; fail-closed evidence re-derivation and safe retirement; and live-status gating in Phase-2 planning, Phase-5 execution and Phase-12 capital formation. Focused regressions in src/simulation/productionUnitLifecycle.test.ts and src/simulation/productionStartupPlanning.test.ts cover startup readiness/N+1 activation, same-tick causal isolation, funding conservation, configured consecutive reviews/reset/reactivation/closing, residual-stock retirement refusal/safe retirement, seed/live-status divergence, insertion-order determinism and tampered lifecycle evidence. Merge commit intentionally blank until integration."
+>>>>>>> REPLACE
