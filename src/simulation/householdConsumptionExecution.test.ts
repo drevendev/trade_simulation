@@ -863,6 +863,7 @@ describe("REQ-POPULATION-003 Phase-9 household realization", () => {
     const context: TickContext = {
       ...base,
       phase: 9,
+      effectiveJurisdictionByRegion: new Map([[REGION, stateId("state:1")]]),
       laborSupplyPlans: [supply(10)],
       laborAllocations: [evidence.allocation],
       wageSettlements: [evidence.settlement],

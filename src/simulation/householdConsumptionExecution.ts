@@ -1246,17 +1246,41 @@ export function applyHouseholdConsumptionTransition(
   };
 }
 
+function assertWageSettlementJurisdictionAuthority(
+  wageSettlements: readonly WageSettlement[],
+  effectiveJurisdictionByRegion: TickContext["effectiveJurisdictionByRegion"],
+): void {
+  for (const settlement of stableOrderBy(wageSettlements, (item) => item.settlementId)) {
+    if (!effectiveJurisdictionByRegion.has(settlement.regionId)) {
+      throw new Error(
+        `Missing Phase-1 effective jurisdiction for WageSettlement ${settlement.settlementId} Region ${String(settlement.regionId)}`,
+      );
+    }
+    const expectedControllerStateId = effectiveJurisdictionByRegion.get(settlement.regionId) ?? null;
+    if (settlement.controllerStateId !== expectedControllerStateId) {
+      throw new Error(
+        `WageSettlement ${settlement.settlementId} controller State does not match Phase-1 effective jurisdiction`,
+      );
+    }
+  }
+}
+
 /** Phase-9 handler: emits execution/economic/loss evidence into TickContext only. */
 export function createPhase9HouseholdConsumptionHandler(): PhaseHandler {
   return (world: WorldState, context: TickContext, _pendingTransitions: PendingTransitions): TickContext => {
     if (context.phase !== 9) return context;
+    const wageSettlements = context.wageSettlements ?? [];
+    assertWageSettlementJurisdictionAuthority(
+      wageSettlements,
+      context.effectiveJurisdictionByRegion,
+    );
     const result = planHouseholdConsumptionPhase9({
       world,
       tick: context.tick,
       marketAllocations: context.marketAllocations,
       laborSupplyPlans: context.laborSupplyPlans ?? [],
       laborAllocations: context.laborAllocations ?? [],
-      wageSettlements: context.wageSettlements ?? [],
+      wageSettlements,
       transactions: context.transactions,
     });
     let ledger = context.currentLedger;

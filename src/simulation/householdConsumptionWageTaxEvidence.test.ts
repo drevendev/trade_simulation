@@ -7,12 +7,17 @@ import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { CurrencyId, GoodId, ProductionUnitId, RegionId, StateId } from "../domain/id";
 import type { LaborAllocation } from "./laborAllocation";
 import type { LaborSupplyPlan } from "./laborSupplyPlanning";
-import { planHouseholdConsumptionPhase9 } from "./householdConsumptionExecution";
+import {
+  createPhase9HouseholdConsumptionHandler,
+  planHouseholdConsumptionPhase9,
+} from "./householdConsumptionExecution";
 import type { LaborDemandPlan } from "./productionPlanning";
 import {
   createTransactionBundleId,
   createTransactionId,
+  initializeTickContext,
   type EconomicTransaction,
+  type TickContext,
 } from "./tickOrchestrator";
 import { planWageSettlementsPhase5, type WageSettlement } from "./wageSettlement";
 import { buildInitialWorld, type WorldState } from "./worldState";
@@ -228,6 +233,41 @@ describe("REQ-POPULATION-003 Phase-9 wage withholding evidence", () => {
         /does not match Phase-5 settlement evidence/,
       );
     }
+  });
+
+  it("rejects a coherently rewritten withholding destination that disagrees with Phase-1 jurisdiction", () => {
+    const fixture = canonicalWageFixture(true);
+    const authoritativeController = fixture.settlement.controllerStateId;
+    const canonicalWithholding = fixture.settlement.wageTaxWithheldTransaction;
+    if (authoritativeController === null || canonicalWithholding === undefined) {
+      throw new Error("Expected canonical controlled positive withholding fixture");
+    }
+
+    const forgedStateId = "state:forged" as StateId;
+    const forgedWithholding: EconomicTransaction = {
+      ...canonicalWithholding,
+      destination: { type: "STATE", stateId: forgedStateId },
+    };
+    const forgedSettlement: WageSettlement = {
+      ...fixture.settlement,
+      controllerStateId: forgedStateId,
+      wageTaxWithheldTransaction: forgedWithholding as WageSettlement["wageTaxWithheldTransaction"],
+    };
+    const base = initializeTickContext(7, fixture.world.seed);
+    const context: TickContext = {
+      ...base,
+      phase: 9,
+      effectiveJurisdictionByRegion: new Map([[fixture.allocation.regionId, authoritativeController]]),
+      laborSupplyPlans: [fixture.supply],
+      laborAllocations: [fixture.allocation],
+      wageSettlements: [forgedSettlement],
+      transactions: [fixture.settlement.wagePaymentTransaction, forgedWithholding],
+    };
+
+    const handler = createPhase9HouseholdConsumptionHandler();
+    expect(() => handler(fixture.world, context, fixture.world.pendingTransitions)).toThrow(
+      /controller State does not match Phase-1 effective jurisdiction/,
+    );
   });
 
   it("accepts canonical zero-collected-tax Phase-5 evidence without a withholding transfer", () => {
