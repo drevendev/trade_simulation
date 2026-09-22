@@ -740,10 +740,12 @@ export function buildProductionOutputSellIntentsPhase5(
       `ProductionUnit ${String(unit.productionUnitId)} post-production OUTPUT`,
       unit.outputInventory.get(execution.outputGoodId) ?? 0,
     );
-    const reserve = requireNonNegative(
-      `ProductionUnit ${String(unit.productionUnitId)} target output reserve`,
-      unit.signals.outputSalesEma * outputCoverageTicks,
-    );
+    const reserve = unit.status === "CLOSING"
+      ? 0
+      : requireNonNegative(
+        `ProductionUnit ${String(unit.productionUnitId)} target output reserve`,
+        unit.signals.outputSalesEma * outputCoverageTicks,
+      );
     const intent: MarketIntent = {
       id: createMarketIntentId(`mi:output:${execution.tick}:${String(execution.unitId)}`),
       actor: { type: "PRODUCTION_UNIT", productionUnitId: execution.unitId },
