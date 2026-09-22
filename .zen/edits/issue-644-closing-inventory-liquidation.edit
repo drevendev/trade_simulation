@@ -1,0 +1,126 @@
+### FILE: src/simulation/productionPlanning.ts
+<<<<<<< FIND
+export interface ProductionPlanningResult {
+  readonly productionPlan: ProductionPlan;
+  readonly laborDemandPlan: LaborDemandPlan;
+  readonly inputIntents: readonly MarketIntent[];
+  readonly investmentIntents: readonly MarketIntent[];
+}
+=======
+export interface ProductionPlanningResult {
+  readonly productionPlan: ProductionPlan;
+  readonly laborDemandPlan: LaborDemandPlan;
+  readonly inputIntents: readonly MarketIntent[];
+  readonly investmentIntents: readonly MarketIntent[];
+  readonly liquidationIntents: readonly MarketIntent[];
+}
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+      : { investmentIntents: [], investableCash: 0, investmentBudget: 0 };
+    const zeroInputs = orderedRecord(
+=======
+      : { investmentIntents: [], investableCash: 0, investmentBudget: 0 };
+    const liquidationIntents: MarketIntent[] = [];
+    if (unit.status === "CLOSING") {
+      const liquidationBuckets = [
+        { bucket: "INPUT" as const, inventory: unit.inputInventory },
+        { bucket: "INVESTMENT" as const, inventory: unit.investmentInventory },
+      ];
+      for (const { bucket, inventory } of liquidationBuckets) {
+        for (const [goodId, rawQuantity] of stableOrderBy(
+          inventory.entries(),
+          ([candidateGoodId]) => String(candidateGoodId),
+        )) {
+          const desiredQuantity = requireNonNegative(
+            `ProductionUnit ${String(unit.productionUnitId)} CLOSING ${bucket}[${String(goodId)}]`,
+            rawQuantity,
+          );
+          if (desiredQuantity <= planning.quantityEpsilon) {
+            continue;
+          }
+          const intent: MarketIntent = {
+            id: createMarketIntentId(
+              `mi:${tick}:${String(unit.productionUnitId)}:CLOSING-LIQUIDATION:${bucket}:${String(goodId)}`,
+            ),
+            actor: { type: "PRODUCTION_UNIT", productionUnitId: unit.productionUnitId },
+            regionId,
+            goodId,
+            side: "SELL",
+            purpose: "INVENTORY_REBALANCE",
+            desiredQuantity,
+            minimumReserveQuantity: 0,
+            sourcePlanId: planId,
+            inventoryBucket: bucket,
+          };
+          validateMarketIntent(intent);
+          liquidationIntents.push(intent);
+        }
+      }
+    }
+    const zeroInputs = orderedRecord(
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+      inputIntents: [],
+      investmentIntents: startup.investmentIntents,
+    };
+=======
+      inputIntents: [],
+      investmentIntents: startup.investmentIntents,
+      liquidationIntents,
+    };
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  return { productionPlan, laborDemandPlan, inputIntents, investmentIntents };
+=======
+  return { productionPlan, laborDemandPlan, inputIntents, investmentIntents, liquidationIntents: [] };
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+      productionMarketIntents.push(...result.inputIntents, ...result.investmentIntents);
+=======
+      productionMarketIntents.push(
+        ...result.inputIntents,
+        ...result.investmentIntents,
+        ...result.liquidationIntents,
+      );
+>>>>>>> REPLACE
+
+### FILE: src/simulation/marketIntent.ts
+<<<<<<< FIND
+    } else if (intent.side === "SELL") {
+      if (intent.inventoryBucket && intent.inventoryBucket !== "OUTPUT") {
+        throw new Error(
+          `ProductionUnit SELL must use OUTPUT bucket, got ${intent.inventoryBucket}`,
+        );
+      }
+    }
+=======
+    } else if (intent.side === "SELL") {
+      if (
+        intent.inventoryBucket &&
+        intent.inventoryBucket !== "INPUT" &&
+        intent.inventoryBucket !== "OUTPUT" &&
+        intent.inventoryBucket !== "INVESTMENT"
+      ) {
+        throw new Error(
+          `ProductionUnit SELL must use INPUT, OUTPUT, or INVESTMENT bucket, got ${intent.inventoryBucket}`,
+        );
+      }
+    }
+>>>>>>> REPLACE
+
+### FILE: src/simulation/productionClosingInventoryLiquidation.test.ts
+<<<<<<< FIND
+import type { GoodId } from "../domain/id";
+=======
+import type { CohortId, GoodId } from "../domain/id";
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+  buyerCohortId: MarketAllocation["buyer"] extends { type: "COHORT"; cohortId: infer T } ? T : never,
+=======
+  buyerCohortId: CohortId,
+>>>>>>> REPLACE
