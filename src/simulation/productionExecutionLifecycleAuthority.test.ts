@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
-import type { CohortId, GoodId, ProductionUnitId, RegionId } from "../domain/id";
+import type { CohortId, GoodId, RegionId } from "../domain/id";
 import type { LaborAllocation } from "./laborAllocation";
 import type { ProductionPlan } from "./productionPlanning";
 import {
@@ -264,11 +264,10 @@ describe("Issue #638 Phase-5 live ProductionUnit status authority", () => {
       laborAllocations: [mineLabor],
     }).executions[0]!;
     expect(mineExecution.realizedBatches).toBeGreaterThan(0);
+    const { resourceConsumption, ...executionWithoutResource } = mineExecution;
+    expect(resourceConsumption).toBeDefined();
 
-    expect(() => applyProductionExecutionTransition(extractionWorld, [{
-      ...mineExecution,
-      resourceConsumption: undefined,
-    }], TICK, {
+    expect(() => applyProductionExecutionTransition(extractionWorld, [executionWithoutResource], TICK, {
       productionPlans: [minePlan],
       laborAllocations: [mineLabor],
     })).toThrow(/extraction resource provenance mismatch/);
