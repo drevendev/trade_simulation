@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
+import type { NeedCategoryDefinition } from "../config/definitionPack";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
-import type { CurrencyId, ProductionUnitId, RegionId, StateId } from "../domain/id";
+import type { CurrencyId, GoodId, ProductionUnitId, RegionId, StateId } from "../domain/id";
 import type { LaborAllocation } from "./laborAllocation";
 import type { LaborSupplyPlan } from "./laborSupplyPlanning";
 import { planHouseholdConsumptionPhase9 } from "./householdConsumptionExecution";
@@ -22,6 +23,47 @@ interface WageFixture {
   readonly allocation: LaborAllocation;
   readonly settlement: WageSettlement;
   readonly transactions: readonly EconomicTransaction[];
+}
+
+function zeroNeedCategories(): Readonly<Record<string, NeedCategoryDefinition>> {
+  const food = "good:food" as GoodId;
+  const wood = "good:wood" as GoodId;
+  const cloth = "good:cloth" as GoodId;
+  const tools = "good:tools" as GoodId;
+  return {
+    ESSENTIAL_FOOD: {
+      id: "ESSENTIAL_FOOD",
+      perCapitaTarget: 0,
+      priority: 4,
+      substitutionGoods: [{ goodId: food, basePreference: 1, qualityFactor: 1 }],
+      priceSensitivity: 1,
+      inventoryCarryoverTicks: 0,
+    },
+    BASIC_GOODS: {
+      id: "BASIC_GOODS",
+      perCapitaTarget: 0,
+      priority: 3,
+      substitutionGoods: [{ goodId: wood, basePreference: 1, qualityFactor: 1 }],
+      priceSensitivity: 1,
+      inventoryCarryoverTicks: 0,
+    },
+    SERVICES: {
+      id: "SERVICES",
+      perCapitaTarget: 0,
+      priority: 2,
+      substitutionGoods: [{ goodId: cloth, basePreference: 1, qualityFactor: 1 }],
+      priceSensitivity: 1,
+      inventoryCarryoverTicks: 0,
+    },
+    COMFORT: {
+      id: "COMFORT",
+      perCapitaTarget: 0,
+      priority: 1,
+      substitutionGoods: [{ goodId: tools, basePreference: 1, qualityFactor: 1 }],
+      priceSensitivity: 1,
+      inventoryCarryoverTicks: 0,
+    },
+  };
 }
 
 function canonicalWageFixture(controlled = true): WageFixture {
@@ -93,6 +135,10 @@ function canonicalWageFixture(controlled = true): WageFixture {
 
   const phase9World: WorldState = {
     ...world,
+    definitionRegistry: {
+      ...world.definitionRegistry,
+      needCategories: zeroNeedCategories(),
+    },
     cohorts: new Map([[match.cohort.cohortId, match.cohort]]),
   };
   const supply: LaborSupplyPlan = {
