@@ -687,6 +687,45 @@ function regionForUnit(world: WorldState, unit: ProductionUnitState): RegionStat
   return region;
 }
 
+function canonicalM4ProductionPolicyEvidence(
+  world: WorldState,
+  unit: ProductionUnitState,
+  region: RegionState,
+  recipe: RecipeDefinition,
+): Pick<ProductionPlanningEvidence, "mandatoryKnownCash" | "legalMinimumWageFloor"> {
+  if (region.controllerStateId === null) {
+    // No controller is itself the explicit Phase-1 jurisdiction result: there is no
+    // applicable State minimum-wage or mandatory pre-payroll-cash rule in M4.
+    return { mandatoryKnownCash: 0, legalMinimumWageFloor: 0 };
+  }
+
+  const controller = world.states.get(region.controllerStateId);
+  if (controller === undefined) {
+    throw new Error(
+      `Canonical Phase-2 planning Region ${String(region.regionId)} references missing controller State ${String(region.controllerStateId)}`,
+    );
+  }
+  const policy = controller.seed.policy.m4ProductionPlanning;
+  if (policy === undefined) {
+    throw new Error(
+      `Canonical Phase-2 planning requires an explicit M4 production-planning policy fixture for controlled Region ${String(region.regionId)}`,
+    );
+  }
+
+  const regionalMinimumWage = policy.minimumWageFloorByRegionKey[region.seed.key]?.[recipe.laborCategory] ?? 0;
+  const mandatoryKnownCash = policy.mandatoryKnownCashByProductionUnitKey[unit.seed.key] ?? 0;
+  return {
+    mandatoryKnownCash: requireNonNegative(
+      `StatePolicySeed.m4ProductionPlanning.mandatoryKnownCashByProductionUnitKey[${unit.seed.key}]`,
+      mandatoryKnownCash,
+    ),
+    legalMinimumWageFloor: requireNonNegative(
+      `StatePolicySeed.m4ProductionPlanning.minimumWageFloorByRegionKey[${region.seed.key}][${recipe.laborCategory}]`,
+      regionalMinimumWage,
+    ),
+  };
+}
+
 function normalizedEvidenceRecord(
   record: Readonly<Record<GoodId, number>> | undefined,
 ): readonly (readonly [string, number])[] | null {
@@ -784,11 +823,11 @@ function canonicalPhase2ProductionPlanningEvidence(
           : 0;
       })();
 
+  const m4Policy = canonicalM4ProductionPolicyEvidence(world, unit, region, recipe);
+
   return {
-    // M4 has no mutable fiscal subsystem yet. Absent an explicit applicable rule,
-    // the contract supplies no mandatory pre-payroll charge and no minimum-wage floor.
-    mandatoryKnownCash: 0,
-    legalMinimumWageFloor: 0,
+    mandatoryKnownCash: m4Policy.mandatoryKnownCash,
+    legalMinimumWageFloor: m4Policy.legalMinimumWageFloor,
     priorCloseGrossInputPriceByGood: priceRecord(
       Object.keys(recipe.inputsPerBatch) as GoodId[],
     ),
