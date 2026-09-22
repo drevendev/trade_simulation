@@ -1,0 +1,25 @@
+### FILE: src/simulation/worldState.ts
+<<<<<<< FIND
+import { validateDefinitionPack, validateLaborConfig, validatePopulationConfig, validateProductionConfig } from "../config/validation";
+import { assertFiniteCanonicalNumber } from "../domain/numeric";
+=======
+import { validateDefinitionPack, validateLaborConfig, validatePopulationConfig, validateProductionConfig } from "../config/validation";
+import { validateM4ProductionPolicyGenesis } from "./m4ProductionPolicyGenesisValidation";
+import { assertFiniteCanonicalNumber } from "../domain/numeric";
+>>>>>>> REPLACE
+
+### FILE: src/simulation/worldState.ts
+<<<<<<< FIND
+  validateProductionConfig(config.production);
+  validateLaborConfig(config.labor);
+  validatePopulationConfig(config.population);
+
+  validateExtractionResourcesPresent(scenario, definitionPack);
+=======
+  validateProductionConfig(config.production);
+  validateLaborConfig(config.labor);
+  validatePopulationConfig(config.population);
+  validateM4ProductionPolicyGenesis(scenario, config.labor);
+
+  validateExtractionResourcesPresent(scenario, definitionPack);
+>>>>>>> REPLACE
