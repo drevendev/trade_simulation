@@ -12,6 +12,7 @@ import { buildInitialWorld, type WorldState } from "./worldState";
 const GOLDEN_TICKS = 240;
 const GOLDEN_REGION_KEY = "region:a1-capital";
 const IRON_RESOURCE_ID = "resource:iron-ore";
+const FOOD = "good:food" as GoodId;
 const TOOLS = "good:tools" as GoodId;
 
 const m4NeedCategories: Readonly<Record<string, NeedCategoryDefinition>> = {
@@ -97,14 +98,38 @@ function goldenOpeningWorld(): WorldState {
   );
   expect(ironMine).toBeDefined();
 
+  const householdSupplier = [...baseline.productionUnits.values()].find(
+    (unit) =>
+      unit.seed.regionKey === "region:a2-farm" &&
+      unit.seed.recipeId === "recipe:food-harvest" &&
+      unit.status === "ACTIVE",
+  );
+  expect(householdSupplier).toBeDefined();
+
   const investmentInventory = new Map(ironMine!.investmentInventory);
   // One complete real-goods capital bundle makes the long-run gate non-vacuous for
   // Phase-12 installation while still using the canonical recipe conversion.
   investmentInventory.set(TOOLS, 50);
   const goldenMine = { ...ironMine!, investmentInventory };
 
+  // Reuse one canonical Alpha food producer and its already-owned food stock inside the
+  // one-Region fixture. This gives Phase 8 a real household-facing seller without adding
+  // a test-only formula or settlement path.
+  const goldenHouseholdSupplier = {
+    ...householdSupplier!,
+    seed: { ...householdSupplier!.seed, regionKey: GOLDEN_REGION_KEY },
+  };
+
   const cohorts = new Map(
-    [...baseline.cohorts.entries()].filter(([, cohort]) => cohort.seed.regionKey === GOLDEN_REGION_KEY),
+    [...baseline.cohorts.entries()]
+      .filter(([, cohort]) => cohort.seed.regionKey === GOLDEN_REGION_KEY)
+      .map(([cohortId, cohort]) => {
+        // Remove the long baseline food buffer so the first ticks exercise actual MAIN
+        // household purchase/settlement rather than satisfying the need from opening stock.
+        const householdInventory = new Map(cohort.householdInventory);
+        householdInventory.set(FOOD, 0);
+        return [cohortId, { ...cohort, householdInventory }] as const;
+      }),
   );
   expect([...cohorts.values()].some((cohort) => cohort.seed.ageBand === "WORKING")).toBe(true);
 
@@ -112,7 +137,10 @@ function goldenOpeningWorld(): WorldState {
     ...baseline,
     regions: new Map([[region!.regionId, region!]]),
     markets: new Map([market!]),
-    productionUnits: new Map([[goldenMine.productionUnitId, goldenMine]]),
+    productionUnits: new Map([
+      [goldenMine.productionUnitId, goldenMine],
+      [goldenHouseholdSupplier.productionUnitId, goldenHouseholdSupplier],
+    ]),
     cohorts,
   };
 }
@@ -237,6 +265,8 @@ function runGolden(): {
   readonly extracted: number;
   readonly capitalBuilt: number;
   readonly householdExecutions: number;
+  readonly householdPurchaseQuantity: number;
+  readonly householdSpend: number;
   readonly wageSettlements: number;
 } {
   let world = goldenOpeningWorld();
@@ -249,6 +279,8 @@ function runGolden(): {
   let extracted = 0;
   let capitalBuilt = 0;
   let householdExecutions = 0;
+  let householdPurchaseQuantity = 0;
+  let householdSpend = 0;
   let wageSettlements = 0;
 
   for (let tick = 0; tick < GOLDEN_TICKS; tick++) {
@@ -303,12 +335,12 @@ function runGolden(): {
     const spendByCohort = new Map<string, number>();
     for (const allocation of result.context.marketAllocations) {
       const intent = householdIntentById.get(String(allocation.buyerIntentId));
-      if (intent?.actor.type !== "COHORT") continue;
+      if (intent?.actor.type !== "COHORT" || intent.purpose !== "CONSUMPTION") continue;
       const key = String(intent.actor.cohortId);
-      spendByCohort.set(
-        key,
-        (spendByCohort.get(key) ?? 0) + allocation.quantity * allocation.buyerGrossUnitPrice,
-      );
+      const spend = allocation.quantity * allocation.buyerGrossUnitPrice;
+      spendByCohort.set(key, (spendByCohort.get(key) ?? 0) + spend);
+      householdPurchaseQuantity += allocation.quantity;
+      householdSpend += spend;
     }
     for (const [cohortId, spend] of spendByCohort) {
       const cohort = [...opening.cohorts.values()].find((candidate) => String(candidate.cohortId) === cohortId)!;
@@ -348,6 +380,8 @@ function runGolden(): {
     extracted,
     capitalBuilt,
     householdExecutions,
+    householdPurchaseQuantity,
+    householdSpend,
     wageSettlements,
   };
 }
@@ -360,6 +394,8 @@ describe("REQ-ACCEPTANCE-005: M4 one-region 240-tick golden gate", () => {
     expect(first.extracted).toBeGreaterThan(0);
     expect(first.capitalBuilt).toBeGreaterThan(0);
     expect(first.householdExecutions).toBeGreaterThan(0);
+    expect(first.householdPurchaseQuantity).toBeGreaterThan(0);
+    expect(first.householdSpend).toBeGreaterThan(0);
     expect(first.wageSettlements).toBeGreaterThan(0);
     expect(first.hash).toMatch(/^[a-f0-9]{64}$/);
     expect(second).toEqual(first);
