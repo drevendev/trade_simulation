@@ -129,8 +129,8 @@
         <div class="m4-metric"><dt>Household purchases</dt><dd>${escapeHtml(number(preview.totals.householdPurchaseQuantity))}<small>${escapeHtml(goods)}, cumulative</small></dd></div>
         <div class="m4-metric"><dt>Capital built</dt><dd>${escapeHtml(number(preview.totals.capitalBuilt))}<small>${escapeHtml(capital)}, cumulative</small></dd></div>
       </dl>
-      <div class="m4-groups" id="m4-groups"></div>
-      <div class="m4-table-scroll" id="m4-table"></div>`;
+      <div class="m4-groups" id="m4-groups" style="min-width:0;max-width:100%"></div>
+      <div class="m4-table-scroll" id="m4-table" style="max-width:100%;overflow-x:auto"></div>`;
 
     const groups = document.getElementById("m4-groups");
     groups.appendChild(visualGroup(

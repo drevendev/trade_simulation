@@ -1,8 +1,0 @@
-### FILE: docs/m4.js
-<<<<<<< FIND
-      <div class="m4-groups" id="m4-groups"></div>
-      <div class="m4-table-scroll" id="m4-table"></div>`;
-=======
-      <div class="m4-groups" id="m4-groups" style="min-width:0;max-width:100%"></div>
-      <div class="m4-table-scroll" id="m4-table" style="max-width:100%;overflow-x:auto"></div>`;
->>>>>>> REPLACE
