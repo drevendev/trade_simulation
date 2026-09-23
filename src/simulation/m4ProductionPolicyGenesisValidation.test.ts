@@ -71,6 +71,15 @@ function emptyRuntimePolicy(): RuntimePolicyFixture {
   };
 }
 
+function withRuntimeNestedWageFloorMap(value: unknown): ScenarioDefinition {
+  return withRuntimeTargetPolicy({
+    ...emptyRuntimePolicy(),
+    minimumWageFloorByRegionKey: {
+      [targetRegion.key]: value,
+    },
+  });
+}
+
 function build(
   scenario: ScenarioDefinition,
   config: SimulationConfig = createDefaultSimulationConfig(),
@@ -101,7 +110,15 @@ function expectPolicyMapShapeFailure(
   );
 }
 
-describe("M4 State policy fail-fast genesis validation (#633, #642)", () => {
+function expectNestedWageFloorMapShapeFailure(value: unknown): void {
+  expect(() => build(withRuntimeNestedWageFloorMap(value))).toThrow(
+    new RegExp(
+      `^StateSeed "${targetState.key}": policy\\.m4ProductionPlanning\\.minimumWageFloorByRegionKey\\["${targetRegion.key}"\\] must be a non-null plain object map$`,
+    ),
+  );
+}
+
+describe("M4 State policy fail-fast genesis validation (#633, #642, #646)", () => {
   it("keeps the unmodified baseline valid", () => {
     expect(() => build(baselineScenario)).not.toThrow();
   });
@@ -210,6 +227,14 @@ describe("M4 State policy fail-fast genesis validation (#633, #642)", () => {
     expectPolicyMapShapeFailure(withRuntimeTargetPolicy(policy), field);
   });
 
+  it.each([
+    ["null", null],
+    ["array", []],
+    ["primitive", 42],
+  ] as const)("rejects a malformed %s nested wage-floor map at genesis", (_label, value) => {
+    expectNestedWageFloorMapShapeFailure(value);
+  });
+
   it("reports the malformed policy field at genesis instead of reaching a later undefined-property path", () => {
     const policy = emptyRuntimePolicy();
     delete policy.minimumWageFloorByRegionKey;
@@ -221,12 +246,16 @@ describe("M4 State policy fail-fast genesis validation (#633, #642)", () => {
     );
   });
 
-  it("preserves explicit empty maps as no applicable M4 rule", () => {
+  it("preserves explicit empty required maps as no applicable M4 rule", () => {
     const scenario = withTargetPolicy({
       minimumWageFloorByRegionKey: {},
       mandatoryKnownCashByProductionUnitKey: {},
     });
 
     expect(() => build(scenario)).not.toThrow();
+  });
+
+  it("preserves an explicit empty nested wage-floor map for a real Region", () => {
+    expect(() => build(withRuntimeNestedWageFloorMap({}))).not.toThrow();
   });
 });
