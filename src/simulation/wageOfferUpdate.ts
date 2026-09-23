@@ -171,13 +171,13 @@ export function planWageOfferUpdatesPhase15(args: {
     );
     requireNonNegative(`LaborDemandPlan ${plan.planId} grossWageOffer`, plan.grossWageOffer);
     requireNonNegative(`LaborDemandPlan ${plan.planId} grossPayrollCap`, plan.grossPayrollCap);
-    if (unit.seed.status !== "ACTIVE" && requested > 0) {
+    if (unit.status !== "ACTIVE" && requested > 0) {
       throw new Error(
-        `LaborDemandPlan ${plan.planId} requests positive normal labor for non-ACTIVE ProductionUnit ${String(plan.unitId)} (${unit.seed.status})`,
+        `LaborDemandPlan ${plan.planId} requests positive normal labor for non-ACTIVE ProductionUnit ${String(plan.unitId)} (${unit.status})`,
       );
     }
     demandByUnit.set(plan.unitId, plan);
-    if (unit.seed.status === "ACTIVE") {
+    if (unit.status === "ACTIVE") {
       const key = groupKey(plan.regionId, plan.laborCategory);
       requestedByGroup.set(key, requireNonNegative(`Phase-15 requested labor ${key}`, (requestedByGroup.get(key) ?? 0) + requested));
     }
@@ -212,9 +212,9 @@ export function planWageOfferUpdatesPhase15(args: {
     if (demandUnit === undefined) {
       throw new Error(`LaborAllocation ${allocation.allocationId} references unknown ProductionUnit ${String(allocation.unitId)}`);
     }
-    if (demandUnit.seed.status !== "ACTIVE") {
+    if (demandUnit.status !== "ACTIVE") {
       throw new Error(
-        `LaborAllocation ${allocation.allocationId} targets non-ACTIVE ProductionUnit ${String(allocation.unitId)} (${demandUnit.seed.status})`,
+        `LaborAllocation ${allocation.allocationId} targets non-ACTIVE ProductionUnit ${String(allocation.unitId)} (${demandUnit.status})`,
       );
     }
     const workers = requireNonNegative(
@@ -249,7 +249,7 @@ export function planWageOfferUpdatesPhase15(args: {
     if (allocated > plan.requestedWorkerEquivalents + resolved.quantityEpsilon) {
       throw new Error(`Phase-15 allocated labor exceeds demand for ${String(plan.unitId)}`);
     }
-    if (unit.seed.status !== "ACTIVE") continue;
+    if (unit.status !== "ACTIVE") continue;
 
     const currentOffer = requireNonNegative(`ProductionUnit ${String(plan.unitId)} wageOffer`, unit.wageOffer);
     const floor = effectiveMinimumWageFloorByUnit.get(plan.unitId);
@@ -351,7 +351,7 @@ export function applyWageOfferStateTransition(world: WorldState, context: TickCo
     if (unit === undefined) {
       throw new Error(`WageOfferUpdate ${update.updateId} references unknown ProductionUnit ${String(update.unitId)}`);
     }
-    if (unit.seed.status !== "ACTIVE") {
+    if (unit.status !== "ACTIVE") {
       throw new Error(`WageOfferUpdate ${update.updateId} targets non-ACTIVE ProductionUnit ${String(update.unitId)}`);
     }
     if (unit.wageOffer !== update.priorOffer) {

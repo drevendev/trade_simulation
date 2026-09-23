@@ -675,14 +675,20 @@ export function planProductionUnitPhase2(args: {
   }
 
   const inputIntents: MarketIntent[] = [];
+  let allocatedInputSpend = 0;
   for (const [goodId, weight] of stableOrderBy(weightEntries, ([goodId]) => String(goodId))) {
     const desiredQuantity = purchaseEntries.find(([candidate]) => candidate === goodId)?.[1] ?? 0;
     if (desiredQuantity <= planning.quantityEpsilon) {
       continue;
     }
-    const maxSpend = totalWeight > planning.moneyEpsilon
+    const proportionalSpend = totalWeight > planning.moneyEpsilon
       ? procurementCashEnvelope * weight / totalWeight
       : 0;
+    // Stable residual clamping keeps floating-point proportional allocation inside the
+    // authoritative envelope (e.g. x * w / w may round a few ulps above x).
+    const remainingProcurementBudget = Math.max(0, procurementCashEnvelope - allocatedInputSpend);
+    const maxSpend = Math.min(proportionalSpend, remainingProcurementBudget);
+    allocatedInputSpend += maxSpend;
     const intent: MarketIntent = {
       id: createMarketIntentId(`mi:${tick}:${String(unit.productionUnitId)}:INPUT:${String(goodId)}`),
       actor: { type: "PRODUCTION_UNIT", productionUnitId: unit.productionUnitId },
