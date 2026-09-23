@@ -231,6 +231,14 @@ describe("REQ-PRODUCTION-008 canonical M4 closed-economy orchestration", () => {
       installedCapital: 1,
       condition: 1,
       status: "ACTIVE" as const,
+      signals: {
+        ...buyer!.signals,
+        utilizationEma: 0,
+        sellThroughEma: 0,
+        marginSignalEma: 0,
+        outputSalesEma: 0,
+        inputUseEma: {},
+      },
     };
 
     // A CLOSING unit exposes residual INPUT stock in Phase 2. Relocating this test-only
@@ -314,6 +322,66 @@ describe("REQ-PRODUCTION-008 canonical M4 closed-economy orchestration", () => {
     expect(result.context.transactions.some((transaction) => transaction.phase === 7)).toBe(false);
     expect(result.world.lastWageSettlementTransitionTick).toBe(1);
     expect(result.world.lastProductionExecutionTransitionTick).toBe(1);
+
+    const closedSignals = result.world.productionUnits.get(fundedBuyer.productionUnitId)!.signals;
+    expect(closedSignals.utilizationEma).toBeGreaterThan(0);
+    expect(closedSignals.sellThroughEma).toBeGreaterThan(0);
+    expect(closedSignals.outputSalesEma).toBeGreaterThan(0);
+    expect(closedSignals.inputUseEma[iron]).toBeGreaterThan(0);
+
+    const nextTick = executeM4ClosedEconomyTick(result.world, 2, options(result.world));
+    const nextPlan = nextTick.context.productionPlans!.find(
+      (plan) => plan.unitId === fundedBuyer.productionUnitId,
+    )!;
+    const staleUnits = new Map(result.world.productionUnits);
+    staleUnits.set(fundedBuyer.productionUnitId, {
+      ...result.world.productionUnits.get(fundedBuyer.productionUnitId)!,
+      signals: fundedBuyer.signals,
+    });
+    const staleWorld: WorldState = { ...result.world, productionUnits: staleUnits };
+    const staleTick = executeM4ClosedEconomyTick(staleWorld, 2, options(staleWorld));
+    const stalePlan = staleTick.context.productionPlans!.find(
+      (plan) => plan.unitId === fundedBuyer.productionUnitId,
+    )!;
+    expect(nextPlan.targetUtilization).not.toBe(stalePlan.targetUtilization);
+  });
+
+  it("uses neutral sell-through and ordinary EMA decay for an ACTIVE unit with no production flow", () => {
+    const openingBase = oneRegionWorld("region:b2-urban");
+    const zeroFlow = [...openingBase.productionUnits.values()].find(
+      (unit) => unit.seed.recipeId === "recipe:tools-craft" && unit.status === "ACTIVE",
+    );
+    expect(zeroFlow).toBeDefined();
+    const silentUnit = {
+      ...zeroFlow!,
+      installedCapital: 0,
+      outputInventory: new Map<GoodId, number>(),
+      signals: {
+        ...zeroFlow!.signals,
+        utilizationEma: 0.8,
+        sellThroughEma: 0.6,
+        marginSignalEma: 0.4,
+        outputSalesEma: 8,
+        inputUseEma: {},
+      },
+    };
+    const opening: WorldState = {
+      ...openingBase,
+      productionUnits: new Map([[silentUnit.productionUnitId, silentUnit]]),
+    };
+
+    const result = executeM4ClosedEconomyTick(opening, 1, options(opening));
+    const signals = result.world.productionUnits.get(silentUnit.productionUnitId)!.signals;
+    expect((result.context.productionExecutions ?? []).find(
+      (execution) => execution.unitId === silentUnit.productionUnitId,
+    )!.realizedBatches).toBe(0);
+    expect((result.context.productionOutputIntents ?? []).find(
+      (intent) => intent.actor.type === "PRODUCTION_UNIT" && intent.actor.productionUnitId === silentUnit.productionUnitId,
+    )!.desiredQuantity).toBe(0);
+    expect(signals.utilizationEma).toBeCloseTo(0.6);
+    expect(signals.sellThroughEma).toBeCloseTo(0.6);
+    expect(signals.marginSignalEma).toBeCloseTo(0.3);
+    expect(signals.outputSalesEma).toBeCloseTo(6);
   });
 
   it("is stable under irrelevant live-map insertion-order changes", () => {

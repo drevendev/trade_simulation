@@ -6,6 +6,7 @@
  * the M3 local-market primitive. Phase 7 is intentionally inert: trade/shipments/FX are M5.
  */
 
+import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { GoodId, MarketId, ProductionUnitId, RegionId, StateId } from "../domain/id";
 import { stableOrderBy } from "../domain/ordering";
 import { addLedgerRecord } from "./ledger";
@@ -363,6 +364,128 @@ function effectiveMinimumWageFloorByUnit(world: WorldState): ReadonlyMap<Product
   return result;
 }
 
+const clampSignal = (value: number, minimum: number, maximum: number): number =>
+  Math.min(maximum, Math.max(minimum, value));
+
+const emaSignal = (previous: number, sample: number, alpha: number): number =>
+  previous + alpha * (sample - previous);
+
+/** Persist the Handoff/05 Phase-15 realized production-signal close for tick N -> N+1. */
+function applyProductionSignalCloseTransition(world: WorldState, context: TickContext): WorldState {
+  const defaults = createDefaultSimulationConfig();
+  const alpha = world.simulationConfig.production.productionSignalAlpha ?? defaults.production.productionSignalAlpha!;
+  const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon ?? defaults.numeric.quantityEpsilon!;
+  const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon ?? defaults.numeric.moneyEpsilon!;
+  if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) {
+    throw new Error(`ProductionConfig.productionSignalAlpha must be finite in [0,1], got ${String(alpha)}`);
+  }
+  if (!Number.isFinite(quantityEpsilon) || quantityEpsilon <= 0) {
+    throw new Error(`SimulationConfig.numeric.quantityEpsilon must be finite and > 0, got ${String(quantityEpsilon)}`);
+  }
+  if (!Number.isFinite(moneyEpsilon) || moneyEpsilon <= 0) {
+    throw new Error(`SimulationConfig.numeric.moneyEpsilon must be finite and > 0, got ${String(moneyEpsilon)}`);
+  }
+
+  const outputOfferByUnit = new Map<ProductionUnitId, number>();
+  for (const intent of context.productionOutputIntents ?? []) {
+    if (intent.actor.type !== "PRODUCTION_UNIT" || intent.inventoryBucket !== "OUTPUT") continue;
+    outputOfferByUnit.set(
+      intent.actor.productionUnitId,
+      (outputOfferByUnit.get(intent.actor.productionUnitId) ?? 0) + intent.desiredQuantity,
+    );
+  }
+
+  const outputSoldByUnit = new Map<ProductionUnitId, number>();
+  const cashRevenueByUnit = new Map<ProductionUnitId, number>();
+  for (const allocation of context.marketAllocations) {
+    if (allocation.seller.type !== "PRODUCTION_UNIT" || allocation.sellerInventoryBucket !== "OUTPUT") continue;
+    const unitId = allocation.seller.productionUnitId;
+    outputSoldByUnit.set(unitId, (outputSoldByUnit.get(unitId) ?? 0) + allocation.quantity);
+    cashRevenueByUnit.set(
+      unitId,
+      (cashRevenueByUnit.get(unitId) ?? 0) + allocation.quantity * allocation.sellerNetUnitPrice,
+    );
+  }
+
+  const inputCashCostByUnit = new Map<ProductionUnitId, number>();
+  for (const allocation of [...(context.phase4MarketAllocations ?? []), ...context.marketAllocations]) {
+    if (allocation.buyer.type !== "PRODUCTION_UNIT" || allocation.buyerInventoryBucket !== "INPUT") continue;
+    const unitId = allocation.buyer.productionUnitId;
+    inputCashCostByUnit.set(
+      unitId,
+      (inputCashCostByUnit.get(unitId) ?? 0) + allocation.quantity * allocation.buyerGrossUnitPrice,
+    );
+  }
+
+  const grossWageByUnit = new Map<ProductionUnitId, number>();
+  for (const settlement of context.wageSettlements ?? []) {
+    grossWageByUnit.set(
+      settlement.unitId,
+      (grossWageByUnit.get(settlement.unitId) ?? 0) + settlement.grossWage,
+    );
+  }
+
+  const productionUnits = new Map(world.productionUnits);
+  for (const execution of stableOrderBy(context.productionExecutions ?? [], (candidate) => String(candidate.unitId))) {
+    const unit = productionUnits.get(execution.unitId);
+    if (unit === undefined) {
+      throw new Error(`Phase-15 production-signal close references missing ProductionUnit ${String(execution.unitId)}`);
+    }
+    if (unit.status !== "ACTIVE") continue;
+
+    const utilization = clampSignal(
+      execution.realizedBatches / Math.max(execution.capitalBoundBatches, quantityEpsilon),
+      0,
+      1,
+    );
+    const offeredOutput = outputOfferByUnit.get(execution.unitId) ?? 0;
+    const soldOutput = outputSoldByUnit.get(execution.unitId) ?? 0;
+    const sellThrough = offeredOutput > quantityEpsilon
+      ? clampSignal(soldOutput / offeredOutput, 0, 1)
+      : unit.signals.sellThroughEma;
+    const cashRevenue = cashRevenueByUnit.get(execution.unitId) ?? 0;
+    const inputCashCost = inputCashCostByUnit.get(execution.unitId) ?? 0;
+    const grossWageCashCost = grossWageByUnit.get(execution.unitId) ?? 0;
+    const marginSignal = cashRevenue <= moneyEpsilon && inputCashCost <= moneyEpsilon && grossWageCashCost <= moneyEpsilon
+      ? 0
+      : clampSignal(
+        (cashRevenue - inputCashCost - grossWageCashCost) / Math.max(cashRevenue, moneyEpsilon),
+        -1,
+        1,
+      );
+
+    const inputUseKeys = stableOrderBy(
+      [...new Set([
+        ...Object.keys(unit.signals.inputUseEma),
+        ...Object.keys(execution.inputConsumedByGood),
+      ])] as GoodId[],
+      String,
+    );
+    const inputUseEma: Record<string, number> = {};
+    for (const goodId of inputUseKeys) {
+      inputUseEma[goodId] = emaSignal(
+        unit.signals.inputUseEma[goodId] ?? 0,
+        execution.inputConsumedByGood[goodId] ?? 0,
+        alpha,
+      );
+    }
+
+    productionUnits.set(execution.unitId, {
+      ...unit,
+      signals: {
+        ...unit.signals,
+        utilizationEma: emaSignal(unit.signals.utilizationEma, utilization, alpha),
+        sellThroughEma: emaSignal(unit.signals.sellThroughEma, sellThrough, alpha),
+        outputSalesEma: emaSignal(unit.signals.outputSalesEma, soldOutput, alpha),
+        inputUseEma: inputUseEma as Readonly<Record<GoodId, number>>,
+        marginSignalEma: emaSignal(unit.signals.marginSignalEma, marginSignal, alpha),
+      },
+    });
+  }
+
+  return { ...world, productionUnits };
+}
+
 function phase1JurisdictionHandler(): PhaseHandler {
   return (world, context) => {
     if (context.phase !== 1) return context;
@@ -469,7 +592,7 @@ export function executeM4ClosedEconomyTick(
       );
     }
     if (phase === 15) {
-      return applyWageOfferStateTransition(world, context);
+      return applyWageOfferStateTransition(applyProductionSignalCloseTransition(world, context), context);
     }
     return world;
   });
