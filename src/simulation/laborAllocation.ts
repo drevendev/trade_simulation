@@ -443,10 +443,21 @@ export function requireCompletePhase3LaborAllocationAuthority(
   }
 
   const authority = phase3LaborAllocationAuthorities.get(context.laborAllocations);
+  const sameAuthorityLineage = authority !== undefined && (
+    authority.world === world ||
+    (
+      authority.world.seed === world.seed &&
+      authority.world.scenarioId === world.scenarioId &&
+      authority.world.configVersion === world.configVersion &&
+      authority.world.definitionRegistry === world.definitionRegistry &&
+      authority.world.simulationConfig === world.simulationConfig &&
+      authority.world.regions === world.regions
+    )
+  );
   if (
     authority === undefined ||
     authority.tick !== currentTick ||
-    authority.world !== world ||
+    !sameAuthorityLineage ||
     authority.laborAllocations !== context.laborAllocations
   ) {
     throw new Error(
