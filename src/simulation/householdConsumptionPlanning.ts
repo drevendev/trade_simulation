@@ -393,6 +393,7 @@ function buildCohortPlan(args: {
   const actor = { type: "COHORT" as const, cohortId: cohort.cohortId };
 
   let budgetLedger = args.startingBudgetLedger;
+  let committedAcrossCategories = 0;
   const intents: MarketIntent[] = [];
   const categoryBudgets: Record<string, number> = {};
   const intendedUsefulConsumption: Record<string, number> = {};
@@ -415,11 +416,14 @@ function buildCohortPlan(args: {
         ? Math.max(0, budget - committedWithinCategory)
         : budget * candidate.share;
       committedWithinCategory += nominalDemand;
-      if (nominalDemand <= 0) return;
+      const remainingPlanningBudget = Math.max(0, planningCashEnvelope - committedAcrossCategories);
+      const maxSpend = Math.min(nominalDemand, remainingPlanningBudget);
+      committedAcrossCategories += maxSpend;
+      if (maxSpend <= 0) return;
 
       const desiredQuantity = requireNonNegative(
         `Household desired quantity ${categoryId}/${String(candidate.goodId)}`,
-        nominalDemand / candidate.expectedGrossBuyerPrice,
+        maxSpend / candidate.expectedGrossBuyerPrice,
       );
       const intent: MarketIntent = {
         id: createMarketIntentId(
@@ -431,7 +435,7 @@ function buildCohortPlan(args: {
         side: "BUY",
         purpose: "CONSUMPTION",
         desiredQuantity,
-        maxSpend: nominalDemand,
+        maxSpend,
         sourcePlanId: planId,
       };
       validateMarketIntent(intent);
@@ -440,7 +444,7 @@ function buildCohortPlan(args: {
         actor,
         region.settlementCurrencyId,
         HOUSEHOLD_BUDGET_ENVELOPE,
-        nominalDemand,
+        maxSpend,
         planningCashEnvelope,
       );
       if (typeof nextLedger === "string") {
