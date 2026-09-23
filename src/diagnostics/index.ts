@@ -17,3 +17,11 @@ export {
   type M3PreviewTick,
   type M3GoldenRunFixture,
 } from "./m3Preview";
+export {
+  createM4PreviewWorld,
+  generateM4Preview,
+  M4_PREVIEW_SAMPLE_EVERY,
+  M4_PREVIEW_TICKS,
+  type M4Preview,
+  type M4PreviewSample,
+} from "./m4Preview";

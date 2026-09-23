@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trade simulation — M3 local markets and settlement</title>
+<title>Trade simulation — M4 one-region closed economy</title>
 
 <style>
   :root {
@@ -162,10 +162,35 @@
   details#earlier-milestones > summary { cursor: pointer; font-weight: 600; font-size: 1.05rem; }
   details#earlier-milestones > summary::marker { color: var(--muted); }
 </style>
+<link rel="stylesheet" href="m4.css">
 </head>
 
 <body>
 <main>
+  <section id="m4-preview" aria-labelledby="m4-heading">
+    <div class="m4-kicker">Milestone Preview <span class="m4-tag">M4</span></div>
+    <h1 id="m4-heading">A one-region economy, from work to needs</h1>
+    <p class="m4-lead">
+      This is the first autonomous closed-economy milestone. A deterministic one-region fixture
+      turns plans into jobs, wages and physical output, lets households buy from the local market,
+      realizes essential needs, forms real capital and carries the resulting signals into the next tick.
+      The charts below are generated from that canonical run, not from a separate dashboard model.
+    </p>
+    <p class="m4-mechanism">
+      <strong>How to read the loop:</strong> Phase&nbsp;2 plans production and household demand;
+      Phase&nbsp;3 allocates work; Phase&nbsp;5 pays wages and produces goods; Phase&nbsp;8 settles purchases;
+      Phase&nbsp;9 turns consumption into need coverage; Phase&nbsp;12 converts investment goods into capital;
+      Phase&nbsp;15 carries realized signals into the next tick. This page is a <strong>one-way observation</strong>:
+      it does not control the simulation, mutate its state, or consume economic randomness. In this fixed
+      60-tick fixture the funded opening cycle is real but not self-sustaining: <strong>activity falls to zero</strong>
+      after the early ticks while food stocks and installed capital remain visible. That is measured M4 behavior,
+      not a hidden steady-state assumption.
+    </p>
+    <div id="m4-preview-body" class="loading">Loading the M4 economy…</div>
+  </section>
+  <script src="m4.js"></script>
+  <div class="m4-history-note">Previous milestone: M3 local-market clearing remains directly below; M0–M2 and the legacy viewer stay in the collapsed history disclosure.</div>
+
   <h1>One local market, settled tick by tick</h1>
   <p>
     This is the canonical TypeScript simulation at milestone <strong>M3</strong>: local markets,
