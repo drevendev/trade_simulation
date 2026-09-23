@@ -1,0 +1,19 @@
+### FILE: docs/spec/implementation_status.csv
+<<<<<<< FIND
+Phase-14 lifecycle, integrated M4 orchestration and M5+ remain separate requirements."
+=======
+Phase-14 lifecycle, integrated M4 orchestration and M5+ remain separate requirements."
+REQ-PRODUCTION-008,IMPLEMENTED,650,651,,"PR #651 composes the canonical one-Region M4 closed-economy tick through the existing 0..15 orchestrator using immutable WorldState threading: Phase 2 production/labor/household plans, Phase 3 labor allocation, Phase 4 PRE_PRODUCTION procurement and settlement, Phase 5 wage settlement plus production/output offers, canonical M3 Phase 6/8 price formation and MAIN clearing, Phase 9 household consumption, Phase 12 capital formation, Phase 14 lifecycle review and Phase 15 wage-signal persistence. Phase 7 remains inert, so M5 trade/shipments/FX cannot feed same-tick Phase 5. Residual Phase-4 production demand is reduced before MAIN, and all persisted transitions are explicit. src/simulation/m4ClosedEconomyOrchestrator.test.ts proves exact 0..15 order, input-world immutability, insertion-order determinism, positive Phase-4 procurement into an initially empty INPUT bucket that is consumed by Phase-5 production, Phase-5 output becoming a positive Phase-8 MAIN sale, positive wage recipients participating in the same Phase-8 market, and no Phase-7 transaction. The integration also repairs lifecycle authority leaks found while composing the tick: labor allocation, wage settlement and wage-offer update now consult the live ProductionUnit status rather than immutable seed status, with focused seed/live divergence regressions. No M5+ behavior or mirror edit is introduced."
+>>>>>>> REPLACE
+
+### FILE: docs/spec/IMPLEMENTATION_STATUS.md
+<<<<<<< FIND
+| REQ-PRODUCTION-008 | `READY` | `NOT_STARTED` | — | — | — |
+=======
+| REQ-PRODUCTION-008 | `READY` | `IMPLEMENTED` | #650 | #651 | PR #651 composes the canonical one-Region M4 closed-economy tick through the existing 0..15 orchestrator using immutable WorldState threading: Phase 2 production/labor/household plans, Phase 3 labor allocation, Phase 4 PRE_PRODUCTION procurement and settlement, Phase 5 wage settlement plus production/output offers, canonical M3 Phase 6/8 price formation and MAIN clearing, Phase 9 household consumption, Phase 12 capital formation, Phase 14 lifecycle review and Phase 15 wage-signal persistence. Phase 7 remains inert, so M5 trade/shipments/FX cannot feed same-tick Phase 5. Residual Phase-4 production demand is reduced before MAIN, and all persisted transitions are explicit. src/simulation/m4ClosedEconomyOrchestrator.test.ts proves exact 0..15 order, input-world immutability, insertion-order determinism, positive Phase-4 procurement into an initially empty INPUT bucket that is consumed by Phase-5 production, Phase-5 output becoming a positive Phase-8 MAIN sale, positive wage recipients participating in the same Phase-8 market, and no Phase-7 transaction. The integration also repairs lifecycle authority leaks found while composing the tick: labor allocation, wage settlement and wage-offer update now consult the live ProductionUnit status rather than immutable seed status, with focused seed/live divergence regressions. No M5+ behavior or mirror edit is introduced. |
+>>>>>>> REPLACE
+<<<<<<< FIND
+**Summary: 42 of 49 requirement identifiers implemented.**
+=======
+**Summary: 43 of 49 requirement identifiers implemented.**
+>>>>>>> REPLACE
