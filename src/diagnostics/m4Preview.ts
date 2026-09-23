@@ -73,7 +73,7 @@ export interface M4PreviewSample {
   readonly grossWagesPaid: number;
   /** Arithmetic mean of canonical Phase-9 essential-need coverage across Cohorts. */
   readonly essentialCoverage: number;
-  /** Canonical food stock across household/public/ProductionUnit inventory buckets. */
+  /** Canonical food stock across selected Cohorts/ProductionUnits plus the selected Region controller State. */
   readonly foodInventory: number;
   /** Persistent installed capital across the one-region ProductionUnits. */
   readonly installedCapital: number;
@@ -195,7 +195,17 @@ export function createM4PreviewWorld(): WorldState {
 function totalFoodInventory(world: WorldState): number {
   let total = 0;
   for (const cohort of world.cohorts.values()) total += cohort.householdInventory.get(FOOD) ?? 0;
-  for (const state of world.states.values()) total += state.publicInventory.get(FOOD) ?? 0;
+
+  const region = [...world.regions.values()][0];
+  if (region === undefined) throw new Error("M4 preview food projection requires one Region");
+  if (region.controllerStateId !== null) {
+    const controllerState = world.states.get(region.controllerStateId);
+    if (controllerState === undefined) {
+      throw new Error(`M4 preview controller State ${region.controllerStateId} is missing`);
+    }
+    total += controllerState.publicInventory.get(FOOD) ?? 0;
+  }
+
   for (const unit of world.productionUnits.values()) {
     total += unit.inputInventory.get(FOOD) ?? 0;
     total += unit.outputInventory.get(FOOD) ?? 0;
