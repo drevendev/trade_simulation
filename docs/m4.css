@@ -1,0 +1,36 @@
+/* REQ-VISUALIZATION-009 — compact M4 one-region observatory. */
+#m4-preview { margin-bottom: 3rem; }
+#m4-preview h1 { margin-bottom: .35rem; }
+.m4-tag { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:.05rem .55rem; font-size:.78rem; color:var(--muted); vertical-align:.16rem; }
+.m4-kicker { margin:.1rem 0 .35rem; font-size:.82rem; font-weight:650; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); }
+.m4-lead { max-width:72ch; }
+.m4-mechanism { padding:.8rem 1rem; border-left:3px solid var(--capital); background:var(--panel); border-radius:0 8px 8px 0; }
+.m4-metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,155px),1fr)); gap:.6rem; margin:1rem 0; }
+.m4-metric { border:1px solid var(--line); border-radius:10px; padding:.65rem .75rem; background:var(--panel); min-width:0; }
+.m4-metric dt { color:var(--muted); font-size:.76rem; }
+.m4-metric dd { margin:.12rem 0 0; font-size:1.15rem; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.m4-metric small { display:block; font-size:.72rem; color:var(--muted); }
+.m4-groups { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr)); gap:.9rem; align-items:start; }
+.m4-visual-group { border:1px solid var(--line); border-radius:10px; padding:.9rem; background:var(--panel); min-width:0; }
+.m4-visual-group h3 { margin:0 0 .2rem; }
+.m4-note { color:var(--muted); font-size:.79rem; margin:0 0 .6rem; }
+.m4-small-multiple + .m4-small-multiple { margin-top:.9rem; padding-top:.7rem; border-top:1px solid var(--line); }
+.m4-chart-title { font-size:.8rem; font-weight:650; margin-bottom:.1rem; }
+.m4-chart-unit { color:var(--muted); font-size:.72rem; margin-bottom:.25rem; }
+.m4-chart { width:100%; height:auto; display:block; overflow:visible; }
+.m4-chart .grid { stroke:var(--line); stroke-width:1; stroke-dasharray:2 4; }
+.m4-chart .axis { stroke:var(--line); stroke-width:1; }
+.m4-chart .trace { fill:none; stroke:var(--capital); stroke-width:2; stroke-linejoin:round; stroke-linecap:round; }
+.m4-chart .dot { fill:var(--capital); }
+.m4-chart .label { fill:var(--muted); font-size:9px; }
+.m4-table-scroll { overflow-x:auto; margin-top:1rem; border:1px solid var(--line); border-radius:10px; background:var(--panel); }
+.m4-table-scroll table { min-width:760px; }
+.m4-table-scroll caption { padding:.7rem .75rem .4rem; }
+.m4-state { border:1px solid var(--line); border-radius:10px; background:var(--panel); padding:1rem; }
+.m4-state h3 { margin:0 0 .25rem; }
+.m4-history-note { margin:2.4rem 0 .7rem; padding-top:1rem; border-top:1px solid var(--line); font-size:.82rem; color:var(--muted); }
+@media (max-width:560px) {
+  body { padding-left:.8rem; padding-right:.8rem; }
+  .m4-groups { grid-template-columns:minmax(0,1fr); }
+  .m4-visual-group { padding:.75rem; }
+}

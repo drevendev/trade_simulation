@@ -1,1 +1,144 @@
-{}
+{
+  "milestone": "M4",
+  "requirement": "REQ-VISUALIZATION-009",
+  "scenario": {
+    "scenarioId": "baseline-multistate-v1",
+    "seed": 42,
+    "configVersion": "1.0.0",
+    "ticksExecuted": 60,
+    "sampleEveryTicks": 5
+  },
+  "region": {
+    "name": "State A Capital",
+    "currencyCode": "ALP",
+    "foodGoodName": "Food",
+    "goodsUnitLabel": "units",
+    "workerUnitLabel": "worker-equivalents",
+    "capitalUnitLabel": "capital units"
+  },
+  "samples": [
+    {
+      "tick": 0,
+      "outputProduced": 148.5,
+      "employedWorkers": 33,
+      "grossWagesPaid": 396,
+      "essentialCoverage": 0.28402366863905315,
+      "foodInventory": 1473.4467455621302,
+      "installedCapital": 216.57
+    },
+    {
+      "tick": 5,
+      "outputProduced": 0.010005889774378218,
+      "employedWorkers": 10.365531328737482,
+      "grossWagesPaid": 119.818386316869,
+      "essentialCoverage": 0.012730086023396012,
+      "foodInventory": 1377.5701430433483,
+      "installedCapital": 196.02270898122902
+    },
+    {
+      "tick": 10,
+      "outputProduced": 1.2770333057687822e-7,
+      "employedWorkers": 7.319589921802486,
+      "grossWagesPaid": 66.29368385786205,
+      "essentialCoverage": 0.004036095722094294,
+      "foodInventory": 1358.906381023928,
+      "installedCapital": 177.88566371123574
+    },
+    {
+      "tick": 15,
+      "outputProduced": 0,
+      "employedWorkers": 0,
+      "grossWagesPaid": 0,
+      "essentialCoverage": 0,
+      "foodInventory": 1355.6657078400422,
+      "installedCapital": 161.84251035479446
+    },
+    {
+      "tick": 20,
+      "outputProduced": 0,
+      "employedWorkers": 0,
+      "grossWagesPaid": 0,
+      "essentialCoverage": 0,
+      "foodInventory": 1355.6657078400422,
+      "installedCapital": 147.62040240726134
+    },
+    {
+      "tick": 25,
+      "outputProduced": 0,
+      "employedWorkers": 0,
+      "grossWagesPaid": 0,
+      "essentialCoverage": 0,
+      "foodInventory": 1355.6657078400422,
+      "installedCapital": 134.98391255330534
+    },
+    {
+      "tick": 30,
+      "outputProduced": 0,
+      "employedWorkers": 0,
+      "grossWagesPaid": 0,
+      "essentialCoverage": 0,
+      "foodInventory": 1355.6657078400422,
+      "installedCapital": 123.72980173202558
+    },
+    {
+      "tick": 35,
+      "outputProduced": 0,
+      "employedWorkers": 0,
+      "grossWagesPaid": 0,
+      "essentialCoverage": 0,
+      "foodInventory": 1355.6657078400422,
+      "installedCapital": 113.6825244535887
+    },
+    {
+      "tick": 40,
+      "outputProduced": 0,
+      "employedWorkers": 0,
+      "grossWagesPaid": 0,
+      "essentialCoverage": 0,
+      "foodInventory": 1350,
+      "installedCapital": 104.69036649250287
+    },
+    {
+      "tick": 45,
+      "outputProduced": 0,
+      "employedWorkers": 0,
+      "grossWagesPaid": 0,
+      "essentialCoverage": 0,
+      "foodInventory": 1350,
+      "installedCapital": 96.6221257501422
+    },
+    {
+      "tick": 50,
+      "outputProduced": 0,
+      "employedWorkers": 0,
+      "grossWagesPaid": 0,
+      "essentialCoverage": 0,
+      "foodInventory": 1350,
+      "installedCapital": 89.36425967493317
+    },
+    {
+      "tick": 55,
+      "outputProduced": 0,
+      "employedWorkers": 0,
+      "grossWagesPaid": 0,
+      "essentialCoverage": 0,
+      "foodInventory": 1350,
+      "installedCapital": 82.81843344535605
+    },
+    {
+      "tick": 59,
+      "outputProduced": 0,
+      "employedWorkers": 0,
+      "grossWagesPaid": 0,
+      "essentialCoverage": 0,
+      "foodInventory": 1350,
+      "installedCapital": 78.03677092437883
+    }
+  ],
+  "totals": {
+    "outputProduced": 273.58131440280425,
+    "grossWagesPaid": 4446.531980777911,
+    "capitalBuilt": 1,
+    "householdPurchaseQuantity": 399.99999999999983
+  }
+}
