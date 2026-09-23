@@ -1,0 +1,23 @@
+### FILE: src/simulation/m4ClosedEconomyOrchestrator.ts
+<<<<<<< FIND
+import type { ProductionUnitState, RegionState, WorldState } from "./worldState";
+=======
+import type { RegionState, WorldState } from "./worldState";
+>>>>>>> REPLACE
+<<<<<<< FIND
+  const phase8 = createPhase8Handler({
+    getFixtureIntents: (world, context) => mainMarketIntents(world, context),
+    getFixtureMarketIds: marketIdMap,
+    collectTelemetry: options.collectMarketTelemetry,
+    taxPolicy: options.taxPolicy,
+  });
+=======
+  const phase8 = createPhase8Handler({
+    getFixtureIntents: (world, context) => mainMarketIntents(world, context),
+    getFixtureMarketIds: marketIdMap,
+    ...(options.collectMarketTelemetry === undefined
+      ? {}
+      : { collectTelemetry: options.collectMarketTelemetry }),
+    taxPolicy: options.taxPolicy,
+  });
+>>>>>>> REPLACE
