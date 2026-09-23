@@ -120,6 +120,28 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     } finally { await page.close(); }
   }, 60_000);
 
+  it("keeps every sampled artifact value available verbatim alongside the readable rounded display", async () => {
+    const page = await pageAt();
+    try {
+      const preview = artifact();
+      const fields = ["outputProduced", "employedWorkers", "grossWagesPaid", "essentialCoverage", "foodInventory", "installedCapital"] as const;
+      for (const field of fields) {
+        const exactValues = page.locator(`.m4-exact[data-field="${field}"]`);
+        expect(await exactValues.count()).toBe(preview.samples.length);
+        for (const [index, sample] of preview.samples.entries()) {
+          const prefix = field === "essentialCoverage" ? "exact ratio " : "exact ";
+          expect(await exactValues.nth(index).innerText()).toBe(`${prefix}${String(sample[field])}`);
+        }
+      }
+
+      const tickFive = preview.samples.find(sample => sample.tick === 5);
+      expect(tickFive).toBeDefined();
+      const highPrecisionOutput = String(tickFive!.outputProduced);
+      expect(highPrecisionOutput.split(".")[1]?.length ?? 0).toBeGreaterThan(4);
+      expect(await page.locator("#m4-table").innerText()).toContain(highPrecisionOutput);
+    } finally { await page.close(); }
+  }, 60_000);
+
   it.each([1280, 360])("is readable without whole-page horizontal overflow at %ipx", async width => {
     const page = await pageAt("", width);
     try {

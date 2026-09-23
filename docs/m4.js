@@ -13,6 +13,7 @@
     maximumFractionDigits: digits,
   });
   const percent = value => `${(Number(value) * 100).toFixed(1)}%`;
+  const exact = value => String(value);
 
   function state(title, detail) {
     body.innerHTML = `<div class="m4-state"><h3>${escapeHtml(title)}</h3><p>${escapeHtml(detail)}</p></div>`;
@@ -125,10 +126,10 @@
     body.innerHTML = `
       <dl class="m4-metrics" aria-label="M4 whole-run summary">
         <div class="m4-metric"><dt>Run length</dt><dd>${escapeHtml(preview.scenario.ticksExecuted)}<small>ticks</small></dd></div>
-        <div class="m4-metric"><dt>Output produced</dt><dd>${escapeHtml(number(preview.totals.outputProduced))}<small>${escapeHtml(goods)}, cumulative</small></dd></div>
-        <div class="m4-metric"><dt>Gross wages paid</dt><dd>${escapeHtml(number(preview.totals.grossWagesPaid))}<small>${escapeHtml(money)}, cumulative</small></dd></div>
-        <div class="m4-metric"><dt>Household purchases</dt><dd>${escapeHtml(number(preview.totals.householdPurchaseQuantity))}<small>${escapeHtml(goods)}, cumulative</small></dd></div>
-        <div class="m4-metric"><dt>Capital built</dt><dd>${escapeHtml(number(preview.totals.capitalBuilt))}<small>${escapeHtml(capital)}, cumulative</small></dd></div>
+        <div class="m4-metric"><dt>Output produced</dt><dd>${escapeHtml(number(preview.totals.outputProduced))}<small>${escapeHtml(goods)}, cumulative<br><span class="m4-exact" data-field="total-outputProduced">exact ${escapeHtml(exact(preview.totals.outputProduced))}</span></small></dd></div>
+        <div class="m4-metric"><dt>Gross wages paid</dt><dd>${escapeHtml(number(preview.totals.grossWagesPaid))}<small>${escapeHtml(money)}, cumulative<br><span class="m4-exact" data-field="total-grossWagesPaid">exact ${escapeHtml(exact(preview.totals.grossWagesPaid))}</span></small></dd></div>
+        <div class="m4-metric"><dt>Household purchases</dt><dd>${escapeHtml(number(preview.totals.householdPurchaseQuantity))}<small>${escapeHtml(goods)}, cumulative<br><span class="m4-exact" data-field="total-householdPurchaseQuantity">exact ${escapeHtml(exact(preview.totals.householdPurchaseQuantity))}</span></small></dd></div>
+        <div class="m4-metric"><dt>Capital built</dt><dd>${escapeHtml(number(preview.totals.capitalBuilt))}<small>${escapeHtml(capital)}, cumulative<br><span class="m4-exact" data-field="total-capitalBuilt">exact ${escapeHtml(exact(preview.totals.capitalBuilt))}</span></small></dd></div>
       </dl>
       <div class="m4-groups" id="m4-groups" style="min-width:0;max-width:100%"></div>
       <div class="m4-table-scroll" id="m4-table" style="max-width:100%;overflow-x:auto"></div>`;
@@ -158,16 +159,16 @@
 
     const rows = preview.samples.map(sample => `<tr>
       <th scope="row">${escapeHtml(sample.tick)}</th>
-      <td>${escapeHtml(number(sample.outputProduced, 4))}</td>
-      <td>${escapeHtml(number(sample.employedWorkers, 3))}</td>
-      <td>${escapeHtml(number(sample.grossWagesPaid, 2))}</td>
-      <td>${escapeHtml(percent(sample.essentialCoverage))}</td>
-      <td>${escapeHtml(number(sample.foodInventory, 2))}</td>
-      <td>${escapeHtml(number(sample.installedCapital, 2))}</td>
+      <td>${escapeHtml(number(sample.outputProduced, 4))}<br><small class="m4-exact" data-field="outputProduced">exact ${escapeHtml(exact(sample.outputProduced))}</small></td>
+      <td>${escapeHtml(number(sample.employedWorkers, 3))}<br><small class="m4-exact" data-field="employedWorkers">exact ${escapeHtml(exact(sample.employedWorkers))}</small></td>
+      <td>${escapeHtml(number(sample.grossWagesPaid, 2))}<br><small class="m4-exact" data-field="grossWagesPaid">exact ${escapeHtml(exact(sample.grossWagesPaid))}</small></td>
+      <td>${escapeHtml(percent(sample.essentialCoverage))}<br><small class="m4-exact" data-field="essentialCoverage">exact ratio ${escapeHtml(exact(sample.essentialCoverage))}</small></td>
+      <td>${escapeHtml(number(sample.foodInventory, 2))}<br><small class="m4-exact" data-field="foodInventory">exact ${escapeHtml(exact(sample.foodInventory))}</small></td>
+      <td>${escapeHtml(number(sample.installedCapital, 2))}<br><small class="m4-exact" data-field="installedCapital">exact ${escapeHtml(exact(sample.installedCapital))}</small></td>
     </tr>`).join("");
     document.getElementById("m4-table").innerHTML = `
       <table>
-        <caption>Exact sampled values for ${escapeHtml(preview.region.name)}. Flow values are per sampled tick; inventory and capital are closing stocks.</caption>
+        <caption>Sampled values for ${escapeHtml(preview.region.name)}. Readable rounded values are paired with the exact artifact value; flow values are per sampled tick and inventory/capital are closing stocks.</caption>
         <thead><tr>
           <th scope="col">Tick</th>
           <th scope="col">Output (${escapeHtml(goods)}/tick)</th>
