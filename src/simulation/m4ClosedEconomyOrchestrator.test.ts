@@ -9,10 +9,10 @@ import { executeM4ClosedEconomyTick, type M4ClosedEconomyOptions } from "./m4Clo
 import { buildInitialWorld, type WorldState } from "./worldState";
 
 const m4NeedCategories: Readonly<Record<string, NeedCategoryDefinition>> = {
-  subsistence: {
-    id: "subsistence",
+  ESSENTIAL_FOOD: {
+    id: "ESSENTIAL_FOOD",
     perCapitaTarget: 1,
-    priority: 3,
+    priority: 4,
     substitutionGoods: [
       { goodId: "good:food" as any, basePreference: 1, qualityFactor: 1 },
       { goodId: "good:grain" as any, basePreference: 0.5, qualityFactor: 1 },
@@ -20,16 +20,24 @@ const m4NeedCategories: Readonly<Record<string, NeedCategoryDefinition>> = {
     priceSensitivity: 1,
     inventoryCarryoverTicks: 1,
   },
-  material: {
-    id: "material",
+  BASIC_GOODS: {
+    id: "BASIC_GOODS",
     perCapitaTarget: 0.1,
-    priority: 2,
+    priority: 3,
     substitutionGoods: [{ goodId: "good:wood" as any, basePreference: 1, qualityFactor: 1 }],
     priceSensitivity: 1,
     inventoryCarryoverTicks: 2,
   },
-  clothing: {
-    id: "clothing",
+  SERVICES: {
+    id: "SERVICES",
+    perCapitaTarget: 0.1,
+    priority: 2,
+    substitutionGoods: [{ goodId: "good:tools" as any, basePreference: 1, qualityFactor: 1 }],
+    priceSensitivity: 1,
+    inventoryCarryoverTicks: 1,
+  },
+  COMFORT: {
+    id: "COMFORT",
     perCapitaTarget: 0.1,
     priority: 1,
     substitutionGoods: [{ goodId: "good:cloth" as any, basePreference: 1, qualityFactor: 1 }],
