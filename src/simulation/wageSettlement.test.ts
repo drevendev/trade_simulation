@@ -307,6 +307,30 @@ describe("REQ-PRODUCTION-004 Phase-5 wage settlement", () => {
     ).toBeCloseTo(originalCohortCash + expectedNetWage, 12);
   });
 
+  it("uses the live ProductionUnit status after Phase-1 lifecycle activation, not immutable seed status", () => {
+    const base = baseEvidence();
+    const productionUnits = new Map(base.world.productionUnits);
+    productionUnits.set(base.unit.productionUnitId, {
+      ...base.unit,
+      seed: { ...base.unit.seed, status: "PLANNED" },
+      status: "ACTIVE",
+    });
+    const activatedWorld: WorldState = { ...base.world, productionUnits };
+
+    const settlements = planWageSettlementsPhase5({
+      tick: 9,
+      world: activatedWorld,
+      laborDemandPlans: [base.laborDemand],
+      laborAllocations: [base.laborAllocation],
+      effectiveJurisdictionByRegion: jurisdiction(base.region.regionId, base.stateId),
+      taxPolicy: policy(0.2, 0.5),
+    });
+
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]!.unitId).toBe(base.unit.productionUnitId);
+    expect(settlements[0]!.grossWage).toBeCloseTo(base.laborAllocation.grossWageObligation, 12);
+  });
+
   it("persists wage settlements exactly once and rejects stale tick provenance atomically", () => {
     const base = baseEvidence();
     const settlements9 = planWageSettlementsPhase5({

@@ -161,7 +161,7 @@ export function planWageSettlementsPhase5(args: {
     if (requestedPayroll > cap + moneyEpsilon) {
       throw new Error(`LaborDemandPlan ${demand.planId} requested payroll exceeds grossPayrollCap`);
     }
-    if (unit.seed.status !== "ACTIVE" && requested > 0) {
+    if (unit.status !== "ACTIVE" && requested > 0) {
       throw new Error(`LaborDemandPlan ${demand.planId} requests positive labor for non-ACTIVE ProductionUnit ${String(demand.unitId)}`);
     }
     demandByUnit.set(demand.unitId, demand);
@@ -183,7 +183,7 @@ export function planWageSettlementsPhase5(args: {
     const demand = demandByUnit.get(allocation.unitId);
     if (!demand) throw new Error(`LaborAllocation ${allocation.allocationId} references unknown demand unit ${String(allocation.unitId)}`);
     const unit = world.productionUnits.get(allocation.unitId)!;
-    if (unit.seed.status !== "ACTIVE") {
+    if (unit.status !== "ACTIVE") {
       throw new Error(`LaborAllocation ${allocation.allocationId} targets non-ACTIVE ProductionUnit ${String(allocation.unitId)}`);
     }
     if (demand.regionId !== allocation.regionId || demand.laborCategory !== allocation.laborCategory) {
