@@ -6,11 +6,11 @@ import type {
 import { createDefaultSimulationConfig, type LaborConfig } from "../config/simulationConfig";
 
 /**
- * REQ-CONFIG-005 / Issues #633, #642 and #646: validate deterministic M4 State policy
- * fixtures at world-genesis step 1 rather than waiting for whichever Phase-2 path
- * happens to read them. These fixtures are scenario inputs, so missing required maps,
- * unknown references and malformed numbers must never become an implicit zero/no-rule
- * fallback.
+ * REQ-CONFIG-005 / Issues #633, #642, #646 and #649: validate deterministic M4 State
+ * policy fixtures at world-genesis step 1 rather than waiting for whichever Phase-2
+ * path happens to read them. These fixtures are scenario inputs, so malformed policy
+ * containers, missing required maps, unknown references and malformed numbers must
+ * never become an implicit zero/no-rule fallback.
  */
 export function validateM4ProductionPolicyGenesis(
   scenario: ScenarioDefinition,
@@ -27,7 +27,13 @@ export function validateM4ProductionPolicyGenesis(
 
   for (const state of scenario.states ?? []) {
     const policy = state.policy?.m4ProductionPlanning;
-    if (!policy) continue;
+    if (policy === undefined) continue;
+
+    if (!isPlainObject(policy)) {
+      throw new Error(
+        `StateSeed "${state.key}": policy.m4ProductionPlanning must be a non-null plain object`,
+      );
+    }
 
     const minimumWageFloorByRegionKey = requirePolicyMap<
       M4ProductionPlanningPolicySeed["minimumWageFloorByRegionKey"]
