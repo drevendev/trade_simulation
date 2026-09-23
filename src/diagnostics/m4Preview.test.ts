@@ -10,11 +10,13 @@ import {
   M4_PREVIEW_TICKS,
   type M4Preview,
 } from "./m4Preview";
+import type { GoodId } from "../domain/id";
 import { executeM4ClosedEconomyTick, type M4ClosedEconomyOptions } from "../simulation/m4ClosedEconomyOrchestrator";
 import type { WorldState } from "../simulation/worldState";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const publishedPath = `${repoRoot}docs/m4-preview.json`;
+const FOOD = "good:food" as GoodId;
 
 function canonicalize(value: unknown): unknown {
   if (value instanceof Map) {
@@ -74,6 +76,26 @@ describe("REQ-VISUALIZATION-009: M4 preview generator", () => {
 
   it("is deterministic for the same canonical fixture", () => {
     expect(JSON.stringify(generated())).toBe(JSON.stringify(generated()));
+  });
+
+  it("ignores foreign-State public food stock in the one-region projection", () => {
+    const world = createM4PreviewWorld();
+    const region = [...world.regions.values()][0]!;
+    expect(region.controllerStateId).not.toBeNull();
+
+    const mutatedStates = new Map(world.states);
+    let mutatedForeignStates = 0;
+    for (const [stateId, state] of world.states.entries()) {
+      if (stateId === region.controllerStateId) continue;
+      const publicInventory = new Map(state.publicInventory);
+      publicInventory.set(FOOD, (publicInventory.get(FOOD) ?? 0) + 123_456);
+      mutatedStates.set(stateId, { ...state, publicInventory });
+      mutatedForeignStates += 1;
+    }
+    expect(mutatedForeignStates).toBeGreaterThan(0);
+
+    const mutatedWorld: WorldState = { ...world, states: mutatedStates };
+    expect(JSON.stringify(generateM4Preview(mutatedWorld))).toBe(JSON.stringify(generateM4Preview(world)));
   });
 
   it("does not mutate the caller's WorldState or advance any mutable RNG cursor", () => {
