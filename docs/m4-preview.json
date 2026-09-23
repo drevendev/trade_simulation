@@ -23,7 +23,7 @@
       "employedWorkers": 33,
       "grossWagesPaid": 396,
       "essentialCoverage": 0.28402366863905315,
-      "foodInventory": 1473.4467455621302,
+      "foodInventory": 623.4467455621302,
       "installedCapital": 216.57
     },
     {
@@ -32,7 +32,7 @@
       "employedWorkers": 10.365531328737482,
       "grossWagesPaid": 119.818386316869,
       "essentialCoverage": 0.012730086023396012,
-      "foodInventory": 1377.5701430433483,
+      "foodInventory": 527.5701430433483,
       "installedCapital": 196.02270898122902
     },
     {
@@ -41,7 +41,7 @@
       "employedWorkers": 7.319589921802486,
       "grossWagesPaid": 66.29368385786205,
       "essentialCoverage": 0.004036095722094294,
-      "foodInventory": 1358.906381023928,
+      "foodInventory": 508.9063810239279,
       "installedCapital": 177.88566371123574
     },
     {
@@ -50,7 +50,7 @@
       "employedWorkers": 0,
       "grossWagesPaid": 0,
       "essentialCoverage": 0,
-      "foodInventory": 1355.6657078400422,
+      "foodInventory": 505.66570784004216,
       "installedCapital": 161.84251035479446
     },
     {
@@ -59,7 +59,7 @@
       "employedWorkers": 0,
       "grossWagesPaid": 0,
       "essentialCoverage": 0,
-      "foodInventory": 1355.6657078400422,
+      "foodInventory": 505.66570784004216,
       "installedCapital": 147.62040240726134
     },
     {
@@ -68,7 +68,7 @@
       "employedWorkers": 0,
       "grossWagesPaid": 0,
       "essentialCoverage": 0,
-      "foodInventory": 1355.6657078400422,
+      "foodInventory": 505.66570784004216,
       "installedCapital": 134.98391255330534
     },
     {
@@ -77,7 +77,7 @@
       "employedWorkers": 0,
       "grossWagesPaid": 0,
       "essentialCoverage": 0,
-      "foodInventory": 1355.6657078400422,
+      "foodInventory": 505.66570784004216,
       "installedCapital": 123.72980173202558
     },
     {
@@ -86,7 +86,7 @@
       "employedWorkers": 0,
       "grossWagesPaid": 0,
       "essentialCoverage": 0,
-      "foodInventory": 1355.6657078400422,
+      "foodInventory": 505.66570784004216,
       "installedCapital": 113.6825244535887
     },
     {
@@ -95,7 +95,7 @@
       "employedWorkers": 0,
       "grossWagesPaid": 0,
       "essentialCoverage": 0,
-      "foodInventory": 1350,
+      "foodInventory": 500,
       "installedCapital": 104.69036649250287
     },
     {
@@ -104,7 +104,7 @@
       "employedWorkers": 0,
       "grossWagesPaid": 0,
       "essentialCoverage": 0,
-      "foodInventory": 1350,
+      "foodInventory": 500,
       "installedCapital": 96.6221257501422
     },
     {
@@ -113,7 +113,7 @@
       "employedWorkers": 0,
       "grossWagesPaid": 0,
       "essentialCoverage": 0,
-      "foodInventory": 1350,
+      "foodInventory": 500,
       "installedCapital": 89.36425967493317
     },
     {
@@ -122,7 +122,7 @@
       "employedWorkers": 0,
       "grossWagesPaid": 0,
       "essentialCoverage": 0,
-      "foodInventory": 1350,
+      "foodInventory": 500,
       "installedCapital": 82.81843344535605
     },
     {
@@ -131,7 +131,7 @@
       "employedWorkers": 0,
       "grossWagesPaid": 0,
       "essentialCoverage": 0,
-      "foodInventory": 1350,
+      "foodInventory": 500,
       "installedCapital": 78.03677092437883
     }
   ],
