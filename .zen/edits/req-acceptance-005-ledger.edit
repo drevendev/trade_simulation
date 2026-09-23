@@ -1,0 +1,20 @@
+### FILE: docs/spec/implementation_status.csv
+<<<<<<< FIND
+Focused regressions in src/simulation/productionUnitLifecycle.test.ts and src/simulation/productionStartupPlanning.test.ts cover startup readiness/N+1 activation, same-tick causal isolation, funding conservation, configured consecutive reviews/reset/reactivation/closing, residual-stock retirement refusal/safe retirement, seed/live-status divergence, insertion-order determinism and tampered lifecycle evidence. Merge commit intentionally blank until integration."
+=======
+Focused regressions in src/simulation/productionUnitLifecycle.test.ts and src/simulation/productionStartupPlanning.test.ts cover startup readiness/N+1 activation, same-tick causal isolation, funding conservation, configured consecutive reviews/reset/reactivation/closing, residual-stock retirement refusal/safe retirement, seed/live-status divergence, insertion-order determinism and tampered lifecycle evidence. Merge commit intentionally blank until integration."
+REQ-ACCEPTANCE-005,IMPLEMENTED,654,655,,"PR #655 adds src/simulation/acceptance-005-m4-golden-gate.test.ts: executes 240 sequential authoritative M4 ticks twice; proves phase 0..15 order, reconciliation health, finite/non-negative canonical stocks, bounded production/extraction, payroll conservation, post-wage household affordability, real-goods capital formation/depreciation, and deterministic normalized replay. The normalized hash includes persistent lifecycle counters and lastLifecycleReviewTick; a focused sensitivity regression proves each lifecycle field changes the hash. Exact-head required TypeScript, retained .NET, policy-guard and mergeability checks passed before SLOPSTER judgement."
+>>>>>>> REPLACE
+
+### FILE: docs/spec/IMPLEMENTATION_STATUS.md
+<<<<<<< FIND
+| REQ-ACCEPTANCE-005 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-009 | `READY` | `NOT_STARTED` | — | — | — |
+
+**Summary: 43 of 49 requirement identifiers implemented.**
+=======
+| REQ-ACCEPTANCE-005 | `READY` | `IMPLEMENTED` | #654 | #655 | PR #655 adds src/simulation/acceptance-005-m4-golden-gate.test.ts: executes 240 sequential authoritative M4 ticks twice; proves phase 0..15 order, reconciliation health, finite/non-negative canonical stocks, bounded production/extraction, payroll conservation, post-wage household affordability, real-goods capital formation/depreciation, and deterministic normalized replay. The normalized hash includes persistent lifecycle counters and lastLifecycleReviewTick; a focused sensitivity regression proves each lifecycle field changes the hash. Exact-head required TypeScript, retained .NET, policy-guard and mergeability checks passed before SLOPSTER judgement. |
+| REQ-VISUALIZATION-009 | `READY` | `NOT_STARTED` | — | — | — |
+
+**Summary: 44 of 49 requirement identifiers implemented.**
+>>>>>>> REPLACE
