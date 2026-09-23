@@ -142,6 +142,7 @@ describe("REQ-PRODUCTION-003 Phase-15 sticky wage-offer update", () => {
     const inactive: ProductionUnitState = {
       ...base.unit,
       wageOffer: 10,
+      status: "MOTHBALLED",
       seed: { ...base.unit.seed, status: "MOTHBALLED" },
     };
     expect(() => plan({ unit: inactive, requested: 50, available: 100, allocated: 50 })).toThrow(/positive normal labor for non-ACTIVE/);
@@ -168,12 +169,14 @@ describe("REQ-PRODUCTION-003 Phase-15 sticky wage-offer update", () => {
       ...base.unit,
       productionUnitId: unitId("unit:active"),
       wageOffer: 10,
+      status: "ACTIVE",
       seed: { ...base.unit.seed, status: "ACTIVE" },
     };
     const inactive: ProductionUnitState = {
       ...base.unit,
       productionUnitId: unitId("unit:mothballed"),
       wageOffer: 10,
+      status: "MOTHBALLED",
       seed: { ...base.unit.seed, status: "MOTHBALLED" },
     };
     const productionUnits = new Map<ProductionUnitId, ProductionUnitState>([

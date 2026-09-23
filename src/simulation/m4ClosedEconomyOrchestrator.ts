@@ -333,7 +333,8 @@ function phase9HouseholdHandler(): PhaseHandler {
 function effectiveMinimumWageFloorByUnit(world: WorldState): ReadonlyMap<ProductionUnitId, number> {
   const result = new Map<ProductionUnitId, number>();
   for (const unit of stableOrderBy(world.productionUnits.values(), (candidate) => String(candidate.productionUnitId))) {
-    if (unit.status !== "ACTIVE") continue;
+    // Phase 1 can activate a unit before Phase 15, so compute floors for the complete
+    // one-region unit set rather than only actors that happened to be ACTIVE at tick open.
     const region = stableOrderBy(
       [...world.regions.values()].filter((candidate) => candidate.seed.key === unit.seed.regionKey),
       (candidate) => String(candidate.regionId),

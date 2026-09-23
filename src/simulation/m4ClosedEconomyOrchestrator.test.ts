@@ -2,15 +2,46 @@ import { describe, expect, it } from "vitest";
 
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
+import type { NeedCategoryDefinition } from "../config/definitionPack";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { MarketId } from "../domain/id";
 import { executeM4ClosedEconomyTick, type M4ClosedEconomyOptions } from "./m4ClosedEconomyOrchestrator";
 import { buildInitialWorld, type WorldState } from "./worldState";
 
+const m4NeedCategories: Readonly<Record<string, NeedCategoryDefinition>> = {
+  subsistence: {
+    id: "subsistence",
+    perCapitaTarget: 1,
+    priority: 3,
+    substitutionGoods: [
+      { goodId: "good:food" as any, basePreference: 1, qualityFactor: 1 },
+      { goodId: "good:grain" as any, basePreference: 0.5, qualityFactor: 1 },
+    ],
+    priceSensitivity: 1,
+    inventoryCarryoverTicks: 1,
+  },
+  material: {
+    id: "material",
+    perCapitaTarget: 0.1,
+    priority: 2,
+    substitutionGoods: [{ goodId: "good:wood" as any, basePreference: 1, qualityFactor: 1 }],
+    priceSensitivity: 1,
+    inventoryCarryoverTicks: 2,
+  },
+  clothing: {
+    id: "clothing",
+    perCapitaTarget: 0.1,
+    priority: 1,
+    substitutionGoods: [{ goodId: "good:cloth" as any, basePreference: 1, qualityFactor: 1 }],
+    priceSensitivity: 1,
+    inventoryCarryoverTicks: 2,
+  },
+};
+
 function baselineWorld(): WorldState {
   return buildInitialWorld(
     baselineScenario,
-    baselineDefinitionPack,
+    { ...baselineDefinitionPack, needCategories: m4NeedCategories },
     createDefaultSimulationConfig(),
     42,
   );
