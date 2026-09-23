@@ -1,0 +1,22 @@
+### FILE: docs/spec/implementation_status.csv
+<<<<<<< FIND
+REQ-ACCEPTANCE-005,IMPLEMENTED,654,655,e8cdeee56fc968f6fb54ce44922720502c466806,"PR #655 adds src/simulation/acceptance-005-m4-golden-gate.test.ts: executes 240 sequential authoritative M4 ticks twice; proves phase 0..15 order, reconciliation health, finite/non-negative canonical stocks, bounded production/extraction, payroll conservation, post-wage household affordability, real-goods capital formation/depreciation, and deterministic normalized replay. The normalized hash includes persistent lifecycle counters and lastLifecycleReviewTick; a focused sensitivity regression proves each lifecycle field changes the hash. Exact-head required TypeScript, retained .NET, policy-guard and mergeability checks passed before SLOPSTER judgement."
+=======
+REQ-ACCEPTANCE-005,PARTIAL,657,655,e8cdeee56fc968f6fb54ce44922720502c466806,"PR #655 remains merged evidence for the 240-tick M4 golden's phase/reconciliation, finite/non-negative stock, production/extraction bounds, payroll, real-goods capital, lifecycle-hash and same-input determinism coverage. Post-merge QA Issue #657 proved the household affordability assertion could still pass from allocation/context evidence without proving authoritative Phase-8 Cohort wallet and householdInventory mutation. REQ-ACCEPTANCE-005 is therefore PARTIAL until the #657 repair lands with authoritative pre/post-settlement stock reconciliation and a settlement-bypass negative control; M4 must not be mechanically closed or released from the overstated prior row."
+>>>>>>> REPLACE
+
+### FILE: docs/spec/IMPLEMENTATION_STATUS.md
+<<<<<<< FIND
+| REQ-ACCEPTANCE-005 | `READY` | `IMPLEMENTED` | #654 | #655, `e8cdeee56fc968f6fb54ce44922720502c466806` | PR #655 adds src/simulation/acceptance-005-m4-golden-gate.test.ts: executes 240 sequential authoritative M4 ticks twice; proves phase 0..15 order, reconciliation health, finite/non-negative canonical stocks, bounded production/extraction, payroll conservation, post-wage household affordability, real-goods capital formation/depreciation, and deterministic normalized replay. The normalized hash includes persistent lifecycle counters and lastLifecycleReviewTick; a focused sensitivity regression proves each lifecycle field changes the hash. Exact-head required TypeScript, retained .NET, policy-guard and mergeability checks passed before SLOPSTER judgement. |
+=======
+| REQ-ACCEPTANCE-005 | `READY` | `PARTIAL` | #657 | #655, `e8cdeee56fc968f6fb54ce44922720502c466806` | PR #655 remains merged evidence for the 240-tick M4 golden's phase/reconciliation, finite/non-negative stock, production/extraction bounds, payroll, real-goods capital, lifecycle-hash and same-input determinism coverage. Post-merge QA Issue #657 proved the household affordability assertion could still pass from allocation/context evidence without proving authoritative Phase-8 Cohort wallet and householdInventory mutation. REQ-ACCEPTANCE-005 is therefore PARTIAL until the #657 repair lands with authoritative pre/post-settlement stock reconciliation and a settlement-bypass negative control; M4 must not be mechanically closed or released from the overstated prior row. |
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+**Summary: 45 of 49 requirement identifiers implemented.**
+The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
+=======
+**Summary: 44 of 49 requirement identifiers implemented.**
+Also recorded: 1 partial.
+The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
+>>>>>>> REPLACE
