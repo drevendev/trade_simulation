@@ -1,0 +1,45 @@
+### FILE: src/simulation/wageOfferUpdate.ts
+<<<<<<< FIND
+    if (unit.seed.status !== "ACTIVE" && requested > 0) {
+      throw new Error(
+        `LaborDemandPlan ${plan.planId} requests positive normal labor for non-ACTIVE ProductionUnit ${String(plan.unitId)} (${unit.seed.status})`,
+      );
+    }
+    demandByUnit.set(plan.unitId, plan);
+    if (unit.seed.status === "ACTIVE") {
+=======
+    if (unit.status !== "ACTIVE" && requested > 0) {
+      throw new Error(
+        `LaborDemandPlan ${plan.planId} requests positive normal labor for non-ACTIVE ProductionUnit ${String(plan.unitId)} (${unit.status})`,
+      );
+    }
+    demandByUnit.set(plan.unitId, plan);
+    if (unit.status === "ACTIVE") {
+>>>>>>> REPLACE
+<<<<<<< FIND
+    if (demandUnit.seed.status !== "ACTIVE") {
+      throw new Error(
+        `LaborAllocation ${allocation.allocationId} targets non-ACTIVE ProductionUnit ${String(allocation.unitId)} (${demandUnit.seed.status})`,
+      );
+    }
+=======
+    if (demandUnit.status !== "ACTIVE") {
+      throw new Error(
+        `LaborAllocation ${allocation.allocationId} targets non-ACTIVE ProductionUnit ${String(allocation.unitId)} (${demandUnit.status})`,
+      );
+    }
+>>>>>>> REPLACE
+<<<<<<< FIND
+    if (unit.seed.status !== "ACTIVE") continue;
+=======
+    if (unit.status !== "ACTIVE") continue;
+>>>>>>> REPLACE
+<<<<<<< FIND
+    if (unit.seed.status !== "ACTIVE") {
+      throw new Error(`WageOfferUpdate ${update.updateId} targets non-ACTIVE ProductionUnit ${String(update.unitId)}`);
+    }
+=======
+    if (unit.status !== "ACTIVE") {
+      throw new Error(`WageOfferUpdate ${update.updateId} targets non-ACTIVE ProductionUnit ${String(update.unitId)}`);
+    }
+>>>>>>> REPLACE
