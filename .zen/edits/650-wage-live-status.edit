@@ -1,0 +1,52 @@
+### FILE: src/simulation/wageSettlement.ts
+<<<<<<< FIND
+    if (unit.seed.status !== "ACTIVE" && requested > 0) {
+      throw new Error(`LaborDemandPlan ${demand.planId} requests positive labor for non-ACTIVE ProductionUnit ${String(demand.unitId)}`);
+    }
+=======
+    if (unit.status !== "ACTIVE" && requested > 0) {
+      throw new Error(`LaborDemandPlan ${demand.planId} requests positive labor for non-ACTIVE ProductionUnit ${String(demand.unitId)}`);
+    }
+>>>>>>> REPLACE
+<<<<<<< FIND
+    const unit = world.productionUnits.get(allocation.unitId)!;
+    if (unit.seed.status !== "ACTIVE") {
+      throw new Error(`LaborAllocation ${allocation.allocationId} targets non-ACTIVE ProductionUnit ${String(allocation.unitId)}`);
+    }
+=======
+    const unit = world.productionUnits.get(allocation.unitId)!;
+    if (unit.status !== "ACTIVE") {
+      throw new Error(`LaborAllocation ${allocation.allocationId} targets non-ACTIVE ProductionUnit ${String(allocation.unitId)}`);
+    }
+>>>>>>> REPLACE
+
+### FILE: src/simulation/wageSettlement.test.ts
+<<<<<<< FIND
+  it("persists wage settlements exactly once and rejects stale tick provenance atomically", () => {
+=======
+  it("uses the live ProductionUnit status after Phase-1 lifecycle activation, not immutable seed status", () => {
+    const base = baseEvidence();
+    const productionUnits = new Map(base.world.productionUnits);
+    productionUnits.set(base.unit.productionUnitId, {
+      ...base.unit,
+      seed: { ...base.unit.seed, status: "PLANNED" },
+      status: "ACTIVE",
+    });
+    const activatedWorld: WorldState = { ...base.world, productionUnits };
+
+    const settlements = planWageSettlementsPhase5({
+      tick: 9,
+      world: activatedWorld,
+      laborDemandPlans: [base.laborDemand],
+      laborAllocations: [base.laborAllocation],
+      effectiveJurisdictionByRegion: jurisdiction(base.region.regionId, base.stateId),
+      taxPolicy: policy(0.2, 0.5),
+    });
+
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]!.unitId).toBe(base.unit.productionUnitId);
+    expect(settlements[0]!.grossWage).toBeCloseTo(base.laborAllocation.grossWageObligation, 12);
+  });
+
+  it("persists wage settlements exactly once and rejects stale tick provenance atomically", () => {
+>>>>>>> REPLACE
