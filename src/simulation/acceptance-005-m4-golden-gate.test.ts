@@ -199,12 +199,15 @@ function normalizedWorldHash(world: WorldState): string {
         investment: sortedNumericEntries(unit.investmentInventory),
         wageOffer: unit.wageOffer,
         installedCapital: unit.installedCapital,
+        lastLifecycleReviewTick: unit.lastLifecycleReviewTick,
         signals: {
           utilizationEma: unit.signals.utilizationEma,
           sellThroughEma: unit.signals.sellThroughEma,
           marginSignalEma: unit.signals.marginSignalEma,
           outputSalesEma: unit.signals.outputSalesEma,
           inputUseEma: Object.entries(unit.signals.inputUseEma).sort(([left], [right]) => left.localeCompare(right)),
+          consecutiveNonviableReviews: unit.signals.consecutiveNonviableReviews,
+          consecutiveViableReviews: unit.signals.consecutiveViableReviews,
         },
       })),
     markets: [...world.markets.values()]
@@ -360,5 +363,37 @@ describe("REQ-ACCEPTANCE-005: M4 one-region 240-tick golden gate", () => {
     expect(first.wageSettlements).toBeGreaterThan(0);
     expect(first.hash).toMatch(/^[a-f0-9]{64}$/);
     expect(second).toEqual(first);
+  });
+
+  it("makes persistent lifecycle-review state load-bearing in the normalized replay hash", () => {
+    const world = goldenOpeningWorld();
+    const unit = [...world.productionUnits.values()][0]!;
+    const baselineHash = normalizedWorldHash(world);
+    const variants = [
+      {
+        ...unit,
+        signals: {
+          ...unit.signals,
+          consecutiveNonviableReviews: unit.signals.consecutiveNonviableReviews + 1,
+        },
+      },
+      {
+        ...unit,
+        signals: {
+          ...unit.signals,
+          consecutiveViableReviews: unit.signals.consecutiveViableReviews + 1,
+        },
+      },
+      {
+        ...unit,
+        lastLifecycleReviewTick: unit.lastLifecycleReviewTick + 1,
+      },
+    ];
+
+    for (const variant of variants) {
+      const productionUnits = new Map(world.productionUnits);
+      productionUnits.set(unit.productionUnitId, variant);
+      expect(normalizedWorldHash({ ...world, productionUnits })).not.toBe(baselineHash);
+    }
   });
 });
