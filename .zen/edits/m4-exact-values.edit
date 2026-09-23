@@ -1,0 +1,80 @@
+### FILE: docs/m4.js
+<<<<<<< FIND
+  const percent = value => `${(Number(value) * 100).toFixed(1)}%`;
+
+  function state(title, detail) {
+=======
+  const percent = value => `${(Number(value) * 100).toFixed(1)}%`;
+  const exact = value => String(value);
+
+  function state(title, detail) {
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+        <div class="m4-metric"><dt>Output produced</dt><dd>${escapeHtml(number(preview.totals.outputProduced))}<small>${escapeHtml(goods)}, cumulative</small></dd></div>
+        <div class="m4-metric"><dt>Gross wages paid</dt><dd>${escapeHtml(number(preview.totals.grossWagesPaid))}<small>${escapeHtml(money)}, cumulative</small></dd></div>
+        <div class="m4-metric"><dt>Household purchases</dt><dd>${escapeHtml(number(preview.totals.householdPurchaseQuantity))}<small>${escapeHtml(goods)}, cumulative</small></dd></div>
+        <div class="m4-metric"><dt>Capital built</dt><dd>${escapeHtml(number(preview.totals.capitalBuilt))}<small>${escapeHtml(capital)}, cumulative</small></dd></div>
+=======
+        <div class="m4-metric"><dt>Output produced</dt><dd>${escapeHtml(number(preview.totals.outputProduced))}<small>${escapeHtml(goods)}, cumulative<br><span class="m4-exact" data-field="total-outputProduced">exact ${escapeHtml(exact(preview.totals.outputProduced))}</span></small></dd></div>
+        <div class="m4-metric"><dt>Gross wages paid</dt><dd>${escapeHtml(number(preview.totals.grossWagesPaid))}<small>${escapeHtml(money)}, cumulative<br><span class="m4-exact" data-field="total-grossWagesPaid">exact ${escapeHtml(exact(preview.totals.grossWagesPaid))}</span></small></dd></div>
+        <div class="m4-metric"><dt>Household purchases</dt><dd>${escapeHtml(number(preview.totals.householdPurchaseQuantity))}<small>${escapeHtml(goods)}, cumulative<br><span class="m4-exact" data-field="total-householdPurchaseQuantity">exact ${escapeHtml(exact(preview.totals.householdPurchaseQuantity))}</span></small></dd></div>
+        <div class="m4-metric"><dt>Capital built</dt><dd>${escapeHtml(number(preview.totals.capitalBuilt))}<small>${escapeHtml(capital)}, cumulative<br><span class="m4-exact" data-field="total-capitalBuilt">exact ${escapeHtml(exact(preview.totals.capitalBuilt))}</span></small></dd></div>
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+    const rows = preview.samples.map(sample => `<tr>
+      <th scope="row">${escapeHtml(sample.tick)}</th>
+      <td>${escapeHtml(number(sample.outputProduced, 4))}</td>
+      <td>${escapeHtml(number(sample.employedWorkers, 3))}</td>
+      <td>${escapeHtml(number(sample.grossWagesPaid, 2))}</td>
+      <td>${escapeHtml(percent(sample.essentialCoverage))}</td>
+      <td>${escapeHtml(number(sample.foodInventory, 2))}</td>
+      <td>${escapeHtml(number(sample.installedCapital, 2))}</td>
+    </tr>`).join("");
+=======
+    const rows = preview.samples.map(sample => `<tr>
+      <th scope="row">${escapeHtml(sample.tick)}</th>
+      <td>${escapeHtml(number(sample.outputProduced, 4))}<br><small class="m4-exact" data-field="outputProduced">exact ${escapeHtml(exact(sample.outputProduced))}</small></td>
+      <td>${escapeHtml(number(sample.employedWorkers, 3))}<br><small class="m4-exact" data-field="employedWorkers">exact ${escapeHtml(exact(sample.employedWorkers))}</small></td>
+      <td>${escapeHtml(number(sample.grossWagesPaid, 2))}<br><small class="m4-exact" data-field="grossWagesPaid">exact ${escapeHtml(exact(sample.grossWagesPaid))}</small></td>
+      <td>${escapeHtml(percent(sample.essentialCoverage))}<br><small class="m4-exact" data-field="essentialCoverage">exact ratio ${escapeHtml(exact(sample.essentialCoverage))}</small></td>
+      <td>${escapeHtml(number(sample.foodInventory, 2))}<br><small class="m4-exact" data-field="foodInventory">exact ${escapeHtml(exact(sample.foodInventory))}</small></td>
+      <td>${escapeHtml(number(sample.installedCapital, 2))}<br><small class="m4-exact" data-field="installedCapital">exact ${escapeHtml(exact(sample.installedCapital))}</small></td>
+    </tr>`).join("");
+>>>>>>> REPLACE
+
+<<<<<<< FIND
+        <caption>Exact sampled values for ${escapeHtml(preview.region.name)}. Flow values are per sampled tick; inventory and capital are closing stocks.</caption>
+=======
+        <caption>Sampled values for ${escapeHtml(preview.region.name)}. Readable rounded values are paired with the exact artifact value; flow values are per sampled tick and inventory/capital are closing stocks.</caption>
+>>>>>>> REPLACE
+
+### FILE: src/diagnostics/m4-pages-render.test.ts
+<<<<<<< FIND
+  it.each([1280, 360])("is readable without whole-page horizontal overflow at %ipx", async width => {
+=======
+  it("keeps every sampled artifact value available verbatim alongside the readable rounded display", async () => {
+    const page = await pageAt();
+    try {
+      const preview = artifact();
+      const fields = ["outputProduced", "employedWorkers", "grossWagesPaid", "essentialCoverage", "foodInventory", "installedCapital"] as const;
+      for (const field of fields) {
+        const exactValues = page.locator(`.m4-exact[data-field="${field}"]`);
+        expect(await exactValues.count()).toBe(preview.samples.length);
+        for (const [index, sample] of preview.samples.entries()) {
+          const prefix = field === "essentialCoverage" ? "exact ratio " : "exact ";
+          expect(await exactValues.nth(index).innerText()).toBe(`${prefix}${String(sample[field])}`);
+        }
+      }
+
+      const tickFive = preview.samples.find(sample => sample.tick === 5);
+      expect(tickFive).toBeDefined();
+      const highPrecisionOutput = String(tickFive!.outputProduced);
+      expect(highPrecisionOutput.split(".")[1]?.length ?? 0).toBeGreaterThan(4);
+      expect(await page.locator("#m4-table").innerText()).toContain(highPrecisionOutput);
+    } finally { await page.close(); }
+  }, 60_000);
+
+  it.each([1280, 360])("is readable without whole-page horizontal overflow at %ipx", async width => {
+>>>>>>> REPLACE
