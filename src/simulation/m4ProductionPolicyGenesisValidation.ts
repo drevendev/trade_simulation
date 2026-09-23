@@ -6,7 +6,7 @@ import type {
 import { createDefaultSimulationConfig, type LaborConfig } from "../config/simulationConfig";
 
 /**
- * REQ-CONFIG-005 / Issues #633 and #642: validate deterministic M4 State policy
+ * REQ-CONFIG-005 / Issues #633, #642 and #646: validate deterministic M4 State policy
  * fixtures at world-genesis step 1 rather than waiting for whichever Phase-2 path
  * happens to read them. These fixtures are scenario inputs, so missing required maps,
  * unknown references and malformed numbers must never become an implicit zero/no-rule
@@ -53,7 +53,13 @@ export function validateM4ProductionPolicyGenesis(
         );
       }
 
-      for (const [laborCategory, floor] of Object.entries(floorsByLaborCategory ?? {})) {
+      const wageFloors = requireNestedWageFloorMap(
+        state.key,
+        regionKey,
+        floorsByLaborCategory,
+      );
+
+      for (const [laborCategory, floor] of Object.entries(wageFloors)) {
         if (!allowedLaborCategories.has(laborCategory)) {
           throw new Error(
             `StateSeed "${state.key}": policy.m4ProductionPlanning.minimumWageFloorByRegionKey["${regionKey}"]["${laborCategory}"] references a labor category not allowed by LaborConfig.allowedLaborCategories`,
@@ -100,6 +106,20 @@ function requirePolicyMap<T extends object>(
   }
 
   return value as T;
+}
+
+function requireNestedWageFloorMap(
+  stateKey: string,
+  regionKey: string,
+  value: unknown,
+): Record<string, number> {
+  if (!isPlainObject(value)) {
+    throw new Error(
+      `StateSeed "${stateKey}": policy.m4ProductionPlanning.minimumWageFloorByRegionKey["${regionKey}"] must be a non-null plain object map`,
+    );
+  }
+
+  return value as Record<string, number>;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
