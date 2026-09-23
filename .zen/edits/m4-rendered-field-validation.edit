@@ -1,0 +1,81 @@
+### FILE: docs/m4.js
+<<<<<<< FIND
+    if (preview.scenario === null || typeof preview.scenario !== "object") return "scenario metadata is missing";
+    if (preview.region === null || typeof preview.region !== "object") return "region metadata is missing";
+    for (const key of ["name", "currencyCode", "goodsUnitLabel", "workerUnitLabel", "capitalUnitLabel"]) {
+      if (typeof preview.region[key] !== "string" || preview.region[key].length === 0) return `region.${key} is missing`;
+    }
+=======
+    if (preview.scenario === null || typeof preview.scenario !== "object") return "scenario metadata is missing";
+    if (!finiteNonNegative(preview.scenario.ticksExecuted) || !Number.isInteger(preview.scenario.ticksExecuted)) return "scenario.ticksExecuted is not a finite non-negative integer";
+    if (preview.region === null || typeof preview.region !== "object") return "region metadata is missing";
+    for (const key of ["name", "currencyCode", "goodsUnitLabel", "workerUnitLabel", "capitalUnitLabel", "foodGoodName"]) {
+      if (typeof preview.region[key] !== "string" || preview.region[key].length === 0) return `region.${key} is missing`;
+    }
+>>>>>>> REPLACE
+
+### FILE: src/diagnostics/m4-pages-render.test.ts
+<<<<<<< FIND
+      if (url.pathname === "/m4-preview-wrong.json") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ milestone: "M4", requirement: "REQ-VISUALIZATION-009", samples: [{ tick: 0 }] }));
+        return;
+      }
+      const relative = url.pathname === "/" ? "index.html" : url.pathname.replace(/^\//, "");
+=======
+      if (url.pathname === "/m4-preview-wrong.json") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ milestone: "M4", requirement: "REQ-VISUALIZATION-009", samples: [{ tick: 0 }] }));
+        return;
+      }
+      if (url.pathname === "/m4-preview-missing-ticks.json") {
+        const preview = artifact();
+        const malformed = { ...preview, scenario: { ...preview.scenario, ticksExecuted: undefined } };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(malformed));
+        return;
+      }
+      if (url.pathname === "/m4-preview-missing-food-name.json") {
+        const preview = artifact();
+        const malformed = { ...preview, region: { ...preview.region, foodGoodName: undefined } };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(malformed));
+        return;
+      }
+      const relative = url.pathname === "/" ? "index.html" : url.pathname.replace(/^\//, "");
+>>>>>>> REPLACE
+
+### FILE: src/diagnostics/m4-pages-render.test.ts
+<<<<<<< FIND
+  it("distinguishes unavailable, malformed JSON, and malformed shape states", async () => {
+    for (const [query, expected] of [
+      ["?m4=missing-preview.json", "M4 preview unavailable"],
+      ["?m4=m4-preview-malformed.json", "M4 preview error"],
+      ["?m4=m4-preview-wrong.json", "M4 preview error"],
+    ] as const) {
+      const page = await pageAt(query);
+      try {
+        expect(await page.locator("#m4-preview-body").innerText()).toContain(expected);
+        expect(await page.locator("#m4-preview-body").innerText()).not.toContain("undefined");
+      } finally { await page.close(); }
+    }
+  }, 60_000);
+=======
+  it("distinguishes unavailable, malformed JSON, malformed shape, and partial-malformation states", async () => {
+    for (const [query, expected] of [
+      ["?m4=missing-preview.json", "M4 preview unavailable"],
+      ["?m4=m4-preview-malformed.json", "M4 preview error"],
+      ["?m4=m4-preview-wrong.json", "M4 preview error"],
+      ["?m4=m4-preview-missing-ticks.json", "M4 preview error"],
+      ["?m4=m4-preview-missing-food-name.json", "M4 preview error"],
+    ] as const) {
+      const page = await pageAt(query);
+      try {
+        const text = await page.locator("#m4-preview-body").innerText();
+        expect(text).toContain(expected);
+        expect(text).not.toContain("undefined");
+        expect(await page.locator(".m4-chart").count()).toBe(0);
+      } finally { await page.close(); }
+    }
+  }, 60_000);
+>>>>>>> REPLACE
