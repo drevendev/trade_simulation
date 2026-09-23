@@ -26,8 +26,9 @@
     if (preview === null || typeof preview !== "object") return "artifact is not an object";
     if (preview.milestone !== "M4" || preview.requirement !== "REQ-VISUALIZATION-009") return "artifact is not the M4 preview";
     if (preview.scenario === null || typeof preview.scenario !== "object") return "scenario metadata is missing";
+    if (!finiteNonNegative(preview.scenario.ticksExecuted) || !Number.isInteger(preview.scenario.ticksExecuted)) return "scenario.ticksExecuted is not a finite non-negative integer";
     if (preview.region === null || typeof preview.region !== "object") return "region metadata is missing";
-    for (const key of ["name", "currencyCode", "goodsUnitLabel", "workerUnitLabel", "capitalUnitLabel"]) {
+    for (const key of ["name", "currencyCode", "goodsUnitLabel", "workerUnitLabel", "capitalUnitLabel", "foodGoodName"]) {
       if (typeof preview.region[key] !== "string" || preview.region[key].length === 0) return `region.${key} is missing`;
     }
     if (!Array.isArray(preview.samples)) return "sample series is missing";

@@ -34,6 +34,20 @@ beforeAll(async () => {
         res.end(JSON.stringify({ milestone: "M4", requirement: "REQ-VISUALIZATION-009", samples: [{ tick: 0 }] }));
         return;
       }
+      if (url.pathname === "/m4-preview-missing-ticks.json") {
+        const preview = artifact();
+        const malformed = { ...preview, scenario: { ...preview.scenario, ticksExecuted: undefined } };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(malformed));
+        return;
+      }
+      if (url.pathname === "/m4-preview-missing-food-name.json") {
+        const preview = artifact();
+        const malformed = { ...preview, region: { ...preview.region, foodGoodName: undefined } };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(malformed));
+        return;
+      }
       const relative = url.pathname === "/" ? "index.html" : url.pathname.replace(/^\//, "");
       const filePath = path.join(docsDir, relative);
       if (!filePath.startsWith(docsDir) || !existsSync(filePath)) {
@@ -129,16 +143,20 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     } finally { await page.close(); }
   }, 60_000);
 
-  it("distinguishes unavailable, malformed JSON, and malformed shape states", async () => {
+  it("distinguishes unavailable, malformed JSON, malformed shape, and partial-malformation states", async () => {
     for (const [query, expected] of [
       ["?m4=missing-preview.json", "M4 preview unavailable"],
       ["?m4=m4-preview-malformed.json", "M4 preview error"],
       ["?m4=m4-preview-wrong.json", "M4 preview error"],
+      ["?m4=m4-preview-missing-ticks.json", "M4 preview error"],
+      ["?m4=m4-preview-missing-food-name.json", "M4 preview error"],
     ] as const) {
       const page = await pageAt(query);
       try {
-        expect(await page.locator("#m4-preview-body").innerText()).toContain(expected);
-        expect(await page.locator("#m4-preview-body").innerText()).not.toContain("undefined");
+        const text = await page.locator("#m4-preview-body").innerText();
+        expect(text).toContain(expected);
+        expect(text).not.toContain("undefined");
+        expect(await page.locator(".m4-chart").count()).toBe(0);
       } finally { await page.close(); }
     }
   }, 60_000);
