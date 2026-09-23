@@ -69,7 +69,7 @@ import {
   executeStatefulTick,
   type StatefulTickExecutionResult,
 } from "./statefulTickOrchestrator";
-import type { ProductionUnitState, RegionState, WorldState } from "./worldState";
+import type { RegionState, WorldState } from "./worldState";
 import "./m4ClosedEconomyContext";
 
 export interface M4ClosedEconomyOptions {
@@ -392,7 +392,9 @@ export function executeM4ClosedEconomyTick(
   const phase8 = createPhase8Handler({
     getFixtureIntents: (world, context) => mainMarketIntents(world, context),
     getFixtureMarketIds: marketIdMap,
-    collectTelemetry: options.collectMarketTelemetry,
+    ...(options.collectMarketTelemetry === undefined
+      ? {}
+      : { collectTelemetry: options.collectMarketTelemetry }),
     taxPolicy: options.taxPolicy,
   });
   const phase15 = createPhase15WageOfferUpdateHandler({
