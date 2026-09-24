@@ -241,6 +241,14 @@ to release a milestone whose rows still lack it. It was called *optional* here u
 2026-09-07, which is why eleven of twenty-three rows carried nothing and eight of those
 were marked `IMPLEMENTED`. Optional and nobody's job are the same thing.
 
+If your row is the last of its milestone — every registry row of that milestone now
+reads `IMPLEMENTED` — README changes in this same pull request: the milestone leaves
+*Not implemented yet* and is recorded the way the previous one is under *Current state*
+and *Known scope boundaries*. `src/diagnostics/readme-conformance.test.ts` fires on your
+merge ref, not on the provenance proposal after it, because that proposal may write the
+two ledger files and nothing else (Issue #680). The tagger still releases only once the
+commits are in.
+
 **Never create a tag or a GitHub release.** The tagger above is the only thing that may, and it is mechanical for a reason: it releases a milestone only when every one of its requirements reads `IMPLEMENTED` and every row carries its merge commit. On 2026-09-08 a run cut `v0.2.0` by hand while `REQ-CORE-006` was still `PARTIAL`, and the tag claimed a milestone nobody had finished. Recording that a row landed is your work; announcing that a milestone shipped is not.
 
 **Quote `EVIDENCE` whenever it contains a comma.** A bare comma splits the row into more

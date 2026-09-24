@@ -53,6 +53,15 @@ The ledger travels inside the pull request. One row per requirement identifier i
 request's own number: open the pull request first if you need it, then add the row on
 the same branch. Naming any other open pull request is refused by `status_lint`.
 
+When your row makes every registry row of a milestone read `IMPLEMENTED`, README changes
+in the same pull request: take the milestone out of *Not implemented yet* and record it
+the way the previous milestone is recorded under *Current state* and *Known scope
+boundaries*. `src/diagnostics/readme-conformance.test.ts` fires on exactly that merge
+ref — a landed milestone still described as open fails `typescript` — because the
+machine that fills the merge commits afterwards may write the two ledger files and
+nothing else (Issue #680). Releasing is still the tagger's, and still waits for the
+commits.
+
 Before pushing: `npm run typecheck`, `npm test`, `npm run build`, and
 `python -m unittest discover -s scripts/tests` whenever anything under `scripts/`
 changed. Never cut a tag or a release; the tagger is mechanical and releases a milestone
