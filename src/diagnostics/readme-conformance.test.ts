@@ -108,16 +108,28 @@ function ledgerStatusOf(reqId: string): string | undefined {
 }
 
 /**
- * Milestones every one of whose requirements has landed, derived exactly the way
- * `scripts/release_tag.py` derives it: milestone membership is the mirrored registry's MILESTONE
- * column, and a member has landed only when its ledger row reads IMPLEMENTED *and* carries the
- * merge commit that landed it. A blank MILESTONE marks a cross-cutting requirement and gates
- * nothing, and a milestone with no registry rows at all is not closed — it is unindexed, and an
- * empty membership would otherwise make every future milestone vacuously closed.
+ * Milestones every one of whose requirements the ledger records IMPLEMENTED. Membership is the
+ * mirrored registry's MILESTONE column; a blank MILESTONE marks a cross-cutting requirement and
+ * gates nothing, and a milestone with no registry rows at all is not landed — it is unindexed,
+ * and an empty membership would otherwise make every future milestone vacuously landed.
+ *
+ * Deliberately *not* the tagger's definition. `scripts/release_tag.py` releases a milestone only
+ * once every row also carries its merge commit, and this check used to require the same. But a
+ * row lands inside the pull request that earns it with `MERGE_COMMIT` blank, and the machine
+ * fills that cell afterwards from a branch that may write the two ledger files and nothing else
+ * (`docs/zendev/MACHINE_PULL_REQUESTS.md`). So the first revision on which a milestone counted
+ * as closed was always the machine's provenance proposal — the one revision that cannot edit
+ * README — and the last row of every milestone left that proposal red (#660, Issue #680).
+ * STATUS is the judgement; the commit is bookkeeping that follows within minutes. Counting a
+ * milestone landed on STATUS alone makes this rule fire on the author's own merge ref, where
+ * README can change in the same pull request.
  */
-function closedMilestones(): ReadonlySet<string> {
+function landedMilestonesOf(
+  registry: readonly Readonly<Record<string, string>>[],
+  rows: readonly LedgerRow[],
+): ReadonlySet<string> {
   const members = new Map<string, string[]>();
-  for (const record of readCsvRecords(`${repoRoot}docs/spec/mirror/REQUIREMENTS_REGISTRY.csv`)) {
+  for (const record of registry) {
     const milestone = (record["MILESTONE"] ?? "").trim();
     if (!/^M\d+$/.test(milestone)) {
       continue;
@@ -126,17 +138,24 @@ function closedMilestones(): ReadonlySet<string> {
     reqIds.push((record["REQ_ID"] ?? "").trim());
     members.set(milestone, reqIds);
   }
-  const closed = new Set<string>();
+  const landed = new Set<string>();
   for (const [milestone, reqIds] of members) {
-    const landed = reqIds.every((reqId) => {
-      const row = ledger.find((candidate) => candidate.reqId === reqId);
-      return row !== undefined && row.status === "IMPLEMENTED" && row.mergeCommit !== "";
+    const every = reqIds.every((reqId) => {
+      const row = rows.find((candidate) => candidate.reqId === reqId);
+      return row !== undefined && row.status === "IMPLEMENTED";
     });
-    if (landed) {
-      closed.add(milestone);
+    if (every) {
+      landed.add(milestone);
     }
   }
-  return closed;
+  return landed;
+}
+
+function landedMilestones(): ReadonlySet<string> {
+  return landedMilestonesOf(
+    readCsvRecords(`${repoRoot}docs/spec/mirror/REQUIREMENTS_REGISTRY.csv`),
+    ledger,
+  );
 }
 
 /**
@@ -144,8 +163,12 @@ function closedMilestones(): ReadonlySet<string> {
  * identifier it is about sit in the same paragraph or the same list item continuation, so the
  * block is the unit that has to stay internally consistent.
  */
+function blocksOf(text: string): readonly string[] {
+  return text.split(/\n\s*\n/).filter((block) => block.trim() !== "");
+}
+
 function readmeBlocks(): readonly string[] {
-  return readme.split(/\n\s*\n/).filter((block) => block.trim() !== "");
+  return blocksOf(readme);
 }
 
 /** Expands `REQ-MARKET-001..005` shorthand into the identifiers it names. */
@@ -185,6 +208,48 @@ function milestoneIdsIn(text: string): readonly string[] {
     ids.add(`M${String(Number.parseInt(group(match, 1), 10))}`);
   }
   return [...ids];
+}
+
+/**
+ * Phrases that call a milestone still open. Release phrases ("not released") are not among
+ * them: whether a milestone is released is decided by the tag `release-tag.yml` cuts after the
+ * provenance lands, which no file this check reads records, and a landed milestone is
+ * truthfully unreleased for the minutes in between.
+ */
+const MILESTONE_OPEN_PHRASES = [
+  "not closed",
+  "not yet closed",
+  "has not closed",
+  "have not closed",
+  "remains open",
+  "remain open",
+  "still open",
+  "not implemented",
+  "not yet implemented",
+];
+
+/** Every block that names a landed milestone while calling it open. Pure. */
+function milestoneContradictions(
+  blocks: readonly string[],
+  landed: ReadonlySet<string>,
+): readonly string[] {
+  const contradictions: string[] = [];
+  for (const block of blocks) {
+    const lowered = block.toLowerCase();
+    const phrase = MILESTONE_OPEN_PHRASES.find((candidate) => lowered.includes(candidate));
+    if (phrase === undefined) {
+      continue;
+    }
+    for (const id of milestoneIdsIn(block)) {
+      if (landed.has(id)) {
+        contradictions.push(
+          `${id} has landed in full (every registry requirement IMPLEMENTED) but README says ` +
+            `"${phrase}"; the pull request that lands a milestone's last row also updates README`,
+        );
+      }
+    }
+  }
+  return contradictions;
 }
 
 describe("README conformance (REQ-VISUALIZATION-007)", () => {
@@ -233,42 +298,40 @@ describe("README conformance (REQ-VISUALIZATION-007)", () => {
     expect(contradictions).toEqual([]);
   });
 
-  it("never describes a milestone the ledger records closed as still open", () => {
-    const closed = closedMilestones();
+  it("never describes a milestone the ledger records landed as still open", () => {
+    const landed = landedMilestones();
     // Non-vacuity guard: a parse failure in either CSV would otherwise make this check pass
     // while measuring nothing.
-    expect([...closed].length).toBeGreaterThan(0);
+    expect([...landed].length).toBeGreaterThan(0);
+    expect(milestoneContradictions(readmeBlocks(), landed)).toEqual([]);
+  });
 
-    const openPhrases = [
-      "not closed",
-      "not yet closed",
-      "has not closed",
-      "have not closed",
-      "remains open",
-      "remain open",
-      "still open",
-      "not released",
-      "not yet released",
-      "not implemented",
-      "not yet implemented",
+  it("counts a milestone landed on STATUS alone, so the rule fires where README can change", () => {
+    // Issue #680: a milestone's last row lands with a blank merge commit, and the machine that
+    // fills the commit afterwards may not touch README. The rule therefore has to fire on that
+    // row's own pull request, not on the provenance proposal after it.
+    const registry = [
+      { REQ_ID: "REQ-TEST-001", MILESTONE: "M98" },
+      { REQ_ID: "REQ-TEST-002", MILESTONE: "M98" },
+      { REQ_ID: "REQ-TEST-003", MILESTONE: "M99" },
+      { REQ_ID: "REQ-TEST-004", MILESTONE: "" },
     ];
-    const contradictions: string[] = [];
-    for (const block of readmeBlocks()) {
-      const lowered = block.toLowerCase();
-      const phrase = openPhrases.find((candidate) => lowered.includes(candidate));
-      if (phrase === undefined) {
-        continue;
-      }
-      for (const id of milestoneIdsIn(block)) {
-        if (closed.has(id)) {
-          contradictions.push(
-            `${id} has landed in full (every registry requirement IMPLEMENTED with a merge ` +
-              `commit) but README says "${phrase}"`,
-          );
-        }
-      }
-    }
-    expect(contradictions).toEqual([]);
+    const lastRowInFlight: readonly LedgerRow[] = [
+      { reqId: "REQ-TEST-001", status: "IMPLEMENTED", mergeCommit: "0123abcd" },
+      { reqId: "REQ-TEST-002", status: "IMPLEMENTED", mergeCommit: "" },
+      { reqId: "REQ-TEST-003", status: "PARTIAL", mergeCommit: "4567cdef" },
+    ];
+    const landed = landedMilestonesOf(registry, lastRowInFlight);
+    expect([...landed]).toEqual(["M98"]);
+
+    // M99 has a PARTIAL row and M100 is unindexed, so neither is a contradiction; and a landed
+    // milestone may truthfully be called unreleased until the tagger has cut it.
+    const stale = blocksOf(
+      "**Not implemented yet (later milestones M98–M100):**\n- one\n\n**M98:** complete, not yet released.\n",
+    );
+    const found = milestoneContradictions(stale, landed);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain("M98 has landed in full");
   });
 
   it("treats the CSV ledger as authoritative and the generated table as presentation", () => {
