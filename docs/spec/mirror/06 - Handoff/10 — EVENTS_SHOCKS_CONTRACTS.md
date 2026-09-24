@@ -83,7 +83,7 @@ Rules:
 \- endTickExclusive means temporary effects are active for ticks startTick \<= tick \< endTickExclusive.  
 \- COMPLETED instances may remain in canonical history for a configured retention horizon or move into an immutable event log/read model; replay semantics must be identical either way.  
 \- SCHEDULED is used for benchmark/scenario injections. Stochastic events are normally realized directly into ACTIVE at Phase 1\.  
-\- EventInstance IDs are deterministic and must not depend on registry insertion order. Recommended: \`ev:${tick}:${definitionId}:${targetKey}\` with deterministic collision suffix only if the scenario allows \>1 identical target event per tick.
+\- EventInstance IDs are deterministic and must not depend on registry insertion order. Recommended: \`ev:\${tick}:\${definitionId}:\${targetKey}\` with deterministic collision suffix only if the scenario allows \>1 identical target event per tick.
 
 4\. Eligibility rules
 
