@@ -77,8 +77,22 @@ jobs:
         with:
           python-version: '3.12'
 
+      # The classifier, the two repair scripts this workflow runs, and the trust
+      # boundary that keeps them master's — named, not discovered. Discovering the
+      # whole suite here once ran a regression over the live ledger: when master carried
+      # a merged row with no commit past the backfill's grace window, this step failed
+      # on every pull request, the status below was never written, and the one pull
+      # request able to repair master could not merge for want of it (#678). A claim
+      # about master's state belongs in policy-guard, on the merge ref, where the repair
+      # passes and everything else is honestly red. scripts/tests/test_mergeability_self_test
+      # refuses `discover` here and keeps the list in step with the scripts this
+      # workflow executes.
       - name: Prove the classifier fires
-        run: python -m unittest discover -s scripts/tests -v
+        working-directory: scripts/tests
+        run: >-
+          python -m unittest -v
+          test_mergeability test_mergeability_trust
+          test_update_branches test_resolve_ledger_conflicts
 
       # One pull request, the one the event is about. This step never fans out: the
       # event that carries a pull request's number has authority over that head only.
