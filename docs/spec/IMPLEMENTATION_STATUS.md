@@ -106,8 +106,29 @@ that fact; this file does not.
 | REQ-PRODUCTION-008 | `READY` | `IMPLEMENTED` | #650 | #651, `170dc4cdb3ef0e2f0a42a7439714f5ac464fd4ea` | PR #651 composes the canonical one-Region M4 closed-economy tick through the existing 0..15 orchestrator using immutable WorldState threading: Phase 2 production/labor/household plans, Phase 3 labor allocation, Phase 4 PRE_PRODUCTION procurement and settlement, Phase 5 wage settlement plus production/output offers, canonical M3 Phase 6/8 price formation and MAIN clearing, Phase 9 household consumption, Phase 12 capital formation, Phase 14 lifecycle review and Phase 15 wage-signal persistence. Phase 7 remains inert, so M5 trade/shipments/FX cannot feed same-tick Phase 5. Residual Phase-4 production demand is reduced before MAIN, and all persisted transitions are explicit. src/simulation/m4ClosedEconomyOrchestrator.test.ts proves exact 0..15 order, input-world immutability, insertion-order determinism, positive Phase-4 procurement into an initially empty INPUT bucket that is consumed by Phase-5 production, Phase-5 output becoming a positive Phase-8 MAIN sale, positive wage recipients participating in the same Phase-8 market, and no Phase-7 transaction. The integration also repairs lifecycle authority leaks found while composing the tick: labor allocation, wage settlement and wage-offer update now consult the live ProductionUnit status rather than immutable seed status, with focused seed/live divergence regressions. No M5+ behavior or mirror edit is introduced. |
 | REQ-ACCEPTANCE-005 | `READY` | `IMPLEMENTED` | #657 | #661 | PR #661 repairs the permanent M4 golden so household MAIN settlement is proven against authoritative WorldState mutation rather than allocation-only evidence. src/simulation/acceptance-005-m4-golden-gate.test.ts observes accepted post-Phase-5 and pre/post-Phase-8 state boundaries, reconciles every MAIN goods and money leg against canonical actor inventories/wallets including the seller side, proves household gross debit against the authoritative post-wage cash available to Phase 8, and includes a negative control that neutralizes the post-Phase-8 stock state while preserving the same allocations and must fail mechanically. The existing 240-tick phase/reconciliation, production/extraction, payroll, capital, lifecycle-hash, finite-stock and same-input determinism checks remain load-bearing. |
 | REQ-VISUALIZATION-009 | `READY` | `IMPLEMENTED` | #658 | #659, `a55b4da3fb633d07016a504bc028cc99ab5b4ec3` | PR #659 publishes the deterministic one-region M4 Pages preview from the authoritative executeM4ClosedEconomyTick path. src/diagnostics/m4Preview.test.ts proves byte-deterministic projection, non-vacuous production/wage/employment/needs/inventory/capital facts and caller WorldState/RNG isolation; src/diagnostics/m4-pages-render.test.ts exercises Chromium at desktop and 360px narrow viewports plus empty, unavailable, invalid-JSON and malformed-shape handling. docs/m4-preview.json is the checked-in deterministic artifact; docs/index.html, docs/m4.css and docs/m4.js make M4 the first visible Pages story while retaining earlier milestones. Exact-head TypeScript install/typecheck/tests/build, retained .NET restore/build/tests, policy-guard and mergeability were green before SLOPSTER judgement. |
+| REQ-CONFIG-008 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-CONFIG-009 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MARKET-006 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MONETARY-001 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MONETARY-002 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MARKET-007 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MARKET-008 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MONETARY-003 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-006 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-010 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-CLAN-001 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-CLAN-002 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-FISCAL-001 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-FISCAL-002 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-FISCAL-003 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-FISCAL-004 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-FISCAL-005 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-FISCAL-006 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MIGRATION-005 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-007 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-011 | `READY` | `NOT_STARTED` | — | — | — |
 
-**Summary: 45 of 49 requirement identifiers implemented.**
+**Summary: 45 of 70 requirement identifiers implemented.**
 The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
 
 <!-- coverage:generated:end -->

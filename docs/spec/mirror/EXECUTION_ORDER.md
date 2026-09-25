@@ -1,8 +1,8 @@
 # EXECUTION\_ORDER
 
 Status: FROZEN  
-Version: 5  
-Updated: 2026-09-10
+Version: 6  
+Updated: 2026-09-25
 
 Rule: AUTHOR takes exactly one bounded unit from the earliest milestone whose dependencies and requirement statuses are satisfied. Only READY/FROZEN requirements are executable. A failed gate blocks promotion. Do not skip ahead because a later task looks easier. The baseline cross-cutting visibility rule remains at least 5% per milestone. OWNER OVERRIDE 2026-09-10: M3 has a hard \>=30% representation/documentation allocation and may not close until REQ-VISUALIZATION-006, REQ-VISUALIZATION-007 and REQ-VISUALIZATION-008 are all IMPLEMENTED.
 
@@ -13,8 +13,8 @@ M1 Canonical primitives/config/world genesis — after M0 gate. Read 00, 01, 02,
 M2 Tick/ledger spine — after M1 gate. Read 01, 02, 11 and M2 rows; REQ-VISUALIZATION-005 is the required phase/ledger Milestone Preview.  
 M3 Local markets — indexed as nine permanent rows: REQ-MARKET-001..005, REQ-ACCEPTANCE-004 and REQ-VISUALIZATION-006..008. After M2, read Handoff/04 plus the listed dependencies and Handoff/11 for the representation package. All nine registry rows are READY; implementation selection still respects each row's declared dependencies. REQ-VISUALIZATION-007/008 may proceed while market correctness repairs continue. REQ-VISUALIZATION-006 remains dependent on the completed M3 telemetry/acceptance surface. M3 is not complete until all three representation rows are IMPLEMENTED.  
 M4 Production/labor/population closed economy — indexed as fifteen permanent rows: REQ-CONFIG-006..007, REQ-PRODUCTION-001..008, REQ-POPULATION-001..003, REQ-ACCEPTANCE-005 and REQ-VISUALIZATION-009. Read Handoff/05 and 06 plus Handoff/11 for the integrated gate/preview. All M4 rows are READY in the registry but remain non-executable until the complete M3 gate passes. M4 deliberately stops at the one-region closed economy: no M5 trade/FX, no M6 institutional Clan/fiscal dynamics and no M8 demography/migration.  
-M5 Transport/trade/FX — after M4. Read 04 and 08 interfaces plus relevant rows.  
-M6 Fiscal/laws/clans/debt — after M5. Read 06, 07 plus relevant monetary debt interfaces.  
+M5 Transport/trade/FX — indexed as ten permanent rows: REQ-CONFIG-008..009, REQ-MARKET-006..008, REQ-MONETARY-001..003, REQ-ACCEPTANCE-006 and REQ-VISUALIZATION-010. Hard predecessor is the truthful M4 gate. Read Handoff/04 for transport/planning/settlement/shipment/finite-FX mechanics, Handoff/08 for the Phase-11 FX reconciliation/next-rate ownership boundary, and Handoff/11 for Gate M5/preview. Dependency order: CONFIG-008/009 → MARKET-006 and MONETARY-001 → MONETARY-002 → MARKET-007 → MARKET-008 and MONETARY-003 → ACCEPTANCE-006 → VISUALIZATION-010. M7 monetary-policy behavior remains out of scope.  
+M6 Fiscal/laws/clans/debt — indexed as eleven permanent rows: REQ-CLAN-001..002, REQ-FISCAL-001..006, REQ-MIGRATION-005, REQ-ACCEPTANCE-007 and REQ-VISUALIZATION-011. Hard predecessor is the truthful M5 gate. Read Handoff/06 for Clan institutional/treasury behavior, Handoff/07 for State fiscal/law/debt authority, Handoff/08 only for the debt-holder/settleFx monetary interface, and Handoff/11 for Gate M6/preview. Dependency order: CLAN-001 \+ FISCAL-004 → CLAN-002 \+ FISCAL-001 \+ FISCAL-002 \+ FISCAL-003 → FISCAL-005 → FISCAL-006 → ACCEPTANCE-007 → MIGRATION-005 → VISUALIZATION-011. REQ-MIGRATION-005 removes canonical runtime dependence on legacy City/Pop/Market/Deal only after equivalent M0–M6 evidence; retained regression/.NET gates must not be weakened. M7 monetary-policy/OMO behavior remains out of scope.  
 M7 Monetary/currency — after M6. Read 08\.  
 M8 Demography/migration/expansion/succession — after M7. Read 06, 09\.  
 M9 Events/shocks — after M8. Read 10\.  
@@ -24,7 +24,7 @@ M12 Legacy removal/release candidate — after M11. Remove legacy responsibility
 
 ## First executable work
 
-M0-M2 remain governed by their existing executable rows. M3 is indexed as nine permanent requirement-sized units: REQ-MARKET-001..005, REQ-ACCEPTANCE-004 and REQ-VISUALIZATION-006..008. The three representation/documentation rows are 3/9 \= 33.3%, satisfying the owner's \>=30% M3 focus requirement. Treat them as first-class completion work: polished Pages, current README/public texts, and at least two public explainers. M4 is now pre-indexed as fifteen bounded READY rows so the AUTHOR queue can transition without an indexing gap once M3 closes: two config, eight production, three population, one integrated acceptance and one Pages-preview row. The M4 visualization share is 1/15 \= 6.7%, above the baseline \>=5% rule. M4 rows remain blocked by milestone order until all nine M3 rows have truthful closing evidence. Before promoting into M5, the researcher/QA side must index M5-specific rows.
+M0-M2 remain governed by their existing executable rows. M3 is indexed as nine permanent requirement-sized units: REQ-MARKET-001..005, REQ-ACCEPTANCE-004 and REQ-VISUALIZATION-006..008. The three representation/documentation rows are 3/9 \= 33.3%, satisfying the owner's \>=30% M3 focus requirement. Treat them as first-class completion work: polished Pages, current README/public texts, and at least two public explainers. M4 is now pre-indexed as fifteen bounded READY rows so the AUTHOR queue can transition without an indexing gap once M3 closes: two config, eight production, three population, one integrated acceptance and one Pages-preview row. The M4 visualization share is 1/15 \= 6.7%, above the baseline \>=5% rule. M4 rows remain blocked by milestone order until all nine M3 rows have truthful closing evidence. M5 permanent indexing is complete: the ten READY rows and dependency order above are the canonical navigation contract. Runtime promotion into M5 remains blocked until the truthful M4 gate closes.
 
 ## Per-run AUTHOR protocol
 
