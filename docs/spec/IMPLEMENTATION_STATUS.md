@@ -116,8 +116,19 @@ that fact; this file does not.
 | REQ-MONETARY-003 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-ACCEPTANCE-006 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-VISUALIZATION-010 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-CLAN-001 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-CLAN-002 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-FISCAL-001 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-FISCAL-002 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-FISCAL-003 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-FISCAL-004 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-FISCAL-005 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-FISCAL-006 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MIGRATION-005 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-007 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-011 | `READY` | `NOT_STARTED` | — | — | — |
 
-**Summary: 44 of 59 requirement identifiers implemented.**
+**Summary: 44 of 70 requirement identifiers implemented.**
 Also recorded: 1 partial.
 The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
 
