@@ -135,8 +135,17 @@ that fact; this file does not.
 | REQ-MONETARY-009 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-ACCEPTANCE-008 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-VISUALIZATION-012 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-POPULATION-004 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-EXPANSION-001 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-EXPANSION-002 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-EXPANSION-003 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-EXPANSION-004 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-EXPANSION-005 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-EXPANSION-006 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-009 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-013 | `READY` | `NOT_STARTED` | — | — | — |
 
-**Summary: 44 of 78 requirement identifiers implemented.**
+**Summary: 44 of 87 requirement identifiers implemented.**
 Also recorded: 1 partial.
 The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
 
