@@ -266,6 +266,88 @@ describe("Phase-8 consumption-tax policy input (REQ-MARKET-004, Issue #481)", ()
     expect(result.context.marketTelemetry[0]!.consumptionTaxCollected).toBe(0);
   });
 
+  it("keeps allocation identity and emitted group order stable when cross-good intent insertion is reversed", () => {
+    const world = buildWorld();
+    const actors = counterparties(world);
+    const TOOLS = "good:tools" as GoodId;
+
+    const intents: MarketIntent[] = [
+      {
+        id: createMarketIntentId("mi:issue-251-food-seller"),
+        actor: { type: "PRODUCTION_UNIT" as const, productionUnitId: actors.sellerUnitId },
+        regionId: actors.regionId,
+        goodId: FOOD,
+        side: "SELL" as const,
+        purpose: "INVENTORY_REBALANCE" as const,
+        desiredQuantity: 2,
+        minimumReserveQuantity: 0,
+        inventoryBucket: "OUTPUT" as const,
+        sourcePlanId: "plan:issue-251-food-supply",
+      },
+      {
+        id: createMarketIntentId("mi:issue-251-food-buyer"),
+        actor: { type: "COHORT" as const, cohortId: actors.buyerCohortId },
+        regionId: actors.regionId,
+        goodId: FOOD,
+        side: "BUY" as const,
+        purpose: "CONSUMPTION" as const,
+        desiredQuantity: 1,
+        maxSpend: 100,
+        sourcePlanId: "plan:issue-251-food-demand",
+      },
+      {
+        id: createMarketIntentId("mi:issue-251-tools-seller"),
+        actor: { type: "PRODUCTION_UNIT" as const, productionUnitId: actors.sellerUnitId },
+        regionId: actors.regionId,
+        goodId: TOOLS,
+        side: "SELL" as const,
+        purpose: "INVENTORY_REBALANCE" as const,
+        desiredQuantity: 2,
+        minimumReserveQuantity: 0,
+        inventoryBucket: "OUTPUT" as const,
+        sourcePlanId: "plan:issue-251-tools-supply",
+      },
+      {
+        id: createMarketIntentId("mi:issue-251-tools-buyer"),
+        actor: { type: "COHORT" as const, cohortId: actors.buyerCohortId },
+        regionId: actors.regionId,
+        goodId: TOOLS,
+        side: "BUY" as const,
+        purpose: "CONSUMPTION" as const,
+        desiredQuantity: 1,
+        maxSpend: 100,
+        sourcePlanId: "plan:issue-251-tools-demand",
+      },
+    ];
+
+    const run = (orderedIntents: MarketIntent[]) =>
+      executeTick(
+        world,
+        1,
+        world.pendingTransitions,
+        createPhase8Handler({
+          getFixtureIntents: () => orderedIntents,
+          getFixtureMarketIds: () => new Map([[actors.regionId, UNSEEDED_MARKET]]),
+          collectTelemetry: true,
+          taxPolicy: fixtureTaxPolicy,
+        }),
+      );
+
+    const forward = run(intents);
+    const reversed = run([...intents].reverse());
+
+    expect(forward.reconciliationErrors).toBeNull();
+    expect(reversed.reconciliationErrors).toBeNull();
+    expect(forward.context.marketAllocations).toHaveLength(2);
+    expect(reversed.context.marketAllocations).toHaveLength(2);
+
+    expect(reversed.context.marketAllocations).toEqual(forward.context.marketAllocations);
+    expect(reversed.context.marketTelemetry).toEqual(forward.context.marketTelemetry);
+    expect(Array.from(reversed.context.marketClearingAggregates.entries())).toEqual(
+      Array.from(forward.context.marketClearingAggregates.entries()),
+    );
+  });
+
   it("refuses to clear a fixture that supplies no tax policy", () => {
     // No fallback rate exists to fall back to: an M3 fixture that does not state its tax
     // policy is a defect, not a request for a canonical default.

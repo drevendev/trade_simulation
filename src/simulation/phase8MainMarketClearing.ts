@@ -14,6 +14,7 @@
  */
 
 import type { MarketId, GoodId, RegionId, CurrencyId, StateId } from "../domain/id";
+import { stableOrderBy } from "../domain/ordering";
 import type { WorldState } from "./worldState";
 import type { TickContext, PhaseHandler } from "./tickOrchestrator";
 import type { PendingTransitions } from "./worldState";
@@ -170,7 +171,7 @@ export const createPhase8Handler = (options?: {
     const newAggregates = new Map(context.marketClearingAggregates);
     const allocationIdCounter = { value: 0 };
 
-    for (const group of intentsByMarketGoodPass.values()) {
+    for (const [, group] of stableOrderBy(intentsByMarketGoodPass.entries(), ([key]) => key)) {
       if (group.buyers.length === 0 || group.sellers.length === 0) {
         continue;
       }
