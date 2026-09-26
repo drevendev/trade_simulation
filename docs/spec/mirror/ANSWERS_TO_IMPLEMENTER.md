@@ -789,4 +789,12 @@ M6 is now pre-indexed as eleven permanent READY rows: REQ-CLAN-001..002, REQ-FIS
 Dependency order: REQ-CLAN-001 \+ REQ-FISCAL-004 → REQ-CLAN-002 \+ REQ-FISCAL-001 \+ REQ-FISCAL-002 \+ REQ-FISCAL-003 → REQ-FISCAL-005 → REQ-FISCAL-006 → REQ-ACCEPTANCE-007 → REQ-MIGRATION-005 → REQ-VISUALIZATION-011. REQ-MIGRATION-005 means removal of canonical runtime dependence on legacy City/Pop/Market/Deal after equivalent M0–M6 evidence; it does not authorize weakening retained migration/.NET regression gates, and physical archive/delete remains optional until safe.  
 Backlog mapping: \#684 → REQ-CLAN-001; \#685 → REQ-CLAN-002; \#686 → REQ-FISCAL-001; \#687 → REQ-FISCAL-002 \+ REQ-FISCAL-003 because transfers/grants and procurement/infrastructure/state ownership are independently implementable/verifiable; \#688 → REQ-FISCAL-004; \#689 → REQ-FISCAL-005; \#690 → REQ-FISCAL-006; \#691 → REQ-ACCEPTANCE-007; \#692 → REQ-VISUALIZATION-011. REQ-MIGRATION-005 has no pre-existing dedicated backlog Issue and must receive one before implementation is claimed.  
 No new implementation-package file was added. Let normal MACHINE synchronization update the existing mirror; do not patch docs/spec/mirror manually.  
-STATUS: M6\_INDEXED / READY-BUT-MILESTONE-BLOCKED / RUNTIME\_GATE\_STILL\_M5  
+STATUS: M6\_INDEXED / READY-BUT-MILESTONE-BLOCKED / RUNTIME\_GATE\_STILL\_M
+
+2026-09-25 — NAV-M7-001 — M7 permanent requirement/index mapping  
+M7 is indexed as eight permanent READY rows: REQ-MONETARY-004..009, REQ-ACCEPTANCE-008 and REQ-VISUALIZATION-012. Truthful M6 closure remains the hard runtime predecessor.  
+Dependency order: REQ-MONETARY-004 → REQ-MONETARY-005 → REQ-MONETARY-006 → REQ-MONETARY-007 → REQ-MONETARY-008 → REQ-MONETARY-009 → REQ-ACCEPTANCE-008 → REQ-VISUALIZATION-012.  
+Backlog mapping: \#694→REQ-MONETARY-004; \#695→REQ-MONETARY-005; \#696→REQ-MONETARY-006; \#697→REQ-MONETARY-007; \#698→REQ-MONETARY-008; \#699→REQ-MONETARY-009; \#700→REQ-ACCEPTANCE-008; \#701→REQ-VISUALIZATION-012.  
+No new implementation-package file was added. Let normal MACHINE synchronization update the existing mirror; do not patch docs/spec/mirror manually.  
+STATUS: M7\_INDEXED / READY-BUT-MILESTONE-BLOCKED / RUNTIME\_GATE\_STILL\_M6  
+5  
