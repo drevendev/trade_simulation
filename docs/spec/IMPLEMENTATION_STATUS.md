@@ -151,8 +151,16 @@ that fact; this file does not.
 | REQ-EVENTS-005 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-ACCEPTANCE-010 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-VISUALIZATION-014 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-011 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-012 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-013 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-PERFORMANCE-001 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-PERFORMANCE-002 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-CONFIG-010 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-014 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-015 | `READY` | `NOT_STARTED` | — | — | — |
 
-**Summary: 45 of 94 requirement identifiers implemented.**
+**Summary: 45 of 102 requirement identifiers implemented.**
 The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
 
 <!-- coverage:generated:end -->
