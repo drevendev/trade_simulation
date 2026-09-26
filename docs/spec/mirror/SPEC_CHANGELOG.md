@@ -72,4 +72,18 @@ Backlog mapping: \#721→REQ-ACCEPTANCE-011; \#722→REQ-ACCEPTANCE-012; \#723�
 Performance thresholds are copied only from the canonical acceptance suite: controlled P2 \<=8/16 ms median/p95 per tick, 100 ticks \<=1.0 s median, \<=500 KB/tick hard payload ceiling, \<=256 MB P2 retained-history memory; P3 \<=50/100 ms median/p95 and \<=512 MB history memory; comparable median regression \>15% is a warning until an absolute controlled-environment budget fails. No economics were retuned and no M11 Worker/UI authority was pulled forward.  
 The M10 visualization share is 1/8 \= 12.5%, above the baseline 5% rule. No new implementation-package file was added; normal MACHINE synchronization should update the existing mirror.  
 STATUS: M10\_INDEXED / READY-BUT-MILESTONE-BLOCKED / RUNTIME\_GATE\_STILL\_M9  
-|  
+2026-09-26 — NAV-M11-001 — M11 permanent requirement/index mapping  
+M11 is indexed as eleven permanent READY rows: REQ-VISUALIZATION-016..025 plus REQ-ACCEPTANCE-015. Truthful M10 closure remains the hard runtime predecessor; indexing does not authorize early M11 Worker/UI execution.  
+STATUS: M11\_INDEXED / READY-BUT-MILESTONE-BLOCKED / RUNTIME\_GATE\_STILL\_M10  
+2026-09-26 — NAV-M12-001 — M12 permanent requirement/index mapping  
+M12 is indexed as five permanent READY rows: REQ-MIGRATION-006..007, REQ-CONFIG-011, REQ-VISUALIZATION-026 and REQ-ACCEPTANCE-016. Truthful M11 closure remains the hard runtime predecessor; indexing does not authorize early release cleanup.  
+Dependency order: REQ-MIGRATION-006 \+ REQ-CONFIG-011 → REQ-MIGRATION-007 → REQ-VISUALIZATION-026 → REQ-ACCEPTANCE-016.  
+Backlog mapping: \#742→REQ-MIGRATION-006; \#743→REQ-CONFIG-011; \#744→REQ-MIGRATION-007; \#745→REQ-VISUALIZATION-026; \#746→REQ-ACCEPTANCE-016.  
+REQ-MIGRATION-006 narrows final physical legacy cleanup to archive/delete or explicit reference-only quarantine after REQ-MIGRATION-005 has already proven no canonical runtime dependency, avoiding duplicate authority. M12 keeps one canonical TypeScript runtime, current validated CLI controls, truthful public docs/Pages, and a clean-clone final HANDOFF gate without adding new v1 economics.  
+The visualization share is 1/5 \= 20%, above the baseline 5% rule. No new implementation-package file was added; normal MACHINE synchronization should update the mirror.  
+STATUS: M12\_INDEXED / READY-BUT-MILESTONE-BLOCKED / RUNTIME\_GATE\_STILL\_M11  
+|
+
+2026-09-26 — NAV-M11-ROW-SHAPE-REPAIR-001 — repaired M11 registry row shape  
+REQ-VISUALIZATION-020..025 and REQ-ACCEPTANCE-015 had acceptance criteria shifted into the MILESTONE column with ACCEPTANCE empty. REQUIREMENTS\_REGISTRY now restores MILESTONE=M11 and the original acceptance criteria in ACCEPTANCE. Requirement IDs, semantics, status, priority, dependency order and backlog mapping are unchanged. MACHINE PR \#759 captured the malformed pre-repair rows and is not valid mirror-verification evidence; await a fresh MACHINE sync from corrected Drive truth. No manual mirror edit and no allowlist change.  
+STATUS: REPAIRED\_IN\_DRIVE / MACHINE\_RESYNC\_PENDING  

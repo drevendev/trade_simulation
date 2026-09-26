@@ -811,10 +811,37 @@ Dependency order: REQ-EVENTS-001 → REQ-EVENTS-002 → REQ-EVENTS-003 → REQ-E
 Backlog mapping: \#713→REQ-EVENTS-001; \#714→REQ-EVENTS-002; \#715→REQ-EVENTS-003; \#716→REQ-EVENTS-004; \#717→REQ-EVENTS-005; \#718→REQ-ACCEPTANCE-010; \#719→REQ-VISUALIZATION-014.  
 M9 effects remain bounded to typed ShockOperations, explicit physical/demographic losses and subsystem-owned modifier/query boundaries. Direct writes to prices, GDP, CPI, policy rate, jurisdiction or transaction money remain forbidden.  
 The visualization share is 1/7 \= 14.3%, above the baseline 5% rule. No new implementation-package file was added. Let normal MACHINE synchronization update the existing mirror; do not patch docs/spec/mirror manually.  
-STATUS: M9\_INDEXED / READY-BUT-MILESTONE-BLOCKED / RUNTIME\_GATE\_STILL\_M  
+STATUS: M9\_INDEXED / READY-BUT-MILESTONE-BLOCKED / RUNTIME\_GATE\_STILL\_M8  
 2026-09-26 — NAV-M10-001 — permanent M10 mapping  
 M10 IDs are fixed before implementation: \#721 \-\> REQ-ACCEPTANCE-011; \#722 \-\> REQ-ACCEPTANCE-012; \#723 \-\> REQ-ACCEPTANCE-013; \#724 \-\> REQ-PERFORMANCE-001; \#725 \-\> REQ-PERFORMANCE-002; \#726 \-\> REQ-CONFIG-010; \#727 \-\> REQ-ACCEPTANCE-014; \#728 \-\> REQ-VISUALIZATION-015.  
 Dependency order: ACCEPTANCE-011 \+ ACCEPTANCE-012 \+ CONFIG-010 \-\> ACCEPTANCE-013 \-\> PERFORMANCE-001 \+ PERFORMANCE-002 \-\> ACCEPTANCE-014 \-\> VISUALIZATION-015. M9 remains the hard predecessor. Exact performance/history thresholds come only from Handoff/12. Do not weaken correctness or pull M11 Worker/SimulationOutput/interactive-observatory semantics forward.  
 No new implementation-package file was added, so no mirror allowlist request is required. Wait for normal MACHINE synchronization; do not patch docs/spec/mirror manually.  
 STATUS: ANSWERED / M10\_INDEXED / MIRROR\_VERIFICATION\_PENDING  
+2026-09-26 — NAV-M11-001 — permanent M11 mapping  
+M11 permanent IDs are fixed before implementation; M10 remains the hard predecessor.  
+Permanent M11 IDs: REQ-VISUALIZATION-016 through REQ-VISUALIZATION-025, then REQ-ACCEPTANCE-015.  
+Issue 730 maps to REQ-VISUALIZATION-016.  
+Issue 731 maps to REQ-VISUALIZATION-017.  
+Issue 732 maps to REQ-VISUALIZATION-018.  
+Issue 733 maps to REQ-VISUALIZATION-019.  
+Issue 734 maps to REQ-VISUALIZATION-020.  
+Issue 735 maps to REQ-VISUALIZATION-021.  
+Issue 736 maps to REQ-VISUALIZATION-022.  
+Issue 737 maps to REQ-VISUALIZATION-023.  
+Issue 738 maps to REQ-VISUALIZATION-024.  
+Issue 739 maps to REQ-VISUALIZATION-025.  
+Issue 740 maps to REQ-ACCEPTANCE-015.  
+Dependency order: VISUALIZATION-016, 017, 018, 019, 020, 021, then 022/023/024, then 025, then ACCEPTANCE-015.  
+STATUS: ANSWERED / M11\_INDEXED / MIRROR\_VERIFICATION\_PENDING  
+2026-09-26 — NAV-M12-001 — permanent M12 mapping  
+M12 permanent IDs are fixed before implementation; truthful M11 closure remains the hard predecessor.  
+Issue 742 maps to REQ-MIGRATION-006.  
+Issue 743 maps to REQ-CONFIG-011.  
+Issue 744 maps to REQ-MIGRATION-007.  
+Issue 745 maps to REQ-VISUALIZATION-026.  
+Issue 746 maps to REQ-ACCEPTANCE-016.  
+Dependency order: REQ-MIGRATION-006 \+ REQ-CONFIG-011 → REQ-MIGRATION-007 → REQ-VISUALIZATION-026 → REQ-ACCEPTANCE-016.  
+REQ-MIGRATION-006 is final archive/delete or reference-only quarantine after REQ-MIGRATION-005 has already removed canonical runtime dependence on City/Pop/Market/Deal.  
+The M12 visualization share is 1/5 \= 20%, above the baseline 5% rule. No new implementation-package file was added, so no mirror allowlist request is required.  
+STATUS: ANSWERED / M12\_INDEXED / MIRROR\_VERIFICATION\_PENDING  
 8  
