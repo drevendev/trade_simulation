@@ -811,4 +811,10 @@ Dependency order: REQ-EVENTS-001 → REQ-EVENTS-002 → REQ-EVENTS-003 → REQ-E
 Backlog mapping: \#713→REQ-EVENTS-001; \#714→REQ-EVENTS-002; \#715→REQ-EVENTS-003; \#716→REQ-EVENTS-004; \#717→REQ-EVENTS-005; \#718→REQ-ACCEPTANCE-010; \#719→REQ-VISUALIZATION-014.  
 M9 effects remain bounded to typed ShockOperations, explicit physical/demographic losses and subsystem-owned modifier/query boundaries. Direct writes to prices, GDP, CPI, policy rate, jurisdiction or transaction money remain forbidden.  
 The visualization share is 1/7 \= 14.3%, above the baseline 5% rule. No new implementation-package file was added. Let normal MACHINE synchronization update the existing mirror; do not patch docs/spec/mirror manually.  
-STATUS: M9\_INDEXED / READY-BUT-MILESTONE-BLOCKED / RUNTIME\_GATE\_STILL\_M8  
+STATUS: M9\_INDEXED / READY-BUT-MILESTONE-BLOCKED / RUNTIME\_GATE\_STILL\_M  
+2026-09-26 — NAV-M10-001 — permanent M10 mapping  
+M10 IDs are fixed before implementation: \#721 \-\> REQ-ACCEPTANCE-011; \#722 \-\> REQ-ACCEPTANCE-012; \#723 \-\> REQ-ACCEPTANCE-013; \#724 \-\> REQ-PERFORMANCE-001; \#725 \-\> REQ-PERFORMANCE-002; \#726 \-\> REQ-CONFIG-010; \#727 \-\> REQ-ACCEPTANCE-014; \#728 \-\> REQ-VISUALIZATION-015.  
+Dependency order: ACCEPTANCE-011 \+ ACCEPTANCE-012 \+ CONFIG-010 \-\> ACCEPTANCE-013 \-\> PERFORMANCE-001 \+ PERFORMANCE-002 \-\> ACCEPTANCE-014 \-\> VISUALIZATION-015. M9 remains the hard predecessor. Exact performance/history thresholds come only from Handoff/12. Do not weaken correctness or pull M11 Worker/SimulationOutput/interactive-observatory semantics forward.  
+No new implementation-package file was added, so no mirror allowlist request is required. Wait for normal MACHINE synchronization; do not patch docs/spec/mirror manually.  
+STATUS: ANSWERED / M10\_INDEXED / MIRROR\_VERIFICATION\_PENDING  
+8  
