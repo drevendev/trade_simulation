@@ -127,8 +127,17 @@ that fact; this file does not.
 | REQ-MIGRATION-005 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-ACCEPTANCE-007 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-VISUALIZATION-011 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MONETARY-004 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MONETARY-005 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MONETARY-006 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MONETARY-007 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MONETARY-008 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MONETARY-009 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-008 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-012 | `READY` | `NOT_STARTED` | — | — | — |
 
-**Summary: 45 of 70 requirement identifiers implemented.**
+**Summary: 45 of 78 requirement identifiers implemented.**
+Also recorded: 1 partial.
 The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
 
 <!-- coverage:generated:end -->
