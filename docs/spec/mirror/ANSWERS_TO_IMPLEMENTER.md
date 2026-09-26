@@ -805,3 +805,10 @@ Backlog mapping: \#703→REQ-POPULATION-004; \#704→REQ-EXPANSION-001; \#705→
 The M8 visualization share is 1/9 \= 11.1%, above the baseline 5% rule. No new implementation-package file was added; normal MACHINE synchronization should update the mirror.  
 STATUS: M8\_INDEXED / READY-BUT-MILESTONE-BLOCKED / RUNTIME\_GATE\_STILL\_M7
 
+2026-09-26 — NAV-M9-001 — M9 permanent requirement/index mapping  
+M9 is indexed as seven permanent READY rows: REQ-EVENTS-001..005, REQ-ACCEPTANCE-010 and REQ-VISUALIZATION-014. Truthful M8 closure remains the hard runtime predecessor; indexing does not authorize early event runtime behavior.  
+Dependency order: REQ-EVENTS-001 → REQ-EVENTS-002 → REQ-EVENTS-003 → REQ-EVENTS-004 → REQ-EVENTS-005 → REQ-ACCEPTANCE-010 → REQ-VISUALIZATION-014.  
+Backlog mapping: \#713→REQ-EVENTS-001; \#714→REQ-EVENTS-002; \#715→REQ-EVENTS-003; \#716→REQ-EVENTS-004; \#717→REQ-EVENTS-005; \#718→REQ-ACCEPTANCE-010; \#719→REQ-VISUALIZATION-014.  
+M9 effects remain bounded to typed ShockOperations, explicit physical/demographic losses and subsystem-owned modifier/query boundaries. Direct writes to prices, GDP, CPI, policy rate, jurisdiction or transaction money remain forbidden.  
+The visualization share is 1/7 \= 14.3%, above the baseline 5% rule. No new implementation-package file was added. Let normal MACHINE synchronization update the existing mirror; do not patch docs/spec/mirror manually.  
+STATUS: M9\_INDEXED / READY-BUT-MILESTONE-BLOCKED / RUNTIME\_GATE\_STILL\_M8  
