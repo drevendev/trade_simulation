@@ -159,8 +159,24 @@ that fact; this file does not.
 | REQ-CONFIG-010 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-ACCEPTANCE-014 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-VISUALIZATION-015 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-016 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-017 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-018 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-019 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-020 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-021 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-022 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-023 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-024 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-025 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-015 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MIGRATION-006 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-CONFIG-011 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-MIGRATION-007 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-VISUALIZATION-026 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-016 | `READY` | `NOT_STARTED` | — | — | — |
 
-**Summary: 44 of 102 requirement identifiers implemented.**
+**Summary: 44 of 118 requirement identifiers implemented.**
 Also recorded: 1 partial.
 The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
 
