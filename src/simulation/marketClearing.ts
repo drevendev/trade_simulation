@@ -14,7 +14,7 @@ import type {
   RegionId,
   StateId,
 } from "../domain/id";
-import type { ActorRef } from "../domain/genesisLedger";
+import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
 import type { MarketIntent, MarketIntentId } from "./marketIntent";
@@ -140,9 +140,11 @@ export function computeLocalClearing(
   quantityEpsilon: number = 1e-8,
   allocationIdCounter: { value: number },
 ): MarketAllocation[] {
-  // Validate inputs
-  const buyerIntents = input.buyerIntents;
-  const sellerIntents = input.sellerIntents;
+  // Canonicalize before callbacks and floating-point reductions, not only before
+  // residual correction: addition order is observable for mixed-magnitude stocks.
+  const intentKey = (intent: MarketIntent): string => `${actorRefKey(intent.actor)}|${intent.id}`;
+  const buyerIntents = stableOrderBy(input.buyerIntents, intentKey);
+  const sellerIntents = stableOrderBy(input.sellerIntents, intentKey);
 
   if (buyerIntents.length === 0 || sellerIntents.length === 0) {
     return [];
@@ -176,13 +178,17 @@ export function computeLocalClearing(
   // Provisional seller allocations: sellerFill_i = Q × sellable_i / Σ sellable
   const provisionalSellerAllocations = sellerData.map((data) => ({
     ...data,
-    provisionalFill: (clearedQuantity * data.sellable) / totalSupply,
+    provisionalFill: clearedQuantity === totalSupply
+      ? data.sellable
+      : (clearedQuantity * data.sellable) / totalSupply,
   }));
 
   // Provisional buyer allocations: buyerFill_j = Q × effectiveDemand_j / Σ effectiveDemand
   const provisionalBuyerAllocations = buyerData.map((data) => ({
     ...data,
-    provisionalFill: (clearedQuantity * data.effectiveDemand) / totalDemand,
+    provisionalFill: clearedQuantity === totalDemand
+      ? data.effectiveDemand
+      : (clearedQuantity * data.effectiveDemand) / totalDemand,
   }));
 
   // Residual correction: use stable ID order (actor ID then intent ID)
@@ -190,11 +196,13 @@ export function computeLocalClearing(
     provisionalSellerAllocations,
     clearedQuantity,
     quantityEpsilon,
+    (entry) => entry.sellable,
   );
   const correctedBuyerAllocations = applyResidualCorrection(
     provisionalBuyerAllocations,
     clearedQuantity,
     quantityEpsilon,
+    (entry) => entry.effectiveDemand,
   );
 
   // Two-pointer concrete matching
@@ -204,7 +212,6 @@ export function computeLocalClearing(
     correctedBuyerAllocations,
     marketPrice,
     allocationIdCounter,
-    quantityEpsilon,
   );
 
   return allocations;
@@ -219,40 +226,49 @@ function applyResidualCorrection<T extends { intent: MarketIntent; provisionalFi
   data: T[],
   targetTotal: number,
   quantityEpsilon: number,
+  capacityOf: (entry: T) => number,
 ): (T & { correctedFill: number })[] {
-  // Sort by stable ID order: actor ID first, then intent ID
-  const sorted = stableOrderBy(data, (d) => {
-    const actorKey =
-      d.intent.actor.type === "CLAN"
-        ? `clan:${d.intent.actor.clanId}`
-        : d.intent.actor.type === "STATE"
-          ? `state:${d.intent.actor.stateId}`
-          : d.intent.actor.type === "PRODUCTION_UNIT"
-            ? `pu:${d.intent.actor.productionUnitId}`
-            : `unknown:${d.intent.actor.type}`;
-    return `${actorKey}|${d.intent.id}`;
-  });
+  // Sort by canonical persistent actor key first, then intent ID.
+  // Reusing actorRefKey keeps COHORT and MONETARY_AUTHORITY ordering aligned with
+  // the rest of the stock/settlement model and makes the ActorRef union exhaustive.
+  const sorted = stableOrderBy(data, (d) => `${actorRefKey(d.intent.actor)}|${d.intent.id}`);
 
-  // Start with provisionalFill for all
+  // Start with provisionalFill for all.
   const corrected = sorted.map((d) => ({
     ...d,
     correctedFill: d.provisionalFill,
   }));
 
-  // Compute total and residual error
+  // Compute total and residual error.
   const currentTotal = corrected.reduce((sum, d) => sum + d.correctedFill, 0);
   const residualError = targetTotal - currentTotal;
 
-  // If residual error is significant, apply correction in stable order
+  // Reconcile only significant floating residuals, in stable order, without
+  // ever moving a fill above its canonical sellable/effective-demand capacity
+  // or below zero.
   if (Math.abs(residualError) > quantityEpsilon) {
     let remaining = residualError;
     for (let i = 0; i < corrected.length && Math.abs(remaining) > quantityEpsilon; i++) {
       const curr = corrected[i]!;
-      const toAdd = remaining > 0
-        ? Math.min(remaining, 1 - (curr.correctedFill % 1))
-        : Math.max(remaining, -(curr.correctedFill % 1));
+      const capacity = capacityOf(curr);
+      assertFiniteCanonicalNumber(capacity, `residual-correction capacity for ${curr.intent.id}`);
+      if (capacity < 0) {
+        throw new Error(`Residual-correction capacity must be >= 0 for ${curr.intent.id}, got ${capacity}`);
+      }
+
+      const toAdd =
+        remaining > 0
+          ? Math.min(remaining, Math.max(0, capacity - curr.correctedFill))
+          : Math.max(remaining, -curr.correctedFill);
+
       curr.correctedFill += toAdd;
       remaining -= toAdd;
+    }
+
+    if (Math.abs(remaining) > quantityEpsilon) {
+      throw new Error(
+        `Residual correction could not reconcile target total within epsilon: remaining=${remaining}`,
+      );
     }
   }
 
@@ -277,7 +293,6 @@ function twoPointerMatcher(
   }>,
   marketPrice: number,
   allocationIdCounter: { value: number },
-  quantityEpsilon: number,
 ): MarketAllocation[] {
   const allocations: MarketAllocation[] = [];
 
@@ -291,7 +306,7 @@ function twoPointerMatcher(
     const buyerData = buyerAllocations[buyerIdx]!;
 
     const matched = Math.min(sellerRemaining, buyerRemaining);
-    if (matched > quantityEpsilon) {
+    if (matched > 0) {
       const seller = sellerData.intent;
       const buyer = buyerData.intent;
 
@@ -340,11 +355,15 @@ function twoPointerMatcher(
     sellerRemaining -= matched;
     buyerRemaining -= matched;
 
-    if (sellerRemaining <= quantityEpsilon) {
+    // Epsilon belongs to aggregate reconciliation, not to individual lots.
+    // A positive sub-epsilon fill is still real cleared quantity and must settle.
+    // Subtracting the exact matched operand makes at least one remainder exactly zero,
+    // so exact exhaustion advances the pointer without silently discarding micro-lots.
+    if (sellerRemaining <= 0) {
       sellerIdx++;
       sellerRemaining = sellerAllocations[sellerIdx]?.correctedFill ?? 0;
     }
-    if (buyerRemaining <= quantityEpsilon) {
+    if (buyerRemaining <= 0) {
       buyerIdx++;
       buyerRemaining = buyerAllocations[buyerIdx]?.correctedFill ?? 0;
     }
