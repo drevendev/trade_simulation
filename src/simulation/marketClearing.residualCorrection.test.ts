@@ -6,6 +6,7 @@ import {
   type LocalClearingInput,
 } from "./marketClearing";
 import { createMarketIntentId, type MarketIntent } from "./marketIntent";
+import { exactBinary64QuantityScaled as scaled } from "./marketClearing.exactBinary64Quantity";
 
 const regionId = "r:residual" as RegionId;
 const goodId = "good:residual" as GoodId;
@@ -195,20 +196,32 @@ describe("REQ-MARKET-003 residual correction", () => {
       counter,
     );
 
-    expect(allocations).toHaveLength(4);
+    // One matched pair needs two representable binary64 chunks. Both are final
+    // positive lots: exactly one callback/ID per emitted lot, none for rejected plans.
+    expect(allocations).toHaveLength(5);
+    expect(allocations.every((allocation) => allocation.quantity > 0)).toBe(true);
     expect(taxationCalls).toBe(allocations.length);
-    expect(counter.value).toBe(44);
+    expect(counter.value).toBe(45);
     expect(allocations.map((allocation) => allocation.id)).toEqual([
       createMarketAllocationId("ma:m:residual/good:residual/MAIN/41"),
       createMarketAllocationId("ma:m:residual/good:residual/MAIN/42"),
       createMarketAllocationId("ma:m:residual/good:residual/MAIN/43"),
       createMarketAllocationId("ma:m:residual/good:residual/MAIN/44"),
+      createMarketAllocationId("ma:m:residual/good:residual/MAIN/45"),
     ]);
     expect(
       Math.abs(
         allocations.reduce((sum, allocation) => sum + allocation.quantity, 0) - canonicalTotal,
       ),
     ).toBeLessThanOrEqual(1e-8);
+    expect(allocations.reduce((sum, allocation) => sum + scaled(allocation.quantity), 0n))
+      .toBe(scaled(canonicalTotal));
+    for (const buyer of buyers) {
+      const received = allocations.filter((allocation) => allocation.buyerIntentId === buyer.id)
+        .reduce((sum, allocation) => sum + scaled(allocation.quantity), 0n);
+      expect(received).toBeGreaterThan(0n);
+      expect(received).toBeLessThanOrEqual(scaled(buyer.desiredQuantity));
+    }
     expect(
       allocations.some((allocation) => allocation.quantity === 9.685900454960775e-11),
     ).toBe(true);
@@ -233,14 +246,31 @@ describe("REQ-MARKET-003 residual correction", () => {
       id: createMarketIntentId("mi:seller"), actor: { type: "STATE", stateId },
       regionId, goodId, side: "SELL", purpose: "INVENTORY_REBALANCE", desiredQuantity: cleared, sourcePlanId: "plan:seller",
     };
-    const allocations = computeLocalClearing(
-      input([later, first], [seller], new Map([[first.id, firstDemand], [later.id, laterDemand]]), new Map([[seller.id, cleared]])),
+    const run = (buyers: MarketIntent[]) => computeLocalClearing(
+      input(buyers, [seller], new Map([[first.id, firstDemand], [later.id, laterDemand]]), new Map([[seller.id, cleared]])),
       new Map(), 1, 1e-8, { value: 0 },
     );
+    const allocations = run([later, first]);
     const provisional = cleared * firstDemand / totalDemand;
     const actual = allocations
       .filter(x => x.buyer.type === "COHORT" && x.buyer.cohortId === firstCohort)
       .reduce((sum, x) => sum + x.quantity, 0);
-    expect(actual - provisional).toBeGreaterThan(1e-8);
+    // Correction size is not an ordering contract: exact reconciliation removes
+    // the former extra rounding step. Assert actor-first order directly, even
+    // though the intent IDs sort the other way, plus conservation and capacity.
+    expect(first.id > later.id).toBe(true);
+    expect([...new Set(allocations.map((allocation) => allocation.buyerIntentId))])
+      .toEqual([first.id, later.id]);
+    expect(allocations[0]!.buyer).toEqual(first.actor);
+    expect(run([first, later])).toEqual(allocations);
+    expect(actual - provisional).toBeGreaterThan(0);
+    expect(allocations.reduce((sum, allocation) => sum + scaled(allocation.quantity), 0n))
+      .toBe(scaled(cleared));
+    for (const buyer of [first, later]) {
+      const received = allocations.filter((allocation) => allocation.buyerIntentId === buyer.id)
+        .reduce((sum, allocation) => sum + scaled(allocation.quantity), 0n);
+      expect(received).toBeGreaterThan(0n);
+      expect(received).toBeLessThanOrEqual(scaled(buyer.desiredQuantity));
+    }
   });
 });
