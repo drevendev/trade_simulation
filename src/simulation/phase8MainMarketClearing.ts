@@ -350,6 +350,12 @@ export const createPhase8Handler = (options?: {
         group.sellers,
         (intent) => `${actorRefKey(intent.actor)}|${intent.id}`,
       );
+      // REQ-CORE-002 / SLP-787-02: share one ordered buyer collection across
+      // clearing, authoritative effective demand and desired-demand telemetry.
+      const orderedBuyers = stableOrderBy(
+        group.buyers,
+        (intent) => `${actorRefKey(intent.actor)}|${intent.id}`,
+      );
 
       // Create clearing input with production computations
       const clearingInput: LocalClearingInput = {
@@ -358,7 +364,7 @@ export const createPhase8Handler = (options?: {
         goodId: group.goodId as GoodId,
         pass: "MAIN",
         marketCurrencyId,
-        buyerIntents: group.buyers,
+        buyerIntents: orderedBuyers,
         sellerIntents: orderedSellers,
         computeEffectiveDemand: (intent, grossPrice) => {
           if (intent.side !== "BUY") return 0;
@@ -403,7 +409,7 @@ export const createPhase8Handler = (options?: {
         0,
       );
       let totalBuyerEffective = 0;
-      for (const buyer of group.buyers) {
+      for (const buyer of orderedBuyers) {
         const buyerGrossPrice = grossUnitPriceForBuyer(buyer, marketPrice);
         const buyerMaxSpend =
           buyer.maxSpend ?? (buyer.desiredQuantity * buyerGrossPrice);
@@ -433,7 +439,7 @@ export const createPhase8Handler = (options?: {
         quantityEpsilon,
       );
 
-      const totalBuyerDesired = group.buyers.reduce((sum, i) => sum + i.desiredQuantity, 0);
+      const totalBuyerDesired = orderedBuyers.reduce((sum, i) => sum + i.desiredQuantity, 0);
       const totalTaxCollected = allocations.reduce((sum, a) => sum + a.consumptionTaxAmount, 0);
 
       builder.setClearingQuantities(
