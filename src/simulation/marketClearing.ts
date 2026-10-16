@@ -18,6 +18,8 @@ import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
 import type { MarketIntent, MarketIntentId } from "./marketIntent";
+import { exactBinary64QuantityWithinEpsilon } from "./marketClearing.exactBinary64Quantity";
+import { exactMarginalsSafe, exactTrialPreservesMarginals } from "./marketClearing.exactBinary64MarginalGuard";
 
 /** Opaque market allocation ID (ma:...) */
 export type MarketAllocationId = string & { readonly __brand: "MarketAllocationId" };
@@ -205,11 +207,8 @@ export function computeLocalClearing(
     (entry) => entry.effectiveDemand,
   );
 
-  // Build the concrete match plan without observable effects first. Mixed-magnitude
-  // binary64 subtraction can make the sequentially emitted plan miss Q by one ULP
-  // even when both corrected marginal totals are canonical. A guarded half-epsilon
-  // stabilization may repair that plan, but callbacks and allocation IDs are consumed
-  // only once after the final plan has been selected.
+  // Select and validate the concrete match plan before taxation callbacks or
+  // allocation IDs are consumed. Balanced markets must not bypass this guard.
   const matchPlan = selectStableMatchPlan(
     correctedSellerAllocations,
     correctedBuyerAllocations,
@@ -348,67 +347,12 @@ function planQuantity(plan: ReadonlyArray<PlannedMatch>): number {
   return plan.reduce((sum, match) => sum + match.quantity, 0);
 }
 
-function planMarginals(
-  plan: ReadonlyArray<PlannedMatch>,
-  side: "SELL" | "BUY",
-): Map<string, number> {
-  const result = new Map<string, number>();
-  for (const match of plan) {
-    const intent = side === "SELL" ? match.seller : match.buyer;
-    result.set(intent.id, (result.get(intent.id) ?? 0) + match.quantity);
-  }
-  return result;
-}
-
-function trialPreservesMarginals(
-  plan: ReadonlyArray<PlannedMatch>,
-  originalSellers: ReadonlyArray<CorrectedIntentFill>,
-  originalBuyers: ReadonlyArray<CorrectedIntentFill>,
-  trialSellers: ReadonlyArray<CorrectedIntentFill>,
-  trialBuyers: ReadonlyArray<CorrectedIntentFill>,
-  quantityEpsilon: number,
-): boolean {
-  const sellerActual = planMarginals(plan, "SELL");
-  const buyerActual = planMarginals(plan, "BUY");
-
-  const sideIsSafe = (
-    actual: ReadonlyMap<string, number>,
-    original: ReadonlyArray<CorrectedIntentFill>,
-    trial: ReadonlyArray<CorrectedIntentFill>,
-  ): boolean => {
-    const trialById = new Map(trial.map((entry) => [entry.intent.id, entry.correctedFill]));
-    for (const entry of original) {
-      const realized = actual.get(entry.intent.id) ?? 0;
-      const trialTarget = trialById.get(entry.intent.id);
-      if (trialTarget === undefined) return false;
-
-      // A stabilization may under-fill by at most epsilon but may never borrow from
-      // an original per-intent capacity, even by a sub-epsilon amount.
-      if (realized > entry.correctedFill) return false;
-      if (entry.correctedFill - realized > quantityEpsilon) return false;
-
-      // The materialized plan must also remain within epsilon of the trial target.
-      // Subtraction is deliberate: target + epsilon can round outward by an ULP at
-      // large magnitudes and hide a real overrun.
-      if (realized - trialTarget > quantityEpsilon) return false;
-      if (trialTarget - realized > quantityEpsilon) return false;
-
-      // Positive canonical fills, including micro-lots, must not disappear.
-      if (entry.correctedFill > 0 && !(realized > 0)) return false;
-    }
-    return true;
-  };
-
-  return sideIsSafe(sellerActual, originalSellers, trialSellers)
-    && sideIsSafe(buyerActual, originalBuyers, trialBuyers);
-}
-
 /**
- * Repair only the rare one-ULP sequential aggregation miss where exactly one side is
- * saturated. The trial reduces one non-micro saturated marginal by epsilon/2, but it is
- * accepted only if the canonical saturated-side reduction remains bit-identical, the
- * actually emitted plan improves to <= epsilon, every original/trial marginal stays safe,
- * and no positive fill disappears. Otherwise the original canonical plan is retained.
+ * SLP-787-01: Never return an out-of-tolerance match plan. The two-pointer
+ * matcher is linear but binary64 subtraction and aggregation are not exact.
+ * Verify the real emitted lots (globally and per endpoint) BEFORE the first
+ * tax callback or allocation-ID mutation; a balanced market may saturate
+ * both sides and must not skip a safe bounded correction.
  */
 function selectStableMatchPlan(
   sellerAllocations: ReadonlyArray<CorrectedIntentFill>,
@@ -418,66 +362,64 @@ function selectStableMatchPlan(
   sellerSaturated: boolean,
   buyerSaturated: boolean,
 ): PlannedMatch[] {
+  if (!(Number.isFinite(clearedQuantity) && clearedQuantity > 0) ||
+      !(Number.isFinite(quantityEpsilon) && quantityEpsilon >= 0)) {
+    throw new Error("Local clearing requires finite positive quantity and finite nonnegative epsilon");
+  }
+  const acceptable = (
+    plan: ReadonlyArray<PlannedMatch>,
+    trialSellers: ReadonlyArray<CorrectedIntentFill>,
+    trialBuyers: ReadonlyArray<CorrectedIntentFill>,
+  ): boolean =>
+    Math.abs(clearedQuantity - planQuantity(plan)) <= quantityEpsilon &&
+    exactBinary64QuantityWithinEpsilon(
+      plan.map((match) => match.quantity), clearedQuantity, quantityEpsilon,
+    ) &&
+    exactTrialPreservesMarginals(
+      plan, sellerAllocations, buyerAllocations, trialSellers, trialBuyers, quantityEpsilon,
+    ) &&
+    exactMarginalsSafe(plan, sellerAllocations, buyerAllocations, quantityEpsilon);
+
   const baseline = buildMatchPlan(sellerAllocations, buyerAllocations);
-  const baselineResidual = Math.abs(clearedQuantity - planQuantity(baseline));
-  if (baselineResidual <= quantityEpsilon) {
-    return baseline;
-  }
+  if (acceptable(baseline, sellerAllocations, buyerAllocations)) return baseline;
 
-  // A bounded adjustment is only justified when one and only one marginal side is
-  // canonically saturated. Balanced-both-sides and proportionally scaled cases fall back.
-  if (sellerSaturated === buyerSaturated) {
-    return baseline;
-  }
-
-  const saturated = sellerSaturated ? sellerAllocations : buyerAllocations;
-  const canonicalSaturatedTotal = saturated.reduce((sum, entry) => sum + entry.correctedFill, 0);
+  // Only an already-invalid baseline enters this rare speculative path.
+  // Both-saturated cases must try both sides, not silently emit the baseline.
+  const sides: ReadonlyArray<"SELL" | "BUY"> =
+    sellerSaturated !== buyerSaturated
+      ? [sellerSaturated ? "SELL" : "BUY"]
+      : ["SELL", "BUY"];
   const halfEpsilon = quantityEpsilon / 2;
-
-  for (let candidateIndex = 0; candidateIndex < saturated.length; candidateIndex++) {
-    const candidate = saturated[candidateIndex]!;
-    if (!(candidate.correctedFill > quantityEpsilon)) continue;
-
-    const trialSellers = sellerAllocations.map((entry, index) =>
-      sellerSaturated && index === candidateIndex
-        ? { ...entry, correctedFill: entry.correctedFill - halfEpsilon }
-        : entry,
-    );
-    const trialBuyers = buyerAllocations.map((entry, index) =>
-      buyerSaturated && index === candidateIndex
-        ? { ...entry, correctedFill: entry.correctedFill - halfEpsilon }
-        : entry,
-    );
-
-    const trialSaturated = sellerSaturated ? trialSellers : trialBuyers;
-    const trialSaturatedTotal = trialSaturated.reduce(
-      (sum, entry) => sum + entry.correctedFill,
-      0,
-    );
-
-    // If the canonical saturated total itself changes, the trial is not merely a
-    // representability stabilization and must not be used.
-    if (trialSaturatedTotal !== canonicalSaturatedTotal) continue;
-
-    const trial = buildMatchPlan(trialSellers, trialBuyers);
-    const trialResidual = Math.abs(clearedQuantity - planQuantity(trial));
-    if (!(trialResidual < baselineResidual) || trialResidual > quantityEpsilon) continue;
-
-    if (!trialPreservesMarginals(
-      trial,
-      sellerAllocations,
-      buyerAllocations,
-      trialSellers,
-      trialBuyers,
-      quantityEpsilon,
-    )) {
-      continue;
+  for (const side of sides) {
+    const oldSide = side === "SELL" ? sellerAllocations : buyerAllocations;
+    const oldTotal = oldSide.reduce((sum, fill) => sum + fill.correctedFill, 0);
+    // At most eight eligible trials per side: the slow branch remains O(B+S).
+    let trials = 0;
+    for (let index = 0; index < oldSide.length && trials < 8; index++) {
+      const oldFill = oldSide[index]!.correctedFill;
+      if (!(oldFill > quantityEpsilon)) continue;
+      trials++;
+      const lowered = oldFill - halfEpsilon;
+      if (!(lowered > 0 && lowered < oldFill)) continue;
+      const changed = oldSide.map((fill, i) =>
+        i === index ? { ...fill, correctedFill: lowered } : fill,
+      );
+      // An epsilon-safe correction may change the rounded sum. Keep the
+      // unchanged absolute tolerance and independently check emitted lots.
+      if (!exactBinary64QuantityWithinEpsilon(
+        changed.map((fill) => fill.correctedFill), oldTotal, quantityEpsilon,
+      )) continue;
+      const trialSellers = side === "SELL" ? changed : sellerAllocations;
+      const trialBuyers = side === "BUY" ? changed : buyerAllocations;
+      const trial = buildMatchPlan(trialSellers, trialBuyers);
+      if (acceptable(trial, trialSellers, trialBuyers)) return trial;
     }
-
-    return trial;
   }
-
-  return baseline;
+  // Fail before materializeMatchPlan's taxation callbacks and ID mutations.
+  throw new Error(
+    `Local clearing cannot safely materialize match plan: ` +
+    `residual=${Math.abs(clearedQuantity - planQuantity(baseline))}; epsilon=${quantityEpsilon}`,
+  );
 }
 
 /**
@@ -585,4 +527,5 @@ export function validateMarketAllocation(allocation: MarketAllocation, quantityE
       `MarketAllocation consumptionTaxAmount ${allocation.consumptionTaxAmount} exceeds gross payment ${grossPayment}`,
     );
   }
+  assertFiniteCanonicalNumber(allocation.consumptionTaxAmount, "MarketAllocation consumptionTaxAmount");
 }
