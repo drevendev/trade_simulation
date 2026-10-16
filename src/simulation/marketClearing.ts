@@ -19,7 +19,7 @@ import { assertFiniteCanonicalNumber } from "../domain/numeric";
 import { stableOrderBy } from "../domain/ordering";
 import type { MarketIntent, MarketIntentId } from "./marketIntent";
 import { exactBinary64QuantityWithinEpsilon } from "./marketClearing.exactBinary64Quantity";
-import { exactMarginalsSafe, exactTrialPreservesMarginals } from "./marketClearing.exactBinary64MarginalGuard";
+import { buildExactMatchPlan, exactPlanWithinCapacities } from "./marketClearing.exactMatchPlan";
 
 /** Opaque market allocation ID (ma:...) */
 export type MarketAllocationId = string & { readonly __brand: "MarketAllocationId" };
@@ -152,7 +152,6 @@ export function computeLocalClearing(
     return [];
   }
 
-  // Compute effective demand and sellable quantities
   const buyerData = buyerIntents.map((intent) => {
     const grossPrice = input.computeGrossUnitPrice(intent, marketPrice);
     const effectiveDemand = input.computeEffectiveDemand(intent, grossPrice);
@@ -166,7 +165,6 @@ export function computeLocalClearing(
     return { intent, sellable };
   });
 
-  // Compute total demand and supply
   const totalDemand = buyerData.reduce((sum, d) => sum + d.effectiveDemand, 0);
   const totalSupply = sellerData.reduce((sum, s) => sum + s.sellable, 0);
 
@@ -174,10 +172,8 @@ export function computeLocalClearing(
     return [];
   }
 
-  // Compute cleared quantity: Q = min(Σ sellable, Σ effectiveDemand)
   const clearedQuantity = Math.min(totalDemand, totalSupply);
 
-  // Provisional seller allocations: sellerFill_i = Q × sellable_i / Σ sellable
   const provisionalSellerAllocations = sellerData.map((data) => ({
     ...data,
     provisionalFill: clearedQuantity === totalSupply
@@ -185,7 +181,6 @@ export function computeLocalClearing(
       : (clearedQuantity * data.sellable) / totalSupply,
   }));
 
-  // Provisional buyer allocations: buyerFill_j = Q × effectiveDemand_j / Σ effectiveDemand
   const provisionalBuyerAllocations = buyerData.map((data) => ({
     ...data,
     provisionalFill: clearedQuantity === totalDemand
@@ -193,7 +188,6 @@ export function computeLocalClearing(
       : (clearedQuantity * data.effectiveDemand) / totalDemand,
   }));
 
-  // Residual correction: use stable ID order (actor ID then intent ID)
   const correctedSellerAllocations = applyResidualCorrection(
     provisionalSellerAllocations,
     clearedQuantity,
@@ -207,23 +201,16 @@ export function computeLocalClearing(
     (entry) => entry.effectiveDemand,
   );
 
-  // Select and validate the concrete match plan before taxation callbacks or
-  // allocation IDs are consumed. Balanced markets must not bypass this guard.
+  // Retain physical capacity independently of the proportional target. Validate
+  // the emitted plan before taxation callbacks or allocation IDs are consumed.
   const matchPlan = selectStableMatchPlan(
-    correctedSellerAllocations,
-    correctedBuyerAllocations,
+    correctedSellerAllocations.map((entry) => ({ ...entry, capacity: entry.sellable })),
+    correctedBuyerAllocations.map((entry) => ({ ...entry, capacity: entry.effectiveDemand })),
     clearedQuantity,
     quantityEpsilon,
-    clearedQuantity === totalSupply,
-    clearedQuantity === totalDemand,
   );
 
-  return materializeMatchPlan(
-    input,
-    matchPlan,
-    marketPrice,
-    allocationIdCounter,
-  );
+  return materializeMatchPlan(input, matchPlan, marketPrice, allocationIdCounter);
 }
 
 /**
@@ -237,24 +224,11 @@ function applyResidualCorrection<T extends { intent: MarketIntent; provisionalFi
   quantityEpsilon: number,
   capacityOf: (entry: T) => number,
 ): (T & { correctedFill: number })[] {
-  // Sort by canonical persistent actor key first, then intent ID.
-  // Reusing actorRefKey keeps COHORT and MONETARY_AUTHORITY ordering aligned with
-  // the rest of the stock/settlement model and makes the ActorRef union exhaustive.
   const sorted = stableOrderBy(data, (d) => `${actorRefKey(d.intent.actor)}|${d.intent.id}`);
-
-  // Start with provisionalFill for all.
-  const corrected = sorted.map((d) => ({
-    ...d,
-    correctedFill: d.provisionalFill,
-  }));
-
-  // Compute total and residual error.
+  const corrected = sorted.map((d) => ({ ...d, correctedFill: d.provisionalFill }));
   const currentTotal = corrected.reduce((sum, d) => sum + d.correctedFill, 0);
   const residualError = targetTotal - currentTotal;
 
-  // Reconcile only significant floating residuals, in stable order, without
-  // ever moving a fill above its canonical sellable/effective-demand capacity
-  // or below zero.
   if (Math.abs(residualError) > quantityEpsilon) {
     let remaining = residualError;
     for (let i = 0; i < corrected.length && Math.abs(remaining) > quantityEpsilon; i++) {
@@ -265,22 +239,16 @@ function applyResidualCorrection<T extends { intent: MarketIntent; provisionalFi
         throw new Error(`Residual-correction capacity must be >= 0 for ${curr.intent.id}, got ${capacity}`);
       }
 
-      const toAdd =
-        remaining > 0
-          ? Math.min(remaining, Math.max(0, capacity - curr.correctedFill))
-          : Math.max(remaining, -curr.correctedFill);
-
+      const toAdd = remaining > 0
+        ? Math.min(remaining, Math.max(0, capacity - curr.correctedFill))
+        : Math.max(remaining, -curr.correctedFill);
       curr.correctedFill += toAdd;
       remaining -= toAdd;
     }
-
     if (Math.abs(remaining) > quantityEpsilon) {
-      throw new Error(
-        `Residual correction could not reconcile target total within epsilon: remaining=${remaining}`,
-      );
+      throw new Error(`Residual correction could not reconcile target total within epsilon: remaining=${remaining}`);
     }
   }
-
   return corrected;
 }
 
@@ -293,18 +261,15 @@ interface PlannedMatch {
 interface CorrectedIntentFill {
   readonly intent: MarketIntent;
   readonly correctedFill: number;
+  readonly capacity: number;
 }
 
-/**
- * Pure two-pointer planning. No taxation callback and no allocation ID consumption is
- * allowed here: candidate plans are speculative until selectStableMatchPlan commits to one.
- */
+/** Pure two-pointer planning: speculative plans consume no callbacks or allocation IDs. */
 function buildMatchPlan(
   sellerAllocations: ReadonlyArray<CorrectedIntentFill>,
   buyerAllocations: ReadonlyArray<CorrectedIntentFill>,
 ): PlannedMatch[] {
   const plan: PlannedMatch[] = [];
-
   let sellerIdx = 0;
   let buyerIdx = 0;
   let sellerRemaining = sellerAllocations[0]?.correctedFill ?? 0;
@@ -314,22 +279,12 @@ function buildMatchPlan(
     const sellerData = sellerAllocations[sellerIdx]!;
     const buyerData = buyerAllocations[buyerIdx]!;
     const matched = Math.min(sellerRemaining, buyerRemaining);
-
-    // Epsilon is an aggregate reconciliation tolerance, not a minimum tradable lot.
-    // Every positive micro-lot remains real cleared quantity.
+    // Epsilon is a reconciliation tolerance, not a minimum tradable lot.
     if (matched > 0) {
-      plan.push({
-        seller: sellerData.intent,
-        buyer: buyerData.intent,
-        quantity: matched,
-      });
+      plan.push({ seller: sellerData.intent, buyer: buyerData.intent, quantity: matched });
     }
-
     sellerRemaining -= matched;
     buyerRemaining -= matched;
-
-    // Exact subtraction makes at least one side zero for each match. Advance only on
-    // actual exhaustion so a positive sub-epsilon remainder is never silently dropped.
     if (sellerRemaining <= 0) {
       sellerIdx++;
       sellerRemaining = sellerAllocations[sellerIdx]?.correctedFill ?? 0;
@@ -339,87 +294,31 @@ function buildMatchPlan(
       buyerRemaining = buyerAllocations[buyerIdx]?.correctedFill ?? 0;
     }
   }
-
   return plan;
 }
 
-function planQuantity(plan: ReadonlyArray<PlannedMatch>): number {
-  return plan.reduce((sum, match) => sum + match.quantity, 0);
-}
-
-/**
- * SLP-787-01: Never return an out-of-tolerance match plan. The two-pointer
- * matcher is linear but binary64 subtraction and aggregation are not exact.
- * Verify the real emitted lots (globally and per endpoint) BEFORE the first
- * tax callback or allocation-ID mutation; a balanced market may saturate
- * both sides and must not skip a safe bounded correction.
- */
+/** Validate actual emitted quantities, then repair only an invalid Number plan. */
 function selectStableMatchPlan(
-  sellerAllocations: ReadonlyArray<CorrectedIntentFill>,
-  buyerAllocations: ReadonlyArray<CorrectedIntentFill>,
+  sellers: ReadonlyArray<CorrectedIntentFill>,
+  buyers: ReadonlyArray<CorrectedIntentFill>,
   clearedQuantity: number,
   quantityEpsilon: number,
-  sellerSaturated: boolean,
-  buyerSaturated: boolean,
 ): PlannedMatch[] {
   if (!(Number.isFinite(clearedQuantity) && clearedQuantity > 0) ||
       !(Number.isFinite(quantityEpsilon) && quantityEpsilon >= 0)) {
     throw new Error("Local clearing requires finite positive quantity and finite nonnegative epsilon");
   }
-  const acceptable = (
-    plan: ReadonlyArray<PlannedMatch>,
-    trialSellers: ReadonlyArray<CorrectedIntentFill>,
-    trialBuyers: ReadonlyArray<CorrectedIntentFill>,
-  ): boolean =>
-    Math.abs(clearedQuantity - planQuantity(plan)) <= quantityEpsilon &&
-    exactBinary64QuantityWithinEpsilon(
-      plan.map((match) => match.quantity), clearedQuantity, quantityEpsilon,
-    ) &&
-    exactTrialPreservesMarginals(
-      plan, sellerAllocations, buyerAllocations, trialSellers, trialBuyers, quantityEpsilon,
-    ) &&
-    exactMarginalsSafe(plan, sellerAllocations, buyerAllocations, quantityEpsilon);
+  const acceptable = (plan: ReadonlyArray<PlannedMatch>): boolean =>
+    exactBinary64QuantityWithinEpsilon(plan.map((match) => match.quantity), clearedQuantity, quantityEpsilon) &&
+    exactPlanWithinCapacities(plan, sellers, buyers, clearedQuantity, quantityEpsilon);
+  const baseline = buildMatchPlan(sellers, buyers);
+  if (acceptable(baseline)) return baseline;
 
-  const baseline = buildMatchPlan(sellerAllocations, buyerAllocations);
-  if (acceptable(baseline, sellerAllocations, buyerAllocations)) return baseline;
-
-  // Only an already-invalid baseline enters this rare speculative path.
-  // Both-saturated cases must try both sides, not silently emit the baseline.
-  const sides: ReadonlyArray<"SELL" | "BUY"> =
-    sellerSaturated !== buyerSaturated
-      ? [sellerSaturated ? "SELL" : "BUY"]
-      : ["SELL", "BUY"];
-  const halfEpsilon = quantityEpsilon / 2;
-  for (const side of sides) {
-    const oldSide = side === "SELL" ? sellerAllocations : buyerAllocations;
-    const oldTotal = oldSide.reduce((sum, fill) => sum + fill.correctedFill, 0);
-    // At most eight eligible trials per side: the slow branch remains O(B+S).
-    let trials = 0;
-    for (let index = 0; index < oldSide.length && trials < 8; index++) {
-      const oldFill = oldSide[index]!.correctedFill;
-      if (!(oldFill > quantityEpsilon)) continue;
-      trials++;
-      const lowered = oldFill - halfEpsilon;
-      if (!(lowered > 0 && lowered < oldFill)) continue;
-      const changed = oldSide.map((fill, i) =>
-        i === index ? { ...fill, correctedFill: lowered } : fill,
-      );
-      // An epsilon-safe correction may change the rounded sum. Keep the
-      // unchanged absolute tolerance and independently check emitted lots.
-      if (!exactBinary64QuantityWithinEpsilon(
-        changed.map((fill) => fill.correctedFill), oldTotal, quantityEpsilon,
-      )) continue;
-      const trialSellers = side === "SELL" ? changed : sellerAllocations;
-      const trialBuyers = side === "BUY" ? changed : buyerAllocations;
-      const trial = buildMatchPlan(trialSellers, trialBuyers);
-      if (acceptable(trial, trialSellers, trialBuyers)) return trial;
-    }
-  }
-  // Fail before materializeMatchPlan's taxation callbacks and ID mutations.
-  throw new Error(
-    `Local clearing cannot safely materialize match plan: ` +
-    `residual=${Math.abs(clearedQuantity - planQuantity(baseline))}; epsilon=${quantityEpsilon}`,
-  );
+  // Exact remaining balances avoid cumulative subtraction error. A nonrepresentable
+  // matched amount is split into bounded positive binary64 lots rather than discarded.
+  const corrected = buildExactMatchPlan(sellers, buyers, clearedQuantity, quantityEpsilon);
+  if (acceptable(corrected)) return corrected;
+  throw new Error("Local clearing cannot safely materialize match plan within physical capacities and epsilon");
 }
 
 /**
@@ -436,21 +335,13 @@ function materializeMatchPlan(
   const allocations: MarketAllocation[] = [];
 
   for (const match of plan) {
-    const taxInfo = input.getTaxationInfo(
-      match.buyer,
-      match.buyer.regionId,
-      input.goodId,
-    );
-
-    const collectedTaxPerUnit =
-      marketPrice * taxInfo.assessedTaxRate * taxInfo.collectionEfficiency;
+    const taxInfo = input.getTaxationInfo(match.buyer, match.buyer.regionId, input.goodId);
+    const collectedTaxPerUnit = marketPrice * taxInfo.assessedTaxRate * taxInfo.collectionEfficiency;
     const grossUnitPrice = marketPrice + collectedTaxPerUnit;
 
     allocationIdCounter.value++;
     allocations.push({
-      id: createMarketAllocationId(
-        `ma:${input.marketId}/${input.goodId}/${input.pass}/${allocationIdCounter.value}`,
-      ),
+      id: createMarketAllocationId(`ma:${input.marketId}/${input.goodId}/${input.pass}/${allocationIdCounter.value}`),
       marketId: input.marketId,
       regionId: input.regionId,
       goodId: input.goodId,
@@ -477,55 +368,39 @@ function materializeMatchPlan(
         | "INVESTMENT",
     });
   }
-
   return allocations;
 }
 
-/**
- * Validate a MarketAllocation against specification constraints.
- * Throws descriptive error if any constraint is violated.
- */
+/** Validate a MarketAllocation against specification constraints. */
 export function validateMarketAllocation(allocation: MarketAllocation, quantityEpsilon: number = 1e-8): void {
   if (!allocation.id || !allocation.id.startsWith("ma:")) {
     throw new Error("MarketAllocation must have valid id starting with 'ma:'");
   }
-
   if (allocation.pass !== "PRE_PRODUCTION" && allocation.pass !== "MAIN") {
     throw new Error(`MarketAllocation pass must be PRE_PRODUCTION or MAIN, got ${allocation.pass}`);
   }
-
   if (allocation.quantity < 0) {
     throw new Error(`MarketAllocation quantity must be >= 0, got ${allocation.quantity}`);
   }
   assertFiniteCanonicalNumber(allocation.quantity, "MarketAllocation quantity");
 
   if (allocation.sellerNetUnitPrice < 0) {
-    throw new Error(
-      `MarketAllocation sellerNetUnitPrice must be >= 0, got ${allocation.sellerNetUnitPrice}`,
-    );
+    throw new Error(`MarketAllocation sellerNetUnitPrice must be >= 0, got ${allocation.sellerNetUnitPrice}`);
   }
   assertFiniteCanonicalNumber(allocation.sellerNetUnitPrice, "MarketAllocation sellerNetUnitPrice");
 
   if (allocation.buyerGrossUnitPrice < 0) {
-    throw new Error(
-      `MarketAllocation buyerGrossUnitPrice must be >= 0, got ${allocation.buyerGrossUnitPrice}`,
-    );
+    throw new Error(`MarketAllocation buyerGrossUnitPrice must be >= 0, got ${allocation.buyerGrossUnitPrice}`);
   }
   assertFiniteCanonicalNumber(allocation.buyerGrossUnitPrice, "MarketAllocation buyerGrossUnitPrice");
 
   if (allocation.consumptionTaxAmount < 0) {
-    throw new Error(
-      `MarketAllocation consumptionTaxAmount must be >= 0, got ${allocation.consumptionTaxAmount}`,
-    );
+    throw new Error(`MarketAllocation consumptionTaxAmount must be >= 0, got ${allocation.consumptionTaxAmount}`);
   }
   assertFiniteCanonicalNumber(allocation.consumptionTaxAmount, "MarketAllocation consumptionTaxAmount");
 
-  // Tax amount must not exceed gross payment
   const grossPayment = allocation.quantity * allocation.buyerGrossUnitPrice;
   if (allocation.consumptionTaxAmount > grossPayment + quantityEpsilon) {
-    throw new Error(
-      `MarketAllocation consumptionTaxAmount ${allocation.consumptionTaxAmount} exceeds gross payment ${grossPayment}`,
-    );
+    throw new Error(`MarketAllocation consumptionTaxAmount ${allocation.consumptionTaxAmount} exceeds gross payment ${grossPayment}`);
   }
-  assertFiniteCanonicalNumber(allocation.consumptionTaxAmount, "MarketAllocation consumptionTaxAmount");
 }
