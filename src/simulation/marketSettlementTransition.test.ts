@@ -21,6 +21,7 @@ import { createMarketAllocationId, type MarketAllocation } from "./marketClearin
 import { createMarketIntentId } from "./marketIntent";
 import {
   applyActorMoneyDeltas,
+  applyMarketSettlementTransition,
   executeAllocation,
   SettlementRefusedError,
 } from "./marketSettlementTransition";
@@ -164,6 +165,166 @@ function buildAllocation(overrides: {
 function context(): TickContext {
   return { ...initializeTickContext(3, 42), phase: 8 };
 }
+
+/** Copy numeric entries, not mutable Map references, so failure assertions detect writes. */
+function snapshotSettlementStocks(world: WorldState) {
+  return {
+    cohorts: [...world.cohorts].map(([id, actor]) => [id, [...actor.wallet], [...actor.householdInventory]]),
+    units: [...world.productionUnits].map(([id, actor]) => [id, [...actor.wallet],
+      [...actor.inputInventory], [...actor.outputInventory], [...actor.investmentInventory]]),
+    states: [...world.states].map(([id, actor]) => [id, [...actor.treasury], [...actor.publicInventory]]),
+    clans: [...world.clans].map(([id, actor]) => [id, [...actor.treasury]]),
+  };
+}
+
+type SettlementStockSlot = "sellerInventory" | "buyerInventory" | "sellerWallet" | "buyerWallet" | "taxTreasury";
+
+/** Deliberately corrupt one real actor endpoint without modifying the baseline world. */
+function withSettlementStock(world: WorldState, slot: SettlementStockSlot, value: number): WorldState {
+  const { sellerUnitId, buyerCohortId, stateId, currencyId } = pickCounterparties(world);
+  if (slot === "sellerInventory" || slot === "sellerWallet") {
+    const unit = world.productionUnits.get(sellerUnitId)!;
+    return { ...world, productionUnits: new Map(world.productionUnits).set(sellerUnitId, {
+      ...unit,
+      ...(slot === "sellerInventory"
+        ? { outputInventory: new Map(unit.outputInventory).set(FOOD, value) }
+        : { wallet: new Map(unit.wallet).set(currencyId, value) }),
+    }) };
+  }
+  if (slot === "buyerInventory" || slot === "buyerWallet") {
+    const cohort = world.cohorts.get(buyerCohortId)!;
+    return { ...world, cohorts: new Map(world.cohorts).set(buyerCohortId, {
+      ...cohort,
+      ...(slot === "buyerInventory"
+        ? { householdInventory: new Map(cohort.householdInventory).set(FOOD, value) }
+        : { wallet: new Map(cohort.wallet).set(currencyId, value) }),
+    }) };
+  }
+  const state = world.states.get(stateId)!;
+  return { ...world, states: new Map(world.states).set(stateId, {
+    ...state, treasury: new Map(state.treasury).set(currencyId, value),
+  }) };
+}
+
+describe("real WorldState settlement — endpoint and whole-batch atomicity", () => {
+  for (const slot of ["sellerInventory", "buyerInventory", "sellerWallet", "buyerWallet", "taxTreasury"] as const) {
+    it.each([NaN, Infinity, -1])(`rejects corrupt ${slot} (%s) without changing any live stock`, (value) => {
+      const world = buildWorld();
+      const { sellerUnitId, buyerCohortId, stateId, currencyId } = pickCounterparties(world);
+      const original = snapshotSettlementStocks(world);
+      const corrupted = withSettlementStock(world, slot, value);
+      const before = snapshotSettlementStocks(corrupted);
+      const allocation = buildAllocation({
+        seller: { type: "PRODUCTION_UNIT", productionUnitId: sellerUnitId },
+        buyer: { type: "COHORT", cohortId: buyerCohortId },
+        quantity: 1, sellerNetUnitPrice: 1, taxPerUnit: 0.5, currencyId, destinationStateId: stateId,
+      });
+      expect(() => executeAllocation(corrupted, context(), allocation))
+        .toThrow(/invalid or non-finite (goods|wallet) projection/);
+      expect(snapshotSettlementStocks(corrupted)).toEqual(before);
+      expect(snapshotSettlementStocks(world)).toEqual(original);
+    });
+  }
+
+  it.each(["INPUT", "OUTPUT", "INVESTMENT"] as const)("credits exactly the named %s bucket with a shared actor wallet", (bucket) => {
+    const world = buildWorld();
+    const { sellerUnitId, currencyId } = pickCounterparties(world);
+    const before = snapshotSettlementStocks(world);
+    const actor = { type: "PRODUCTION_UNIT" as const, productionUnitId: sellerUnitId };
+    const allocation = buildAllocation({
+      seller: actor, buyer: actor, quantity: 1, sellerNetUnitPrice: 1, currencyId,
+      destinationStateId: null, sellerInventoryBucket: "OUTPUT", buyerInventoryBucket: bucket,
+    });
+    const next = executeAllocation(world, context(), allocation);
+    const originalUnit = world.productionUnits.get(sellerUnitId)!;
+    const nextUnit = next.productionUnits.get(sellerUnitId)!;
+    for (const [name, field] of [["INPUT", "inputInventory"], ["OUTPUT", "outputInventory"],
+      ["INVESTMENT", "investmentInventory"]] as const) {
+      expect(nextUnit[field].get(FOOD) ?? 0).toBe((originalUnit[field].get(FOOD) ?? 0)
+        - (name === "OUTPUT" ? 1 : 0) + (name === bucket ? 1 : 0));
+      if (name !== "OUTPUT" && name !== bucket) expect(nextUnit[field]).toBe(originalUnit[field]);
+    }
+    expect(nextUnit.wallet).toEqual(originalUnit.wallet);
+    expect(snapshotSettlementStocks(world)).toEqual(before);
+  });
+
+  it.each(["WAREHOUSE", "", "input"])("refuses unknown runtime bucket %j instead of guessing investment inventory", (bucket) => {
+    const world = buildWorld();
+    const { sellerUnitId, currencyId } = pickCounterparties(world);
+    const before = snapshotSettlementStocks(world);
+    const actor = { type: "PRODUCTION_UNIT" as const, productionUnitId: sellerUnitId };
+    const allocation = buildAllocation({
+      seller: actor, buyer: actor, quantity: 1, sellerNetUnitPrice: 1, currencyId,
+      destinationStateId: null,
+      buyerInventoryBucket: bucket as MarketAllocation["buyerInventoryBucket"],
+    });
+    expect(() => executeAllocation(world, context(), allocation)).toThrow(/unknown inventory bucket/);
+    expect(snapshotSettlementStocks(world)).toEqual(before);
+  });
+
+  it("a missing late tax recipient cannot publish earlier valid goods or payment legs", () => {
+    const world = buildWorld();
+    const { sellerUnitId, buyerCohortId, currencyId } = pickCounterparties(world);
+    const before = snapshotSettlementStocks(world);
+    const allocation = buildAllocation({
+      seller: { type: "PRODUCTION_UNIT", productionUnitId: sellerUnitId },
+      buyer: { type: "COHORT", cohortId: buyerCohortId },
+      quantity: 1, sellerNetUnitPrice: 1, taxPerUnit: 0.5, currencyId,
+      destinationStateId: "s:missing-recipient" as StateId,
+    });
+    expect(() => executeAllocation(world, context(), allocation)).toThrow(/no StateState/);
+    expect(snapshotSettlementStocks(world)).toEqual(before);
+  });
+
+  it("rejects receiver inventory overflow although both opening stocks and the lot are finite", () => {
+    const world = buildWorld();
+    const { sellerUnitId, buyerCohortId, currencyId } = pickCounterparties(world);
+    const seeded = withSettlementStock(withSettlementStock(world, "sellerInventory", Number.MAX_VALUE),
+      "buyerInventory", Number.MAX_VALUE);
+    const before = snapshotSettlementStocks(seeded);
+    const allocation = buildAllocation({
+      seller: { type: "PRODUCTION_UNIT", productionUnitId: sellerUnitId },
+      buyer: { type: "COHORT", cohortId: buyerCohortId },
+      quantity: Number.MAX_VALUE, sellerNetUnitPrice: 0, currencyId, destinationStateId: null,
+    });
+    expect(() => executeAllocation(seeded, context(), allocation)).toThrow(/non-finite goods projection/);
+    expect(snapshotSettlementStocks(seeded)).toEqual(before);
+  });
+
+  it("rejects seller receipt overflow without publishing the valid buyer debit", () => {
+    const world = buildWorld();
+    const { sellerUnitId, buyerCohortId, currencyId } = pickCounterparties(world);
+    const seeded = withSettlementStock(withSettlementStock(world, "sellerWallet", Number.MAX_VALUE),
+      "buyerWallet", Number.MAX_VALUE);
+    const before = snapshotSettlementStocks(seeded);
+    const allocation = buildAllocation({
+      seller: { type: "PRODUCTION_UNIT", productionUnitId: sellerUnitId },
+      buyer: { type: "COHORT", cohortId: buyerCohortId },
+      quantity: 1, sellerNetUnitPrice: Number.MAX_VALUE, currencyId, destinationStateId: null,
+    });
+    expect(() => executeAllocation(seeded, context(), allocation)).toThrow(/non-finite wallet projection/);
+    expect(snapshotSettlementStocks(seeded)).toEqual(before);
+  });
+
+  it("refusal of a second MAIN allocation leaves the entire input world and context unchanged", () => {
+    const world = buildWorld();
+    const { sellerUnitId, buyerCohortId, currencyId } = pickCounterparties(world);
+    const stock = world.productionUnits.get(sellerUnitId)!.outputInventory.get(FOOD)!;
+    const firstAllocation = buildAllocation({
+      seller: { type: "PRODUCTION_UNIT", productionUnitId: sellerUnitId },
+      buyer: { type: "COHORT", cohortId: buyerCohortId },
+      quantity: Math.min(1, stock), sellerNetUnitPrice: 0, currencyId, destinationStateId: null,
+    });
+    const secondAllocation = { ...firstAllocation, id: createMarketAllocationId("ma:second"), quantity: stock };
+    const ctx = { ...context(), marketAllocations: [firstAllocation, secondAllocation] };
+    const before = snapshotSettlementStocks(world);
+    const allocationsBefore = structuredClone(ctx.marketAllocations);
+    expect(() => applyMarketSettlementTransition(world, ctx)).toThrow(SettlementRefusedError);
+    expect(snapshotSettlementStocks(world)).toEqual(before);
+    expect(ctx.marketAllocations).toEqual(allocationsBefore);
+    expect(ctx.transactions).toEqual([]);
+  });
+});
 
 describe("executeAllocation — live actor stock settlement (Issue #427)", () => {
   describe("criterion 5: opening and live stock share one owner mapping", () => {
