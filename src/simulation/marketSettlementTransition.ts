@@ -119,6 +119,9 @@ function resolveGoodsEndpoint(
             `than guessing which one was meant.`,
         );
       }
+      if (bucket !== "INPUT" && bucket !== "OUTPUT" && bucket !== "INVESTMENT") {
+        refuse(`executeAllocation: ${side} production unit has an unknown inventory bucket "${String(bucket)}"`);
+      }
       return { kind: "PRODUCTION_UNIT", productionUnitId: actor.productionUnitId, bucket };
 
     case "CLAN":

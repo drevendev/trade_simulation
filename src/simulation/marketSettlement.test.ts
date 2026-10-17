@@ -294,7 +294,7 @@ describe("Market settlement transaction schemas (REQ-MARKET-004)", () => {
       expect(tx).toBeNull();
     });
 
-    it("returns null when no destination state", () => {
+    it("rejects a nonzero tax without a destination before consuming an ID", () => {
       const allocation = createTestAllocation({
         consumptionTaxAmount: 100,
         destinationStateId: null,
@@ -303,16 +303,15 @@ describe("Market settlement transaction schemas (REQ-MARKET-004)", () => {
       const bundleId = "tb:test-bundle" as any;
       const counter = { value: 0 };
 
-      const tx = createConsumptionTaxTransaction(
+      expect(() => createConsumptionTaxTransaction(
         allocation,
         marketSaleId,
         bundleId,
         5,
         8,
         counter,
-      );
-
-      expect(tx).toBeNull();
+      )).toThrow(/no destinationStateId/);
+      expect(counter.value).toBe(0);
     });
   });
 
