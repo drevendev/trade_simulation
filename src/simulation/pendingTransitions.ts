@@ -12,11 +12,11 @@ import type { PendingTransitions } from "./worldState";
 export function assertValidJurisdictionActivateTick(activateTick: number): void {
   if (
     !Number.isFinite(activateTick) ||
-    !Number.isInteger(activateTick) ||
+    !Number.isSafeInteger(activateTick) ||
     activateTick < 0
   ) {
     throw new Error(
-      `Jurisdiction activateTick must be a finite non-negative integer, got ${String(activateTick)}`,
+      `Jurisdiction activateTick must be a finite non-negative integer within Number.MAX_SAFE_INTEGER, got ${String(activateTick)}`,
     );
   }
 }

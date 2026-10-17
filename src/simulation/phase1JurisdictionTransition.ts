@@ -15,9 +15,9 @@ export function resolveEffectiveJurisdictionAtPhase1(
   world: WorldState,
   currentTick: number,
 ): ReadonlyMap<RegionId, StateId | null> {
-  if (!Number.isInteger(currentTick) || currentTick < 0) {
+  if (!Number.isSafeInteger(currentTick) || currentTick < 0) {
     throw new Error(
-      `Phase-1 jurisdiction tick must be a non-negative integer, got ${String(currentTick)}`,
+      `Phase-1 jurisdiction tick must be a non-negative integer within Number.MAX_SAFE_INTEGER, got ${String(currentTick)}`,
     );
   }
 
