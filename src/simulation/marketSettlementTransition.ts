@@ -514,6 +514,12 @@ function assertNoStockGoesNegative(
     const existing = projectedGoods.get(key);
     const opening = existing?.opening ?? (readGoods(world, delta.endpoint).get(delta.goodId) ?? 0);
     const balance = (existing?.balance ?? opening) + delta.delta;
+    if (!Number.isFinite(opening) || opening < 0 || !Number.isFinite(delta.delta) || !Number.isFinite(balance)) {
+      refuse(
+        `executeAllocation: ${key} has invalid or non-finite goods projection; ` +
+          `opening=${String(opening)}, delta=${String(delta.delta)}, final=${String(balance)}`,
+      );
+    }
     projectedGoods.set(key, { delta, opening, balance });
   }
 
@@ -534,6 +540,12 @@ function assertNoStockGoesNegative(
     const existing = projectedMoney.get(key);
     const opening = existing?.opening ?? (readWallet(world, delta.endpoint).get(delta.currencyId) ?? 0);
     const balance = (existing?.balance ?? opening) + delta.delta;
+    if (!Number.isFinite(opening) || opening < 0 || !Number.isFinite(delta.delta) || !Number.isFinite(balance)) {
+      refuse(
+        `executeAllocation: ${key} has invalid or non-finite wallet projection; ` +
+          `opening=${String(opening)}, delta=${String(delta.delta)}, final=${String(balance)}`,
+      );
+    }
     projectedMoney.set(key, { delta, opening, balance });
   }
 
