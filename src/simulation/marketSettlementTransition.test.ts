@@ -581,3 +581,135 @@ describe("executeAllocation — live actor stock settlement (Issue #427)", () =>
     });
   });
 });
+
+/**
+ * Issue #427: the preflight must reject corrupt opening stocks and unrepresentable
+ * intermediate projections before any WorldState mutation. This suite shares the
+ * baseline fixtures above and exercises the production exported transition APIs.
+ */
+describe("atomic projection refuses non-finite stock values before commit", () => {
+  it("rejects infinite opening seller inventory without mutating either world", () => {
+    const world = buildWorld();
+    const { sellerUnitId, buyerCohortId, stateId, currencyId } = pickCounterparties(world);
+    const unit = world.productionUnits.get(sellerUnitId)!;
+    const corrupted = {
+      ...world,
+      productionUnits: new Map(world.productionUnits).set(sellerUnitId, {
+        ...unit,
+        outputInventory: new Map(unit.outputInventory).set(FOOD, Infinity),
+      }),
+    };
+    const allocation = buildAllocation({
+      seller: { type: "PRODUCTION_UNIT", productionUnitId: sellerUnitId },
+      buyer: { type: "COHORT", cohortId: buyerCohortId },
+      quantity: 1,
+      sellerNetUnitPrice: 1,
+      currencyId,
+      destinationStateId: stateId,
+    });
+    expect(() => executeAllocation(corrupted, context(), allocation))
+      .toThrow(/invalid or non-finite goods projection/);
+    expect(corrupted.productionUnits.get(sellerUnitId)!.outputInventory.get(FOOD)).toBe(Infinity);
+    expect(world.productionUnits.get(sellerUnitId)!.outputInventory.get(FOOD))
+      .toBe(unit.outputInventory.get(FOOD));
+  });
+
+  it("rejects NaN in an existing wallet before committing the money delta", () => {
+    const world = buildWorld();
+    const { buyerCohortId, currencyId } = pickCounterparties(world);
+    const cohort = world.cohorts.get(buyerCohortId)!;
+    const poisoned = {
+      ...world,
+      cohorts: new Map(world.cohorts).set(buyerCohortId, {
+        ...cohort,
+        wallet: new Map(cohort.wallet).set(currencyId, NaN),
+      }),
+    };
+    expect(() => applyActorMoneyDeltas(poisoned, [{
+      actor: { type: "COHORT", cohortId: buyerCohortId },
+      currencyId,
+      delta: -1,
+    }])).toThrow(/invalid or non-finite wallet projection/);
+    expect(Number.isNaN(poisoned.cohorts.get(buyerCohortId)!.wallet.get(currencyId)))
+      .toBe(true);
+  });
+
+  it("rejects cumulative overflow from two individually finite wallet credits", () => {
+    const world = buildWorld();
+    const { buyerCohortId, currencyId } = pickCounterparties(world);
+    const actor = { type: "COHORT" as const, cohortId: buyerCohortId };
+    const initial = world.cohorts.get(buyerCohortId)!.wallet.get(currencyId);
+    expect(() => applyActorMoneyDeltas(world, [
+      { actor, currencyId, delta: Number.MAX_VALUE },
+      { actor, currencyId, delta: Number.MAX_VALUE },
+    ])).toThrow(/invalid or non-finite wallet projection/);
+    expect(world.cohorts.get(buyerCohortId)!.wallet.get(currencyId)).toBe(initial);
+  });
+
+  it("accepts finite exactly offsetting wallet deltas on the same actor", () => {
+    const world = buildWorld();
+    const { buyerCohortId, currencyId } = pickCounterparties(world);
+    const actor = { type: "COHORT" as const, cohortId: buyerCohortId };
+    const next = applyActorMoneyDeltas(world, [
+      { actor, currencyId, delta: 1 },
+      { actor, currencyId, delta: -1 },
+    ]);
+    expect(next.cohorts.get(buyerCohortId)!.wallet.get(currencyId))
+      .toBe(world.cohorts.get(buyerCohortId)!.wallet.get(currencyId));
+  });
+
+  it("rejects a pre-existing negative wallet even when a credit would hide it", () => {
+    const world = buildWorld();
+    const { buyerCohortId, currencyId } = pickCounterparties(world);
+    const cohort = world.cohorts.get(buyerCohortId)!;
+    const poisoned = {
+      ...world,
+      cohorts: new Map(world.cohorts).set(buyerCohortId, {
+        ...cohort,
+        wallet: new Map(cohort.wallet).set(currencyId, -3),
+      }),
+    };
+    expect(() => applyActorMoneyDeltas(poisoned, [{
+      actor: { type: "COHORT", cohortId: buyerCohortId },
+      currencyId,
+      delta: 10,
+    }])).toThrow(/invalid or non-finite wallet projection/);
+    expect(poisoned.cohorts.get(buyerCohortId)!.wallet.get(currencyId)).toBe(-3);
+  });
+
+  it("rejects a negative opening household inventory before a restorative purchase", () => {
+    const world = buildWorld();
+    const { sellerUnitId, buyerCohortId, stateId, currencyId } = pickCounterparties(world);
+    const cohort = world.cohorts.get(buyerCohortId)!;
+    const poisoned = {
+      ...world,
+      cohorts: new Map(world.cohorts).set(buyerCohortId, {
+        ...cohort,
+        householdInventory: new Map(cohort.householdInventory).set(FOOD, -1),
+      }),
+    };
+    const allocation = buildAllocation({
+      seller: { type: "PRODUCTION_UNIT", productionUnitId: sellerUnitId },
+      buyer: { type: "COHORT", cohortId: buyerCohortId },
+      quantity: 2,
+      sellerNetUnitPrice: 1,
+      currencyId,
+      destinationStateId: stateId,
+    });
+    expect(() => executeAllocation(poisoned, context(), allocation))
+      .toThrow(/invalid or non-finite goods projection/);
+    expect(poisoned.cohorts.get(buyerCohortId)!.householdInventory.get(FOOD)).toBe(-1);
+  });
+
+  it("permits a temporary negative wallet projection that is netted to a valid final stock", () => {
+    const world = buildWorld();
+    const { buyerCohortId, currencyId } = pickCounterparties(world);
+    const original = world.cohorts.get(buyerCohortId)!.wallet.get(currencyId)!;
+    const actor = { type: "COHORT" as const, cohortId: buyerCohortId };
+    const next = applyActorMoneyDeltas(world, [
+      { actor, currencyId, delta: -(original + 10) },
+      { actor, currencyId, delta: original + 10 },
+    ]);
+    expect(next.cohorts.get(buyerCohortId)!.wallet.get(currencyId)).toBe(original);
+  });
+});
