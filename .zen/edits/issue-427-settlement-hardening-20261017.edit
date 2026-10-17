@@ -1,0 +1,246 @@
+### FILE: src/simulation/marketSettlement.ts
+<<<<<<< FIND
+export interface MarketSettlementBundle {
+  readonly bundleId: TransactionBundleId;
+  readonly marketSaleTransaction: EconomicTransaction;
+  readonly consumptionTaxTransaction?: EconomicTransaction | null;
+}
+=======
+export interface MarketSettlementBundle {
+  readonly bundleId: TransactionBundleId;
+  readonly marketSaleTransaction: EconomicTransaction;
+  readonly consumptionTaxTransaction?: EconomicTransaction | null;
+}
+
+/** A counter is the next unused ordinal, not an approximate floating-point quantity. */
+function assertTransactionCapacity(
+  counter: { value: number },
+  count: number,
+  tick: number,
+  phase: number,
+): void {
+  if (!Number.isSafeInteger(tick) || tick < 0 ||
+      !Number.isSafeInteger(phase) || phase < 0 || phase > 15) {
+    throw new Error("Market settlement requires a nonnegative safe-integer tick and phase 0..15");
+  }
+  if (!Number.isSafeInteger(counter.value) || counter.value < 0 ||
+      counter.value > Number.MAX_SAFE_INTEGER - count) {
+    throw new Error(`Market settlement transaction counter cannot reserve ${count} safe ordinal(s)`);
+  }
+}
+>>>>>>> REPLACE
+<<<<<<< FIND
+  assertFiniteCanonicalNumber(sellerNetValue, "sellerNetValue in computeConsumptionTax");
+
+  const assessedTaxRate = taxPolicy.getConsumptionTaxRate(destinationStateId, goodId);
+=======
+  assertFiniteCanonicalNumber(sellerNetValue, "sellerNetValue in computeConsumptionTax");
+  if (sellerNetValue < 0) {
+    throw new Error(`sellerNetValue must be >= 0, got ${sellerNetValue}`);
+  }
+
+  const assessedTaxRate = taxPolicy.getConsumptionTaxRate(destinationStateId, goodId);
+>>>>>>> REPLACE
+<<<<<<< FIND
+  // Preflight math check: buyer debit must equal seller net receipt + tax (MTFX-I2)
+  const sellerNetReceipt = allocation.quantity * allocation.sellerNetUnitPrice;
+  const buyerGrossDebit = allocation.quantity * allocation.buyerGrossUnitPrice;
+  const expectedBuyerDebit = sellerNetReceipt + allocation.consumptionTaxAmount;
+
+  // Use epsilon for floating-point comparison
+=======
+  if (!Number.isSafeInteger(tick) || tick < 0 ||
+      !Number.isSafeInteger(phase) || phase < 0 || phase > 15) {
+    return "Market settlement requires a nonnegative safe-integer tick and phase 0..15";
+  }
+
+  if (allocation.consumptionTaxAmount > 0 &&
+      (typeof allocation.destinationStateId !== "string" || allocation.destinationStateId.trim() === "")) {
+    return "Collected consumption tax has no destinationStateId; it must reach a State treasury";
+  }
+
+  // Finite operands do not imply finite products/sums. Infinity - Infinity is NaN,
+  // whose comparison with epsilon would otherwise admit an invalid money bundle.
+  const sellerNetReceipt = allocation.quantity * allocation.sellerNetUnitPrice;
+  const buyerGrossDebit = allocation.quantity * allocation.buyerGrossUnitPrice;
+  const expectedBuyerDebit = sellerNetReceipt + allocation.consumptionTaxAmount;
+  if (!Number.isFinite(sellerNetReceipt) || !Number.isFinite(buyerGrossDebit) ||
+      !Number.isFinite(expectedBuyerDebit)) {
+    return "Derived seller receipt, buyer debit and receipt plus tax must be finite";
+  }
+  if (allocation.quantity > 0 &&
+      ((allocation.sellerNetUnitPrice > 0 && sellerNetReceipt === 0) ||
+       (allocation.buyerGrossUnitPrice > 0 && buyerGrossDebit === 0))) {
+    return "Positive quantity and positive price underflow to a zero money transfer";
+  }
+
+  // Preserve the existing comparison tolerance; this repair adds no economic rounding rule.
+>>>>>>> REPLACE
+<<<<<<< FIND
+  const sellerNetValue = allocation.quantity * allocation.sellerNetUnitPrice;
+  assertFiniteCanonicalNumber(sellerNetValue, "sellerNetValue");
+
+  const transactionId = createTransactionId(`tx:${tick}:${phase}:market-sale:${transactionIdCounter.value++}`);
+=======
+  assertFiniteCanonicalNumber(allocation.quantity, "allocation.quantity");
+  assertFiniteCanonicalNumber(allocation.sellerNetUnitPrice, "sellerNetUnitPrice");
+  if (allocation.quantity < 0 || allocation.sellerNetUnitPrice < 0) {
+    throw new Error("Market sale quantity and sellerNetUnitPrice must be >= 0");
+  }
+  const sellerNetValue = allocation.quantity * allocation.sellerNetUnitPrice;
+  assertFiniteCanonicalNumber(sellerNetValue, "sellerNetValue");
+  if (allocation.quantity > 0 && allocation.sellerNetUnitPrice > 0 && sellerNetValue === 0) {
+    throw new Error("Positive market sale quantity and price underflow to zero");
+  }
+  assertTransactionCapacity(transactionIdCounter, 1, tick, phase);
+
+  const transactionId = createTransactionId(`tx:${tick}:${phase}:market-sale:${transactionIdCounter.value++}`);
+>>>>>>> REPLACE
+<<<<<<< FIND
+  // Only create tax transaction if tax amount > 0
+  if (allocation.consumptionTaxAmount <= 0) {
+    return null;
+  }
+
+  assertFiniteCanonicalNumber(allocation.consumptionTaxAmount, "allocation.consumptionTaxAmount");
+
+  if (!allocation.destinationStateId) {
+    // No tax without destination state
+    return null;
+  }
+
+  const transactionId = createTransactionId(`tx:${tick}:${phase}:consumption-tax:${transactionIdCounter.value++}`);
+=======
+  assertFiniteCanonicalNumber(allocation.consumptionTaxAmount, "allocation.consumptionTaxAmount");
+  if (allocation.consumptionTaxAmount < 0) {
+    throw new Error("consumptionTaxAmount must be >= 0");
+  }
+  if (allocation.consumptionTaxAmount === 0) return null;
+
+  if (typeof allocation.destinationStateId !== "string" || allocation.destinationStateId.trim() === "") {
+    throw new Error("Collected consumption tax has no destinationStateId; it must reach a State treasury");
+  }
+  assertTransactionCapacity(transactionIdCounter, 1, tick, phase);
+
+  const transactionId = createTransactionId(`tx:${tick}:${phase}:consumption-tax:${transactionIdCounter.value++}`);
+>>>>>>> REPLACE
+<<<<<<< FIND
+  // Create bundle ID from stable semantic inputs
+  const bundleId = createTransactionBundleId(
+    `tb:${tick}:${phase}:${allocation.marketId}:${allocation.goodId}:${allocation.sellerIntentId}:${allocation.buyerIntentId}`,
+  );
+
+  // Create MARKET_SALE transaction
+=======
+  const transactionCount = allocation.consumptionTaxAmount > 0 ? 2 : 1;
+  assertTransactionCapacity(transactionIdCounter, transactionCount, tick, phase);
+  // Publish the caller's counter only after both records exist. A refused bundle must
+  // not consume even its first ordinal, including exhaustion before the tax leg.
+  const stagedCounter = { value: transactionIdCounter.value };
+
+  // Allocation identity distinguishes split lots for the same two intents. Tuple
+  // encoding is injective for string IDs, unlike concatenating colon-delimited keys.
+  const bundleId = createTransactionBundleId(`tb:${JSON.stringify([
+    tick, phase, allocation.pass, allocation.marketId, allocation.regionId,
+    allocation.goodId, allocation.marketCurrencyId, allocation.sellerIntentId,
+    allocation.buyerIntentId, allocation.id,
+  ])}`);
+
+  // Create MARKET_SALE transaction
+>>>>>>> REPLACE
+<<<<<<< FIND
+  // Create MARKET_SALE transaction
+  const marketSaleTransaction = createMarketSaleTransaction(
+    allocation,
+    bundleId,
+    tick,
+    phase,
+    transactionIdCounter,
+  );
+=======
+  // Create MARKET_SALE transaction
+  const marketSaleTransaction = createMarketSaleTransaction(
+    allocation,
+    bundleId,
+    tick,
+    phase,
+    stagedCounter,
+  );
+>>>>>>> REPLACE
+<<<<<<< FIND
+  const consumptionTaxTransaction = createConsumptionTaxTransaction(
+    allocation,
+    marketSaleTransaction.transactionId,
+    bundleId,
+    tick,
+    phase,
+    transactionIdCounter,
+  );
+
+  return {
+=======
+  const consumptionTaxTransaction = createConsumptionTaxTransaction(
+    allocation,
+    marketSaleTransaction.transactionId,
+    bundleId,
+    tick,
+    phase,
+    stagedCounter,
+  );
+
+  transactionIdCounter.value = stagedCounter.value;
+  return {
+>>>>>>> REPLACE
+### FILE: src/simulation/marketSettlement.test.ts
+<<<<<<< FIND
+    it("returns null when no destination state", () => {
+=======
+    it("rejects a nonzero tax without a destination before consuming an ID", () => {
+>>>>>>> REPLACE
+<<<<<<< FIND
+      const allocation = createTestAllocation({
+        consumptionTaxAmount: 100,
+        destinationStateId: null,
+      });
+      const marketSaleId = "tx:5:8:market-sale:0" as any;
+      const bundleId = "tb:test-bundle" as any;
+      const counter = { value: 0 };
+
+      const tx = createConsumptionTaxTransaction(
+        allocation,
+        marketSaleId,
+        bundleId,
+        5,
+        8,
+        counter,
+      );
+
+      expect(tx).toBeNull();
+=======
+      const allocation = createTestAllocation({
+        consumptionTaxAmount: 100,
+        destinationStateId: null,
+      });
+      const marketSaleId = "tx:5:8:market-sale:0" as any;
+      const bundleId = "tb:test-bundle" as any;
+      const counter = { value: 0 };
+
+      expect(() => createConsumptionTaxTransaction(
+        allocation,
+        marketSaleId,
+        bundleId,
+        5,
+        8,
+        counter,
+      )).toThrow(/no destinationStateId/);
+      expect(counter.value).toBe(0);
+>>>>>>> REPLACE
+### FILE: src/simulation/marketSettlementTransition.ts
+<<<<<<< FIND
+      return { kind: "PRODUCTION_UNIT", productionUnitId: actor.productionUnitId, bucket };
+=======
+      if (bucket !== "INPUT" && bucket !== "OUTPUT" && bucket !== "INVESTMENT") {
+        refuse(`executeAllocation: ${side} production unit has an unknown inventory bucket "${String(bucket)}"`);
+      }
+      return { kind: "PRODUCTION_UNIT", productionUnitId: actor.productionUnitId, bucket };
+>>>>>>> REPLACE
