@@ -168,7 +168,10 @@ export function computeLocalClearing(
   const totalDemand = buyerData.reduce((sum, d) => sum + d.effectiveDemand, 0);
   const totalSupply = sellerData.reduce((sum, s) => sum + s.sellable, 0);
 
-  if (totalDemand <= quantityEpsilon || totalSupply <= quantityEpsilon) {
+  // Epsilon measures reconciliation error; it is never a minimum tradable lot.
+  // A positive feasible market must reach the matcher and exact capacity checks,
+  // even when its entire aggregate quantity is at or below quantityEpsilon.
+  if (totalDemand <= 0 || totalSupply <= 0) {
     return [];
   }
 
