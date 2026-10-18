@@ -97,6 +97,76 @@ describe("REQ-MARKET-003 residual correction", () => {
     expect(fill(sellerB.id)).toBeLessThanOrEqual(b + 1e-8);
   });
 
+  it.each([
+    [9e-9, 1e-8],
+    [1e-8, 1e-8],
+    [9e-10, 1e-9],
+    [1e-9, 1e-9],
+  ])("settles a single feasible lot q=%s at epsilon=%s", (quantity, epsilon) => {
+    const buyer: MarketIntent = {
+      id: createMarketIntentId("mi:single-micro-buyer"),
+      actor: { type: "COHORT", cohortId: "cohort:single-micro" as CohortId },
+      regionId, goodId, side: "BUY", purpose: "CONSUMPTION", desiredQuantity: quantity,
+      maxSpend: quantity, sourcePlanId: "plan:single-micro-buyer",
+    };
+    const seller: MarketIntent = {
+      id: createMarketIntentId("mi:single-micro-seller"),
+      actor: { type: "CLAN", clanId: "c:single-micro" as ClanId },
+      regionId, goodId, side: "SELL", purpose: "INVENTORY_REBALANCE",
+      desiredQuantity: quantity, sourcePlanId: "plan:single-micro-seller",
+    };
+    let taxationCalls = 0;
+    const counter = { value: 40 };
+    const fixture = input([buyer], [seller], new Map(), new Map());
+    const allocations = computeLocalClearing({
+      ...fixture,
+      getTaxationInfo: () => {
+        taxationCalls++;
+        return { destinationStateId: stateId, assessedTaxRate: 0, collectionEfficiency: 1 };
+      },
+    }, new Map(), 1, epsilon, counter);
+
+    expect(allocations).toHaveLength(1);
+    expect(allocations[0]!.quantity).toBe(quantity);
+    expect(scaled(allocations[0]!.quantity)).toBe(scaled(quantity));
+    expect(allocations[0]!.sellerIntentId).toBe(seller.id);
+    expect(allocations[0]!.buyerIntentId).toBe(buyer.id);
+    expect(taxationCalls).toBe(1);
+    expect(counter.value).toBe(41);
+  });
+
+  it.each(["BUY", "SELL"] as const)("preserves zero-flow %s early exit", (zeroSide) => {
+    const buyer: MarketIntent = {
+      id: createMarketIntentId("mi:zero-buyer"),
+      actor: { type: "COHORT", cohortId: "cohort:zero" as CohortId },
+      regionId, goodId, side: "BUY", purpose: "CONSUMPTION", desiredQuantity: 1,
+      maxSpend: 1, sourcePlanId: "plan:zero-buyer",
+    };
+    const seller: MarketIntent = {
+      id: createMarketIntentId("mi:zero-seller"),
+      actor: { type: "CLAN", clanId: "c:zero" as ClanId },
+      regionId, goodId, side: "SELL", purpose: "INVENTORY_REBALANCE",
+      desiredQuantity: 1, sourcePlanId: "plan:zero-seller",
+    };
+    const fixture = input(
+      [buyer], [seller],
+      new Map([[buyer.id, zeroSide === "BUY" ? 0 : 1]]),
+      new Map([[seller.id, zeroSide === "SELL" ? 0 : 1]]),
+    );
+    let taxationCalls = 0;
+    const counter = { value: 40 };
+    const allocations = computeLocalClearing({
+      ...fixture,
+      getTaxationInfo: () => {
+        taxationCalls++;
+        return { destinationStateId: stateId, assessedTaxRate: 0, collectionEfficiency: 1 };
+      },
+    }, new Map(), 1, 1e-8, counter);
+    expect(allocations).toEqual([]);
+    expect(taxationCalls).toBe(0);
+    expect(counter.value).toBe(40);
+  });
+
   it("settles positive micro-lots instead of dropping aggregate cleared quantity", () => {
     const micro = 9e-9;
     const total = micro * 2;
