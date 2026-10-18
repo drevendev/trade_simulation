@@ -146,3 +146,9 @@ is generated from that file and is presentation only. The summary below follows 
 - Warfare or explicit political dynamics
 
 For the full specification boundary, see [`docs/spec/mirror/06 - Handoff/START_HERE.md`](docs/spec/mirror/06%20-%20Handoff/START_HERE%20—%20Economic%20Simulation%20Implementation%20Handoff.md).
+
+## Contributing and license
+
+Interested in improving a reproducible economy simulation? Start with [CONTRIBUTING.md](CONTRIBUTING.md) and a narrowly scoped [Issue](https://github.com/drevendev/trade_simulation/issues). The contribution guide explains the TypeScript and legacy C# development paths, actual verification commands, and the repository-specific independent review/merge process. Before starting a change, check which integration branch maintainers are currently accepting.
+
+Project-authored code and documentation are licensed under the [MIT License](LICENSE). Third-party dependencies, external source material, and separately licensed assets retain their own terms; see their upstream notices. GitHub-public does not imply rights beyond the applicable licenses.
