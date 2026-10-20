@@ -4,10 +4,11 @@ A deterministic economic simulation that models price formation, trade, and sett
 interconnected local-market system. The **canonical implementation is TypeScript** and the engine
 is browser-capable today; the full Worker-backed interactive observatory around that same engine is
 scheduled for M11. The current [GitHub Pages](https://drevendev.github.io/trade_simulation/)
-deployment leads with the consolidated M3 LocalMarket experience — price and traded-quantity trends,
-a selected-tick market balance and settlement split, and headline metrics — and keeps the earlier
-M0–M2 milestone previews and the legacy run viewer behind a collapsed history disclosure. All of it
-is static, one-way milestone output, not the canonical engine executing in the browser.
+experience is a static milestone-viewer surface, not the canonical engine running in-browser.
+The current repository `docs/index.html` source leads with an M4 closed-economy preview and also
+contains the consolidated M3 LocalMarket experience, including price/quantity charts, selected-tick
+market balance and headline metrics; earlier M0–M2 previews and the legacy viewer remain in history.
+The freshness of the deployed Pages build has not been independently re-verified here.
 
 ## Current state
 
@@ -30,15 +31,15 @@ market implementation adds:
 - Atomic market settlement with tax-aware money and goods transfers
 - Canonical M3 local-market telemetry for diagnostics (shortage/surplus rates, cleared/traded quantities, collection efficiency)
 
-**Milestone 4:** Implementation-complete when this pull request lands. The canonical one-region
-closed economy now composes production, labor allocation and payroll, household consumption,
-finite extraction, real-goods capital formation and ProductionUnit lifecycle through the
-authoritative sixteen-phase TypeScript orchestrator. Its 240-tick deterministic acceptance gate
-binds household MAIN settlement to authoritative post-wage wallet/inventory mutation, and the
-M4 representation requirement is recorded in the implementation ledger. Release tagging remains
-mechanical and follows only after the merged requirement row receives its merge provenance.
+**Milestone 4:** Complete, and [released as `v0.4.0`](https://github.com/drevendev/trade_simulation/releases/tag/v0.4.0)
+on 2026-09-30. The canonical one-region closed economy composes production, labor allocation
+and payroll, household consumption, finite extraction, real-goods capital formation and
+ProductionUnit lifecycle through the authoritative sixteen-phase TypeScript orchestrator.
+Its 240-tick deterministic acceptance gate and milestone representation are recorded in the
+[implementation ledger](docs/spec/implementation_status.csv). The release was published after
+machine-recorded merge provenance, through the repository's mechanical release workflow.
 
-**Interactive viewer:** [Open the M3 LocalMarket Pages experience](https://drevendev.github.io/trade_simulation/) — price and traded-quantity trends, the selected-tick market balance and settlement split, and headline metrics from the deterministic golden run, with the M0–M2 previews and the legacy run viewer under the history disclosure.
+**Interactive viewer:** [Open the GitHub Pages milestone viewer](https://drevendev.github.io/trade_simulation/) — the repository source contains an M4 preview and the M3 LocalMarket experience, including selected-tick price and quantity charts. Earlier M0–M2 previews and the legacy viewer are preserved in the history disclosure. Deployed build freshness is not asserted by this source-level README update.
 
 ## Understanding M3 local markets
 
@@ -131,9 +132,10 @@ is generated from that file and is presentation only. The summary below follows 
   mechanically from the ledger rather than by hand. All nine M3 rows met it, and the tagger cut
   `v0.3.0 — M3` on that evidence. A row whose merge commit is blank is one a pull request is
   still carrying: `scripts/backfill_merge_commits.py` records it once that pull request lands.
-- Milestone 4 is implementation-complete when this pull request lands: every M4 registry row then
-  reads IMPLEMENTED. Its release remains pending until the machine records the merge provenance
-  for the final REQ-ACCEPTANCE-005 row and `release-tag.yml` evaluates the completed ledger.
+- Milestone 4 is complete and was released as [`v0.4.0 — M4`](https://github.com/drevendev/trade_simulation/releases/tag/v0.4.0)
+  on 2026-09-30, after the canonical M4 implementation rows and machine-recorded merge provenance
+  satisfied the release workflow. This published release is historical; it is not a claim that later
+  M5–M12 requirements are implemented.
 
 **Not implemented yet (later milestones M5–M8):**
 - Inter-regional transport, trade logistics and FX (M5)
