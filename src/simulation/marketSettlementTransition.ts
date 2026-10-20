@@ -508,7 +508,10 @@ export function executeAllocation(
       // Pure alias cycles may accumulate harmless sub-epsilon rounding during
       // sequential credits. They are governed by the existing conservation
       // tolerance, not treated as a mandatory bit-for-bit identity.
-      if ((requested !== 0 && opening === closing) ||
+      // Aggregate same-stock alias legs can cancel to a sub-epsilon
+      // floating residual. Refuse a swallowed *material* transfer, not
+      // ordinary zero-net activity inside the existing reconciliation limit.
+      if ((Math.abs(requested) > 1e-8 && opening === closing) ||
           (requested === 0 && Math.abs(closing - opening) > 1e-8)) {
         refuse("executeAllocation: " + kind +
           " transfer lost to binary64 rounding or zero-net stock drift" +
