@@ -475,6 +475,55 @@ export function executeAllocation(
   for (const delta of moneyDeltas) {
     next = applyMoneyDelta(next, delta);
   }
+
+  // A nominally balanced transfer can lose either leg when a small amount is
+  // added to or subtracted from a large binary64 balance. The successor is
+  // still local: refusing it leaves the caller's immutable world untouched.
+  type RealizedPosting = { opening: number; closing: number; requested: number };
+  const goodsPosting = new Map<string, RealizedPosting>();
+  for (const delta of goodsDeltas) {
+    const key = goodsDeltaKey(delta);
+    const previous = goodsPosting.get(key);
+    goodsPosting.set(key, {
+      opening: previous?.opening ?? (readGoods(world, delta.endpoint).get(delta.goodId) ?? 0),
+      closing: readGoods(next, delta.endpoint).get(delta.goodId) ?? 0,
+      requested: (previous?.requested ?? 0) + delta.delta,
+    });
+  }
+  const moneyPosting = new Map<string, RealizedPosting>();
+  for (const delta of moneyDeltas) {
+    const key = moneyDeltaKey(delta);
+    const previous = moneyPosting.get(key);
+    moneyPosting.set(key, {
+      opening: previous?.opening ?? (readWallet(world, delta.endpoint).get(delta.currencyId) ?? 0),
+      closing: readWallet(next, delta.endpoint).get(delta.currencyId) ?? 0,
+      requested: (previous?.requested ?? 0) + delta.delta,
+    });
+  }
+
+  function checkRealizedPostings(kind: string, rows: Iterable<RealizedPosting>): void {
+    let sum = 0;
+    let correction = 0;
+    for (const { opening, closing, requested } of rows) {
+      if ((requested !== 0 && opening === closing) ||
+          (requested === 0 && opening !== closing)) {
+        refuse("executeAllocation: " + kind + " transfer lost to binary64 rounding or zero-net stock drift");
+      }
+      const actual = closing - opening;
+      const rounded = sum + actual;
+      correction += Math.abs(sum) >= Math.abs(actual)
+        ? (sum - rounded) + actual : (actual - rounded) + sum;
+      sum = rounded;
+    }
+    const residual = sum + correction;
+    // Preserve the existing absolute 1e-8 market preflight tolerance.
+    // This is a bounded guard, not an exact lifetime accounting contract.
+    if (Math.abs(residual) > 1e-8) {
+      refuse("executeAllocation: materialized " + kind + " conservation residual " + residual);
+    }
+  }
+  checkRealizedPostings("goods", goodsPosting.values());
+  checkRealizedPostings("money", moneyPosting.values());
   return next;
 }
 
