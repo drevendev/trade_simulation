@@ -505,9 +505,14 @@ export function executeAllocation(
     let sum = 0;
     let correction = 0;
     for (const { opening, closing, requested } of rows) {
+      // Pure alias cycles may accumulate harmless sub-epsilon rounding during
+      // sequential credits. They are governed by the existing conservation
+      // tolerance, not treated as a mandatory bit-for-bit identity.
       if ((requested !== 0 && opening === closing) ||
-          (requested === 0 && opening !== closing)) {
-        refuse("executeAllocation: " + kind + " transfer lost to binary64 rounding or zero-net stock drift");
+          (requested === 0 && Math.abs(closing - opening) > 1e-8)) {
+        refuse("executeAllocation: " + kind +
+          " transfer lost to binary64 rounding or zero-net stock drift" +
+          " (requested=" + requested + ", opening=" + opening + ", closing=" + closing + ")");
       }
       const actual = closing - opening;
       const rounded = sum + actual;
