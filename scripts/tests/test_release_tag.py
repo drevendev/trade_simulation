@@ -231,3 +231,23 @@ class TheRegistrysOwnColumnTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ReleaseWorkflowEventTests(unittest.TestCase):
+    """Issue #778: unrelated master advances must still retry stranded provenance."""
+
+    def test_release_provenance_runs_on_every_master_push(self):
+        workflow = (ROOT / ".github" / "workflows" / "release-tag.yml").read_text(encoding="utf-8")
+        self.assertIn("\non:\n", workflow)
+        on_block = workflow.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertIn("  push:\n    branches: [master]", on_block)
+        self.assertNotIn("    paths:", on_block)
+        self.assertIn("  workflow_dispatch:", on_block)
+
+    def test_release_provenance_has_an_explicit_no_change_path(self):
+        script = (ROOT / "scripts" / "release_tag.py").read_text(encoding="utf-8")
+        # Do not broaden triggers unless both the existing no-op tag plan and
+        # a provenance pull-request gate remain in place.
+        workflow = (ROOT / ".github" / "workflows" / "release-tag.yml").read_text(encoding="utf-8")
+        self.assertIn("def plan(", script)
+        self.assertIn("name: Propose the provenance as a pull request", workflow)
+        self.assertIn("name: Cut the tag if a milestone is newly complete", workflow)
