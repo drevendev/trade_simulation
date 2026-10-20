@@ -892,7 +892,7 @@ describe("SLP-788-01/02: actual WorldState posting conservation", () => {
     const world = buildWorld();
     const seeded = withSettlementStock(withSettlementStock(world, "buyerWallet", 1e12), "sellerWallet", 0);
     const original = snapshotSettlementStocks(seeded);
-    expect(() => executeAllocation(seeded, context(), sale(seeded, lostLot, 1)))
+    expect(() => executeAllocation(seeded, context(), sale(world, lostLot, 1)))
       .toThrow(/money transfer lost to binary64 rounding/);
     expect(snapshotSettlementStocks(seeded)).toEqual(original);
   });
@@ -900,14 +900,14 @@ describe("SLP-788-01/02: actual WorldState posting conservation", () => {
     const world = buildWorld();
     const seeded = withSettlementStock(withSettlementStock(world, "sellerInventory", 1e12), "buyerInventory", 0);
     const original = snapshotSettlementStocks(seeded);
-    expect(() => executeAllocation(seeded, context(), sale(seeded, lostLot, 0)))
+    expect(() => executeAllocation(seeded, context(), sale(world, lostLot, 0)))
       .toThrow(/goods transfer lost to binary64 rounding/);
     expect(snapshotSettlementStocks(seeded)).toEqual(original);
   });
   it("refuses a seller credit swallowed by its large opening wallet", () => {
     const world = buildWorld();
     const seeded = withSettlementStock(withSettlementStock(world, "sellerWallet", 1e17), "buyerWallet", 10);
-    expect(() => executeAllocation(seeded, context(), sale(seeded, 1, 1)))
+    expect(() => executeAllocation(seeded, context(), sale(world, 1, 1)))
       .toThrow(/money transfer lost to binary64 rounding/);
   });
   it("refuses a positive tax credit swallowed by a huge treasury", () => {
@@ -916,7 +916,7 @@ describe("SLP-788-01/02: actual WorldState posting conservation", () => {
     seeded = withSettlementStock(seeded, "buyerWallet", 10);
     seeded = withSettlementStock(seeded, "taxTreasury", 1e17);
     const original = snapshotSettlementStocks(seeded);
-    expect(() => executeAllocation(seeded, context(), sale(seeded, 1, 1, 0.125)))
+    expect(() => executeAllocation(seeded, context(), sale(world, 1, 1, 0.125)))
       .toThrow(/money transfer lost to binary64 rounding/);
     expect(snapshotSettlementStocks(seeded)).toEqual(original);
   });
@@ -924,7 +924,7 @@ describe("SLP-788-01/02: actual WorldState posting conservation", () => {
     const world = buildWorld();
     const seeded = withSettlementStock(withSettlementStock(world, "sellerInventory", 1e12), "buyerInventory", 0);
     const original = snapshotSettlementStocks(seeded);
-    expect(() => executeAllocation(seeded, context(), sale(seeded, fractionalLot, 0)))
+    expect(() => executeAllocation(seeded, context(), sale(world, fractionalLot, 0)))
       .toThrow(/materialized goods conservation residual/);
     expect(snapshotSettlementStocks(seeded)).toEqual(original);
   });
@@ -933,14 +933,14 @@ describe("SLP-788-01/02: actual WorldState posting conservation", () => {
     let seeded = withSettlementStock(world, "sellerInventory", 10);
     seeded = withSettlementStock(seeded, "buyerWallet", 1e12);
     seeded = withSettlementStock(seeded, "sellerWallet", 0);
-    expect(() => executeAllocation(seeded, context(), sale(seeded, fractionalLot, 1)))
+    expect(() => executeAllocation(seeded, context(), sale(world, fractionalLot, 1)))
       .toThrow(/materialized money conservation residual/);
   });
   it("retains an exactly representable positive one-ULP free lot", () => {
     const world = buildWorld();
     const { sellerUnitId, buyerCohortId } = pickCounterparties(world);
     const seeded = withSettlementStock(withSettlementStock(world, "sellerInventory", 1e12), "buyerInventory", 0);
-    const next = executeAllocation(seeded, context(), sale(seeded, ulp, 0));
+    const next = executeAllocation(seeded, context(), sale(world, ulp, 0));
     expect(1e12 - next.productionUnits.get(sellerUnitId)!.outputInventory.get(FOOD)!).toBe(ulp);
     expect(next.cohorts.get(buyerCohortId)!.householdInventory.get(FOOD)).toBe(ulp);
   });
@@ -952,7 +952,7 @@ describe("SLP-788-01/02: actual WorldState posting conservation", () => {
     seeded = withSettlementStock(seeded, "buyerWallet", 10);
     seeded = withSettlementStock(seeded, "sellerWallet", 0);
     seeded = withSettlementStock(seeded, "taxTreasury", 0);
-    const next = executeAllocation(seeded, context(), sale(seeded, 1, 1, 0.25));
+    const next = executeAllocation(seeded, context(), sale(world, 1, 1, 0.25));
     expect(next.productionUnits.get(sellerUnitId)!.outputInventory.get(FOOD)).toBe(9);
     expect(next.cohorts.get(buyerCohortId)!.householdInventory.get(FOOD)).toBe(1);
     expect(next.cohorts.get(buyerCohortId)!.wallet.get(currencyId)).toBe(8.75);
