@@ -174,6 +174,15 @@ export function preflightMarketSettlement(
     return `Buyer debit (${buyerGrossDebit}) must equal seller net (${sellerNetReceipt}) + tax (${allocation.consumptionTaxAmount}), got difference of ${Math.abs(buyerGrossDebit - expectedBuyerDebit)}`;
   }
 
+  // The tax is a separate treasury credit: it must be funded by a separately
+  // materialized buyer debit even when buyerGross and sellerNet are huge.
+  // This guard supplements (does not replace) the existing tolerance contract.
+  const separatelyPostedResidual = (buyerGrossDebit - sellerNetReceipt) - allocation.consumptionTaxAmount;
+  if ((allocation.consumptionTaxAmount > 0 && buyerGrossDebit === sellerNetReceipt) ||
+      Math.abs(separatelyPostedResidual) > epsilon) {
+    return "Buyer debit cannot fund the separately posted seller receipt and collected tax";
+  }
+
   return null;
 }
 
