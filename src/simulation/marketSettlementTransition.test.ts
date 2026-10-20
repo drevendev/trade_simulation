@@ -874,3 +874,89 @@ describe("atomic projection refuses non-finite stock values before commit", () =
     expect(next.cohorts.get(buyerCohortId)!.wallet.get(currencyId)).toBe(original);
   });
 });
+
+describe("SLP-788-01/02: actual WorldState posting conservation", () => {
+  const ulp = 2 ** -13;
+  const lostLot = 2 ** -14;
+  const fractionalLot = ulp * 0.75;
+  function sale(world: WorldState, quantity: number, sellerNetUnitPrice: number, taxPerUnit = 0) {
+    const { sellerUnitId, buyerCohortId, currencyId, stateId } = pickCounterparties(world);
+    return buildAllocation({
+      seller: { type: "PRODUCTION_UNIT", productionUnitId: sellerUnitId },
+      buyer: { type: "COHORT", cohortId: buyerCohortId },
+      quantity, sellerNetUnitPrice, taxPerUnit, currencyId,
+      destinationStateId: taxPerUnit > 0 ? stateId : null,
+    });
+  }
+  it("refuses buyer debit rounded away while seller is actually paid", () => {
+    const world = buildWorld();
+    const seeded = withSettlementStock(withSettlementStock(world, "buyerWallet", 1e12), "sellerWallet", 0);
+    const original = snapshotSettlementStocks(seeded);
+    expect(() => executeAllocation(seeded, context(), sale(seeded, lostLot, 1)))
+      .toThrow(/money transfer lost to binary64 rounding/);
+    expect(snapshotSettlementStocks(seeded)).toEqual(original);
+  });
+  it("refuses seller goods debit rounded away while the buyer receives goods", () => {
+    const world = buildWorld();
+    const seeded = withSettlementStock(withSettlementStock(world, "sellerInventory", 1e12), "buyerInventory", 0);
+    const original = snapshotSettlementStocks(seeded);
+    expect(() => executeAllocation(seeded, context(), sale(seeded, lostLot, 0)))
+      .toThrow(/goods transfer lost to binary64 rounding/);
+    expect(snapshotSettlementStocks(seeded)).toEqual(original);
+  });
+  it("refuses a seller credit swallowed by its large opening wallet", () => {
+    const world = buildWorld();
+    const seeded = withSettlementStock(withSettlementStock(world, "sellerWallet", 1e17), "buyerWallet", 10);
+    expect(() => executeAllocation(seeded, context(), sale(seeded, 1, 1)))
+      .toThrow(/money transfer lost to binary64 rounding/);
+  });
+  it("refuses a positive tax credit swallowed by a huge treasury", () => {
+    const world = buildWorld();
+    let seeded = withSettlementStock(world, "sellerInventory", 10);
+    seeded = withSettlementStock(seeded, "buyerWallet", 10);
+    seeded = withSettlementStock(seeded, "taxTreasury", 1e17);
+    const original = snapshotSettlementStocks(seeded);
+    expect(() => executeAllocation(seeded, context(), sale(seeded, 1, 1, 0.125)))
+      .toThrow(/money transfer lost to binary64 rounding/);
+    expect(snapshotSettlementStocks(seeded)).toEqual(original);
+  });
+  it("rejects nonzero goods postings that lose part of a positive lot", () => {
+    const world = buildWorld();
+    const seeded = withSettlementStock(withSettlementStock(world, "sellerInventory", 1e12), "buyerInventory", 0);
+    const original = snapshotSettlementStocks(seeded);
+    expect(() => executeAllocation(seeded, context(), sale(seeded, fractionalLot, 0)))
+      .toThrow(/materialized goods conservation residual/);
+    expect(snapshotSettlementStocks(seeded)).toEqual(original);
+  });
+  it("rejects a partly rounded buyer debit even if both wallet legs move", () => {
+    const world = buildWorld();
+    let seeded = withSettlementStock(world, "sellerInventory", 10);
+    seeded = withSettlementStock(seeded, "buyerWallet", 1e12);
+    seeded = withSettlementStock(seeded, "sellerWallet", 0);
+    expect(() => executeAllocation(seeded, context(), sale(seeded, fractionalLot, 1)))
+      .toThrow(/materialized money conservation residual/);
+  });
+  it("retains an exactly representable positive one-ULP free lot", () => {
+    const world = buildWorld();
+    const { sellerUnitId, buyerCohortId } = pickCounterparties(world);
+    const seeded = withSettlementStock(withSettlementStock(world, "sellerInventory", 1e12), "buyerInventory", 0);
+    const next = executeAllocation(seeded, context(), sale(seeded, ulp, 0));
+    expect(1e12 - next.productionUnits.get(sellerUnitId)!.outputInventory.get(FOOD)!).toBe(ulp);
+    expect(next.cohorts.get(buyerCohortId)!.householdInventory.get(FOOD)).toBe(ulp);
+  });
+  it("retains a normal exactly representable taxable sale", () => {
+    const world = buildWorld();
+    const { sellerUnitId, buyerCohortId, stateId, currencyId } = pickCounterparties(world);
+    let seeded = withSettlementStock(world, "sellerInventory", 10);
+    seeded = withSettlementStock(seeded, "buyerInventory", 0);
+    seeded = withSettlementStock(seeded, "buyerWallet", 10);
+    seeded = withSettlementStock(seeded, "sellerWallet", 0);
+    seeded = withSettlementStock(seeded, "taxTreasury", 0);
+    const next = executeAllocation(seeded, context(), sale(seeded, 1, 1, 0.25));
+    expect(next.productionUnits.get(sellerUnitId)!.outputInventory.get(FOOD)).toBe(9);
+    expect(next.cohorts.get(buyerCohortId)!.householdInventory.get(FOOD)).toBe(1);
+    expect(next.cohorts.get(buyerCohortId)!.wallet.get(currencyId)).toBe(8.75);
+    expect(next.productionUnits.get(sellerUnitId)!.wallet.get(currencyId)).toBe(1);
+    expect(next.states.get(stateId)!.treasury.get(currencyId)).toBe(0.25);
+  });
+});
