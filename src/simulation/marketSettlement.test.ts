@@ -510,3 +510,37 @@ describe("Market settlement transaction schemas (REQ-MARKET-004)", () => {
     });
   });
 });
+
+describe("SLP-788-01: distinct tax posting must be funded", () => {
+  it("refuses tax absorbed in the buyer gross debit at 1e15, without consuming an ID", () => {
+    const allocation = createTestAllocation({
+      quantity: 1, sellerNetUnitPrice: 1e15, buyerGrossUnitPrice: 1e15,
+      consumptionTaxAmount: 0.0625,
+    });
+    const counter = { value: 17 };
+    expect(preflightMarketSettlement(allocation, 5, 8)).toMatch(/cannot fund/);
+    expect(() => executeMarketSettlement(allocation, 5, 8, counter)).toThrow(/preflight failed/);
+    expect(counter.value).toBe(17);
+  });
+  it("refuses positive sub-epsilon tax whose entire buyer debit is absorbed", () => {
+    const allocation = createTestAllocation({
+      quantity: 1, sellerNetUnitPrice: 1e15, buyerGrossUnitPrice: 1e15,
+      consumptionTaxAmount: 1e-11,
+    });
+    expect(preflightMarketSettlement(allocation, 5, 8)).toMatch(/cannot fund/);
+  });
+  it("accepts representable positive tax beside a large seller receipt", () => {
+    const allocation = createTestAllocation({
+      quantity: 1, sellerNetUnitPrice: 1e15, buyerGrossUnitPrice: 1e15 + 0.125,
+      consumptionTaxAmount: 0.125,
+    });
+    expect(preflightMarketSettlement(allocation, 5, 8)).toBeNull();
+  });
+  it("preserves an ordinary taxable decimal settlement", () => {
+    const allocation = createTestAllocation({
+      quantity: 100, sellerNetUnitPrice: 100, buyerGrossUnitPrice: 100.8,
+      consumptionTaxAmount: 80,
+    });
+    expect(preflightMarketSettlement(allocation, 5, 8)).toBeNull();
+  });
+});
