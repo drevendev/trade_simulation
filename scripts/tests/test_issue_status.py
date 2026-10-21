@@ -164,6 +164,13 @@ class FakeForge:
             if hook:
                 hook()
             return answer
+        if path == "repos/%s/issues?state=open&per_page=100" % REPO:
+            opened = [self._as_listed(n) for n in sorted(self.issues) if self.issues[n]["state"] == "open"]
+            answer = self._answer(self._paged(opened))
+            hook, self.after_listing = self.after_listing, None
+            if hook:
+                hook()
+            return answer
         raise AssertionError("unexpected listing: %s" % path)
 
     def _remove(self, path):
@@ -433,13 +440,14 @@ class TimelineTests(unittest.TestCase):
         follow(forge, 23, "labeled", "status:in-progress")
         self.assertEqual(forge.status(23), ["status:ready"])
 
-    def test_a_history_that_has_not_caught_up_keeps_the_label_just_applied(self):
+    def test_a_history_that_has_not_caught_up_defers_without_deleting_either_label(self):
         forge = FakeForge().add(24, labels=OTHER_AXES)
         forge.apply(24, "status:ready")
         forge.apply(24, "status:in-progress")
-        forge.lag[24] = 1  # the event that started the run is not in the history yet
-        follow(forge, 24, "labeled", "status:in-progress")
-        self.assertEqual(forge.status(24), ["status:in-progress"])
+        forge.lag[24] = 1  # the newest present status is absent from the history
+        outcome = follow(forge, 24, "labeled", "status:in-progress")
+        self.assertEqual(outcome.removed, [])
+        self.assertEqual(forge.status(24), ["status:ready", "status:in-progress"])
 
     def test_a_history_that_names_neither_label_removes_nothing(self):
         # Negative control: two status labels and nothing to say which came last. The
@@ -457,6 +465,102 @@ class TimelineTests(unittest.TestCase):
         forge.take_off(27, "status:ready")
         forge.set_state(27, "closed")
         self.assertEqual(len(issue_status.read_history(REPO, 27, forge)), 1)
+
+
+class OpenRepairTests(unittest.TestCase):
+    """SLP-776-01: history-lag refusal plus explicit manual recovery of open Issues."""
+
+    @staticmethod
+    def forge():
+        forge = FakeForge()
+        forge.add(80, labels=OTHER_AXES)
+        forge.apply(80, "status:ready")
+        forge.apply(80, "status:in-progress")
+        forge.add(81, labels=OTHER_AXES + ["status:ready"])
+        forge.add(82, labels=["status:ready", "status:blocked"], pull_request=True)
+        forge.add(83, state="closed", labels=["status:blocked"])
+        return forge
+
+    def test_an_old_label_event_cannot_remove_a_new_status_unseen_in_history(self):
+        forge = self.forge()
+        forge.lag[80] = 1
+        outcome = follow(forge, 80, "labeled", "status:ready")
+        self.assertEqual(outcome.removed, [])
+        self.assertEqual(forge.status(80), ["status:ready", "status:in-progress"])
+        self.assertIn("does not say", outcome.decision.reason)
+
+    def test_manual_repair_defers_on_lag_then_converges_without_another_event(self):
+        forge = self.forge()
+        forge.lag[80] = 1
+        found, results = issue_status.repair_open(REPO, apply=True, gh=forge, pause=lambda _: None)
+        self.assertEqual(found, [(80, ["status:ready", "status:in-progress"])])
+        self.assertEqual(results[0].removed, [])
+        self.assertIn("history incomplete", results[0].note)
+        self.assertEqual(forge.status(80), ["status:ready", "status:in-progress"])
+        forge.lag.pop(80)
+        found, results = issue_status.repair_open(REPO, apply=True, gh=forge, pause=lambda _: None)
+        self.assertEqual(results[0].removed, ["status:ready"])
+        self.assertEqual(forge.status(80), ["status:in-progress"])
+        self.assertEqual(forge.labels(80), OTHER_AXES + ["status:in-progress"])
+        self.assertEqual(issue_status.repair_open(REPO, gh=forge)[0], [])
+
+    def test_manual_repair_dry_run_reads_only_the_listing(self):
+        forge = self.forge()
+        found, results = issue_status.repair_open(REPO, gh=forge)
+        self.assertEqual(found, [(80, ["status:ready", "status:in-progress"])])
+        self.assertEqual(results, [])
+        self.assertEqual(len(forge.calls), 1)
+        self.assertEqual(forge.removals, [])
+
+    def test_manual_repair_uses_latest_reapplication_not_old_label_name(self):
+        forge = FakeForge().add(84, labels=OTHER_AXES)
+        forge.apply(84, "status:ready")
+        forge.apply(84, "status:in-progress")
+        forge.take_off(84, "status:ready")
+        forge.apply(84, "status:ready")
+        issue_status.repair_open(REPO, apply=True, gh=forge, pause=lambda _: None)
+        self.assertEqual(forge.status(84), ["status:ready"])
+
+    def test_manual_repair_orders_same_second_events_by_event_id(self):
+        forge = FakeForge().add(85, labels=OTHER_AXES)
+        forge.apply(85, "status:ready")
+        forge.apply(85, "status:blocked", same_second=True)
+        issue_status.repair_open(REPO, apply=True, gh=forge, pause=lambda _: None)
+        self.assertEqual(forge.status(85), ["status:blocked"])
+
+    def test_open_repair_never_touches_a_pull_request_or_closed_issue(self):
+        forge = self.forge()
+        issue_status.repair_open(REPO, apply=True, gh=forge, pause=lambda _: None)
+        self.assertEqual(forge.status(82), ["status:ready", "status:blocked"])
+        self.assertEqual(forge.status(83), ["status:blocked"])
+
+    def test_repair_checks_fresh_issue_state_after_listing(self):
+        forge = self.forge()
+        forge.after_listing = lambda: forge.set_state(80, "closed")
+        _, results = issue_status.repair_open(REPO, apply=True, gh=forge, pause=lambda _: None)
+        self.assertIn("no longer ambiguous", results[0].note)
+        self.assertEqual(results[0].removed, [])
+        self.assertEqual(forge.status(80), ["status:ready", "status:in-progress"])
+
+    def test_manual_repair_surfaces_a_failed_deletion(self):
+        forge = self.forge()
+        forge.refused["status:ready"] = "gh: Server Error (HTTP 500)"
+        _, results = issue_status.repair_open(REPO, apply=True, gh=forge, pause=lambda _: None)
+        self.assertEqual(results[0].failed[0][0], "status:ready")
+        self.assertEqual(forge.status(80), ["status:ready", "status:in-progress"])
+
+    def test_existing_dispatch_reconciles_open_issues_after_history_catches_up(self):
+        forge = self.forge()
+        forge.lag[80] = 1
+        code, _, summary = run_main(["repair", "--repo", REPO, "--mode=apply"], forge)
+        self.assertEqual(code, 0)
+        self.assertEqual(forge.status(80), ["status:ready", "status:in-progress"])
+        self.assertIn("deferred 1 uncertain Issue", summary)
+        forge.lag.pop(80)
+        code, _, summary = run_main(["repair", "--repo", REPO, "--mode=apply"], forge)
+        self.assertEqual(code, 0)
+        self.assertEqual(forge.status(80), ["status:in-progress"])
+        self.assertIn("Open Issue status reconciliation: apply", summary)
 
 
 class RepairTests(unittest.TestCase):
