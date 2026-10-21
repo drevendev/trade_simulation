@@ -25,7 +25,7 @@ request on which all four required checks are green, this writes one comment:
 against the merge base with its base branch — positions dropped, because a line added
 above by the base moves a hunk without changing it, and the generated coverage table
 excluded, because it is regenerated from the registry on every base merge and is
-presentation only. Two heads with the same diff identity would land the same change.
+presentation only. Diff identity is only a coarse signal: a real per-commit tree proof is also required to carry a verdict.
 A base merge that had to resolve a conflict inside the pull request's own lines changes
 what is removed or added, so its identity differs and nothing is carried across it.
 
@@ -142,7 +142,8 @@ def walk(head: str, read: Callable[[str], Commit], bound: int = MAX_CHAIN) -> Ch
     onto the base branch, so a pull request whose own diff is empty does not walk into
     the base's history looking for a change.
 
-    What kind of commit a head is decides nothing here; the diff does. The first version
+    Diff identity alone is insufficient: the real Git reader checks unchanged
+    substantive trees on ordinary commits and automatic merge outcomes on base merges. The first version
     followed merges of the base only, and on #661 it stopped at `22feb2aa`, an ordinary
     commit that regenerated the coverage table and changed nothing else.
     """
@@ -333,7 +334,7 @@ def continuity_proven(sha: str, parents: tuple, merges_base: bool, cwd=".") -> b
         conflicts = [line for line in lines[1:] if line.startswith("CONFLICT ")]
         staged = [
             m.group(1) for line in lines[1:]
-            if (m := re.match(r"^\\d{6} [0-9a-f]{40} [123]\\t(.+)$", line))
+            if (m := re.match(r"^\d{6} [0-9a-f]{40} [123]\t(.+)$", line))
         ]
         if not conflicts or not staged or any(name != GENERATED for name in staged):
             return False
