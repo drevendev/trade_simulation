@@ -91,13 +91,13 @@ Rules:
 interface RegionState {  
   id: RegionId;  
   name: string;  
-  controllerStateId: StateId \| null;
+  controllerStateId: StateId | null;
 
   marketId: MarketId;  
   settlementCurrencyId: CurrencyId;  
   settlementLevel: number;
 
-  discoveryState: Record\<string, 'UNKNOWN' \| 'KNOWN'\>;  
+  discoveryState: Record\<string, 'UNKNOWN' | 'KNOWN'\>;  
   resourceDeposits: Record\<string, ResourceDepositState\>;  
   infrastructure: Record\<string, InfrastructureState\>;  
   climateHabitabilityInputs: Record\<string, number\>;  
@@ -114,8 +114,8 @@ Binding rules:
 5.2 StateState  
 interface CurrencyRegimeState {  
   currencyId: CurrencyId;  
-  regimeType: 'INDEPENDENT\_FLOAT' \| 'MONETARY\_UNION' \| 'FOREIGN\_LEGAL\_TENDER';  
-  policyAuthorityId: MonetaryAuthorityId \| null;  
+  regimeType: 'INDEPENDENT\_FLOAT' | 'MONETARY\_UNION' | 'FOREIGN\_LEGAL\_TENDER';  
+  policyAuthorityId: MonetaryAuthorityId | null;  
 }
 
 Currency-regime ownership is State-specific. currencyId selects the State's effective legal-tender/default fiscal currency. INDEPENDENT\_FLOAT and MONETARY\_UNION require policyAuthorityId \= currencies\[currencyId\].issuerAuthorityId and membership in that MonetaryAuthority. FOREIGN\_LEGAL\_TENDER requires policyAuthorityId \= null and no membership; the Currency keeps its issuerAuthorityId unchanged.
@@ -154,8 +154,8 @@ interface PopulationCohortState {
   id: CohortId;  
   regionId: RegionId;  
   clanId: ClanId;  
-  ageBand: 'CHILD' \| 'WORKING' \| 'ELDER';  
-  stratum: 'VULNERABLE' \| 'WORKING\_MIDDLE' \| 'AFFLUENT';  
+  ageBand: 'CHILD' | 'WORKING' | 'ELDER';  
+  stratum: 'VULNERABLE' | 'WORKING\_MIDDLE' | 'AFFLUENT';  
   laborCategory: string; // baseline GENERAL
 
   population: number;
@@ -181,9 +181,9 @@ Cohort identity represents one homogeneous lifecycle bucket. Splits/merges are a
 interface ProductionUnitState {  
   id: ProductionUnitId;  
   regionId: RegionId;  
-  owner: { type: 'CLAN'; id: ClanId } \| { type: 'STATE'; id: StateId };  
+  owner: { type: 'CLAN'; id: ClanId } | { type: 'STATE'; id: StateId };  
   recipeId: string;  
-  status: 'PLANNED' \| 'ACTIVE' \| 'MOTHBALLED' \| 'CLOSING';  
+  status: 'PLANNED' | 'ACTIVE' | 'MOTHBALLED' | 'CLOSING';  
   wallet: Wallet;  
   inputInventory: Inventory;  
   outputInventory: Inventory;  
@@ -215,7 +215,7 @@ Expansion/settlement may make a region eligible or provide subsidies but may nev
 interface LocalMarketState {  
   id: MarketId;  
   regionId: RegionId;  
-  status: 'ACTIVE' \| 'DORMANT';  
+  status: 'ACTIVE' | 'DORMANT';  
   priceByGood: Record\<GoodId, number\>;  
   expectationByGood: Record\<GoodId, MarketExpectationState\>;  
 }
@@ -242,7 +242,7 @@ Trade uses only configured links; no all-pairs magical world market.
 interface CurrencyState {  
   id: CurrencyId;  
   code: string;  
-  issuerAuthorityId: MonetaryAuthorityId \| null;  
+  issuerAuthorityId: MonetaryAuthorityId | null;  
 }
 
 interface MonetaryAuthorityState {  
@@ -289,7 +289,7 @@ interface StateBondState {
 
 interface BondHoldingState {  
   bondId: BondId;  
-  holder: { type: 'CLAN'; id: ClanId } \| { type: 'MONETARY\_AUTHORITY'; id: MonetaryAuthorityId };  
+  holder: { type: 'CLAN'; id: ClanId } | { type: 'MONETARY\_AUTHORITY'; id: MonetaryAuthorityId };  
   principalHeld: number;  
 }
 
@@ -304,7 +304,7 @@ interface EventInstanceState {
   endTick: number;  
   severity: number;  
   targetRegionIds: RegionId\[\];  
-  status: 'SCHEDULED' \| 'ACTIVE';  
+  status: 'SCHEDULED' | 'ACTIVE';  
 }
 
 Events may mutate only typed canonical physical/biological capacity inputs. They may not assign prices, GDP, CPI, unemployment, prosperity, migration count, loyalty or jurisdiction.
@@ -323,11 +323,11 @@ Definitions are immutable for a run and scenario-versioned. Mutable quantities n
 7\. ActorRef and transaction contract
 
 type ActorRef \=  
-  \| { type: 'COHORT'; id: CohortId }  
-  \| { type: 'PRODUCTION\_UNIT'; id: ProductionUnitId }  
-  \| { type: 'CLAN'; id: ClanId }  
-  \| { type: 'STATE'; id: StateId }  
-  \| { type: 'MONETARY\_AUTHORITY'; id: MonetaryAuthorityId };
+  | { type: 'COHORT'; id: CohortId }  
+  | { type: 'PRODUCTION\_UNIT'; id: ProductionUnitId }  
+  | { type: 'CLAN'; id: ClanId }  
+  | { type: 'STATE'; id: StateId }  
+  | { type: 'MONETARY\_AUTHORITY'; id: MonetaryAuthorityId };
 
 Canonical transaction/debug record:
 
@@ -368,7 +368,7 @@ Do not pollute WorldState with plans that should expire every tick.
 
 interface TickContext {  
   tick: number;  
-  effectiveJurisdictionByRegion: Record\<RegionId, StateId \| null\>;  
+  effectiveJurisdictionByRegion: Record\<RegionId, StateId | null\>;  
   laborPlans: unknown;  
   productionPlans: unknown;  
   consumptionPlans: unknown;  
@@ -388,7 +388,7 @@ Plans are created in Phase 2 and are immutable intent for that tick where practi
 ## PendingTransitions
 
 interface PendingTransitions {  
-  jurisdictionChanges: Array\<{ regionId: RegionId; nextControllerStateId: StateId \| null; activateTick: number }\>;  
+  jurisdictionChanges: Array\<{ regionId: RegionId; nextControllerStateId: StateId | null; activateTick: number }\>;  
   stateCreations: PendingStateCreation\[\];  
   policyChanges: Array\<{ stateId: StateId; patch: unknown; activateTick: number }\>;  
   monetaryPolicyChanges: Array\<{ authorityId: MonetaryAuthorityId; patch: unknown; activateTick: number }\>;  
