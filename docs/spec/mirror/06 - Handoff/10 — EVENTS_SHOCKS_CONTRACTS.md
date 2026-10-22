@@ -18,18 +18,18 @@ type EventInstanceId \= string;     // ev:... (already canonical)
 type ShockOperationId \= string;    // op:... local stable key inside definition
 
 type EventCategory \=  
-  | 'DISASTER'  
-  | 'EPIDEMIC'  
-  | 'HARVEST'  
-  | 'INFRASTRUCTURE'  
-  | 'DISCOVERY'  
-  | 'POLITICAL\_EXTERNAL';
+  \| 'DISASTER'  
+  \| 'EPIDEMIC'  
+  \| 'HARVEST'  
+  \| 'INFRASTRUCTURE'  
+  \| 'DISCOVERY'  
+  \| 'POLITICAL\_EXTERNAL';
 
-type EventScopeKind \= 'REGION' | 'REGION\_CLUSTER' | 'TRANSPORT\_LINK' | 'STATE';
+type EventScopeKind \= 'REGION' \| 'REGION\_CLUSTER' \| 'TRANSPORT\_LINK' \| 'STATE';
 
 type DurationSpec \=  
-  | { kind: 'FIXED'; ticks: number }  
-  | { kind: 'TRIANGULAR'; minTicks: number; modeTicks: number; maxTicks: number };
+  \| { kind: 'FIXED'; ticks: number }  
+  \| { kind: 'TRIANGULAR'; minTicks: number; modeTicks: number; maxTicks: number };
 
 type SeveritySpec \= {  
   min: number;  
@@ -74,7 +74,7 @@ interface EventInstanceState {
   localSeverityByRegion: Record\<RegionId, number\>;  
   realizedOperations: RealizedShockOperation\[\];  
   rngKey: string;  
-  status: 'SCHEDULED' | 'ACTIVE' | 'COMPLETED';  
+  status: 'SCHEDULED' \| 'ACTIVE' \| 'COMPLETED';  
   completedTick?: number;  
 }
 
@@ -173,17 +173,17 @@ For STATE scope, enumerate that State's effective Phase-1 controlled Regions. A 
 8\. Typed shock operation vocabulary
 
 type ShockOperationKind \=  
-  | 'INVENTORY\_LOSS'  
-  | 'CAPITAL\_DAMAGE'  
-  | 'PRODUCTIVITY\_MODIFIER'  
-  | 'INFRASTRUCTURE\_DAMAGE'  
-  | 'TRANSPORT\_CAPACITY\_MODIFIER'  
-  | 'TRANSPORT\_COST\_MODIFIER'  
-  | 'HEALTH\_HAZARD'  
-  | 'CARRYING\_CAPACITY\_MODIFIER'  
-  | 'RESOURCE\_YIELD\_MODIFIER'  
-  | 'RESOURCE\_DISCOVERY'  
-  | 'DEMAND\_WEIGHT\_MODIFIER';
+  \| 'INVENTORY\_LOSS'  
+  \| 'CAPITAL\_DAMAGE'  
+  \| 'PRODUCTIVITY\_MODIFIER'  
+  \| 'INFRASTRUCTURE\_DAMAGE'  
+  \| 'TRANSPORT\_CAPACITY\_MODIFIER'  
+  \| 'TRANSPORT\_COST\_MODIFIER'  
+  \| 'HEALTH\_HAZARD'  
+  \| 'CARRYING\_CAPACITY\_MODIFIER'  
+  \| 'RESOURCE\_YIELD\_MODIFIER'  
+  \| 'RESOURCE\_DISCOVERY'  
+  \| 'DEMAND\_WEIGHT\_MODIFIER';
 
 interface ShockOperationDefinition {  
   id: ShockOperationId;  
@@ -192,8 +192,8 @@ interface ShockOperationDefinition {
   baseMagnitude: number;  
   severityExponent: number;  
   cap: number;  
-  persistence: 'IMMEDIATE' | 'TEMPORARY';  
-  combineRule?: 'MULTIPLY' | 'ADD';  
+  persistence: 'IMMEDIATE' \| 'TEMPORARY';  
+  combineRule?: 'MULTIPLY' \| 'ADD';  
 }
 
 realizedMagnitude \= clamp(baseMagnitude \* pow(localOrBaseSeverity, severityExponent), 0, cap)
@@ -316,7 +316,7 @@ interface EventPhysicalLoss {
   tick: number;  
   eventInstanceId: EventInstanceId;  
   operationId: ShockOperationId;  
-  kind: 'GOOD' | 'CAPITAL' | 'INFRASTRUCTURE';  
+  kind: 'GOOD' \| 'CAPITAL' \| 'INFRASTRUCTURE';  
   regionId?: RegionId;  
   owner?: ActorRef;  
   goodId?: GoodId;  
