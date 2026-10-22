@@ -17,7 +17,7 @@ Currency:
 \- id: CurrencyId  
 \- code: string  
 \- displayName: string  
-\- issuerAuthorityId: MonetaryAuthorityId | null  
+\- issuerAuthorityId: MonetaryAuthorityId \| null  
 \- decimals: integer  
 \- inflationTargetAnnualized: number  
 \- minPolicyRateAnnualized: number  
@@ -135,12 +135,12 @@ MonetaryOperationPlan:
 \- currencyId  
 \- createdAtTick  
 \- executeTick  
-\- direction: EXPANSION | CONTRACTION  
+\- direction: EXPANSION \| CONTRACTION  
 \- maxCashAmount  
 \- eligibleBondIds  
 \- orderedCandidateHoldingIds  
 \- reasonFacts\[\]  
-\- status: PLANNED | EXECUTED | PARTIAL | UNFILLED | CANCELLED
+\- status: PLANNED \| EXECUTED \| PARTIAL \| UNFILLED \| CANCELLED
 
 Planning happens during the Phase-15 close/review using prior-close data. Execution happens in Phase 1 before current-tick planning and markets.
 
@@ -252,10 +252,10 @@ MonetarySupplyChangeRecord:
 \- phase  
 \- authorityId  
 \- currencyId  
-\- type: OMO\_PURCHASE\_ISSUANCE | OMO\_SALE\_DESTRUCTION | AUTHORITY\_DEBT\_PRINCIPAL\_DESTRUCTION | AUTHORITY\_DEBT\_COUPON\_DESTRUCTION | FX\_POOL\_CAPITALIZATION\_ISSUANCE | OTHER\_FORBIDDEN\_IN\_CORE  
+\- type: OMO\_PURCHASE\_ISSUANCE \| OMO\_SALE\_DESTRUCTION \| AUTHORITY\_DEBT\_PRINCIPAL\_DESTRUCTION \| AUTHORITY\_DEBT\_COUPON\_DESTRUCTION \| FX\_POOL\_CAPITALIZATION\_ISSUANCE \| OTHER\_FORBIDDEN\_IN\_CORE  
 \- amount  
 \- originatingOperationId / bondId  
-\- counterparty ActorRef | null  
+\- counterparty ActorRef \| null  
 \- explanationFactIds\[\]
 
 Every nonzero delta between M\_tx\_open and M\_tx\_close must reconcile to these records. Ordinary EconomicTransactions must never be mislabeled as issuance/destruction.
