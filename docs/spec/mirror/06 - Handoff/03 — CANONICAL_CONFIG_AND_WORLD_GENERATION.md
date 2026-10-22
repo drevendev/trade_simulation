@@ -20,7 +20,7 @@ interface RunOptions {
   scenarioId: string;  
   seed: number;  
   maxTicks?: number;  
-  diagnosticsLevel: 'OFF' | 'SUMMARY' | 'DEBUG';  
+  diagnosticsLevel: 'OFF' \| 'SUMMARY' \| 'DEBUG';  
 }
 
 interface SimulationConfig {  
@@ -400,7 +400,7 @@ Each GoodDefinition must include:
 interface RegionSeed {  
   key: string;  
   name: string;  
-  controllerStateKey: string | null;  
+  controllerStateKey: string \| null;  
   settlementCurrencyKey: string;  
   settlementLevel: number;  
   infrastructure: Record\<string, number\>;  
@@ -418,7 +418,7 @@ interface TransportLinkSeed {
   condition: number;  
   baseTransportCost: number;  
   transitTicks?: number;  
-  feeReceiverStateKey?: string | null;  
+  feeReceiverStateKey?: string \| null;  
 }
 
 interface StateSeed {  
@@ -432,14 +432,14 @@ interface StateSeed {
 
 interface CurrencyRegimeSeed {  
   currencyKey: string;  
-  regimeType: 'INDEPENDENT\_FLOAT' | 'MONETARY\_UNION' | 'FOREIGN\_LEGAL\_TENDER';  
-  policyAuthorityKey: string | null;  
+  regimeType: 'INDEPENDENT\_FLOAT' \| 'MONETARY\_UNION' \| 'FOREIGN\_LEGAL\_TENDER';  
+  policyAuthorityKey: string \| null;  
 }
 
 interface CurrencySeed {  
   key: string;  
   code: string;  
-  issuerAuthorityKey: string | null;  
+  issuerAuthorityKey: string \| null;  
 }
 
 interface MonetaryAuthoritySeed {  
@@ -463,8 +463,8 @@ interface CohortSeed {
   key: string;  
   regionKey: string;  
   clanKey: string;  
-  ageBand: 'CHILD' | 'WORKING' | 'ELDER';  
-  stratum: 'VULNERABLE' | 'WORKING\_MIDDLE' | 'AFFLUENT';  
+  ageBand: 'CHILD' \| 'WORKING' \| 'ELDER';  
+  stratum: 'VULNERABLE' \| 'WORKING\_MIDDLE' \| 'AFFLUENT';  
   laborCategory: string; // baseline GENERAL  
   population: number;  
   wallet: Record\<string, number\>;  
@@ -482,9 +482,9 @@ interface CohortSeed {
 interface ProductionUnitSeed {  
   key: string;  
   regionKey: string;  
-  owner: { type: 'CLAN'; key: string } | { type: 'STATE'; key: string };  
+  owner: { type: 'CLAN'; key: string } \| { type: 'STATE'; key: string };  
   recipeId: string;  
-  status: 'ACTIVE' | 'PLANNED' | 'MOTHBALLED';  
+  status: 'ACTIVE' \| 'PLANNED' \| 'MOTHBALLED';  
   wallet: Record\<string, number\>;  
   inputInventory: Record\<string, number\>;  
   outputInventory: Record\<string, number\>;  
@@ -615,13 +615,13 @@ REQ-CONFIG-004 is the immediate downstream genesis-accounting finalization. Afte
 Starting assets are scenario endowments, not unexplained runtime creation. Under REQ-CONFIG-004, genesis-accounting finalization records them separately from normal EconomicTransaction history:
 
 interface GenesisRecord {  
-  type: 'MONEY\_ENDOWMENT' | 'GOOD\_ENDOWMENT' | 'POPULATION\_ENDOWMENT' | 'CAPITAL\_ENDOWMENT' | 'RESOURCE\_ENDOWMENT' | 'BOND\_OPENING\_POSITION' | 'FX\_POOL\_OPENING';  
+  type: 'MONEY\_ENDOWMENT' \| 'GOOD\_ENDOWMENT' \| 'POPULATION\_ENDOWMENT' \| 'CAPITAL\_ENDOWMENT' \| 'RESOURCE\_ENDOWMENT' \| 'BOND\_OPENING\_POSITION' \| 'FX\_POOL\_OPENING';  
   owner?: ActorRef;  
   regionId?: RegionId;  
   currencyId?: CurrencyId;  
   goodId?: GoodId;  
   amount: number;  
-  inventoryBucket?: 'INPUT' | 'OUTPUT' | 'INVESTMENT';  
+  inventoryBucket?: 'INPUT' \| 'OUTPUT' \| 'INVESTMENT';  
   sourceSeedKey: string;  
 }
 
