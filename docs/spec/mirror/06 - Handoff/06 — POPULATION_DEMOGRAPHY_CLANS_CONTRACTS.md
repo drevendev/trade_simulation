@@ -18,8 +18,8 @@ interface PopulationCohortState {
   id: CohortId;  
   regionId: RegionId;  
   clanId: ClanId;  
-  ageBand: 'CHILD' | 'WORKING' | 'ELDER';  
-  stratum: 'VULNERABLE' | 'WORKING\_MIDDLE' | 'AFFLUENT';  
+  ageBand: 'CHILD' \| 'WORKING' \| 'ELDER';  
+  stratum: 'VULNERABLE' \| 'WORKING\_MIDDLE' \| 'AFFLUENT';  
   laborCategory: string; // baseline GENERAL  
   population: number; // persons \>= 0  
   wallet: Wallet;  

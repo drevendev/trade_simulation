@@ -15,7 +15,7 @@ Regions are stable coarse geographic units. Expansion changes their economic act
 
 Region extensions:  
 \- id: RegionId, stable for entire run.  
-\- controllerStateId: StateId | null.  
+\- controllerStateId: StateId \| null.  
 \- settlementLevel: float in \[0,1\].  
 \- baseLandCapacityPeople: people.  
 \- climateHabitability: float \[0,1\].  
@@ -27,13 +27,13 @@ Region extensions:
 \- marketId: LocalMarketId, always present.  
 \- controlHistory: append-only bounded history or telemetry reference; not authoritative for current control.
 
-DiscoveryState enum: UNKNOWN | INDICATED | KNOWN.
+DiscoveryState enum: UNKNOWN \| INDICATED \| KNOWN.
 
 SettlementProject:  
 \- id: SettlementProjectId.  
 \- sponsor: ActorRef restricted to State or Clan.  
 \- targetRegionId: RegionId.  
-\- status: PLANNED | ACTIVE | COMPLETE | CANCELLED.  
+\- status: PLANNED \| ACTIVE \| COMPLETE \| CANCELLED.  
 \- createdTick: Tick.  
 \- committedCurrencyId: CurrencyId.  
 \- committedCash: Money.  
@@ -50,7 +50,7 @@ SettlementProject:
 
 SurveyProject:  
 \- id: SurveyProjectId.  
-\- sponsor: State | Clan | ProductionUnit owner actor.  
+\- sponsor: State \| Clan \| ProductionUnit owner actor.  
 \- regionId: RegionId.  
 \- cashBudget / remainingCashBudget.  
 \- requiredServiceOrGoods inputs as configured.  
@@ -61,7 +61,7 @@ StateFormationCandidate:
 \- predecessorStateId.  
 \- regionIds: sorted connected RegionId list.  
 \- consecutiveQualifiedReviews: integer \>=0.  
-\- firstQualifiedTick: Tick | null.  
+\- firstQualifiedTick: Tick \| null.  
 \- lastReviewedTick: Tick.  
 This is candidate state only; new State creation occurs through PendingTransitions.
 
