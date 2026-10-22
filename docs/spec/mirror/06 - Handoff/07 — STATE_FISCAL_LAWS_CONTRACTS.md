@@ -22,8 +22,8 @@ StateFiscalState:
 \- institutionalProfile: InstitutionalProfile  
 \- budgetPlan: StateBudgetPlan  
 \- fiscalMetrics: FiscalMetricState  
-\- fiscalStatus: NORMAL | STRESSED | DISTRESS | DEFAULT  
-\- emergencyRule: EmergencyFiscalRuleState | null  
+\- fiscalStatus: NORMAL \| STRESSED \| DISTRESS \| DEFAULT  
+\- emergencyRule: EmergencyFiscalRuleState \| null  
 \- nextBudgetReviewTick  
 \- nextPolicyReviewTick
 
@@ -43,7 +43,7 @@ FiscalMetricState stores revenue/expenditure/debt-service EMAs, fiscalStressEma,
 
 3\. Tax transaction record
 
-TaxType \= WAGE\_INCOME | BUSINESS\_PROFIT | CONSUMPTION | TARIFF.  
+TaxType \= WAGE\_INCOME \| BUSINESS\_PROFIT \| CONSUMPTION \| TARIFF.  
 TaxTransactionRecord stores id, tick, taxType, stateId, payer ActorRef, currencyId, taxBaseAmount, effectiveRate, assessedAmount, collectedAmount, originatingTransactionId, regionId, goodId and collectionEfficiencyApplied.
 
 assessedAmount and collectedAmount are distinct. If collectionEfficiency \< 1, the uncollected amount stays with the payer; core v1 creates no tax-arrears asset.
@@ -154,7 +154,7 @@ Owner injections execute in Phase 10 after mandatory flows and may fund Phase-12
 
 14\. Sovereign debt schema
 
-StateBond fields: id, issuerStateId, currencyId (issuer home currency in core v1), principalIssued, principalOutstanding, couponRatePerTick, issueTick, maturityTick, status PLANNED|ACTIVE|MATURED|DEFAULTED|RESTRUCTURED.
+StateBond fields: id, issuerStateId, currencyId (issuer home currency in core v1), principalIssued, principalOutstanding, couponRatePerTick, issueTick, maturityTick, status PLANNED\|ACTIVE\|MATURED\|DEFAULTED\|RESTRUCTURED.
 
 BondHolding fields: id, bondId, holder ActorRef, principalShare.
 
@@ -258,7 +258,7 @@ getLaborTaxPolicy(stateId)
 getBusinessTaxPolicy(stateId)  
 getConsumptionTaxRate(stateId, goodCategory)  
 getCollectionEfficiency(stateId)  
-getTariffRate(originStateId|null, destinationStateId|null, goodCategory)  
+getTariffRate(originStateId\|null, destinationStateId\|null, goodCategory)  
 canCrossBorderTrade(...)  
 canOwnProperty(clanId, regionId)  
 canMigrate(cohortId, originRegionId, destinationRegionId)  
