@@ -16,8 +16,8 @@ CORE\_SCHEMA currently contains an older cohort shape with stratum LOWER/MIDDLE/
 
 Canonical persistent cohort fields are:  
 \- id, regionId, clanId;  
-\- ageBand \= CHILD | WORKING | ELDER;  
-\- stratum \= VULNERABLE | WORKING\_MIDDLE | AFFLUENT;  
+\- ageBand \= CHILD \| WORKING \| ELDER;  
+\- stratum \= VULNERABLE \| WORKING\_MIDDLE \| AFFLUENT;  
 \- laborCategory;  
 \- population;  
 \- wallet;  
@@ -113,7 +113,7 @@ condition remains a separate canonical \[0,1\] impairment stock and may be chang
 
 8\. Region/Market status — removes duplicated lifecycle state
 
-LocalMarketState.status is the sole canonical market lifecycle state: ACTIVE | DORMANT.
+LocalMarketState.status is the sole canonical market lifecycle state: ACTIVE \| DORMANT.
 
 DROP RegionState.marketStatus as an independently mutable field. If UI/convenience code wants region.marketStatus, derive it from region.marketId \-\> LocalMarketState.status.
 
