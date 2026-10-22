@@ -78,14 +78,14 @@ interface MarketIntent {
   actor: ActorRef;  
   regionId: RegionId;  
   goodId: GoodId;  
-  side: 'BUY' | 'SELL';  
-  purpose: 'CONSUMPTION' | 'INPUT' | 'INVESTMENT' | 'PUBLIC\_PROCUREMENT' | 'INVENTORY\_REBALANCE';  
+  side: 'BUY' \| 'SELL';  
+  purpose: 'CONSUMPTION' \| 'INPUT' \| 'INVESTMENT' \| 'PUBLIC\_PROCUREMENT' \| 'INVENTORY\_REBALANCE';  
   desiredQuantity: number;  
   maxSpend?: number;                // BUY only, in region settlement currency  
   minimumReserveQuantity?: number;  // SELL only  
   priorityClass?: string;  
   sourcePlanId: string;  
-  inventoryBucket?: 'GENERAL' | 'INPUT' | 'OUTPUT' | 'INVESTMENT';  
+  inventoryBucket?: 'GENERAL' \| 'INPUT' \| 'OUTPUT' \| 'INVESTMENT';  
 }
 
 Validation:  
@@ -221,7 +221,7 @@ interface MarketAllocation {
   id: MarketAllocationId;  
   marketId: MarketId;  
   goodId: GoodId;  
-  pass: 'PRE\_PRODUCTION' | 'MAIN';  
+  pass: 'PRE\_PRODUCTION' \| 'MAIN';  
   sellerIntentId: MarketIntentId;  
   buyerIntentId: MarketIntentId;  
   seller: ActorRef;  
@@ -231,9 +231,9 @@ interface MarketAllocation {
   buyerGrossUnitPrice: number;  
   marketCurrencyId: CurrencyId;  
   consumptionTaxAmount: number;  
-  destinationStateId: StateId | null;  
-  sellerInventoryBucket: 'GENERAL' | 'INPUT' | 'OUTPUT' | 'INVESTMENT';  
-  buyerInventoryBucket: 'GENERAL' | 'INPUT' | 'OUTPUT' | 'INVESTMENT';  
+  destinationStateId: StateId \| null;  
+  sellerInventoryBucket: 'GENERAL' \| 'INPUT' \| 'OUTPUT' \| 'INVESTMENT';  
+  buyerInventoryBucket: 'GENERAL' \| 'INPUT' \| 'OUTPUT' \| 'INVESTMENT';  
 }
 
 MarketAllocation is ephemeral. Persistent truth after execution is actor stock \+ transaction ledger \+ LocalMarket price/expectation state.
@@ -414,7 +414,7 @@ interface FxSettlementRequest {
   outputCurrencyId: CurrencyId;  
   desiredOutputAmount: number;  
   maxInputAmount: number;  
-  purpose: 'TRADE\_GOODS' | 'FOREIGN\_BOND' | 'OWNER\_TRANSFER' | 'OTHER\_EXPLICIT\_PAYMENT';  
+  purpose: 'TRADE\_GOODS' \| 'FOREIGN\_BOND' \| 'OWNER\_TRANSFER' \| 'OTHER\_EXPLICIT\_PAYMENT';  
   originatingBundleId: TransactionBundleId;  
 }
 
@@ -452,8 +452,8 @@ No other currency changes. The conversion itself preserves M\_tx for each curren
 ActorRef does not pretend that an FX pool is an economic actor. For reconciliation only, define:
 
 type LedgerAccountRef \=  
-  | { type:'ACTOR'; actor: ActorRef }  
-  | { type:'FX\_POOL'; owningAuthorityId: MonetaryAuthorityId; pairId: FxPairId };
+  \| { type:'ACTOR'; actor: ActorRef }  
+  \| { type:'FX\_POOL'; owningAuthorityId: MonetaryAuthorityId; pairId: FxPairId };
 
 FX settlement emits two linked ledger legs under one FxSettlementId:  
 \- FX\_INPUT: payer actor \-\> FX\_POOL in input currency;  
@@ -587,7 +587,7 @@ consumptionTaxAmount: number;
 fxSettlementId?: FxSettlementId;  
 transportLinkId: TransportLinkId;  
 beneficialOwner: ActorRef; // normally buyer after dispatch settlement  
-destinationInventoryBucket: 'GENERAL' | 'INPUT' | 'OUTPUT' | 'INVESTMENT'; // copied from the destination BUY intent so delayed delivery remains unambiguous
+destinationInventoryBucket: 'GENERAL' \| 'INPUT' \| 'OUTPUT' \| 'INVESTMENT'; // copied from the destination BUY intent so delayed delivery remains unambiguous
 
 quantity is current physical in-transit quantity, not original planned quantity.
 
