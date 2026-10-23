@@ -167,6 +167,55 @@ describe("exact posting staging (#798): no WorldState/v2 activation", () => {
     expect(stocks.initial.get(key(BUYER))).toEqual(exactFromNumber(5));
   });
 
+  it("rejects absent, null, blank and non-string actor IDs before any stock lookup (SLP-814-01)", () => {
+    // External JSON and untyped JS callers can violate ActorRef's static ID fields.
+    const actorKinds = [
+      ["COHORT", "cohortId", "WALLET"],
+      ["CLAN", "clanId", "TREASURY"],
+      ["STATE", "stateId", "TREASURY"],
+      ["PRODUCTION_UNIT", "productionUnitId", "WALLET"],
+      ["MONETARY_AUTHORITY", "authorityId", "WALLET"],
+    ] as const;
+    for (const [type, field, bucket] of actorKinds) {
+      for (const invalid of [undefined, null, "", "  ", 42, {}]) {
+        const unsafeOwner = { type, [field]: invalid };
+        const unsafeEndpoint = {
+          kind: "MONEY", owner: unsafeOwner, bucket, currencyId: USD,
+        } as unknown as ExactPostingEndpoint;
+        let reads = 0;
+        const read = () => { reads++; return exactFromNumber(10); };
+        expect(() => stageExactPostingBundle([
+          leg("unsafe-debit", unsafeEndpoint, exactFromNumber(-1)),
+          leg("safe-credit", SELLER, exactFromNumber(1)),
+        ], read), `${type} ${String(invalid)}`).toThrow(/invalid owner ID/);
+        expect(reads).toBe(0);
+      }
+    }
+
+    // Valid fields still retain their distinct owner/bucket keys and close exactly.
+    const clanTreasury: ExactPostingEndpoint = {
+      kind: "MONEY", owner: { type: "CLAN", clanId: "clan:1" as ClanId },
+      bucket: "TREASURY", currencyId: USD,
+    };
+    const stocks = opening([
+      [BUYER, exactFromNumber(10)], [SELLER, EXACT_ZERO],
+      [TAX, EXACT_ZERO], [clanTreasury, EXACT_ZERO],
+    ]);
+    const result = stageExactPostingBundle([
+      leg("buyer", BUYER, exactFromNumber(-3)),
+      leg("seller", SELLER, exactFromNumber(1)),
+      leg("state", TAX, exactFromNumber(1)),
+      leg("clan", clanTreasury, exactFromNumber(1)),
+    ], stocks.read);
+    expect(result).toHaveLength(4);
+    expect(result.map(row => key(row.endpoint))).toEqual(
+      [...new Set(result.map(row => key(row.endpoint)))].sort(),
+    );
+    expect(result.find(row => key(row.endpoint) === key(BUYER))?.closing)
+      .toEqual(exactFromNumber(7));
+    expect(stocks.reads).toBe(4);
+  });
+
   it("refuses overdrafts and final overflows; preserves caller's map", () => {
     const zero = opening([[BUYER, EXACT_ZERO], [SELLER, EXACT_ZERO]]);
     expect(() => stageExactPostingBundle([
