@@ -69,8 +69,19 @@ function endpointKey(endpoint: ExactPostingEndpoint): { key: string; assetKey: s
     throw new Error("exact posting: missing owner/endpoint");
   }
   const owner = endpoint.owner;
+  // Validate the original typed ID before actorRefKey can stringify null/missing
+  // fields into plausible-looking "COHORT:undefined" / "PU:null" owner keys.
+  let rawOwnerId: unknown;
+  switch (owner.type) {
+    case "COHORT": rawOwnerId = owner.cohortId; break;
+    case "CLAN": rawOwnerId = owner.clanId; break;
+    case "STATE": rawOwnerId = owner.stateId; break;
+    case "PRODUCTION_UNIT": rawOwnerId = owner.productionUnitId; break;
+    case "MONETARY_AUTHORITY": rawOwnerId = owner.authorityId; break;
+    default: throw new Error("exact posting: unknown owner kind");
+  }
+  requiredId(rawOwnerId, "owner ID");
   const ownerId = actorRefKey(owner);
-  requiredId(ownerId.split(":").slice(1).join(":"), "owner ID");
 
   if (endpoint.kind === "MONEY") {
     const expected = owner.type === "STATE" || owner.type === "CLAN" ? "TREASURY" : "WALLET";
