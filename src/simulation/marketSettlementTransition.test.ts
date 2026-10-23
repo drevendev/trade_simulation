@@ -925,7 +925,7 @@ describe("SLP-788-01/02: actual WorldState posting conservation", () => {
     const seeded = withSettlementStock(withSettlementStock(world, "sellerInventory", 1e12), "buyerInventory", 0);
     const original = snapshotSettlementStocks(seeded);
     expect(() => executeAllocation(seeded, context(), sale(world, fractionalLot, 0)))
-      .toThrow(/materialized goods conservation residual/);
+      .toThrow(/goods endpoint rounded away from requested posting/);
     expect(snapshotSettlementStocks(seeded)).toEqual(original);
   });
   it("rejects a partly rounded buyer debit even if both wallet legs move", () => {
@@ -934,8 +934,66 @@ describe("SLP-788-01/02: actual WorldState posting conservation", () => {
     seeded = withSettlementStock(seeded, "buyerWallet", 1e12);
     seeded = withSettlementStock(seeded, "sellerWallet", 0);
     expect(() => executeAllocation(seeded, context(), sale(world, fractionalLot, 1)))
-      .toThrow(/materialized money conservation residual/);
+      .toThrow(/money endpoint rounded away from requested posting/);
   });
+  it("refuses paired one-ULP overposting even when money and goods sums cancel exactly", () => {
+    const world = buildWorld();
+    const { sellerUnitId, buyerCohortId, currencyId } = pickCounterparties(world);
+    let seeded = withSettlementStock(world, "sellerInventory", 1e12);
+    seeded = withSettlementStock(seeded, "buyerInventory", 1e12);
+    seeded = withSettlementStock(seeded, "buyerWallet", 1e12);
+    seeded = withSettlementStock(seeded, "sellerWallet", 1e12);
+    const original = snapshotSettlementStocks(seeded);
+    const allocation = buildAllocation({
+      seller: { type: "PRODUCTION_UNIT", productionUnitId: sellerUnitId },
+      buyer: { type: "COHORT", cohortId: buyerCohortId },
+      quantity: 0.0001, sellerNetUnitPrice: 1, currencyId, destinationStateId: null,
+    });
+    const ulp = 2 ** -13;
+    expect(1e12 - (1e12 - allocation.quantity)).toBe(ulp);
+    expect((1e12 + allocation.quantity) - 1e12).toBe(ulp);
+    expect(ulp - allocation.quantity).toBeGreaterThan(1e-8);
+    expect(() => executeAllocation(seeded, context(), allocation))
+      .toThrow(/(goods|money) endpoint rounded away from requested posting/);
+    expect(snapshotSettlementStocks(seeded)).toEqual(original);
+  });
+
+  it("preserves a truly materialized one-ULP paid transfer at two large endpoints", () => {
+    const world = buildWorld();
+    const { sellerUnitId, buyerCohortId, currencyId } = pickCounterparties(world);
+    let seeded = withSettlementStock(world, "sellerInventory", 1e12);
+    seeded = withSettlementStock(seeded, "buyerInventory", 1e12);
+    seeded = withSettlementStock(seeded, "buyerWallet", 1e12);
+    seeded = withSettlementStock(seeded, "sellerWallet", 1e12);
+    const allocation = buildAllocation({
+      seller: { type: "PRODUCTION_UNIT", productionUnitId: sellerUnitId },
+      buyer: { type: "COHORT", cohortId: buyerCohortId },
+      quantity: 2 ** -13, sellerNetUnitPrice: 1, currencyId, destinationStateId: null,
+    });
+    const next = executeAllocation(seeded, context(), allocation);
+    expect(1e12 - next.productionUnits.get(sellerUnitId)!.outputInventory.get(FOOD)!).toBe(allocation.quantity);
+    expect(next.cohorts.get(buyerCohortId)!.householdInventory.get(FOOD)! - 1e12).toBe(allocation.quantity);
+    expect(1e12 - next.cohorts.get(buyerCohortId)!.wallet.get(currencyId)!).toBe(allocation.quantity);
+    expect(next.productionUnits.get(sellerUnitId)!.wallet.get(currencyId)! - 1e12).toBe(allocation.quantity);
+  });
+
+  it("preserves same-actor same-stock alias cancellation at a large opening balance", () => {
+    const world = buildWorld();
+    const { sellerUnitId, currencyId } = pickCounterparties(world);
+    let seeded = withSettlementStock(world, "sellerInventory", 1e12);
+    seeded = withSettlementStock(seeded, "sellerWallet", 1e12);
+    const original = snapshotSettlementStocks(seeded);
+    const actor = { type: "PRODUCTION_UNIT" as const, productionUnitId: sellerUnitId };
+    const allocation = buildAllocation({
+      seller: actor, buyer: actor, quantity: 0.0001,
+      sellerNetUnitPrice: 1, currencyId, destinationStateId: null,
+      sellerInventoryBucket: "OUTPUT", buyerInventoryBucket: "OUTPUT",
+    });
+    const next = executeAllocation(seeded, context(), allocation);
+    expect(snapshotSettlementStocks(next)).toEqual(original);
+    expect(snapshotSettlementStocks(seeded)).toEqual(original);
+  });
+
   it("retains an exactly representable positive one-ULP free lot", () => {
     const world = buildWorld();
     const { sellerUnitId, buyerCohortId } = pickCounterparties(world);
