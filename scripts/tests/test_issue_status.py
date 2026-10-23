@@ -458,13 +458,15 @@ class TimelineTests(unittest.TestCase):
         self.assertEqual(forge.removals, [])
         self.assertIn("does not say", outcome.decision.reason)
 
-    def test_only_applications_count_as_history(self):
+    def test_history_retains_removals_but_only_applications_rank(self):
         history = issue_status.read_history(REPO, 26, FakeForge().add(26, labels=["status:ready"]))
         self.assertEqual([event.name for event in history], ["status:ready"])
         forge = FakeForge().add(27, labels=["status:ready"])
         forge.take_off(27, "status:ready")
         forge.set_state(27, "closed")
-        self.assertEqual(len(issue_status.read_history(REPO, 27, forge)), 1)
+        history = issue_status.read_history(REPO, 27, forge)
+        self.assertEqual([event.kind for event in history], ["labeled", "unlabeled"])
+        self.assertEqual(issue_status.last_applications(history)["status:ready"], history[0])
 
 
 class OpenRepairTests(unittest.TestCase):
@@ -520,6 +522,45 @@ class OpenRepairTests(unittest.TestCase):
         forge.apply(84, "status:ready")
         issue_status.repair_open(REPO, apply=True, gh=forge, pause=lambda _: None)
         self.assertEqual(forge.status(84), ["status:ready"])
+
+    def test_lagged_reapplication_defers_the_old_trigger_until_history_catches_up(self):
+        # SLP-802-01: both names appeared in earlier applications, but the
+        # last visible event for ready is a removal, not its current application.
+        forge = FakeForge().add(86, labels=OTHER_AXES)
+        forge.apply(86, "status:ready")       # T1
+        forge.apply(86, "status:in-progress") # T2
+        forge.take_off(86, "status:ready")    # T3
+        forge.apply(86, "status:ready")       # T4 (newest, history still lagged)
+        forge.lag[86] = 1
+        outcome = follow(forge, 86, "labeled", "status:in-progress")
+        self.assertEqual(outcome.removed, [])
+        self.assertEqual(forge.removals, [])
+        self.assertEqual(forge.status(86), ["status:in-progress", "status:ready"])
+        self.assertIn("does not say", outcome.decision.reason)
+        forge.lag.pop(86)
+        _, results = issue_status.repair_open(REPO, apply=True, gh=forge, pause=lambda _: None)
+        self.assertEqual(results[0].removed, ["status:in-progress"])
+        self.assertEqual(forge.status(86), ["status:ready"])
+        follow(forge, 86, "labeled", "status:in-progress")  # delayed older trigger
+        self.assertEqual(forge.status(86), ["status:ready"])
+        self.assertEqual(forge.labels(86), OTHER_AXES + ["status:ready"])
+
+    def test_lagged_reapplication_defers_manual_repair_too(self):
+        forge = FakeForge().add(87, labels=OTHER_AXES)
+        forge.apply(87, "status:ready")
+        forge.apply(87, "status:in-progress")
+        forge.take_off(87, "status:ready")
+        forge.apply(87, "status:ready")
+        forge.lag[87] = 1
+        _, results = issue_status.repair_open(REPO, apply=True, gh=forge, pause=lambda _: None)
+        self.assertEqual(results[0].removed, [])
+        self.assertIn("history incomplete", results[0].note)
+        self.assertEqual(forge.removals, [])
+        self.assertEqual(forge.status(87), ["status:in-progress", "status:ready"])
+        forge.lag.pop(87)
+        _, results = issue_status.repair_open(REPO, apply=True, gh=forge, pause=lambda _: None)
+        self.assertEqual(results[0].removed, ["status:in-progress"])
+        self.assertEqual(forge.status(87), ["status:ready"])
 
     def test_manual_repair_orders_same_second_events_by_event_id(self):
         forge = FakeForge().add(85, labels=OTHER_AXES)
