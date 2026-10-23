@@ -21,6 +21,8 @@ const BINARY64_MANTISSA_MASK = (1n << 52n) - 1n;
 const BINARY64_EXPONENT_MASK = 0x7ffn;
 const MAX_FINITE = Object.freeze({ coefficient: (1n << 53n) - 1n, exponent: 971 });
 const MAX_CANONICAL_COEFFICIENT_DIGITS = 640; // MAX_VALUE at exponent -1074 needs < 640 decimal digits.
+const MAX_INTERMEDIATE_EXPONENT = 2048;
+const MAX_INTERMEDIATE_COEFFICIENT_BITS = 4096;
 
 function normalized(coefficient: bigint, exponent: number): ExactStockAmount {
   if (!Number.isSafeInteger(exponent)) {
@@ -44,6 +46,8 @@ function assertCanonical(amount: ExactStockAmount): void {
     typeof amount !== "object" || amount === null ||
     typeof amount.coefficient !== "bigint" ||
     !Number.isSafeInteger(amount.exponent) ||
+    amount.exponent < -1074 || amount.exponent > MAX_INTERMEDIATE_EXPONENT ||
+    (amount.coefficient !== 0n && amount.coefficient.toString(2).length > MAX_INTERMEDIATE_COEFFICIENT_BITS) ||
     (amount.coefficient === 0n && amount.exponent !== 0) ||
     (amount.coefficient !== 0n && (amount.coefficient & 1n) === 0n)
   ) {
