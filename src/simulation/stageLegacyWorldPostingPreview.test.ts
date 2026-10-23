@@ -171,9 +171,9 @@ describe("M4 read-only legacy WorldState posting preview (#798)", () => {
     const initialGenesis = f.world.worldGenesisLedger;
 
     // Missing wallet/inventory entries are legal zero stocks, not missing owners.
-    expect(stageLegacyWorldPostingPreview(f.world, [buyerDebit, sellerCredit]))
+    expect(stageLegacyWorldPostingPreview(f.world, [buyerDebit, sellerCredit])
       .find(row => key(row.endpoint) === key(f.sellerMoney))?.opening).toEqual(EXACT_ZERO);
-    expect(stageLegacyWorldPostingPreview(f.world, [unitDebit, cohortCredit]))
+    expect(stageLegacyWorldPostingPreview(f.world, [unitDebit, cohortCredit])
       .find(row => key(row.endpoint) === key(f.buyerGoods))?.opening).toEqual(EXACT_ZERO);
 
     for (const invalid of [null, undefined] as const) {
