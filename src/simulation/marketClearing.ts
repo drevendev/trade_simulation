@@ -335,16 +335,54 @@ function materializeMatchPlan(
   marketPrice: number,
   allocationIdCounter: { value: number },
 ): MarketAllocation[] {
-  const allocations: MarketAllocation[] = [];
+  // The caller's allocation counter is durable tick state. Validate the *whole*
+  // plan before spending an ordinal: a bad late taxation callback must not leave
+  // earlier IDs consumed when the clearing attempt throws and is retried.
+  const firstOrdinal = allocationIdCounter.value;
+  if (!Number.isSafeInteger(firstOrdinal) || firstOrdinal < 0 ||
+      plan.length > Number.MAX_SAFE_INTEGER - firstOrdinal) {
+    throw new Error("Local clearing allocation counter cannot reserve safe ordinals for the whole match plan");
+  }
+  assertFiniteCanonicalNumber(marketPrice, "marketPrice for local allocation materialization");
+  if (marketPrice < 0) {
+    throw new Error("Local clearing marketPrice must be >= 0");
+  }
 
-  for (const match of plan) {
+  const prepared = plan.map((match) => {
     const taxInfo = input.getTaxationInfo(match.buyer, match.buyer.regionId, input.goodId);
+    assertFiniteCanonicalNumber(taxInfo.assessedTaxRate, "assessedTaxRate for local allocation");
+    assertFiniteCanonicalNumber(taxInfo.collectionEfficiency, "collectionEfficiency for local allocation");
+    if (taxInfo.assessedTaxRate < 0 || taxInfo.assessedTaxRate > 1 ||
+        taxInfo.collectionEfficiency < 0 || taxInfo.collectionEfficiency > 1) {
+      throw new Error("Local clearing taxation rate and collection efficiency must be in [0, 1]");
+    }
+
     const collectedTaxPerUnit = marketPrice * taxInfo.assessedTaxRate * taxInfo.collectionEfficiency;
     const grossUnitPrice = marketPrice + collectedTaxPerUnit;
+    const consumptionTaxAmount = match.quantity * collectedTaxPerUnit;
+    const sellerReceipt = match.quantity * marketPrice;
+    const buyerDebit = match.quantity * grossUnitPrice;
+    if (![collectedTaxPerUnit, grossUnitPrice, consumptionTaxAmount, sellerReceipt, buyerDebit]
+      .every(Number.isFinite)) {
+      throw new Error("Local clearing taxation/money products must be finite before allocation");
+    }
+    if (match.quantity > 0 &&
+        ((marketPrice > 0 && sellerReceipt === 0) ||
+         (grossUnitPrice > 0 && buyerDebit === 0))) {
+      throw new Error("Local clearing positive quantity/price underflows to a zero transfer");
+    }
+    if (consumptionTaxAmount > 0 &&
+        (typeof taxInfo.destinationStateId !== "string" || taxInfo.destinationStateId.trim() === "")) {
+      throw new Error("Local clearing collected consumption tax has no State treasury destination");
+    }
+    return { match, grossUnitPrice, consumptionTaxAmount, destinationStateId: taxInfo.destinationStateId };
+  });
 
-    allocationIdCounter.value++;
-    allocations.push({
-      id: createMarketAllocationId(`ma:${input.marketId}/${input.goodId}/${input.pass}/${allocationIdCounter.value}`),
+  // All callback/numeric checks succeeded. Build the deterministic contiguous ID
+  // sequence locally; publish the caller counter only after every record exists.
+  const allocations: MarketAllocation[] = prepared.map(({ match, grossUnitPrice, consumptionTaxAmount, destinationStateId }, index) => ({
+
+      id: createMarketAllocationId(`ma:${input.marketId}/${input.goodId}/${input.pass}/${firstOrdinal + index + 1}`),
       marketId: input.marketId,
       regionId: input.regionId,
       goodId: input.goodId,
@@ -357,8 +395,8 @@ function materializeMatchPlan(
       sellerNetUnitPrice: marketPrice,
       buyerGrossUnitPrice: grossUnitPrice,
       marketCurrencyId: input.marketCurrencyId,
-      consumptionTaxAmount: match.quantity * collectedTaxPerUnit,
-      destinationStateId: taxInfo.destinationStateId,
+      consumptionTaxAmount,
+      destinationStateId,
       sellerInventoryBucket: (match.seller.inventoryBucket ?? "GENERAL") as
         | "GENERAL"
         | "INPUT"
@@ -369,8 +407,8 @@ function materializeMatchPlan(
         | "INPUT"
         | "OUTPUT"
         | "INVESTMENT",
-    });
-  }
+    }));
+  allocationIdCounter.value = firstOrdinal + allocations.length;
   return allocations;
 }
 
