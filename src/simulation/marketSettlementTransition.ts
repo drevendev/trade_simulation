@@ -119,6 +119,9 @@ function resolveGoodsEndpoint(
             `than guessing which one was meant.`,
         );
       }
+      if (bucket !== "INPUT" && bucket !== "OUTPUT" && bucket !== "INVESTMENT") {
+        refuse(`executeAllocation: ${side} production unit has an unknown inventory bucket "${String(bucket)}"`);
+      }
       return { kind: "PRODUCTION_UNIT", productionUnitId: actor.productionUnitId, bucket };
 
     case "CLAN":
@@ -472,6 +475,72 @@ export function executeAllocation(
   for (const delta of moneyDeltas) {
     next = applyMoneyDelta(next, delta);
   }
+
+  // A nominally balanced transfer can lose either leg when a small amount is
+  // added to or subtracted from a large binary64 balance. The successor is
+  // still local: refusing it leaves the caller's immutable world untouched.
+  type RealizedPosting = { opening: number; closing: number; requested: number };
+  const goodsPosting = new Map<string, RealizedPosting>();
+  for (const delta of goodsDeltas) {
+    const key = goodsDeltaKey(delta);
+    const previous = goodsPosting.get(key);
+    goodsPosting.set(key, {
+      opening: previous?.opening ?? (readGoods(world, delta.endpoint).get(delta.goodId) ?? 0),
+      closing: readGoods(next, delta.endpoint).get(delta.goodId) ?? 0,
+      requested: (previous?.requested ?? 0) + delta.delta,
+    });
+  }
+  const moneyPosting = new Map<string, RealizedPosting>();
+  for (const delta of moneyDeltas) {
+    const key = moneyDeltaKey(delta);
+    const previous = moneyPosting.get(key);
+    moneyPosting.set(key, {
+      opening: previous?.opening ?? (readWallet(world, delta.endpoint).get(delta.currencyId) ?? 0),
+      closing: readWallet(next, delta.endpoint).get(delta.currencyId) ?? 0,
+      requested: (previous?.requested ?? 0) + delta.delta,
+    });
+  }
+
+  function checkRealizedPostings(kind: string, rows: Iterable<RealizedPosting>): void {
+    let sum = 0;
+    let correction = 0;
+    for (const { opening, closing, requested } of rows) {
+      // Pure alias cycles may accumulate harmless sub-epsilon rounding during
+      // sequential credits. They are governed by the existing conservation
+      // tolerance, not treated as a mandatory bit-for-bit identity.
+      // Aggregate same-stock alias legs can cancel to a sub-epsilon
+      // floating residual. Refuse a swallowed *material* transfer, not
+      // ordinary zero-net activity inside the existing reconciliation limit.
+      if ((Math.abs(requested) > 1e-8 && opening === closing) ||
+          (requested === 0 && Math.abs(closing - opening) > 1e-8)) {
+        refuse("executeAllocation: " + kind +
+          " transfer lost to binary64 rounding or zero-net stock drift" +
+          " (requested=" + requested + ", opening=" + opening + ", closing=" + closing + ")");
+      }
+      const actual = closing - opening;
+      // Aggregate conservation can conceal equal overposting of distinct endpoints:
+      // 1e12 +/- 0.0001 moves one ULP, not the requested 0.0001. The requested
+      // amount is already netted per physical stock key (same-stock aliases).
+      if (Math.abs(actual - requested) > 1e-8) {
+        refuse("executeAllocation: " + kind +
+          " endpoint rounded away from requested posting" +
+          " (requested=" + requested + ", actual=" + actual +
+          ", opening=" + opening + ", closing=" + closing + ")");
+      }
+      const rounded = sum + actual;
+      correction += Math.abs(sum) >= Math.abs(actual)
+        ? (sum - rounded) + actual : (actual - rounded) + sum;
+      sum = rounded;
+    }
+    const residual = sum + correction;
+    // Preserve the existing absolute 1e-8 market preflight tolerance.
+    // This is a bounded guard, not an exact lifetime accounting contract.
+    if (Math.abs(residual) > 1e-8) {
+      refuse("executeAllocation: materialized " + kind + " conservation residual " + residual);
+    }
+  }
+  checkRealizedPostings("goods", goodsPosting.values());
+  checkRealizedPostings("money", moneyPosting.values());
   return next;
 }
 
@@ -530,6 +599,12 @@ function assertNoStockGoesNegative(
     const existing = projectedGoods.get(key);
     const opening = existing?.opening ?? (readGoods(world, delta.endpoint).get(delta.goodId) ?? 0);
     const balance = (existing?.balance ?? opening) + delta.delta;
+    if (!Number.isFinite(opening) || opening < 0 || !Number.isFinite(delta.delta) || !Number.isFinite(balance)) {
+      refuse(
+        `executeAllocation: ${key} has invalid or non-finite goods projection; ` +
+          `opening=${String(opening)}, delta=${String(delta.delta)}, final=${String(balance)}`,
+      );
+    }
     projectedGoods.set(key, { delta, opening, balance });
   }
 
@@ -550,6 +625,12 @@ function assertNoStockGoesNegative(
     const existing = projectedMoney.get(key);
     const opening = existing?.opening ?? (readWallet(world, delta.endpoint).get(delta.currencyId) ?? 0);
     const balance = (existing?.balance ?? opening) + delta.delta;
+    if (!Number.isFinite(opening) || opening < 0 || !Number.isFinite(delta.delta) || !Number.isFinite(balance)) {
+      refuse(
+        `executeAllocation: ${key} has invalid or non-finite wallet projection; ` +
+          `opening=${String(opening)}, delta=${String(delta.delta)}, final=${String(balance)}`,
+      );
+    }
     projectedMoney.set(key, { delta, opening, balance });
   }
 

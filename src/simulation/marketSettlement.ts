@@ -48,6 +48,23 @@ export interface MarketSettlementBundle {
   readonly consumptionTaxTransaction?: EconomicTransaction | null;
 }
 
+/** A counter is the next unused ordinal, not an approximate floating-point quantity. */
+function assertTransactionCapacity(
+  counter: { value: number },
+  count: number,
+  tick: number,
+  phase: number,
+): void {
+  if (!Number.isSafeInteger(tick) || tick < 0 ||
+      !Number.isSafeInteger(phase) || phase < 0 || phase > 15) {
+    throw new Error("Market settlement requires a nonnegative safe-integer tick and phase 0..15");
+  }
+  if (!Number.isSafeInteger(counter.value) || counter.value < 0 ||
+      counter.value > Number.MAX_SAFE_INTEGER - count) {
+    throw new Error(`Market settlement transaction counter cannot reserve ${count} safe ordinal(s)`);
+  }
+}
+
 /**
  * Compute consumption tax details for a buyer purchase.
  * Returns assessed tax rate, collection efficiency, and resulting collected tax.
@@ -65,6 +82,9 @@ export function computeConsumptionTax(
   collectedTaxAmount: number;
 } {
   assertFiniteCanonicalNumber(sellerNetValue, "sellerNetValue in computeConsumptionTax");
+  if (sellerNetValue < 0) {
+    throw new Error(`sellerNetValue must be >= 0, got ${sellerNetValue}`);
+  }
 
   const assessedTaxRate = taxPolicy.getConsumptionTaxRate(destinationStateId, goodId);
   const collectionEfficiency = taxPolicy.getCollectionEfficiency(destinationStateId);
@@ -123,15 +143,44 @@ export function preflightMarketSettlement(
   }
   assertFiniteCanonicalNumber(allocation.consumptionTaxAmount, "consumptionTaxAmount");
 
-  // Preflight math check: buyer debit must equal seller net receipt + tax (MTFX-I2)
+  if (!Number.isSafeInteger(tick) || tick < 0 ||
+      !Number.isSafeInteger(phase) || phase < 0 || phase > 15) {
+    return "Market settlement requires a nonnegative safe-integer tick and phase 0..15";
+  }
+
+  if (allocation.consumptionTaxAmount > 0 &&
+      (typeof allocation.destinationStateId !== "string" || allocation.destinationStateId.trim() === "")) {
+    return "Collected consumption tax has no destinationStateId; it must reach a State treasury";
+  }
+
+  // Finite operands do not imply finite products/sums. Infinity - Infinity is NaN,
+  // whose comparison with epsilon would otherwise admit an invalid money bundle.
   const sellerNetReceipt = allocation.quantity * allocation.sellerNetUnitPrice;
   const buyerGrossDebit = allocation.quantity * allocation.buyerGrossUnitPrice;
   const expectedBuyerDebit = sellerNetReceipt + allocation.consumptionTaxAmount;
+  if (!Number.isFinite(sellerNetReceipt) || !Number.isFinite(buyerGrossDebit) ||
+      !Number.isFinite(expectedBuyerDebit)) {
+    return "Derived seller receipt, buyer debit and receipt plus tax must be finite";
+  }
+  if (allocation.quantity > 0 &&
+      ((allocation.sellerNetUnitPrice > 0 && sellerNetReceipt === 0) ||
+       (allocation.buyerGrossUnitPrice > 0 && buyerGrossDebit === 0))) {
+    return "Positive quantity and positive price underflow to a zero money transfer";
+  }
 
-  // Use epsilon for floating-point comparison
+  // Preserve the existing comparison tolerance; this repair adds no economic rounding rule.
   const epsilon = 1e-8;
   if (Math.abs(buyerGrossDebit - expectedBuyerDebit) > epsilon) {
     return `Buyer debit (${buyerGrossDebit}) must equal seller net (${sellerNetReceipt}) + tax (${allocation.consumptionTaxAmount}), got difference of ${Math.abs(buyerGrossDebit - expectedBuyerDebit)}`;
+  }
+
+  // The tax is a separate treasury credit: it must be funded by a separately
+  // materialized buyer debit even when buyerGross and sellerNet are huge.
+  // This guard supplements (does not replace) the existing tolerance contract.
+  const separatelyPostedResidual = (buyerGrossDebit - sellerNetReceipt) - allocation.consumptionTaxAmount;
+  if ((allocation.consumptionTaxAmount > 0 && buyerGrossDebit === sellerNetReceipt) ||
+      Math.abs(separatelyPostedResidual) > epsilon) {
+    return "Buyer debit cannot fund the separately posted seller receipt and collected tax";
   }
 
   return null;
@@ -159,8 +208,17 @@ export function createMarketSaleTransaction(
   phase: number,
   transactionIdCounter: { value: number },
 ): EconomicTransaction {
+  assertFiniteCanonicalNumber(allocation.quantity, "allocation.quantity");
+  assertFiniteCanonicalNumber(allocation.sellerNetUnitPrice, "sellerNetUnitPrice");
+  if (allocation.quantity < 0 || allocation.sellerNetUnitPrice < 0) {
+    throw new Error("Market sale quantity and sellerNetUnitPrice must be >= 0");
+  }
   const sellerNetValue = allocation.quantity * allocation.sellerNetUnitPrice;
   assertFiniteCanonicalNumber(sellerNetValue, "sellerNetValue");
+  if (allocation.quantity > 0 && allocation.sellerNetUnitPrice > 0 && sellerNetValue === 0) {
+    throw new Error("Positive market sale quantity and price underflow to zero");
+  }
+  assertTransactionCapacity(transactionIdCounter, 1, tick, phase);
 
   const transactionId = createTransactionId(`tx:${tick}:${phase}:market-sale:${transactionIdCounter.value++}`);
 
@@ -204,17 +262,16 @@ export function createConsumptionTaxTransaction(
   phase: number,
   transactionIdCounter: { value: number },
 ): EconomicTransaction | null {
-  // Only create tax transaction if tax amount > 0
-  if (allocation.consumptionTaxAmount <= 0) {
-    return null;
-  }
-
   assertFiniteCanonicalNumber(allocation.consumptionTaxAmount, "allocation.consumptionTaxAmount");
-
-  if (!allocation.destinationStateId) {
-    // No tax without destination state
-    return null;
+  if (allocation.consumptionTaxAmount < 0) {
+    throw new Error("consumptionTaxAmount must be >= 0");
   }
+  if (allocation.consumptionTaxAmount === 0) return null;
+
+  if (typeof allocation.destinationStateId !== "string" || allocation.destinationStateId.trim() === "") {
+    throw new Error("Collected consumption tax has no destinationStateId; it must reach a State treasury");
+  }
+  assertTransactionCapacity(transactionIdCounter, 1, tick, phase);
 
   const transactionId = createTransactionId(`tx:${tick}:${phase}:consumption-tax:${transactionIdCounter.value++}`);
 
@@ -261,10 +318,19 @@ export function executeMarketSettlement(
     throw new Error(`Market settlement preflight failed: ${preflightError}`);
   }
 
-  // Create bundle ID from stable semantic inputs
-  const bundleId = createTransactionBundleId(
-    `tb:${tick}:${phase}:${allocation.marketId}:${allocation.goodId}:${allocation.sellerIntentId}:${allocation.buyerIntentId}`,
-  );
+  const transactionCount = allocation.consumptionTaxAmount > 0 ? 2 : 1;
+  assertTransactionCapacity(transactionIdCounter, transactionCount, tick, phase);
+  // Publish the caller's counter only after both records exist. A refused bundle must
+  // not consume even its first ordinal, including exhaustion before the tax leg.
+  const stagedCounter = { value: transactionIdCounter.value };
+
+  // Allocation identity distinguishes split lots for the same two intents. Tuple
+  // encoding is injective for string IDs, unlike concatenating colon-delimited keys.
+  const bundleId = createTransactionBundleId(`tb:${JSON.stringify([
+    tick, phase, allocation.pass, allocation.marketId, allocation.regionId,
+    allocation.goodId, allocation.marketCurrencyId, allocation.sellerIntentId,
+    allocation.buyerIntentId, allocation.id,
+  ])}`);
 
   // Create MARKET_SALE transaction
   const marketSaleTransaction = createMarketSaleTransaction(
@@ -272,7 +338,7 @@ export function executeMarketSettlement(
     bundleId,
     tick,
     phase,
-    transactionIdCounter,
+    stagedCounter,
   );
 
   // Create CONSUMPTION_TAX transaction (if applicable)
@@ -282,9 +348,10 @@ export function executeMarketSettlement(
     bundleId,
     tick,
     phase,
-    transactionIdCounter,
+    stagedCounter,
   );
 
+  transactionIdCounter.value = stagedCounter.value;
   return {
     bundleId,
     marketSaleTransaction,
