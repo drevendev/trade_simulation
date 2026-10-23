@@ -25,19 +25,29 @@ import {
  * currency, good, actor or forbidden bucket is NOT a valid empty holding.
  * stageExactPostingBundle validates endpoint identity before invoking this.
  */
+/** A missing stock key is empty; a present malformed key is corrupted live state. */
+function exactFromLiveHolding<K>(holdings: ReadonlyMap<K, number>, key: K) {
+  if (!holdings.has(key)) return exactFromNumber(0);
+  const value: unknown = holdings.get(key);
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new Error("exact posting: present holding must be a finite nonnegative number");
+  }
+  return exactFromNumber(value);
+}
+
 function readLegacyOpening(world: WorldState, endpoint: ExactPostingEndpoint) {
   if (endpoint.kind === "MONEY") {
     if (!world.currencies.has(endpoint.currencyId)) {
       throw new Error(`exact posting: unknown live currency ${endpoint.currencyId}`);
     }
-    return exactFromNumber(readActorWallet(world, endpoint.owner).get(endpoint.currencyId) ?? 0);
+    return exactFromLiveHolding(readActorWallet(world, endpoint.owner), endpoint.currencyId);
   }
 
   if (!Object.prototype.hasOwnProperty.call(world.definitionRegistry.goods, endpoint.goodId)) {
     throw new Error(`exact posting: unknown live good ${endpoint.goodId}`);
   }
-  return exactFromNumber(
-    readMarketActorInventory(world, endpoint.owner, endpoint.bucket).get(endpoint.goodId) ?? 0,
+  return exactFromLiveHolding(
+    readMarketActorInventory(world, endpoint.owner, endpoint.bucket), endpoint.goodId,
   );
 }
 
