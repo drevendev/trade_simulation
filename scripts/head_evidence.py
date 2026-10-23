@@ -25,7 +25,7 @@ request on which all four required checks are green, this writes one comment:
 against the merge base with its base branch — positions dropped, because a line added
 above by the base moves a hunk without changing it, and the generated coverage table
 excluded, because it is regenerated from the registry on every base merge and is
-presentation only. Two heads with the same diff identity would land the same change.
+presentation only. Diff identity is only a coarse signal: a real per-commit tree proof is also required to carry a verdict.
 A base merge that had to resolve a conflict inside the pull request's own lines changes
 what is removed or added, so its identity differs and nothing is carried across it.
 
@@ -103,6 +103,9 @@ class Commit(NamedTuple):
     # Whether the commit itself is the base branch's. The walk never steps onto one.
     on_base: bool
     identity: str
+    # None is for pure synthetic readers. Real Git readers always supply a
+    # content-preservation proof for this head relative to its first parent.
+    continuity_proven: Optional[bool] = None
 
 
 class Chain(NamedTuple):
@@ -139,7 +142,8 @@ def walk(head: str, read: Callable[[str], Commit], bound: int = MAX_CHAIN) -> Ch
     onto the base branch, so a pull request whose own diff is empty does not walk into
     the base's history looking for a change.
 
-    What kind of commit a head is decides nothing here; the diff does. The first version
+    Diff identity alone is insufficient: the real Git reader checks unchanged
+    substantive trees on ordinary commits and automatic merge outcomes on base merges. The first version
     followed merges of the base only, and on #661 it stopped at `22feb2aa`, an ordinary
     commit that regenerated the coverage table and changed nothing else.
     """
@@ -149,7 +153,8 @@ def walk(head: str, read: Callable[[str], Commit], bound: int = MAX_CHAIN) -> Ch
         if len(heads) > bound:
             return Chain(tuple(reversed(heads)), True)
         previous = read(current.parents[0])
-        if previous.on_base or previous.identity != current.identity:
+        if (previous.on_base or previous.identity != current.identity
+                or current.continuity_proven is False):
             break
         heads.append(previous.sha)
         current = previous
@@ -299,6 +304,49 @@ def _git(args, cwd="."):
     )
 
 
+def continuity_proven(sha: str, parents: tuple, merges_base: bool, cwd=".") -> bool:
+    """Prove real Git tree continuity, not just equality of lossy diff signatures.
+
+    A single-parent commit may change only the MACHINE-generated representation
+    file; its content is independently checked by the mandatory green policy gate.
+    A two-parent base merge may carry a verdict only if every *non-generated* file
+    matches Git's automatic merge tree. Manual semantic relocation of otherwise
+    identical +/- lines changes that tree and therefore cannot inherit a verdict.
+
+    Refuse unmeasurable merges or conflicts outside the narrowly excluded table.
+    The merge-tree command reads objects as data: no branch checkout or execution.
+    """
+    scope = ["--", ".", f":(exclude){GENERATED}"]
+    if len(parents) == 1:
+        delta = _git(["diff", "--quiet", parents[0], sha, *scope], cwd)
+        return delta.returncode == 0
+    if len(parents) != 2 or not merges_base:
+        return False
+
+    automatic = _git(["merge-tree", "--write-tree", parents[0], parents[1]], cwd)
+    if automatic.returncode not in (0, 1):
+        return False
+    lines = automatic.stdout.splitlines()
+    if not lines or SHA.fullmatch(lines[0].strip()) is None:
+        return False
+
+    if automatic.returncode == 1:
+        conflicts = [line for line in lines[1:] if line.startswith("CONFLICT ")]
+        staged = [
+            m.group(1) for line in lines[1:]
+            if (m := re.match(r"^\d{6} [0-9a-f]{40} [123]\t(.+)$", line))
+        ]
+        if not conflicts or not staged or any(name != GENERATED for name in staged):
+            return False
+        if any(GENERATED not in line for line in conflicts):
+            return False
+
+    expected_tree = lines[0].strip()
+    # A successful tree comparison establishes that no substantive code was
+    # edited while resolving the merge, even if +/- hunks look identical.
+    return _git(["diff", "--quiet", expected_tree, sha, *scope], cwd).returncode == 0
+
+
 def own_diff(sha: str, base: str, cwd=".") -> tuple:
     """(diff text, number of files) of `sha` against its merge base with `base`."""
     found = _git(["merge-base", sha, base], cwd)
@@ -328,7 +376,8 @@ def reader(base: str, cwd=".") -> Callable[[str], Commit]:
         )
         on_base = _git(["merge-base", "--is-ancestor", full, base], cwd).returncode == 0
         diff, _ = own_diff(full, base, cwd)
-        return Commit(full, tuple(parents), merges_base, on_base, identity(diff))
+        proof = continuity_proven(full, tuple(parents), merges_base, cwd)
+        return Commit(full, tuple(parents), merges_base, on_base, identity(diff), proof)
 
     return read
 
