@@ -376,6 +376,15 @@ describe("README conformance (REQ-VISUALIZATION-007)", () => {
     expect(collapsed).not.toContain('id="m3-preview-body"');
   });
 
+  it("does not describe the already published M4 milestone as an in-flight PR (#794)", () => {
+    // Source-content guard only: release tag creation is machine-owned and may
+    // occur after the last requirement merge; never require a tag in pre-release CI.
+    expect(readme).not.toMatch(/Milestone 4[^\n]*implementation-complete when this pull request lands/i);
+    expect(readme).not.toMatch(/M4[^\n]*release remains pending/i);
+    expect(readme).not.toMatch(/Its release remains pending/i);
+    expect(readme).toMatch(/\*\*Milestone 4:\*\* Complete/);
+    expect(readme).toContain("v0.4.0");
+  });
   it("documents only npm scripts this repository actually defines", () => {
     const packageJson = JSON.parse(readFileSync(`${repoRoot}package.json`, "utf8")) as {
       scripts?: Record<string, string>;
