@@ -183,6 +183,26 @@ describe("exact posting staging (#798): no WorldState/v2 activation", () => {
     expect(huge.initial.get(key(SELLER))).toEqual(exactFromNumber(Number.MAX_VALUE));
   });
 
+  it("snapshots mutable caller-owned opening and leg values before returning immutable evidence", () => {
+    // A deserializer or unsafe JS caller can hand us unfrozen objects despite TS readonly.
+    const mutableOpening = { coefficient: 2n, exponent: 0 };
+    const mutableDebit = { coefficient: -1n, exponent: 0 };
+    const transfer = [
+      leg("payer", BUYER, mutableDebit),
+      leg("payee", SELLER, { coefficient: 1n, exponent: 0 }),
+    ];
+    const staged = stageExactPostingBundle(transfer, endpoint =>
+      key(endpoint) === key(BUYER) ? mutableOpening : EXACT_ZERO);
+    mutableOpening.coefficient = 999n;
+    mutableDebit.coefficient = -999n;
+    const buyer = staged.find(row => key(row.endpoint) === key(BUYER))!;
+    expect(buyer.opening).toEqual(exactFromNumber(2));
+    expect(buyer.closing).toEqual(exactFromNumber(1));
+    expect(buyer.legs[0]!.delta).toEqual(exactFromNumber(-1));
+    expect(Object.isFrozen(buyer.opening)).toBe(true);
+    expect(Object.isFrozen(buyer.legs[0]!.delta)).toBe(true);
+  });
+
   it("produces stable endpoint order irrespective of caller leg and Map insertion order", () => {
     const stocks = opening([[BUYER, exactFromNumber(2)], [SELLER, EXACT_ZERO]]);
     const a = leg("buyer", BUYER, exactFromNumber(-1));
