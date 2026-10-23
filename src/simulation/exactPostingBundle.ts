@@ -134,18 +134,25 @@ export function stageExactPostingBundle(
 
     let stage = stages.get(key);
     if (!stage) {
-      const opening = readOpening(leg.endpoint);
-      assertPhysicalExactStock(opening);
+      const sourceOpening = readOpening(leg.endpoint);
+      assertPhysicalExactStock(sourceOpening);
+      // Detached snapshot: caller-owned objects may be mutable at runtime despite TS readonly.
+      const opening: ExactStockAmount = Object.freeze({
+        coefficient: sourceOpening.coefficient, exponent: sourceOpening.exponent,
+      });
       const endpoint = Object.freeze({
         ...leg.endpoint, owner: Object.freeze({ ...leg.endpoint.owner }),
       }) as ExactPostingEndpoint;
       stage = { endpoint, opening, closing: opening, legs: [] };
       stages.set(key, stage);
     }
-    const immutableLeg = Object.freeze({ legId, endpoint: stage.endpoint, delta: leg.delta });
-    stage.closing = exactAdd(stage.closing, leg.delta);
+    const immutableLeg: ExactPostingLeg = Object.freeze({
+      legId, endpoint: stage.endpoint,
+      delta: Object.freeze({ coefficient: leg.delta.coefficient, exponent: leg.delta.exponent }),
+    });
+    stage.closing = exactAdd(stage.closing, immutableLeg.delta);
     stage.legs.push(immutableLeg);
-    assetTotals.set(assetKey, exactAdd(assetTotals.get(assetKey) ?? EXACT_ZERO, leg.delta));
+    assetTotals.set(assetKey, exactAdd(assetTotals.get(assetKey) ?? EXACT_ZERO, immutableLeg.delta));
   }
 
   for (const [asset, total] of assetTotals) {
