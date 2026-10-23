@@ -83,6 +83,7 @@ class LabelEvent(NamedTuple):
     at: str  # `created_at`, ISO 8601 UTC as the API writes it, so it sorts as text
     id: int  # the event's id, which orders two applications within one second
     actor: str
+    kind: str = LABELED  # removal events remain visible for application-freshness checks
 
 
 class Decision(NamedTuple):
@@ -103,6 +104,8 @@ def last_applications(history) -> dict:
     """The latest application of each label name in a history. Pure."""
     latest = {}
     for event in history:
+        if event.kind != LABELED:
+            continue
         known = latest.get(event.name)
         if known is None or (event.at, event.id) > (known.at, known.id):
             latest[event.name] = event
@@ -121,7 +124,17 @@ def applied_last(present, history, applied=None) -> Optional[str]:
     if not present:
         return None
     latest = last_applications(history)
-    if any(name not in latest for name in present):
+    # A present name can have an old labeled event followed by a visible removal;
+    # that old application must never be mistaken for its present incarnation.
+    last_seen = {}
+    for event in history:
+        if event.name not in present:
+            continue
+        previous = last_seen.get(event.name)
+        if previous is None or (event.at, event.id) > (previous.at, previous.id):
+            last_seen[event.name] = event
+    if any(name not in latest or name not in last_seen
+           or last_seen[name].kind != LABELED for name in present):
         return None
     return max(present, key=lambda name: (latest[name].at, latest[name].id))
 
@@ -243,7 +256,7 @@ def read_issue(repo, number, gh=None) -> dict:
 
 
 def read_history(repo, number, gh=None) -> list:
-    """Every application of a label to the Issue, as `LabelEvent`s, oldest first."""
+    """Applications AND removals, so visible removal detects lagged reapplication."""
     events = _pages(
         _read(
             gh or _gh,
@@ -254,11 +267,12 @@ def read_history(repo, number, gh=None) -> list:
     history = []
     for event in events:
         name = (event.get("label") or {}).get("name")
-        if event.get("event") != LABELED or not name:
+        kind = event.get("event")
+        if kind not in (LABELED, "unlabeled") or not name:
             continue
         history.append(
             LabelEvent(name, event.get("created_at") or "", int(event.get("id") or 0),
-                       (event.get("actor") or {}).get("login") or "")
+                       (event.get("actor") or {}).get("login") or "", kind)
         )
     return history
 
