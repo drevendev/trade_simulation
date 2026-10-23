@@ -162,4 +162,53 @@ describe("M4 read-only legacy WorldState posting preview (#798)", () => {
         .toBe(invalid);
     }
   });
+  it("rejects present nullish receiver stocks for MONEY and GOOD but accepts genuinely missing keys", () => {
+    const f = fixture();
+    const buyerDebit = record("money-debit", f.buyerMoney, exactFromNumber(-0.5));
+    const sellerCredit = record("money-credit", f.sellerMoney, exactFromNumber(0.5));
+    const unitDebit = record("goods-debit", f.sellerGoods, exactFromNumber(-0.25));
+    const cohortCredit = record("goods-credit", f.buyerGoods, exactFromNumber(0.25));
+    const initialGenesis = f.world.worldGenesisLedger;
+
+    // Missing wallet/inventory entries are legal zero stocks, not missing owners.
+    expect(stageLegacyWorldPostingPreview(f.world, [buyerDebit, sellerCredit]))
+      .find(row => key(row.endpoint) === key(f.sellerMoney))?.opening).toEqual(EXACT_ZERO);
+    expect(stageLegacyWorldPostingPreview(f.world, [unitDebit, cohortCredit]))
+      .find(row => key(row.endpoint) === key(f.buyerGoods))?.opening).toEqual(EXACT_ZERO);
+
+    for (const invalid of [null, undefined] as const) {
+      // Credit into a present malformed wallet must refuse, even when the
+      // opposite debit is valid, fully funded and the bundle conserves money.
+      const units = new Map(f.world.productionUnits);
+      const [unitId, unit] = [...units.entries()][0]!;
+      const malformedWallet = new Map(unit.wallet);
+      malformedWallet.set(f.currencyId, invalid as unknown as number);
+      units.set(unitId, { ...unit, wallet: malformedWallet });
+      const corruptMoney = { ...f.world, productionUnits: units };
+      expect(() => stageLegacyWorldPostingPreview(corruptMoney, [
+        buyerDebit, sellerCredit,
+      ])).toThrow(/present holding must be a finite nonnegative number/);
+      expect(corruptMoney.productionUnits.get(unitId)!.wallet.has(f.currencyId)).toBe(true);
+      expect(corruptMoney.productionUnits.get(unitId)!.wallet.get(f.currencyId)).toBe(invalid);
+      expect(corruptMoney.worldGenesisLedger).toBe(initialGenesis);
+      expect(f.world.productionUnits.get(unitId)!.wallet.has(f.currencyId)).toBe(false);
+
+      // Repeat with a receiving cohort's physical inventory: Map.has is
+      // required for both assets, not just for wallet entries.
+      const cohorts = new Map(f.world.cohorts);
+      const cohort = cohorts.get(f.cohortId)!;
+      const malformedInventory = new Map(cohort.householdInventory);
+      malformedInventory.set(f.goodId, invalid as unknown as number);
+      cohorts.set(f.cohortId, { ...cohort, householdInventory: malformedInventory });
+      const corruptGoods = { ...f.world, cohorts };
+      expect(() => stageLegacyWorldPostingPreview(corruptGoods, [
+        unitDebit, cohortCredit,
+      ])).toThrow(/present holding must be a finite nonnegative number/);
+      expect(corruptGoods.cohorts.get(f.cohortId)!.householdInventory.has(f.goodId)).toBe(true);
+      expect(corruptGoods.cohorts.get(f.cohortId)!.householdInventory.get(f.goodId)).toBe(invalid);
+      expect(corruptGoods.worldGenesisLedger).toBe(initialGenesis);
+      expect(f.world.cohorts.get(f.cohortId)!.householdInventory.has(f.goodId)).toBe(false);
+    }
+  });
+
 });
