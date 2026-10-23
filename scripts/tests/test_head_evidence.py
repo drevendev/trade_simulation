@@ -482,6 +482,55 @@ class RealCommitTests(unittest.TestCase):
         self.assertEqual(files, 2)
 
 
+    @staticmethod
+    def semantic_source(alpha=0, beta=0):
+        # Same textual patch at two different semantic locations. The current
+        # normalized diff intentionally drops hunk offsets/context.
+        return (
+            "function alpha() {\n"
+            f"  return {alpha};\n"
+            "}\n\n"
+            "function beta() {\n"
+            f"  return {beta};\n"
+            "}\n"
+        )
+
+    def prepare_semantic_source(self):
+        self.base_moves(lambda: self.repo.write("src/semantic.ts", self.semantic_source()))
+        self.repo.merge("master")
+        self.repo.write("src/semantic.ts", self.semantic_source(alpha=1))
+        return self.repo.commit("Change alpha only")
+
+    def test_semantic_relocation_cannot_inherit_an_ordinary_commit_verdict(self):
+        first = self.prepare_semantic_source()
+        self.repo.write("src/semantic.ts", self.semantic_source(beta=1))
+        second = self.repo.commit("Restore alpha and change beta")
+        self.assertEqual(self.identity_of(first), self.identity_of(second),
+                         "control: the old lossy identity equates these two patches")
+        self.assertFalse(he.reader("master", self.repo.path)(second).continuity_proven)
+        self.assertEqual(self.chain_of(second).heads, (second,))
+        self.assertNotIn("stands for", he.render(second, ROWS, self.chain_of(second), 2,
+                                               self.identity_of(second)[0], "master", False))
+
+    def test_semantic_relocation_inside_a_real_base_merge_is_a_new_verdict_boundary(self):
+        first = self.prepare_semantic_source()
+        self.base_moves(lambda: self.repo.write("src/other.txt", "base advanced again\n"))
+        self.repo.git("merge", "--no-ff", "--no-commit", "-q", "master")
+        self.repo.write("src/semantic.ts", self.semantic_source(beta=1))
+        second = self.repo.commit("Merge master with semantic relocation")
+        self.assertEqual(len(self.repo.git("rev-list", "--parents", "-n", "1", second).stdout.split()), 3)
+        self.assertEqual(self.identity_of(first), self.identity_of(second),
+                         "control: unchanged-looking own-diff must not authorize relocation")
+        self.assertFalse(he.reader("master", self.repo.path)(second).continuity_proven)
+        self.assertEqual(self.chain_of(second).heads, (second,))
+
+    def test_plain_generated_table_commit_keeps_content_continuity_proof(self):
+        self.repo.write(he.GENERATED, "table with independently checked regenerated status\n")
+        changed = self.repo.commit("Regenerate status presentation only")
+        self.assertTrue(he.reader("master", self.repo.path)(changed).continuity_proven)
+        self.assertEqual(self.chain_of(changed).heads, (self.first, changed))
+
+
 # ------------------------------------------------------------------------------ main
 
 
