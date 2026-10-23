@@ -86,6 +86,8 @@ describe("ExactStockAmount v2 pure codec (#797/#798)", () => {
     expect(() => assertFiniteExactMagnitude(exactAdd(exactFromNumber(Number.MAX_VALUE), exactFromNumber(1)))).toThrow(/range/);
     expect(() => assertFiniteExactMagnitude(exactAdd(exactFromNumber(Number.MAX_VALUE), exactFromNumber(Number.MAX_VALUE)))).toThrow(/range/);
     expect(() => assertPhysicalExactStock(exactFromNumber(Number.MIN_VALUE))).not.toThrow();
+    expect(() => exactAdd({ coefficient: 1n, exponent: Number.MAX_SAFE_INTEGER }, EXACT_ZERO)).toThrow(/normalized/);
+    expect(() => exactAdd({ coefficient: 1n << 5000n, exponent: 0 }, EXACT_ZERO)).toThrow(/normalized/);
   });
 
   it("has a strict deterministic wire form and round-trips every finite binary64 sample exactly", () => {
