@@ -42,6 +42,10 @@
       for (const key of ["tick", "outputProduced", "employedWorkers", "grossWagesPaid", "essentialCoverage", "foodInventory", "installedCapital"]) {
         if (!finiteNonNegative(sample[key])) return `sample ${index}.${key} is not a finite non-negative number`;
       }
+      if (!Number.isSafeInteger(sample.tick) || sample.tick >= preview.scenario.ticksExecuted ||
+          (index > 0 && sample.tick <= preview.samples[index - 1].tick)) {
+        return `sample ${index}.tick must be a strictly increasing integer within executed ticks`;
+      }
       if (sample.essentialCoverage > 1) return `sample ${index}.essentialCoverage exceeds 100%`;
     }
     return null;
@@ -67,9 +71,13 @@
     let maximum = Math.max(0, ...values);
     if (minimum === maximum) maximum = minimum + 1;
     const span = maximum - minimum;
+    // Sample cadence can have a short tail (M4: 0, 5, ..., 55, 59).
+    // Equal index spacing would misrepresent that final four-tick interval.
+    const firstTick = ticks[0];
+    const lastTick = ticks[ticks.length - 1];
     const x = index => ticks.length === 1
       ? pad.left + (width - pad.left - pad.right) / 2
-      : pad.left + (index / (ticks.length - 1)) * (width - pad.left - pad.right);
+      : pad.left + ((ticks[index] - firstTick) / (lastTick - firstTick)) * (width - pad.left - pad.right);
     const y = value => height - pad.bottom - ((value - minimum) / span) * (height - pad.top - pad.bottom);
 
     const svg = svgElement("svg", {
