@@ -138,6 +138,23 @@ describe("Market settlement transaction schemas (REQ-MARKET-004)", () => {
   });
 
   describe("preflightMarketSettlement", () => {
+    it("keeps fractional sale receipts nominal and failed preflight counter unchanged", () => {
+      // Ledger receipts record allocated amounts; only live stock verification
+      // proves that binary64 materialization moved those amounts at each endpoint.
+      const allocation = createTestAllocation({
+        quantity: 0.0001, sellerNetUnitPrice: 1, buyerGrossUnitPrice: 1,
+        consumptionTaxAmount: 0, destinationStateId: null,
+      });
+      const counter = { value: 41 };
+      const bundle = executeMarketSettlement(allocation, 5, 8, counter);
+      expect(bundle.marketSaleTransaction.quantity).toBe(allocation.quantity);
+      expect(bundle.marketSaleTransaction.moneyAmount).toBe(0.0001);
+      expect(counter.value).toBe(42);
+      const invalid = { ...allocation, buyerGrossUnitPrice: 2 };
+      expect(() => executeMarketSettlement(invalid, 5, 8, counter)).toThrow(/preflight failed/);
+      expect(counter.value).toBe(42);
+    });
+
     it("passes valid allocation", () => {
       const allocation = createTestAllocation();
       const error = preflightMarketSettlement(allocation, 5, 8);
