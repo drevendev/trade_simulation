@@ -518,6 +518,15 @@ export function executeAllocation(
           " (requested=" + requested + ", opening=" + opening + ", closing=" + closing + ")");
       }
       const actual = closing - opening;
+      // Aggregate conservation can conceal equal overposting of distinct endpoints:
+      // 1e12 +/- 0.0001 moves one ULP, not the requested 0.0001. The requested
+      // amount is already netted per physical stock key (same-stock aliases).
+      if (Math.abs(actual - requested) > 1e-8) {
+        refuse("executeAllocation: " + kind +
+          " endpoint rounded away from requested posting" +
+          " (requested=" + requested + ", actual=" + actual +
+          ", opening=" + opening + ", closing=" + closing + ")");
+      }
       const rounded = sum + actual;
       correction += Math.abs(sum) >= Math.abs(actual)
         ? (sum - rounded) + actual : (actual - rounded) + sum;
