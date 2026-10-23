@@ -12,9 +12,8 @@ name: Release tag
 on:
   push:
     branches: [master]
-    paths:
-      - 'docs/spec/implementation_status.csv'
-      - 'docs/spec/mirror/REQUIREMENTS_REGISTRY.csv'
+    # Any master advancement can strand a ledger-provenance PR behind the base.
+    # Recompute its idempotent proposal on every push, even without ledger edits (#778).
   workflow_dispatch:
 
 permissions: {}
