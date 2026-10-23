@@ -185,7 +185,7 @@ describe("exact posting staging (#798): no WorldState/v2 activation", () => {
 
   it("snapshots mutable caller-owned opening and leg values before returning immutable evidence", () => {
     // A deserializer or unsafe JS caller can hand us unfrozen objects despite TS readonly.
-    const mutableOpening = { coefficient: 2n, exponent: 0 };
+    const mutableOpening = { coefficient: 1n, exponent: 1 }; // normalized 2
     const mutableDebit = { coefficient: -1n, exponent: 0 };
     const transfer = [
       leg("payer", BUYER, mutableDebit),
