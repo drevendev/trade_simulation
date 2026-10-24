@@ -191,14 +191,22 @@
 
   const requested = new URLSearchParams(location.search).get("m4");
   const artifact = requested && /^[a-z0-9-]+\.json$/.test(requested) ? requested : "m4-preview.json";
+  // A rejected fetch/body promise is a transport failure, not an invalid artifact.
+  // Do not mask JSON parsing, schema, or rendering defects as network failures.
+  const transportFailure = error => {
+    const failure = new Error(`${artifact}: ${error?.message ?? String(error)}`);
+    failure.unavailable = true;
+    throw failure;
+  };
   fetch(artifact)
+    .catch(transportFailure)
     .then(response => {
       if (!response.ok) {
         const error = new Error(`${artifact}: HTTP ${response.status}`);
         error.unavailable = true;
         throw error;
       }
-      return response.text();
+      return response.text().catch(transportFailure);
     })
     .then(text => {
       let preview;
