@@ -47,6 +47,15 @@
         return `sample ${index}.tick must be a strictly increasing integer within executed ticks`;
       }
       if (sample.essentialCoverage > 1) return `sample ${index}.essentialCoverage exceeds 100%`;
+      // Each sampled per-tick flow contributes to the non-negative cumulative
+      // total. Sparse samples cannot reconstruct that total, but no individual
+      // observation may exceed it without contradicting the run's provenance.
+      if (sample.outputProduced > preview.totals.outputProduced) {
+        return `sample ${index}.outputProduced exceeds totals.outputProduced`;
+      }
+      if (sample.grossWagesPaid > preview.totals.grossWagesPaid) {
+        return `sample ${index}.grossWagesPaid exceeds totals.grossWagesPaid`;
+      }
     }
     return null;
   }
