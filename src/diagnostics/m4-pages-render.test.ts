@@ -188,6 +188,8 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     for (const phrase of ["Phase&nbsp;2", "Phase&nbsp;3", "Phase&nbsp;5", "Phase&nbsp;8", "Phase&nbsp;9", "Phase&nbsp;12", "Phase&nbsp;15", "one-way observation", "does not control the simulation"]) {
       expect(html).toContain(phrase);
     }
-    expect(html).toContain("activity falls to zero");
+    expect(html).not.toContain("activity falls to zero");
+    expect(html).toContain("The run length and observed outcomes below come from the selected validated artifact");
+    expect(html).toContain('id="m4-run-summary"');
   });
 });
