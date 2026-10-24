@@ -642,7 +642,8 @@ describe("REQ-ACCEPTANCE-005: M4 one-region 240-tick golden gate", () => {
       // Control: the real, unmodified post-Phase-8 stocks reconcile.
       assertAuthoritativePhase8Settlement(frame!, moneyEpsilon, quantityEpsilon);
       expect(purchase.buyer.type).toBe("COHORT");
-      expect(purchase.buyerInventoryBucket).toBe("HOUSEHOLD");
+      // Canonical Cohort market bucket is GENERAL, backed by householdInventory.
+      expect(purchase.buyerInventoryBucket).toBe("GENERAL");
       if (purchase.buyer.type !== "COHORT") throw new Error("household allocation has no Cohort buyer");
       const cohortId = purchase.buyer.cohortId;
       const actual = frame!.postPhase8World.cohorts.get(cohortId);
