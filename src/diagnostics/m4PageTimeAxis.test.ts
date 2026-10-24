@@ -10,10 +10,17 @@ const published = JSON.parse(
 
 interface PreviewFixture {
   readonly scenario: { ticksExecuted: number };
-  samples: Array<{ tick: number; outputProduced: number }>;
+  samples: Array<{
+    tick: number;
+    outputProduced: number;
+    employedWorkers: number;
+    essentialCoverage: number;
+    foodInventory: number;
+    installedCapital: number;
+  }>;
 }
 
-async function pageFor(artifact: unknown): Promise<JSDOM> {
+async function pageFor(artifact: unknown, beforeEval?: (page: JSDOM) => void): Promise<JSDOM> {
   const page = new JSDOM('<div id="m4-preview-body">Loading M4...</div>', {
     url: "https://pages.example.test/index.html",
     runScripts: "outside-only",
@@ -21,6 +28,7 @@ async function pageFor(artifact: unknown): Promise<JSDOM> {
   Object.defineProperty(page.window, "fetch", {
     value: () => Promise.resolve({ ok: true, text: async () => JSON.stringify(artifact) }),
   });
+  beforeEval?.(page);
   page.window.eval(script);
   // Flush the fetch -> response.text -> parse/render microtask chain.
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -124,6 +132,63 @@ describe("M4 Pages: elapsed tick axis and malformed artifact rejection (#816)", 
           expect(y).toBeGreaterThanOrEqual(10);
           expect(y).toBeLessThanOrEqual(136);
         }
+      }
+    } finally {
+      page.window.close();
+    }
+  });
+
+  it("bounds chart extrema work without passing a sample-sized argument list (#840)", async () => {
+    const page = await pageFor(cloneFixture(), browser => {
+      // Intercept Math in this isolated browser realm, not the test runner.
+      // A function-argument-limit failure happens before chart creation when
+      // Math.min/max receives the entire samples array through spread.
+      browser.window.eval(`
+        for (const method of ["min", "max"]) {
+          const original = Math[method];
+          Math[method] = (...args) => {
+            if (args.length > 2) throw new RangeError("bulk extrema forbidden");
+            return Reflect.apply(original, Math, args);
+          };
+        }
+      `);
+    });
+    try {
+      expect(page.window.document.querySelector(".m4-state")).toBeNull();
+      expect(page.window.document.querySelectorAll(".m4-chart")).toHaveLength(5);
+      expect(page.window.document.querySelector("#m4-table table")).not.toBeNull();
+      // A complete observed render is the sensitive assertion: the previous
+      // Math.max(0, ...values) crashes under the instrumented argument cap.
+    } finally {
+      page.window.close();
+    }
+  });
+
+  it("preserves a zero baseline and finite SVG coordinates for all-zero samples (#840)", async () => {
+    const fixture = cloneFixture();
+    for (const sample of fixture.samples) {
+      sample.outputProduced = 0;
+      sample.employedWorkers = 0;
+      sample.essentialCoverage = 0;
+      sample.foodInventory = 0;
+      sample.installedCapital = 0;
+    }
+    const page = await pageFor(fixture);
+    try {
+      expect(page.window.document.querySelector(".m4-state")).toBeNull();
+      const traces = [...page.window.document.querySelectorAll(".m4-chart polyline")];
+      expect(traces).toHaveLength(5);
+      for (const trace of traces) {
+        const points = (trace.getAttribute("points") ?? "").trim().split(/\s+/);
+        expect(points).toHaveLength(fixture.samples.length);
+        for (const point of points) {
+          const [x, y] = point.split(",").map(Number);
+          expect(Number.isFinite(x)).toBe(true);
+          expect(y).toBe(136);
+        }
+      }
+      for (const line of page.window.document.querySelectorAll(".m4-chart line.grid")) {
+        expect(Number.isFinite(Number(line.getAttribute("y1")))).toBe(true);
       }
     } finally {
       page.window.close();
