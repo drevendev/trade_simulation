@@ -214,9 +214,11 @@
     failure.unavailable = true;
     throw failure;
   };
+  const invalidSelectionError = new Error("invalid M4 preview selection: expected exactly one lowercase .json filename");
+  invalidSelectionError.invalidSelection = true;
   const loaded = validSelection
     ? fetch(artifact).catch(transportFailure)
-    : Promise.reject(new Error("invalid M4 preview selection: expected exactly one lowercase .json filename"));
+    : Promise.reject(invalidSelectionError);
   loaded
     .then(response => {
       if (!response.ok) {
@@ -244,7 +246,9 @@
           ? "Selected run unavailable. No validated observations were loaded."
           : "Selected run could not be displayed. No validated observations are available.";
       }
-      if (unavailable) {
+      if (error?.invalidSelection === true) {
+        state("M4 preview error", `Invalid M4 selected-run link; no artifact was fetched. ${error.message}.`);
+      } else if (unavailable) {
         state("M4 preview unavailable", `The deterministic preview artifact could not be fetched — ${error.message}. Nothing stale is substituted.`);
       } else {
         state("M4 preview error", `The artifact was fetched but could not be used: ${error.message}.`);
