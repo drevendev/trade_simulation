@@ -139,7 +139,10 @@ describe("M4 Pages selected-run provenance (#820)", () => {
       expect(summary).not.toContain("Reading");
       expect(summary).not.toContain("Selected scenario:");
       expect(document.querySelector(".m4-state h3")?.textContent).toBe("M4 preview error");
-      expect(document.querySelector(".m4-state p")?.textContent).toContain("invalid M4 preview selection");
+      const visibleError = document.querySelector(".m4-state p")?.textContent ?? "";
+      expect(visibleError).toContain("invalid M4 preview selection");
+      expect(visibleError).toContain("no artifact was fetched");
+      expect(visibleError).not.toContain("The artifact was fetched");
       expect(document.querySelectorAll(".m4-chart")).toHaveLength(0);
       expect(document.querySelector("#m4-table table")).toBeNull();
       expect(document.getElementById("injected")).toBeNull();
