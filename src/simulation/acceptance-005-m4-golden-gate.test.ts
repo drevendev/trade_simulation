@@ -614,6 +614,77 @@ describe("REQ-ACCEPTANCE-005: M4 one-region 240-tick golden gate", () => {
     throw new Error("M4 golden produced no household MAIN allocation for Phase-8 sensitivity control");
   });
 
+  it("rejects one-sided buyer wallet and goods mispostings in a real Phase-8 settlement", () => {
+    let world = goldenOpeningWorld();
+    const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
+    const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon ?? 1e-9;
+
+    for (let tick = 0; tick < GOLDEN_TICKS; tick++) {
+      const { result, frame } = executeGoldenTickWithSettlementFrame(world, tick);
+      expect(result.phaseBoundaryError, `tick ${tick} phase boundary`).toBeUndefined();
+      expect(result.reconciliationErrors, `tick ${tick} reconciliation`).toBeNull();
+      expect(frame, `tick ${tick} Phase-8 frame`).toBeDefined();
+
+      const intents = new Map(
+        (frame!.context.householdMarketIntents ?? []).map((intent) => [String(intent.id), intent] as const),
+      );
+      const purchase = frame!.context.marketAllocations.find(
+        (allocation) =>
+          allocation.pass === "MAIN" &&
+          allocation.quantity > 0 &&
+          intents.get(String(allocation.buyerIntentId))?.actor.type === "COHORT",
+      );
+      if (purchase === undefined) {
+        world = result.world;
+        continue;
+      }
+
+      // Control: the real, unmodified post-Phase-8 stocks reconcile.
+      assertAuthoritativePhase8Settlement(frame!, moneyEpsilon, quantityEpsilon);
+      expect(purchase.buyer.type).toBe("COHORT");
+      // Canonical Cohort market bucket is GENERAL, backed by householdInventory.
+      expect(purchase.buyerInventoryBucket).toBe("GENERAL");
+      if (purchase.buyer.type !== "COHORT") throw new Error("household allocation has no Cohort buyer");
+      const cohortId = purchase.buyer.cohortId;
+      const actual = frame!.postPhase8World.cohorts.get(cohortId);
+      expect(actual).toBeDefined();
+
+      // Change only one authoritative stock at a time, *after* actual settlement.
+      // This tests independent detection: whole-transition no-op controls are insufficient.
+      const changedWallet = new Map(actual!.wallet);
+      changedWallet.set(purchase.marketCurrencyId, (changedWallet.get(purchase.marketCurrencyId) ?? 0) + 1);
+      const wrongMoneyCohorts = new Map(frame!.postPhase8World.cohorts);
+      wrongMoneyCohorts.set(cohortId, { ...actual!, wallet: changedWallet });
+      expect(() =>
+        assertAuthoritativePhase8Settlement(
+          { ...frame!, postPhase8World: { ...frame!.postPhase8World, cohorts: wrongMoneyCohorts } },
+          moneyEpsilon,
+          quantityEpsilon,
+        ),
+      ).toThrow();
+
+      const changedGoods = new Map(actual!.householdInventory);
+      changedGoods.set(purchase.goodId, (changedGoods.get(purchase.goodId) ?? 0) + 1);
+      const wrongGoodsCohorts = new Map(frame!.postPhase8World.cohorts);
+      wrongGoodsCohorts.set(cohortId, { ...actual!, householdInventory: changedGoods });
+      expect(() =>
+        assertAuthoritativePhase8Settlement(
+          { ...frame!, postPhase8World: { ...frame!.postPhase8World, cohorts: wrongGoodsCohorts } },
+          moneyEpsilon,
+          quantityEpsilon,
+        ),
+      ).toThrow();
+
+      // Counterfactuals must never contaminate the real source state.
+      expect(frame!.postPhase8World.cohorts.get(cohortId)).toBe(actual);
+      expect(actual!.wallet.get(purchase.marketCurrencyId)).not.toBe(changedWallet.get(purchase.marketCurrencyId));
+      expect(actual!.householdInventory.get(purchase.goodId)).not.toBe(changedGoods.get(purchase.goodId));
+      return;
+    }
+
+    throw new Error("M4 golden produced no Cohort MAIN purchase for one-sided posting controls");
+  });
+
   it("makes persistent lifecycle-review state load-bearing in the normalized replay hash", () => {
     const world = goldenOpeningWorld();
     const unit = [...world.productionUnits.values()][0]!;
