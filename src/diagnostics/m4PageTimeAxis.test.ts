@@ -10,7 +10,7 @@ const published = JSON.parse(
 
 interface PreviewFixture {
   readonly scenario: { ticksExecuted: number };
-  samples: Array<{ tick: number }>;
+  samples: Array<{ tick: number; outputProduced: number }>;
 }
 
 async function pageFor(artifact: unknown): Promise<JSDOM> {
@@ -98,6 +98,35 @@ describe("M4 Pages: elapsed tick axis and malformed artifact rejection (#816)", 
       expect(rejectedPage.window.document.querySelector("table")).toBeNull();
     } finally {
       rejectedPage.window.close();
+    }
+  });
+
+  it("renders finite SVG grid ticks for an accepted maximum-magnitude output (#838)", async () => {
+    const fixture = cloneFixture();
+    fixture.samples[0]!.outputProduced = Number.MAX_VALUE;
+    const page = await pageFor(fixture);
+    try {
+      expect(page.window.document.querySelectorAll(".m4-chart")).toHaveLength(5);
+      expect(page.window.document.querySelector("#m4-table table")).not.toBeNull();
+      expect(page.window.document.querySelector(".m4-state")).toBeNull();
+
+      // The old "span * step / 3" overflows at steps 2 and 3, producing
+      // y="-Infinity" despite valid finite artifact input. Exercise the
+      // published script and real SVG, not a copied chart helper.
+      const grid = [...page.window.document.querySelectorAll(".m4-chart line.grid")];
+      expect(grid).toHaveLength(20);
+      for (const line of grid) {
+        for (const attribute of ["x1", "x2", "y1", "y2"]) {
+          expect(Number.isFinite(Number(line.getAttribute(attribute))), attribute).toBe(true);
+        }
+        for (const attribute of ["y1", "y2"]) {
+          const y = Number(line.getAttribute(attribute));
+          expect(y).toBeGreaterThanOrEqual(10);
+          expect(y).toBeLessThanOrEqual(136);
+        }
+      }
+    } finally {
+      page.window.close();
     }
   });
 
