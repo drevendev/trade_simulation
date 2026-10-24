@@ -202,8 +202,11 @@
       </table>`;
   }
 
-  const requested = new URLSearchParams(location.search).get("m4");
-  const artifact = requested && /^[a-z0-9-]+\.json$/.test(requested) ? requested : "m4-preview.json";
+  const selections = new URLSearchParams(location.search).getAll("m4");
+  // The default is valid only when no run is selected: never substitute it for
+  // an invalid or ambiguous deep link, which would misstate observed economics.
+  const artifact = selections.length === 0 ? "m4-preview.json" : selections[0];
+  const validSelection = selections.length <= 1 && /^[a-z0-9-]+\.json$/.test(artifact);
   // A rejected fetch/body promise is a transport failure, not an invalid artifact.
   // Do not mask JSON parsing, schema, or rendering defects as network failures.
   const transportFailure = error => {
@@ -211,8 +214,12 @@
     failure.unavailable = true;
     throw failure;
   };
-  fetch(artifact)
-    .catch(transportFailure)
+  const invalidSelectionError = new Error("invalid M4 preview selection: expected exactly one lowercase .json filename");
+  invalidSelectionError.invalidSelection = true;
+  const loaded = validSelection
+    ? fetch(artifact).catch(transportFailure)
+    : Promise.reject(invalidSelectionError);
+  loaded
     .then(response => {
       if (!response.ok) {
         const error = new Error(`${artifact}: HTTP ${response.status}`);
@@ -239,7 +246,9 @@
           ? "Selected run unavailable. No validated observations were loaded."
           : "Selected run could not be displayed. No validated observations are available.";
       }
-      if (unavailable) {
+      if (error?.invalidSelection === true) {
+        state("M4 preview error", `Invalid M4 selected-run link; no artifact was fetched. ${error.message}.`);
+      } else if (unavailable) {
         state("M4 preview unavailable", `The deterministic preview artifact could not be fetched — ${error.message}. Nothing stale is substituted.`);
       } else {
         state("M4 preview error", `The artifact was fetched but could not be used: ${error.message}.`);
