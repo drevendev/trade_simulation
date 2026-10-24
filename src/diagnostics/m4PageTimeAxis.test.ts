@@ -13,11 +13,16 @@ interface PreviewFixture {
   samples: Array<{
     tick: number;
     outputProduced: number;
+    grossWagesPaid: number;
     employedWorkers: number;
     essentialCoverage: number;
     foodInventory: number;
     installedCapital: number;
   }>;
+  totals: {
+    outputProduced: number;
+    grossWagesPaid: number;
+  };
 }
 
 async function pageFor(artifact: unknown, beforeEval?: (page: JSDOM) => void): Promise<JSDOM> {
@@ -112,6 +117,9 @@ describe("M4 Pages: elapsed tick axis and malformed artifact rejection (#816)", 
   it("renders finite SVG grid ticks for an accepted maximum-magnitude output (#838)", async () => {
     const fixture = cloneFixture();
     fixture.samples[0]!.outputProduced = Number.MAX_VALUE;
+    // This chart stress fixture must also satisfy the whole-run flow bound:
+    // a single observed tick cannot exceed the run's cumulative output.
+    fixture.totals.outputProduced = Number.MAX_VALUE;
     const page = await pageFor(fixture);
     try {
       expect(page.window.document.querySelectorAll(".m4-chart")).toHaveLength(5);
@@ -190,6 +198,44 @@ describe("M4 Pages: elapsed tick axis and malformed artifact rejection (#816)", 
       for (const line of page.window.document.querySelectorAll(".m4-chart line.grid")) {
         expect(Number.isFinite(Number(line.getAttribute("y1")))).toBe(true);
       }
+    } finally {
+      page.window.close();
+    }
+  });
+
+  it("rejects impossible sampled output and payroll above whole-run totals (#842)", async () => {
+    for (const field of ["outputProduced", "grossWagesPaid"] as const) {
+      const fixture = cloneFixture();
+      const observed = fixture.samples[0]![field];
+      expect(observed, field).toBeGreaterThan(0);
+      fixture.totals[field] = observed / 2;
+
+      const page = await pageFor(fixture);
+      try {
+        const error = page.window.document.querySelector(".m4-state")?.textContent ?? "";
+        expect(error, field).toContain("M4 preview error");
+        expect(error, field).toContain(`sample 0.${field} exceeds totals.${field}`);
+        expect(page.window.document.querySelectorAll(".m4-chart")).toHaveLength(0);
+        expect(page.window.document.querySelector("table")).toBeNull();
+      } finally {
+        page.window.close();
+      }
+    }
+  });
+
+  it("accepts positive sampled flows equal to their whole-run totals (#842)", async () => {
+    const fixture = cloneFixture();
+    fixture.samples = fixture.samples.slice(0, 1);
+    fixture.totals.outputProduced = fixture.samples[0]!.outputProduced;
+    fixture.totals.grossWagesPaid = fixture.samples[0]!.grossWagesPaid;
+    expect(fixture.totals.outputProduced).toBeGreaterThan(0);
+    expect(fixture.totals.grossWagesPaid).toBeGreaterThan(0);
+
+    const page = await pageFor(fixture);
+    try {
+      expect(page.window.document.querySelector(".m4-state")).toBeNull();
+      expect(page.window.document.querySelectorAll(".m4-chart")).toHaveLength(5);
+      expect(page.window.document.querySelector("#m4-table table")).not.toBeNull();
     } finally {
       page.window.close();
     }
