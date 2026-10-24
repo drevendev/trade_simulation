@@ -119,4 +119,33 @@ describe("M4 Pages selected-run provenance (#820)", () => {
       page.window.close();
     }
   });
+  it.each([
+    ["empty selection", "?m4="],
+    ["path traversal", "?m4=..%2Fother.json"],
+    ["unsupported filename", "?m4=other_run.json"],
+    ["ambiguous repeated selection", "?m4=m4-preview.json&m4=alternate-run.json"],
+    ["markup in selection", "?m4=%3Cimg%20id%3Dinjected%3E.json"],
+  ])("fails closed for %s rather than silently rendering the default run", async (_case, query) => {
+    const { page, fetched } = await pageFor(
+      published, `https://pages.example.test/index.html${query}`,
+    );
+    try {
+      // An invalid selector must not be silently rewritten to m4-preview.json.
+      expect(fetched).toEqual([]);
+      const document = page.window.document;
+      const summary = document.getElementById("m4-run-summary")?.textContent ?? "";
+      expect(summary).toContain("Selected run could not be displayed.");
+      expect(summary).toContain("No validated observations are available.");
+      expect(summary).not.toContain("Reading");
+      expect(summary).not.toContain("Selected scenario:");
+      expect(document.querySelector(".m4-state h3")?.textContent).toBe("M4 preview error");
+      expect(document.querySelector(".m4-state p")?.textContent).toContain("invalid M4 preview selection");
+      expect(document.querySelectorAll(".m4-chart")).toHaveLength(0);
+      expect(document.querySelector("#m4-table table")).toBeNull();
+      expect(document.getElementById("injected")).toBeNull();
+    } finally {
+      page.window.close();
+    }
+  });
+
 });
