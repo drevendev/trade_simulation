@@ -9,6 +9,7 @@
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { GoodId, MarketId, ProductionUnitId, RegionId, StateId } from "../domain/id";
 import { stableOrderBy } from "../domain/ordering";
+import { actorRefKey } from "../domain/genesisLedger";
 import { addLedgerRecord } from "./ledger";
 import {
   computeLocalClearing,
@@ -163,7 +164,8 @@ function taxFacts(
   return { destinationStateId, assessedTaxRate, collectionEfficiency };
 }
 
-function phase4ProcurementHandler(options: M4ClosedEconomyOptions): PhaseHandler {
+/** Exposed for real-WorldState Phase-4 boundary regressions without running unrelated phases. */
+export function phase4ProcurementHandler(options: M4ClosedEconomyOptions): PhaseHandler {
   return (world, context) => {
     if (context.phase !== 4) return context;
     const region = requireSingleRegion(world);
@@ -183,6 +185,7 @@ function phase4ProcurementHandler(options: M4ClosedEconomyOptions): PhaseHandler
     const allocationIdCounter = { value: 0 };
     const commitmentLedger = new Map<string, number>();
     const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon ?? 1e-9;
+    const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
 
     for (const goodId of goods) {
       const goodBuyers = buyers.filter((intent) => intent.goodId === goodId);
@@ -203,9 +206,11 @@ function phase4ProcurementHandler(options: M4ClosedEconomyOptions): PhaseHandler
         buyerIntents: goodBuyers,
         sellerIntents: goodSellers,
         computeEffectiveDemand: (intent, grossUnitPrice) =>
-          computeEffectiveDemand(intent, grossUnitPrice, quantityEpsilon),
+          computeEffectiveDemand(intent, grossUnitPrice, moneyEpsilon),
         computeSellableQuantity: (intent, committed) => {
-          const key = `${String(intent.actor.type)}:${String(intent.id)}`;
+          // Two offers from one owner/Good/bucket draw on the same physical stock.
+          // The market primitive already visits actor+intent keys in stable order.
+          const key = `${actorRefKey(intent.actor)}|${String(intent.goodId)}|${intent.inventoryBucket ?? "GENERAL"}`;
           const alreadyCommitted = committed.get(key) ?? 0;
           const sellable = computeSellableQuantity(
             intent,
