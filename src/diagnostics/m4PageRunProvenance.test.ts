@@ -109,7 +109,9 @@ describe("M4 Pages selected-run provenance (#820)", () => {
     const { page } = await pageFor(broken);
     try {
       const summary = page.window.document.getElementById("m4-run-summary")?.textContent ?? "";
-      expect(summary).toContain("Reading the selected deterministic artifact");
+      expect(summary).toContain("Selected run could not be displayed.");
+      expect(summary).toContain("No validated observations are available.");
+      expect(summary).not.toContain("Reading");
       expect(summary).not.toContain("Selected scenario:");
       expect(page.window.document.querySelector(".m4-state h3")?.textContent).toBe("M4 preview error");
       expect(page.window.document.querySelector(".m4-chart")).toBeNull();

@@ -13,7 +13,9 @@ interface ResponseStub {
 }
 
 async function pageFor(fetchStub: () => Promise<ResponseStub>): Promise<JSDOM> {
-  const page = new JSDOM('<div id="m4-preview-body">Loading M4...</div>', {
+  const page = new JSDOM(
+    '<p id="m4-run-summary" role="status">Reading the selected deterministic artifact…</p>' +
+    '<div id="m4-preview-body">Loading M4...</div>', {
     url: "https://pages.example.test/index.html",
     runScripts: "outside-only",
   });
@@ -26,6 +28,12 @@ async function pageFor(fetchStub: () => Promise<ResponseStub>): Promise<JSDOM> {
 function assertFailedWithoutPartialRender(page: JSDOM, title: string, detail: string): void {
   const doc = page.window.document;
   expect(doc.querySelector(".m4-state h3")?.textContent).toBe(title);
+  const summary = doc.getElementById("m4-run-summary")?.textContent ?? "";
+  expect(summary).toContain(title === "M4 preview unavailable"
+    ? "Selected run unavailable." : "Selected run could not be displayed.");
+  expect(summary).toContain("No validated observations");
+  expect(summary).not.toContain("Reading");
+  expect(summary).not.toContain("Selected scenario:");
   expect(doc.querySelector(".m4-state p")?.textContent).toContain(detail);
   expect(doc.querySelectorAll(".m4-chart")).toHaveLength(0);
   expect(doc.querySelector("table")).toBeNull();
@@ -89,6 +97,9 @@ describe("M4 Pages: transport failures are not malformed preview artifacts (#818
     }));
     try {
       expect(page.window.document.querySelector(".m4-state")).toBeNull();
+      expect(page.window.document.getElementById("m4-run-summary")?.textContent).toContain(
+        "Selected scenario: baseline-multistate-v1.",
+      );
       expect(page.window.document.querySelectorAll(".m4-chart")).toHaveLength(5);
       expect(page.window.document.querySelector("#m4-table table")).not.toBeNull();
     } finally {
