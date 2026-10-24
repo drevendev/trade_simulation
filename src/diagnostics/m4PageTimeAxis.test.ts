@@ -72,6 +72,35 @@ describe("M4 Pages: elapsed tick axis and malformed artifact rejection (#816)", 
     }
   });
 
+  it("rejects a run length above MAX_SAFE_INTEGER while keeping the exact boundary valid (#836)", async () => {
+    const largestExact = cloneFixture();
+    largestExact.scenario.ticksExecuted = Number.MAX_SAFE_INTEGER;
+    const validPage = await pageFor(largestExact);
+    try {
+      expect(validPage.window.document.querySelectorAll(".m4-chart")).toHaveLength(5);
+      expect(validPage.window.document.querySelector("#m4-table table")).not.toBeNull();
+      expect(validPage.window.document.querySelector(".m4-state")).toBeNull();
+    } finally {
+      validPage.window.close();
+    }
+
+    // Number.isInteger(2 ** 53) is true, but adjacent run lengths are no longer
+    // distinguishable. A provenance display must not claim that count as exact.
+    const unsafe = cloneFixture();
+    unsafe.scenario.ticksExecuted = Number.MAX_SAFE_INTEGER + 1;
+    const rejectedPage = await pageFor(unsafe);
+    try {
+      const error = rejectedPage.window.document.querySelector(".m4-state")?.textContent ?? "";
+      expect(error).toContain("M4 preview error");
+      expect(error).toContain("scenario.ticksExecuted");
+      expect(error).toContain("safe integer");
+      expect(rejectedPage.window.document.querySelectorAll(".m4-chart")).toHaveLength(0);
+      expect(rejectedPage.window.document.querySelector("table")).toBeNull();
+    } finally {
+      rejectedPage.window.close();
+    }
+  });
+
   it("fails closed on duplicate, reversed, fractional, negative or out-of-run ticks", async () => {
     const cases: Array<[string, (fixture: PreviewFixture) => void]> = [
       ["duplicate", fixture => { fixture.samples[4]!.tick = fixture.samples[3]!.tick; }],
