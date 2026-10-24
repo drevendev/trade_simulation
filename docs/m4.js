@@ -67,9 +67,15 @@
     const pad = { top: 10, right: 10, bottom: 24, left: 48 };
     const values = samples.map(sample => Number(sample[key]));
     const ticks = samples.map(sample => Number(sample.tick));
-    let minimum = Math.min(0, ...values);
-    let maximum = Math.max(0, ...values);
-    if (minimum === maximum) maximum = minimum + 1;
+    // validate() guarantees finite, non-negative values: the chart starts at
+    // zero. Avoid spreading an arbitrarily long run into Math.max/Math.min,
+    // which can exceed the browser's function-argument limit.
+    const minimum = 0;
+    let maximum = 0;
+    for (const value of values) {
+      if (value > maximum) maximum = value;
+    }
+    if (maximum === 0) maximum = 1;
     const span = maximum - minimum;
     // Sample cadence can have a short tail (M4: 0, 5, ..., 55, 59).
     // Equal index spacing would misrepresent that final four-tick interval.
