@@ -230,7 +230,16 @@
       render(preview);
     })
     .catch(error => {
-      if (error.unavailable === true) {
+      const unavailable = error?.unavailable === true;
+      // The separate live-region summary must not say "Reading…" after the body
+      // has reached a terminal state (or retain an earlier success after render fails).
+      const runSummary = document.getElementById("m4-run-summary");
+      if (runSummary) {
+        runSummary.textContent = unavailable
+          ? "Selected run unavailable. No validated observations were loaded."
+          : "Selected run could not be displayed. No validated observations are available.";
+      }
+      if (unavailable) {
         state("M4 preview unavailable", `The deterministic preview artifact could not be fetched — ${error.message}. Nothing stale is substituted.`);
       } else {
         state("M4 preview error", `The artifact was fetched but could not be used: ${error.message}.`);
