@@ -89,7 +89,9 @@
     wrap.appendChild(svg);
 
     for (let step = 0; step <= 3; step++) {
-      const value = minimum + span * step / 3;
+      // Multiply by the normalized fraction first: span * step can overflow
+      // even when both endpoints and the intended grid value are finite.
+      const value = minimum + span * (step / 3);
       const yy = y(value);
       svgElement("line", { class: "grid", x1: pad.left, x2: width - pad.right, y1: yy, y2: yy }, svg);
       const label = svgElement("text", { class: "label", x: pad.left - 5, y: yy + 3, "text-anchor": "end" }, svg);
