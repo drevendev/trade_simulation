@@ -1,7 +1,9 @@
 """Print bounded npm-audit advisory evidence without disguising outstanding risk.
 
-Exit 0 for a valid audit report, including findings (triage is not remediation).
-Exit nonzero when the audit itself was unavailable or returned invalid JSON.
+Exit 0 for a valid audit report with no HIGH/CRITICAL non-dev or unknown-scope findings.
+Existing dev-only findings are reported but not risk-accepted or remediated here.
+Exit 2 if audit evidence is unavailable; exit 3 if a HIGH/CRITICAL finding
+cannot be proven dev-only from the lockfile.
 """
 
 from __future__ import annotations
@@ -73,6 +75,22 @@ def summarize(report: dict, lockfile: dict) -> str:
     return "\n".join(lines)
 
 
+
+def high_findings_not_proven_dev_only(report: dict, lockfile: dict) -> list[str]:
+    """Gate newly exposed HIGH/CRITICAL dependencies; uncertainty fails closed.
+
+    A dev flag is lockfile classification only, not proof a package is safe.
+    Existing dev-only advisories remain visible in the diagnostic report.
+    """
+    findings = report["vulnerabilities"]
+    packages = lockfile["packages"]
+    return sorted(
+        package for package, detail in findings.items()
+        if detail.get("severity") in ("high", "critical")
+        and _lock_scope(detail.get("nodes"), packages) != "dev-only"
+    )
+
+
 def run_audit(runner=subprocess.run) -> dict:
     result = runner(["npm", "audit", "--json"], capture_output=True, text=True,
                     timeout=90, check=False)
@@ -97,6 +115,11 @@ def main(argv: list[str] | None = None) -> int:
         report = (json.loads(args.report_json.read_text(encoding="utf-8"))
                   if args.report_json else run_audit())
         print(summarize(report, lock))
+        blocked = high_findings_not_proven_dev_only(report, lock)
+        if blocked:
+            print("::error::HIGH/CRITICAL npm audit findings not proven dev-only: "
+                  + ", ".join(_safe(name) for name in blocked[:20]), file=sys.stderr)
+            return 3
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         print(f"::error::npm audit evidence unavailable: {_safe(error)}", file=sys.stderr)
         return 2

@@ -73,5 +73,55 @@ class AuditEvidenceTests(unittest.TestCase):
         self.assertNotIn("\n::error::spoofed", output)
 
 
+    def test_blocks_high_and_critical_without_proven_dev_only_scope(self):
+        path = "node_modules/sample-package"
+        report = self.report()
+        for scope in ({"packages": {path: {"version": "1.0.0"}}},
+                      {"packages": {}},
+                      {"packages": {path: {"dev": False}}}):
+            with self.subTest(scope=scope):
+                self.assertEqual(audit.high_findings_not_proven_dev_only(report, scope),
+                                 ["sample-package"])
+        report["vulnerabilities"]["sample-package"]["severity"] = "critical"
+        self.assertEqual(audit.high_findings_not_proven_dev_only(report, {"packages": {}}),
+                         ["sample-package"])
+
+    def test_dev_only_high_remains_reported_but_not_blocked(self):
+        lock = {"packages": {"node_modules/sample-package": {"dev": True}}}
+        self.assertEqual(audit.high_findings_not_proven_dev_only(self.report(), lock), [])
+        self.assertIn("HIGH sample-package", audit.summarize(self.report(), lock))
+
+    def test_moderate_non_dev_does_not_trigger_high_severity_gate(self):
+        report = self.report()
+        report["vulnerabilities"]["sample-package"]["severity"] = "moderate"
+        self.assertEqual(audit.high_findings_not_proven_dev_only(report, {"packages": {}}), [])
+
+    def test_cli_exits_three_on_high_nondev_with_visible_advisory(self):
+        import contextlib
+        import io
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            folder = pathlib.Path(folder)
+            report_file = folder / "audit.json"
+            lock_file = folder / "package-lock.json"
+            report_file.write_text(json.dumps(self.report()), encoding="utf-8")
+            lock_file.write_text(json.dumps({"packages": {
+                "node_modules/sample-package": {"dev": False}}}), encoding="utf-8")
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = audit.main(["--report-json", str(report_file), "--lockfile", str(lock_file)])
+            self.assertEqual(code, 3)
+            self.assertIn("HIGH sample-package [non-dev]", out.getvalue())
+            self.assertIn("::error::HIGH/CRITICAL", err.getvalue())
+            lock_file.write_text(json.dumps({"packages": {
+                "node_modules/sample-package": {"dev": True}}}), encoding="utf-8")
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = audit.main(["--report-json", str(report_file), "--lockfile", str(lock_file)])
+            self.assertEqual(code, 0)
+            self.assertIn("HIGH sample-package [dev-only]", out.getvalue())
+            self.assertEqual(err.getvalue(), "")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -50,10 +50,10 @@ jobs:
           node-version: 'lts/*'
           cache: npm
       - run: npm ci
-      # Diagnostics only: these known npm findings are tracked in Issue #829.
-      # Report actionable advisory IDs/fixes; never claim that a dev-only node is safe.
-      # A valid audit with findings is recorded; a broken/unavailable audit fails visibly.
-      - name: Report npm advisory detail (#829)
+      # Report all advisories (#829), including known dev-only debt. Reject HIGH/CRITICAL
+      # findings whose lockfile nodes are non-dev or unknown, as well as audit failures.
+      # Lockfile dev-only classification does not establish exploitability or acceptance.
+      - name: Report and guard npm advisory detail (#829)
         run: python3 scripts/npm_audit_report.py
       - run: npm run typecheck
       - run: npm test
