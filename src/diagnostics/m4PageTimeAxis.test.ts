@@ -117,6 +117,9 @@ describe("M4 Pages: elapsed tick axis and malformed artifact rejection (#816)", 
   it("renders finite SVG grid ticks for an accepted maximum-magnitude output (#838)", async () => {
     const fixture = cloneFixture();
     fixture.samples[0]!.outputProduced = Number.MAX_VALUE;
+    // This chart stress fixture must also satisfy the whole-run flow bound:
+    // a single observed tick cannot exceed the run's cumulative output.
+    fixture.totals.outputProduced = Number.MAX_VALUE;
     const page = await pageFor(fixture);
     try {
       expect(page.window.document.querySelectorAll(".m4-chart")).toHaveLength(5);
