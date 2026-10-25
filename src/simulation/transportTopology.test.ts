@@ -38,9 +38,9 @@ describe("M5 sparse directed transport topology (#669)", () => {
       ["region:a3-forest", "region:a2-farm"],
     ]);
     expect(routes).toHaveLength(3);
-    expect(routes).not.toContainEqual(expect.arrayContaining([
-      expect.anything(), "region:a2-farm", "region:a1-capital",
-    ]));
+    expect(routes.some(([, from, to]) =>
+      from === "region:a2-farm" && to === "region:a1-capital",
+    )).toBe(false);
 
     // Reverse is not a duplicate forward edge even though both share seed provenance.
     const [, original, reverse] = [...world.transportLinks.values()];
