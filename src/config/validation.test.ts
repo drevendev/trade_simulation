@@ -470,6 +470,55 @@ describe("validateScenarioContent", () => {
     expect(() => validateScenarioContent(scenario)).toThrow(/condition.*\[0,1\]/);
   });
 
+
+  // M5 / Issue #669: seed validation is a fail-fast bound, not trade settlement.
+  function m5LinkScenario(overrides: Partial<TransportLinkSeed> = {}): ScenarioDefinition {
+    const region = (key: string): RegionSeed => ({
+      key, name: key, controllerStateKey: null, settlementCurrencyKey: "currency-1",
+      settlementLevel: 1, infrastructure: {}, climateHabitabilityInputs: {}, deposits: [],
+    });
+    return createScenario({
+      geography: [region("origin"), region("destination")],
+      currencies: [{ key: "currency-1", code: "CUR", issuerAuthorityKey: null }],
+      transportLinks: [{
+        key: "road", fromRegionKey: "origin", toRegionKey: "destination",
+        distance: 10, baseCapacity: 20, condition: 0.8, baseTransportCost: 0.5,
+        ...overrides,
+      }],
+    });
+  }
+
+  it("accepts valid zero and positive link fees, transit ticks and optional loss", () => {
+    expect(() => validateScenarioContent(m5LinkScenario({
+      baseTransportCost: 0, transitTicks: 0, routinePhysicalLossRate: 0,
+    }))).not.toThrow();
+    expect(() => validateScenarioContent(m5LinkScenario({
+      baseTransportCost: 1.25, transitTicks: 3, routinePhysicalLossRate: 0.25,
+    }))).not.toThrow();
+    expect(() => validateScenarioContent(m5LinkScenario())).not.toThrow();
+  });
+
+  it("rejects negative/non-finite destination-currency transport fees", () => {
+    for (const baseTransportCost of [-1, Number.NaN, Infinity, -Infinity]) {
+      expect(() => validateScenarioContent(m5LinkScenario({ baseTransportCost })))
+        .toThrow(/baseTransportCost must be a non-negative finite number/);
+    }
+  });
+
+  it("rejects fractional, negative and unsafe transport arrival ticks", () => {
+    for (const transitTicks of [-1, 0.5, 1.1, Number.MAX_SAFE_INTEGER + 1, Infinity, Number.NaN]) {
+      expect(() => validateScenarioContent(m5LinkScenario({ transitTicks })))
+        .toThrow(/transitTicks must be a non-negative safe integer/);
+    }
+  });
+
+  it("rejects invalid transport physical-loss fractions", () => {
+    for (const routinePhysicalLossRate of [-0.01, 1, 1.01, Infinity, Number.NaN]) {
+      expect(() => validateScenarioContent(m5LinkScenario({ routinePhysicalLossRate })))
+        .toThrow(/routinePhysicalLossRate must be finite/);
+    }
+  });
+
   it("rejects a cohort with invalid regionKey", () => {
     const scenario = createScenario({
       geography: [
