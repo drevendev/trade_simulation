@@ -29,6 +29,12 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '9.0.x'
+          # CI has a .NET host already; avoid downloading an unrelated LTS
+          # runtime before the requested SDK (HTTP 409 on 2026-10-25).
+          skip-lts-prepass: true
+          # Prefer a compatible runner-cached SDK instead of resolving and
+          # downloading the latest patch on every job. Missing SDK still fails.
+          check-latest: false
       - run: dotnet restore
       - run: dotnet build --configuration Release --no-restore
       - run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
