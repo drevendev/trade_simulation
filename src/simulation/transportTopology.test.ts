@@ -11,8 +11,8 @@ function sparseScenario(): ScenarioDefinition {
   return {
     ...baselineScenario,
     transportLinks: [
-      { ...baselineScenario.transportLinks[0], bidirectional: false },
-      { ...baselineScenario.transportLinks[1], bidirectional: true },
+      { ...baselineScenario.transportLinks[0]!, bidirectional: false },
+      { ...baselineScenario.transportLinks[1]!, bidirectional: true },
     ],
   };
 }
