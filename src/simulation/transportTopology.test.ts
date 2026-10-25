@@ -128,4 +128,60 @@ describe("M5 sparse directed transport topology (#669)", () => {
       ...first.outgoingTransportLinkIdsByRegion!,
     ]);
   });
+  it("resolves a declared State fee receiver on both directions without assuming destination ownership", () => {
+    const interstate = baselineScenario.transportLinks.find((link) => link.key === "link:a4-b4")!;
+    const world = genesis({ ...baselineScenario, transportLinks: [interstate] });
+    const receiverId = [...world.states.values()].find((state) => state.seed.key === "state:beta")!.stateId;
+    const alphaRegion = [...world.regions.values()].find((region) => region.seed.key === "region:a4-border")!;
+    const [forward, reverse] = [...world.transportLinks.values()];
+
+    expect(forward!.feeReceiver).toEqual({ type: "STATE", stateId: receiverId });
+    expect(reverse!.feeReceiver).toEqual(forward!.feeReceiver);
+    expect(forward!.seed.feeReceiverStateKey).toBe("state:beta");
+    expect(reverse!.seed.feeReceiverStateKey).toBe("state:beta");
+    // Reverse direction is invoiced in Alpha currency even though its configured
+    // payee is Beta: settlement must not silently convert the receiver's cash.
+    expect(reverse!.toRegionId).toBe(alphaRegion.regionId);
+    expect(world.states.get(receiverId)!.effectiveCurrencyId).not.toBe(alphaRegion.settlementCurrencyId);
+  });
+
+  it("preserves null and absent receiver declarations without inventing a fee beneficiary", () => {
+    const link = baselineScenario.transportLinks[0]!;
+    const withoutReceiver = { ...link };
+    delete withoutReceiver.feeReceiverStateKey;
+    for (const candidate of [{ ...link, feeReceiverStateKey: null }, withoutReceiver]) {
+      const world = genesis({ ...baselineScenario, transportLinks: [candidate] });
+      expect([...world.transportLinks.values()].map((route) => route.feeReceiver))
+        .toEqual([null, null]);
+      expect([...world.transportLinks.values()].map((route) => route.seed.feeReceiverStateKey))
+        .toEqual([candidate.feeReceiverStateKey, candidate.feeReceiverStateKey]);
+    }
+  });
+
+  it("fails genesis for unknown, blank or non-State fee receivers", () => {
+    const original = baselineScenario.transportLinks[0]!;
+    for (const key of ["state:does-not-exist", "clan:alpha", "", "  "]) {
+      const scenario = {
+        ...baselineScenario,
+        transportLinks: [{ ...original, feeReceiverStateKey: key }],
+      };
+      expect(() => genesis(scenario), `feeReceiverStateKey=${JSON.stringify(key)}`)
+        .toThrow("feeReceiverStateKey");
+    }
+  });
+
+  it("keeps fee receiver IDs and link ordering stable under State/Region/seed reorder", () => {
+    const chosen = baselineScenario.transportLinks.filter((link) => link.feeReceiverStateKey !== null);
+    const first = genesis({ ...baselineScenario, transportLinks: chosen });
+    const permuted = genesis({
+      ...baselineScenario,
+      states: [...baselineScenario.states].reverse(),
+      geography: [...baselineScenario.geography].reverse(),
+      transportLinks: [...chosen].reverse(),
+    });
+    const signature = (world: WorldState) => [...world.transportLinks.values()]
+      .map((link) => [link.linkId, link.fromRegionId, link.toRegionId, link.feeReceiver]);
+    expect(signature(permuted)).toEqual(signature(first));
+  });
+
 });
