@@ -830,8 +830,8 @@ describe("validateDefinitionPack", () => {
       "good-2": { ...goodDefinition("good-2"), cargoWeightPerUnit: 32 },
     } as Record<GoodId, GoodDefinition>;
     expect(() => validateDefinitionPack({ ...pack, goods })).not.toThrow();
-    expect(goods["good-1" as GoodId].cargoWeightPerUnit).toBe(0.25);
-    expect(goods["good-2" as GoodId].cargoWeightPerUnit).toBe(32);
+    expect(goods["good-1" as GoodId]!.cargoWeightPerUnit).toBe(0.25);
+    expect(goods["good-2" as GoodId]!.cargoWeightPerUnit).toBe(32);
   });
 
   // REQ-CONFIG-005, Issue #509: `outputGoodId` was the recipe's one scalar Good reference
