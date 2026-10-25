@@ -356,15 +356,25 @@ function validateTransportLinkSeed(link: TransportLinkSeed, regionKeySet: Set<st
     );
   }
 
-  if (!isFiniteCanonicalNumber(link.baseTransportCost)) {
+  // Negative destination-currency fees would credit the payer and violate M5 fee accounting.
+  if (!isFiniteCanonicalNumber(link.baseTransportCost) || link.baseTransportCost < 0) {
     throw new Error(
-      `TransportLinkSeed "${link.key}": baseTransportCost must be a finite number, got ${describeValue(link.baseTransportCost)}`,
+      `TransportLinkSeed "${link.key}": baseTransportCost must be a non-negative finite number, got ${describeValue(link.baseTransportCost)}`,
     );
   }
 
-  if (link.transitTicks !== undefined && (!isFiniteCanonicalNumber(link.transitTicks) || link.transitTicks < 0)) {
+  // Travel time is counted in discrete arrival ticks; do not silently round it.
+  if (link.transitTicks !== undefined && (!Number.isSafeInteger(link.transitTicks) || link.transitTicks < 0)) {
     throw new Error(
-      `TransportLinkSeed "${link.key}": transitTicks must be a non-negative finite number when present, got ${describeValue(link.transitTicks)}`,
+      `TransportLinkSeed "${link.key}": transitTicks must be a non-negative safe integer when present, got ${describeValue(link.transitTicks)}`,
+    );
+  }
+
+  if (link.routinePhysicalLossRate !== undefined &&
+      (!isFiniteCanonicalNumber(link.routinePhysicalLossRate) ||
+       link.routinePhysicalLossRate < 0 || link.routinePhysicalLossRate >= 1)) {
+    throw new Error(
+      `TransportLinkSeed "${link.key}": routinePhysicalLossRate must be finite in [0,1) when present, got ${describeValue(link.routinePhysicalLossRate)}`,
     );
   }
 }
