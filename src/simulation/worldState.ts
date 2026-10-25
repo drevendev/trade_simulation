@@ -28,6 +28,7 @@ import {
   addGenesisRecord,
   type WorldGenesisLedger,
   type GenesisRecord,
+  type ActorRef,
 } from "../domain/genesisLedger";
 import { reconcileGenesisStocks } from "./genesisReconciliation";
 import { seedLiveActorStocks } from "./liveActorStock";
@@ -251,6 +252,13 @@ export interface TransportLinkState {
   readonly toRegionId: RegionId;
   /** Resolved M5 delivery duration. Canonical genesis always sets it; old test fixtures may omit it. */
   readonly travelTicks?: number;
+  /**
+   * Explicitly configured fee recipient, resolved to a typed live-wallet owner at genesis.
+   * null means no recipient has been configured; future trade settlement must fail closed,
+   * never burn a positive fee or invent a destination-state recipient.
+   * Optional only for older/manual TransportLinkState fixtures.
+   */
+  readonly feeReceiver?: ActorRef | null;
 }
 
 /**
@@ -951,6 +959,21 @@ function expandTransportLink(seed: TransportLinkSeed, idMap: IdMaps, defaultTran
     throw new Error(`TransportLinkSeed "${seed.key}": travelTicks must be a non-negative safe integer`);
   }
 
+  const receiverKey = seed.feeReceiverStateKey;
+  if (receiverKey !== undefined && receiverKey !== null &&
+      (typeof receiverKey !== "string" || receiverKey.trim().length === 0)) {
+    throw new Error(`TransportLinkSeed "${seed.key}": feeReceiverStateKey must be a nonempty State key or null`);
+  }
+  const receiverStateId = receiverKey == null ? null : idMap.stateIds.get(receiverKey);
+  if (receiverKey != null && !receiverStateId) {
+    throw new Error(`TransportLinkSeed "${seed.key}": feeReceiverStateKey "${receiverKey}" references missing State`);
+  }
+  // A bidirectional seed names the SAME configured transport owner on both
+  // directed edges; it does not implicitly switch to the arrival jurisdiction.
+  const feeReceiver: ActorRef | null = receiverStateId === null
+    ? null
+    : { type: "STATE", stateId: receiverStateId! };
+
   const fromId = idMap.regionIds.get(seed.fromRegionKey);
   const toId = idMap.regionIds.get(seed.toRegionKey);
   if (!fromId || !toId) {
@@ -963,6 +986,7 @@ function expandTransportLink(seed: TransportLinkSeed, idMap: IdMaps, defaultTran
     fromRegionId: fromId,
     toRegionId: toId,
     travelTicks,
+    feeReceiver,
   };
 
   const links = [forward];
@@ -973,6 +997,7 @@ function expandTransportLink(seed: TransportLinkSeed, idMap: IdMaps, defaultTran
       fromRegionId: toId,
       toRegionId: fromId,
       travelTicks,
+      feeReceiver,
     };
     links.push(reverse);
   }
