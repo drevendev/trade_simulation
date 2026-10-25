@@ -66,6 +66,51 @@ describe("M5 sparse directed transport topology (#669)", () => {
       .toBe(world.transportLinks.size);
   });
 
+  it("normalizes explicit and inherited transit durations on every directed edge", () => {
+    const scenario = sparseScenario();
+    const configured = createDefaultSimulationConfig();
+    const withTravelTicks = {
+      ...scenario,
+      transportLinks: [
+        { ...scenario.transportLinks[0]!, transitTicks: 3 },
+        { ...scenario.transportLinks[1]!, transitTicks: undefined },
+      ],
+    };
+    const config = {
+      ...configured,
+      trade: { ...configured.trade, defaultTransitTicksPerLink: 4 },
+    };
+    const world = buildInitialWorld(withTravelTicks, baselineDefinitionPack, config, 7);
+    expect([...world.transportLinks.values()].map((link) => link.travelTicks)).toEqual([3, 4, 4]);
+    expect([...world.transportLinks.values()].map((link) => link.seed.transitTicks))
+      .toEqual([3, undefined, undefined]);
+
+    const reordered = buildInitialWorld({
+      ...withTravelTicks,
+      transportLinks: [...withTravelTicks.transportLinks].reverse(),
+      geography: [...withTravelTicks.geography].reverse(),
+    }, baselineDefinitionPack, config, 7);
+    expect([...reordered.transportLinks.values()].map((link) => [link.linkId, link.travelTicks]))
+      .toEqual([...world.transportLinks.values()].map((link) => [link.linkId, link.travelTicks]));
+  });
+
+  it("keeps zero travel ticks but rejects fractional, negative and non-finite durations at genesis", () => {
+    const scenario = sparseScenario();
+    const withDuration = (duration: number): ScenarioDefinition => ({
+      ...scenario,
+      transportLinks: [
+        { ...scenario.transportLinks[0]!, transitTicks: duration },
+        scenario.transportLinks[1]!,
+      ],
+    });
+    const zeroDurationWorld = genesis(withDuration(0));
+    expect([...zeroDurationWorld.transportLinks.values()][0]?.travelTicks).toBe(0);
+    for (const invalid of [-1, 1.5, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => genesis(withDuration(invalid)), `transitTicks=${invalid}`)
+        .toThrow('TransportLinkSeed');
+    }
+  });
+
   it("keeps directed IDs, routes and index ordering stable under seed and region insertion permutations", () => {
     const scenario = sparseScenario();
     const first = genesis(scenario);
