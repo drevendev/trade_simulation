@@ -26,9 +26,46 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+      # Current GitHub-hosted Ubuntu runner images ship a .NET 9 SDK.
+      # Prefer that SDK rather than failing an unrelated LTS runtime download.
+      # A missing SDK still installs through the official action and fails closed.
+      - name: Check hosted .NET 9 SDK
+        id: hosted_dotnet
+        shell: bash
+        run: |
+          if command -v dotnet >/dev/null 2>&1; then
+            dotnet --list-sdks
+            if dotnet --list-sdks | grep -Eq '^9[.]0[.]'; then
+              echo "available=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "available=false" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-dotnet@v6
+        if: steps.hosted_dotnet.outputs.available != 'true'
         with:
           dotnet-version: '9.0.x'
+      - name: Require .NET 9 SDK before retained legacy gates
+        shell: bash
+        run: |
+          dotnet --list-sdks
+          dotnet --list-sdks | grep -Eq '^9[.]0[.]' || {
+            echo "::error::Retained legacy CI requires a .NET 9 SDK"
+            exit 1
+          }
+      # Pin CLI selection: SDK presence alone would otherwise select a newer
+      # host SDK (e.g. .NET 10) even when this project targets net9.0.
+      # Keep this global.json local to the CI job, not a repository-wide policy.
+      - name: Select and verify .NET 9 SDK for retained legacy gates
+        shell: bash
+        run: |
+          printf '%s\n' '{"sdk":{"version":"9.0.100","rollForward":"latestFeature","allowPrerelease":false}}' > global.json
+          selected="$(dotnet --version)"
+          printf 'Selected .NET SDK: %s\n' "$selected"
+          if [[ ! "$selected" =~ ^9[.]0[.][0-9]+$ ]]; then
+            echo "::error::Legacy CI must execute with a .NET 9 SDK; got '$selected'"
+            exit 1
+          fi
       - run: dotnet restore
       - run: dotnet build --configuration Release --no-restore
       - run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
