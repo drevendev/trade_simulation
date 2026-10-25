@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildInitialWorld, type WorldState } from "./worldState";
-import { createIdAllocator } from "../domain/id";
+import { createIdAllocator, type GoodId } from "../domain/id";
 import type { DefinitionPack } from "../config/definitionPack";
 import type { RegionSeed, ScenarioDefinition } from "../config/scenarioDefinition";
 import type { SimulationConfig } from "../config/simulationConfig";
@@ -116,6 +116,25 @@ describe("buildInitialWorld", () => {
     expect(worldState.scenarioId).toBe("test-minimal");
     expect(worldState.seed).toBe(42);
     expect(worldState.configVersion).toBe("1.0.0");
+  });
+
+  // M5 Handoff/04 §13: fail during genesis before any shipment preflight can
+  // operate on missing or zero-weight GoodDefinitions.
+  it.each([
+    ["missing", undefined],
+    ["zero", 0],
+  ])("rejects %s cargo-weight definitions during buildInitialWorld", (_name, weight) => {
+    const food = baselineDefinitionPack.goods["good:food" as GoodId]!;
+    const pack: DefinitionPack = {
+      ...baselineDefinitionPack,
+      goods: {
+        ...baselineDefinitionPack.goods,
+        ["good:food"]: { ...food, cargoWeightPerUnit: weight as number },
+      } as DefinitionPack["goods"],
+    };
+    expect(() => buildInitialWorld(minimalScenario(), pack, minimalConfig(), 42)).toThrow(
+      /GoodDefinition "good:food": cargoWeightPerUnit must be a strictly positive finite number/,
+    );
   });
 
   it("returns a frozen WorldState object", () => {
