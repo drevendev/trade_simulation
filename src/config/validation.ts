@@ -140,6 +140,17 @@ export function validateScenarioContent(scenario: ScenarioDefinition): void {
 export function validateDefinitionPack(definitionPack: DefinitionPack): void {
   const declaredGoodKeys = new Set(Object.keys(definitionPack.goods ?? {}));
 
+  // Handoff/04 §13: Phase-7 capacity is quantity × GoodDefinition weight.
+  // A missing/zero/non-finite weight must fail at genesis rather than silently
+  // manufacturing free capacity or an unbounded trade quantity. No fallback.
+  for (const [goodKey, good] of Object.entries(definitionPack.goods ?? {})) {
+    if (!isFiniteCanonicalNumber(good.cargoWeightPerUnit) || good.cargoWeightPerUnit <= 0) {
+      throw new Error(
+        `GoodDefinition "${goodKey}": cargoWeightPerUnit must be a strictly positive finite number, got ${describeValue(good.cargoWeightPerUnit)}`,
+      );
+    }
+  }
+
   validateNeedCategories(definitionPack.needCategories, declaredGoodKeys);
 
   Object.entries(definitionPack.recipes ?? {}).forEach(([recipeId, recipe]) => {
