@@ -156,8 +156,13 @@ describe("M5 shared directed-link cargo reservation (#852)", () => {
       { ...good, fromRegionId: reverse.fromRegionId },
       { ...good, linkId: "link:does-not-exist" as TransportLinkId },
     ];
-    for (const value of bad) {
-      expect(() => preflight([good, value])).toThrow();
+    for (const [index, value] of bad.entries()) {
+      // A duplicate planId would also throw, masking the intended negative
+      // controls. Give each malformed candidate a distinct ID except blank ID.
+      const invalid = value.planId.trim().length === 0
+        ? value
+        : { ...value, planId: `invalid-${index}` };
+      expect(() => preflight([good, invalid])).toThrow();
     }
     expect(() => preflight([good, { ...good, planId: good.planId }])).toThrow(/planId/);
     expect(() => preflight([good], [linkWithCapacity(forward)], [forward.linkId], new Map()))
