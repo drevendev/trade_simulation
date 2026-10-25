@@ -69,11 +69,15 @@ describe("M5 sparse directed transport topology (#669)", () => {
   it("normalizes explicit and inherited transit durations on every directed edge", () => {
     const scenario = sparseScenario();
     const configured = createDefaultSimulationConfig();
+    // exactOptionalPropertyTypes requires a truly absent seed override, not an
+    // explicitly undefined property. This is the fallback we want to verify.
+    const fallbackLink = { ...scenario.transportLinks[1]! };
+    delete fallbackLink.transitTicks;
     const withTravelTicks = {
       ...scenario,
       transportLinks: [
         { ...scenario.transportLinks[0]!, transitTicks: 3 },
-        { ...scenario.transportLinks[1]!, transitTicks: undefined },
+        fallbackLink,
       ],
     };
     const config = {
