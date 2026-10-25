@@ -53,6 +53,19 @@ jobs:
             echo "::error::Retained legacy CI requires a .NET 9 SDK"
             exit 1
           }
+      # Pin CLI selection: SDK presence alone would otherwise select a newer
+      # host SDK (e.g. .NET 10) even when this project targets net9.0.
+      # Keep this global.json local to the CI job, not a repository-wide policy.
+      - name: Select and verify .NET 9 SDK for retained legacy gates
+        shell: bash
+        run: |
+          printf '%s\n' '{"sdk":{"version":"9.0.100","rollForward":"latestFeature","allowPrerelease":false}}' > global.json
+          selected="$(dotnet --version)"
+          printf 'Selected .NET SDK: %s\n' "$selected"
+          if [[ ! "$selected" =~ ^9[.]0[.][0-9]+$ ]]; then
+            echo "::error::Legacy CI must execute with a .NET 9 SDK; got '$selected'"
+            exit 1
+          fi
       - run: dotnet restore
       - run: dotnet build --configuration Release --no-restore
       - run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
