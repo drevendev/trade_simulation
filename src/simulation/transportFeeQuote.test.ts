@@ -80,6 +80,25 @@ describe("M5 destination-currency transport fee quote (#669)", () => {
     )).toMatchObject({ amount: 0, receiver: null });
   });
 
+  it("fails closed when positive cargo weight rounds capacity use to zero (SLP-850-01)", () => {
+    const [forward] = routes();
+    const validLink = linkWith(forward!);
+    const noReceiver = { ...validLink, feeReceiver: null };
+    // The quantity exceeds the ordinary quantity epsilon, but multiplying by
+    // the smallest positive binary64 weight silently underflows to zero.
+    expect(0.1 * Number.MIN_VALUE).toBe(0);
+    for (const link of [validLink, noReceiver]) {
+      expect(() => quoteTransportFee(world, link, 0.1, Number.MIN_VALUE, config, costPolicy))
+        .toThrow(/not representable/);
+    }
+    // Neither zero quantity nor a genuinely free transport policy is an underflow.
+    expect(quoteTransportFee(world, noReceiver, 0, Number.MIN_VALUE, config, costPolicy))
+      .toMatchObject({ cargoCapacityUsed: 0, amount: 0, receiver: null });
+    expect(quoteTransportFee(
+      world, linkWith(noReceiver, { baseTransportCost: 0 }), 1, 1, config, costPolicy,
+    )).toMatchObject({ cargoCapacityUsed: 1, amount: 0, receiver: null });
+  });
+
   it("rejects invalid arithmetic, unrepresentable fees, and incomplete cost policies", () => {
     const [forward] = routes();
     const link = linkWith(forward!);
