@@ -44,7 +44,7 @@ import type {
   TransportLinkSeed,
 } from "../config/scenarioDefinition";
 import type { DefinitionPack } from "../config/definitionPack";
-import type { SimulationConfig } from "../config/simulationConfig";
+import { validateTradeConfig, type SimulationConfig } from "../config/simulationConfig";
 import { validateDefinitionPack, validateLaborConfig, validatePopulationConfig, validateProductionConfig } from "../config/validation";
 import { validateM4ProductionPolicyGenesis } from "./m4ProductionPolicyGenesisValidation";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
@@ -1041,6 +1041,7 @@ function validateWorldGenesis(
   validateProductionConfig(config.production);
   validateLaborConfig(config.labor);
   validatePopulationConfig(config.population);
+  validateTradeConfig(config.trade);
   validateM4ProductionPolicyGenesis(scenario, config.labor);
 
   validateExtractionResourcesPresent(scenario, definitionPack);

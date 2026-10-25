@@ -36,8 +36,60 @@ export interface MarketConfig {
   readonly expectationAlpha?: number;
 }
 
-/** Concrete fields land with the trade/FX requirement that owns them (section 5). */
-export interface TradeConfig {}
+/**
+ * M5 trade controls with Handoff/03 section 5 baseline values.
+ *
+ * M5 transport planning consumes these controls; FX reserve and rate behavior
+ * remain monetary/FX work, not duplicated here. Optional for historic fixtures.
+ */
+export interface TradeConfig {
+  readonly transportCapacityUtilizationTarget?: number;
+  readonly transportConditionMinimum?: number;
+  readonly shipmentMinimumQuantity?: number;
+  readonly tradeOpportunityMinimumMarginShare?: number;
+  readonly tradeOpportunityMaximumRoutesPerGoodPerRegion?: number;
+  readonly maxExportShareOfAvailableSurplus?: number;
+  readonly defaultTransitTicksPerLink?: number;
+  readonly shipmentLossFromOrdinaryTrade?: number;
+}
+
+/** Reject malformed M5 controls at world genesis instead of coercing them during trade. */
+export function validateTradeConfig(trade: TradeConfig): void {
+  const shares = [
+    "transportCapacityUtilizationTarget",
+    "transportConditionMinimum",
+    "maxExportShareOfAvailableSurplus",
+    "shipmentLossFromOrdinaryTrade",
+  ] as const satisfies readonly (keyof TradeConfig)[];
+  for (const key of shares) {
+    const value = trade[key];
+    if (value === undefined) continue;
+    const strictUpperBound = key === "shipmentLossFromOrdinaryTrade";
+    if (!Number.isFinite(value) || value < 0 || (strictUpperBound ? value >= 1 : value > 1)) {
+      throw new Error(
+        `TradeConfig.${key} must be a finite share in ${strictUpperBound ? "[0,1)" : "[0,1]"}, got ${value}`,
+      );
+    }
+  }
+
+  if (trade.shipmentMinimumQuantity !== undefined &&
+      (!Number.isFinite(trade.shipmentMinimumQuantity) || trade.shipmentMinimumQuantity <= 0)) {
+    throw new Error("TradeConfig.shipmentMinimumQuantity must be positive and finite");
+  }
+  if (trade.tradeOpportunityMinimumMarginShare !== undefined &&
+      (!Number.isFinite(trade.tradeOpportunityMinimumMarginShare) || trade.tradeOpportunityMinimumMarginShare < 0)) {
+    throw new Error("TradeConfig.tradeOpportunityMinimumMarginShare must be non-negative and finite");
+  }
+  if (trade.tradeOpportunityMaximumRoutesPerGoodPerRegion !== undefined &&
+      (!Number.isSafeInteger(trade.tradeOpportunityMaximumRoutesPerGoodPerRegion) ||
+       trade.tradeOpportunityMaximumRoutesPerGoodPerRegion <= 0)) {
+    throw new Error("TradeConfig.tradeOpportunityMaximumRoutesPerGoodPerRegion must be a positive safe integer");
+  }
+  if (trade.defaultTransitTicksPerLink !== undefined &&
+      (!Number.isSafeInteger(trade.defaultTransitTicksPerLink) || trade.defaultTransitTicksPerLink < 0)) {
+    throw new Error("TradeConfig.defaultTransitTicksPerLink must be a non-negative safe integer");
+  }
+}
 
 /**
  * M4 production and capital controls (REQ-CONFIG-006).
@@ -330,7 +382,17 @@ export function createDefaultSimulationConfig(): SimulationConfig {
       targetInventoryCoverageTicks: 1.0,
       expectationAlpha: 0.25,
     },
-    trade: {},
+    // Canonical Handoff/03 section 5 M5 trade defaults, without inventing FX mechanics.
+    trade: {
+      transportCapacityUtilizationTarget: 0.80,
+      transportConditionMinimum: 0.05,
+      shipmentMinimumQuantity: 1e-6,
+      tradeOpportunityMinimumMarginShare: 0.03,
+      tradeOpportunityMaximumRoutesPerGoodPerRegion: 4,
+      maxExportShareOfAvailableSurplus: 0.50,
+      defaultTransitTicksPerLink: 1,
+      shipmentLossFromOrdinaryTrade: 0,
+    },
     // Handoff/03 section 6 "Production defaults", completed by HANDOFF-REPAIR-M4-002.
     production: {
       baseTargetUtilization: 0.7,
