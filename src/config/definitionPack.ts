@@ -21,6 +21,8 @@ export interface GoodDefinition {
   readonly id: GoodId;
   readonly name: string;
   readonly unitLabel: string;
+  /** Cargo-capacity weight units per one unit of this good (Handoff/04 §13). */
+  readonly cargoWeightPerUnit: number;
   readonly spoilageRatePerTick: number;
   readonly consumerNeedCategory: string | null;
   readonly necessityWeight?: number;
