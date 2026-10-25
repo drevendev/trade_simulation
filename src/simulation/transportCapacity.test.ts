@@ -38,7 +38,7 @@ describe("M5 directed transport physical capacity (#669)", () => {
     expect(hasUsableTransportCapacity(route(20, 0.049), config, 1)).toBe(false);
     expect(hasUsableTransportCapacity(route(0, 1), config, 1)).toBe(false);
     expect(hasUsableTransportCapacity(route(20, 1), config, 0)).toBe(false);
-    const epsilon = config.numeric.quantityEpsilon;
+    const epsilon = config.numeric.quantityEpsilon!;
     expect(hasUsableTransportCapacity(route(epsilon, 1), config, 1)).toBe(false);
     expect(hasUsableTransportCapacity(route(epsilon * 2, 1), config, 1)).toBe(true);
   });
