@@ -113,6 +113,8 @@ export interface WorldState {
   readonly productionUnits: ReadonlyMap<ProductionUnitId, ProductionUnitState>;
   readonly markets: ReadonlyMap<MarketId, LocalMarketState>;
   readonly transportLinks: ReadonlyMap<TransportLinkId, TransportLinkState>;
+  /** Derived sparse outgoing-route index; canonical genesis always populates it. Optional for old fixtures. */
+  readonly outgoingTransportLinkIdsByRegion?: ReadonlyMap<RegionId, readonly TransportLinkId[]>;
   /** Last canonical tick whose Phase-5 physical production transition was persisted; -1 at genesis. */
   readonly lastProductionExecutionTransitionTick: number;
   /**
@@ -243,7 +245,10 @@ export interface LocalMarketState {
 
 export interface TransportLinkState {
   readonly linkId: TransportLinkId;
+  /** Original configured link parameters; directed routing uses the resolved endpoints below. */
   readonly seed: TransportLinkSeed;
+  readonly fromRegionId: RegionId;
+  readonly toRegionId: RegionId;
 }
 
 /**
@@ -363,12 +368,14 @@ export function buildInitialWorld(
   );
 
   // Step 5: Instantiate TransportLinks with deterministic directed expansion
-  const transportLinkRegistry = new Map(
-    (scenarioDefinition.transportLinks ?? []).flatMap((linkSeed) => {
+  // Stable by configured key, not array/Map insertion order. Only declared direct edges exist.
+  const transportLinkRegistry = new Map<TransportLinkId, TransportLinkState>(
+    stableOrderBy(scenarioDefinition.transportLinks ?? [], (link) => link.key).flatMap((linkSeed) => {
       const links = expandTransportLink(linkSeed, idMap);
-      return links.map((link) => [link.linkId, link]);
+      return links.map((link) => [link.linkId, link] as const);
     }),
   );
+  const outgoingTransportLinkIdsByRegion = indexOutgoingTransportLinks(transportLinkRegistry);
 
   // Step 6: Instantiate States and apply jurisdiction
   const stateRegistry = new Map<StateId, StateState>();
@@ -747,6 +754,7 @@ export function buildInitialWorld(
     productionUnits: productionUnitRegistry,
     markets: marketRegistry,
     transportLinks: transportLinkRegistry,
+    outgoingTransportLinkIdsByRegion,
     lastProductionExecutionTransitionTick: -1,
     lastWageSettlementTransitionTick: -1,
     lastHouseholdConsumptionTransitionTick: -1,
@@ -819,8 +827,7 @@ function resolveStableIds(scenario: ScenarioDefinition, allocator: IdAllocator):
   });
 
   const transportLinkIds = new Map<string, TransportLinkId>();
-  let linkIndex = 0;
-  const sortedLinks = stableOrderBy(scenario.transportLinks ?? [], (l) => `${l.fromRegionKey}→${l.toRegionKey}`);
+  const sortedLinks = stableOrderBy(scenario.transportLinks ?? [], (l) => l.key);
   sortedLinks.forEach((link) => {
     transportLinkIds.set(`${link.key}→0`, allocator.allocate("TransportLink", `${link.key}→0`));
     if (link.bidirectional !== false) {
@@ -944,6 +951,8 @@ function expandTransportLink(seed: TransportLinkSeed, idMap: IdMaps): TransportL
   const forward: TransportLinkState = {
     linkId: idMap.transportLinkIds.get(`${seed.key}→0`)!,
     seed,
+    fromRegionId: fromId,
+    toRegionId: toId,
   };
 
   const links = [forward];
@@ -951,11 +960,31 @@ function expandTransportLink(seed: TransportLinkSeed, idMap: IdMaps): TransportL
     const reverse: TransportLinkState = {
       linkId: idMap.transportLinkIds.get(`${seed.key}→1`)!,
       seed,
+      fromRegionId: toId,
+      toRegionId: fromId,
     };
     links.push(reverse);
   }
 
   return links;
+}
+
+/** Derived read index only: it never creates a world edge or owns transport stock. */
+function indexOutgoingTransportLinks(
+  links: ReadonlyMap<TransportLinkId, TransportLinkState>,
+): ReadonlyMap<RegionId, readonly TransportLinkId[]> {
+  const byOrigin = new Map<RegionId, TransportLinkId[]>();
+  for (const link of stableOrderBy([...links.values()], (item) => item.linkId)) {
+    const outgoing = byOrigin.get(link.fromRegionId) ?? [];
+    outgoing.push(link.linkId);
+    byOrigin.set(link.fromRegionId, outgoing);
+  }
+
+  const result = new Map<RegionId, readonly TransportLinkId[]>();
+  for (const [regionId, ids] of stableOrderBy([...byOrigin.entries()], ([id]) => id)) {
+    result.set(regionId, Object.freeze([...ids]));
+  }
+  return result;
 }
 
 function validateWorldGenesis(
