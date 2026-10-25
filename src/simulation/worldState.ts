@@ -249,6 +249,8 @@ export interface TransportLinkState {
   readonly seed: TransportLinkSeed;
   readonly fromRegionId: RegionId;
   readonly toRegionId: RegionId;
+  /** Resolved M5 delivery duration. Canonical genesis always sets it; old test fixtures may omit it. */
+  readonly travelTicks?: number;
 }
 
 /**
@@ -371,7 +373,7 @@ export function buildInitialWorld(
   // Stable by configured key, not array/Map insertion order. Only declared direct edges exist.
   const transportLinkRegistry = new Map<TransportLinkId, TransportLinkState>(
     stableOrderBy(scenarioDefinition.transportLinks ?? [], (link) => link.key).flatMap((linkSeed) => {
-      const links = expandTransportLink(linkSeed, idMap);
+      const links = expandTransportLink(linkSeed, idMap, resolvedConfig.trade.defaultTransitTicksPerLink ?? 1);
       return links.map((link) => [link.linkId, link] as const);
     }),
   );
@@ -941,7 +943,14 @@ function buildLocalMarketState(seed: MarketSeed, marketId: MarketId, definitionP
   };
 }
 
-function expandTransportLink(seed: TransportLinkSeed, idMap: IdMaps): TransportLinkState[] {
+function expandTransportLink(seed: TransportLinkSeed, idMap: IdMaps, defaultTransitTicks: number): TransportLinkState[] {
+  // Seed transitTicks predates the canonical runtime travelTicks name. Normalize once
+  // at genesis rather than guessing a delay in each later shipment planner.
+  const travelTicks = seed.transitTicks ?? defaultTransitTicks;
+  if (!Number.isSafeInteger(travelTicks) || travelTicks < 0) {
+    throw new Error(`TransportLinkSeed "${seed.key}": travelTicks must be a non-negative safe integer`);
+  }
+
   const fromId = idMap.regionIds.get(seed.fromRegionKey);
   const toId = idMap.regionIds.get(seed.toRegionKey);
   if (!fromId || !toId) {
@@ -953,6 +962,7 @@ function expandTransportLink(seed: TransportLinkSeed, idMap: IdMaps): TransportL
     seed,
     fromRegionId: fromId,
     toRegionId: toId,
+    travelTicks,
   };
 
   const links = [forward];
@@ -962,6 +972,7 @@ function expandTransportLink(seed: TransportLinkSeed, idMap: IdMaps): TransportL
       seed,
       fromRegionId: toId,
       toRegionId: fromId,
+      travelTicks,
     };
     links.push(reverse);
   }
