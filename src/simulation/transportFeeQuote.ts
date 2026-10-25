@@ -80,6 +80,12 @@ export function quoteTransportFee(
     throw new Error("transport link destination region is missing");
   }
   const cargoCapacityUsed = cargoCapacityUse(quantity, cargoWeightPerUnit);
+  // IEEE-754 can round a strictly positive quantity × strictly positive
+  // weight to zero. A shipment must not bypass fee/recipient accounting this way.
+  // A genuinely zero quantity remains a legitimate zero-fee quote.
+  if (quantity > 0 && cargoCapacityUsed === 0) {
+    throw new Error("positive cargo capacity use is not representable");
+  }
   const conditionCostMultiplier = Math.min(
     1 / Math.max(condition, minimumConditionForCost),
     maximumConditionCostMultiplier,
