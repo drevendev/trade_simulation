@@ -26,15 +26,33 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+      # Current GitHub-hosted Ubuntu runner images ship a .NET 9 SDK.
+      # Prefer that SDK rather than failing an unrelated LTS runtime download.
+      # A missing SDK still installs through the official action and fails closed.
+      - name: Check hosted .NET 9 SDK
+        id: hosted_dotnet
+        shell: bash
+        run: |
+          if command -v dotnet >/dev/null 2>&1; then
+            dotnet --list-sdks
+            if dotnet --list-sdks | grep -Eq '^9\\.0\\.'; then
+              echo "available=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "available=false" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-dotnet@v6
+        if: steps.hosted_dotnet.outputs.available != 'true'
         with:
           dotnet-version: '9.0.x'
-          # CI has a .NET host already; avoid downloading an unrelated LTS
-          # runtime before the requested SDK (HTTP 409 on 2026-10-25).
-          skip-lts-prepass: true
-          # Prefer a compatible runner-cached SDK instead of resolving and
-          # downloading the latest patch on every job. Missing SDK still fails.
-          check-latest: false
+      - name: Require .NET 9 SDK before retained legacy gates
+        shell: bash
+        run: |
+          dotnet --list-sdks
+          dotnet --list-sdks | grep -Eq '^9\\.0\\.' || {
+            echo "::error::Retained legacy CI requires a .NET 9 SDK"
+            exit 1
+          }
       - run: dotnet restore
       - run: dotnet build --configuration Release --no-restore
       - run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
