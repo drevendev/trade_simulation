@@ -1,0 +1,173 @@
+/** Regression for M5 #852 ephemeral shared directed-link capacity preflight. */
+import { describe, expect, it } from "vitest";
+import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
+import { baselineScenario } from "../config/fixtures/baselineScenario";
+import { createDefaultSimulationConfig } from "../config/simulationConfig";
+import type { GoodId, TransportLinkId } from "../domain/id";
+import { planTransportCapacityPreflight, type TransportCapacityRequest } from "./transportCapacityPreflight";
+import { buildInitialWorld, type TransportLinkState } from "./worldState";
+
+const config = createDefaultSimulationConfig();
+const seededWorld = buildInitialWorld({
+  ...baselineScenario,
+  transportLinks: [{ ...baselineScenario.transportLinks[0]!, bidirectional: true }],
+}, baselineDefinitionPack, config, 77);
+const directedLinks = [...seededWorld.transportLinks.values()];
+if (directedLinks.length !== 2) throw new Error("test fixture requires two directed edges");
+const forward: TransportLinkState = directedLinks[0]!;
+const reverse: TransportLinkState = directedLinks[1]!;
+
+function linkWithCapacity(link: TransportLinkState, baseCapacity = 20, condition = 0.5): TransportLinkState {
+  return { ...link, seed: { ...link.seed, baseCapacity, condition } };
+}
+
+function candidate(
+  planId: string,
+  link: TransportLinkState,
+  goodId: GoodId,
+  score: number,
+  requestedQuantity: number,
+  cargoWeightPerUnit: number,
+): TransportCapacityRequest {
+  return {
+    planId,
+    linkId: link.linkId,
+    fromRegionId: link.fromRegionId,
+    toRegionId: link.toRegionId,
+    goodId,
+    score,
+    requestedQuantity,
+    cargoWeightPerUnit,
+  };
+}
+
+const wood = "good:wood" as GoodId;
+const iron = "good:iron" as GoodId;
+
+function preflight(
+  requests: readonly TransportCapacityRequest[],
+  links: readonly TransportLinkState[] = [linkWithCapacity(forward)],
+  eligible: readonly TransportLinkId[] = links.map((l) => l.linkId),
+  factors: ReadonlyMap<TransportLinkId, number> = new Map(links.map((l) => [l.linkId, 1])),
+) {
+  return planTransportCapacityPreflight(
+    { transportLinks: new Map(links.map((l) => [l.linkId, l])) },
+    config,
+    requests,
+    factors,
+    new Set(eligible),
+  );
+}
+
+describe("M5 shared directed-link cargo reservation (#852)", () => {
+  it("reserves ONE weight-unit budget across different goods in stable score order", () => {
+    const first = candidate("high", forward, iron, 5, 3, 2);
+    const second = candidate("low", forward, wood, 2, 8, 1);
+    const result = preflight([second, first]);
+    expect(result.reservations.map((r) => [r.planId, r.reservedQuantity, r.capacityUsed, r.refusal]))
+      .toEqual([["high", 3, 6, null], ["low", 4, 4, null]]);
+    expect(result.usedByLink.get(forward.linkId)).toBe(10);
+    expect(result.remainingByLink.get(forward.linkId)).toBe(0);
+    expect([...seededWorld.transportLinks.values()][0]?.seed.baseCapacity)
+      .toBe(baselineScenario.transportLinks[0]?.baseCapacity);
+  });
+
+  it("does not award additional capacity to a third good after the same edge is exhausted", () => {
+    const result = preflight([
+      candidate("a", forward, iron, 3, 5, 2),
+      candidate("b", forward, wood, 2, 1, 1),
+      candidate("c", forward, iron, 1, 1, 1),
+    ]);
+    expect(result.reservations.map((r) => r.reservedQuantity)).toEqual([5, 0, 0]);
+    expect(result.reservations.slice(1).map((r) => r.refusal))
+      .toEqual(["CAPACITY_EXHAUSTED", "CAPACITY_EXHAUSTED"]);
+  });
+
+  it("keeps independently directed reverse edge budgets separate", () => {
+    const a = linkWithCapacity(forward);
+    const b = linkWithCapacity(reverse);
+    expect(a.fromRegionId).toBe(b.toRegionId);
+    expect(a.toRegionId).toBe(b.fromRegionId);
+    const result = preflight([
+      candidate("a", a, wood, 2, 5, 2),
+      candidate("b", b, iron, 2, 5, 2),
+    ], [a, b]);
+    expect(result.reservations.map((r) => r.reservedQuantity)).toEqual([5, 5]);
+    expect(result.usedByLink.get(a.linkId)).toBe(10);
+    expect(result.usedByLink.get(b.linkId)).toBe(10);
+  });
+
+  it("ignores request order and Map insertion order, ties resolve by good then plan ID", () => {
+    const requests = [
+      candidate("z", forward, wood, 1, 7, 1),
+      candidate("b", forward, iron, 1, 3, 2),
+      candidate("a", forward, iron, 1, 3, 2),
+    ];
+    const x = preflight(requests, [linkWithCapacity(reverse), linkWithCapacity(forward)]);
+    const y = preflight([...requests].reverse(), [linkWithCapacity(forward), linkWithCapacity(reverse)]);
+    expect(y.reservations).toEqual(x.reservations);
+    expect(x.reservations.map((r) => r.planId)).toEqual(["a", "b", "z"]);
+    expect(x.reservations.map((r) => r.reservedQuantity)).toEqual([3, 2, 0]);
+  });
+
+  it("fails closed when eligibility excludes a link or physical condition/capacity is insufficient", () => {
+    const request = candidate("a", forward, wood, 1, 2, 1);
+    const disabled = preflight([request], [linkWithCapacity(forward)], []);
+    expect(disabled.reservations[0]).toMatchObject({
+      reservedQuantity: 0,
+      capacityUsed: 0,
+      refusal: "LINK_NOT_ELIGIBLE",
+    });
+    expect(preflight([request], [linkWithCapacity(forward, 20, 0.049)]).reservations[0]?.refusal)
+      .toBe("NO_PHYSICAL_CAPACITY");
+    expect(preflight([request], [linkWithCapacity(forward, 0, 1)]).reservations[0]?.refusal)
+      .toBe("NO_PHYSICAL_CAPACITY");
+    expect(() => preflight([request], [linkWithCapacity(forward)], [forward.linkId], new Map()))
+      .toThrow(/factor/);
+  });
+
+  it("never overbooks floating-point capacity and refuses invisible tiny reservations", () => {
+    const edge = linkWithCapacity(forward, 0.3, 1);
+    const requests = ["a", "b", "c"].map((id) =>
+      candidate(id, edge, wood, 1, 1, 0.1));
+    const result = preflight(requests, [edge]);
+    expect(result.usedByLink.get(edge.linkId)!).toBeLessThanOrEqual(0.3);
+    expect(result.remainingByLink.get(edge.linkId)!).toBeGreaterThanOrEqual(0);
+    for (const r of result.reservations) {
+      expect(r.capacityUsed).toBeLessThanOrEqual(r.requestedQuantity * 0.1);
+    }
+    const huge = linkWithCapacity(forward, 1e24, 1);
+    expect(() => preflight([candidate("tiny", huge, wood, 1, 1, 1)], [huge]))
+      .toThrow(/precision/);
+  });
+
+  it("rejects invalid ID/score/quantity/cargo arithmetic and cannot expose a partial plan", () => {
+    const good = candidate("ok", forward, wood, 1, 2, 1);
+    const bad: TransportCapacityRequest[] = [
+      { ...good, planId: " " },
+      { ...good, score: Number.NaN },
+      { ...good, score: Infinity },
+      { ...good, requestedQuantity: 0 },
+      { ...good, requestedQuantity: -2 },
+      { ...good, requestedQuantity: Number.MAX_VALUE, cargoWeightPerUnit: 2 },
+      { ...good, cargoWeightPerUnit: 0 },
+      { ...good, cargoWeightPerUnit: Infinity },
+      { ...good, requestedQuantity: Number.MIN_VALUE, cargoWeightPerUnit: Number.MIN_VALUE },
+      { ...good, fromRegionId: reverse.fromRegionId },
+      { ...good, linkId: "link:does-not-exist" as TransportLinkId },
+    ];
+    for (const [index, value] of bad.entries()) {
+      // A duplicate planId would also throw, masking the intended negative
+      // controls. Give each malformed candidate a distinct ID except blank ID.
+      const invalid = value.planId.trim().length === 0
+        ? value
+        : { ...value, planId: `invalid-${index}` };
+      expect(() => preflight([good, invalid])).toThrow();
+    }
+    expect(() => preflight([good, { ...good, planId: good.planId }])).toThrow(/planId/);
+    expect(() => preflight([good], [linkWithCapacity(forward)], [forward.linkId], new Map()))
+      .toThrow(/factor/);
+    expect(() => preflight([good], [linkWithCapacity(forward, Number.MAX_VALUE, 1)],
+      [forward.linkId], new Map([[forward.linkId, 2]]))).toThrow();
+  });
+});
