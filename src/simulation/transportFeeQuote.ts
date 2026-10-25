@@ -8,7 +8,8 @@
 import type { SimulationConfig } from "../config/simulationConfig";
 import type { CurrencyId } from "../domain/id";
 import { cargoCapacityUse } from "./transportCapacity";
-import type { ActorRef, TransportLinkState, WorldState } from "./worldState";
+import type { ActorRef } from "../domain/genesisLedger";
+import type { TransportLinkState, WorldState } from "./worldState";
 
 /**
  * Handoff/04 requires an explicit minimum denominator and multiplier cap, but
