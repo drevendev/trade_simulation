@@ -275,6 +275,7 @@ describe("assertNoBehavioralOverrides", () => {
       necessityWeight: 1,
       substitutionGroup: "staple-food",
       referencePrice: 2,
+      cargoWeightPerUnit: 1,
       tradable: true,
     };
 
@@ -769,6 +770,7 @@ describe("validateDefinitionPack", () => {
       spoilageRatePerTick: 0,
       consumerNeedCategory: null,
       referencePrice: 1,
+      cargoWeightPerUnit: 1,
       tradable: true,
     };
   }
@@ -799,6 +801,37 @@ describe("validateDefinitionPack", () => {
   it("accepts a well-formed DefinitionPack with valid recipes", () => {
     const pack = minimalPack();
     expect(() => validateDefinitionPack(pack)).not.toThrow();
+  });
+
+  // Handoff/04 §13: an absent or invalid goods-weight declaration cannot
+  // reach M5 transport sizing and must never acquire a fabricated default.
+  it.each([
+    ["missing", undefined],
+    ["zero", 0],
+    ["negative", -1],
+    ["NaN", Number.NaN],
+    ["positive infinity", Number.POSITIVE_INFINITY],
+    ["negative infinity", Number.NEGATIVE_INFINITY],
+    ["text instead of a number", "1"],
+  ])("rejects %s GoodDefinition cargoWeightPerUnit", (_reason, value) => {
+    const pack = minimalPack();
+    const invalid = { ...goodDefinition("good-1"), cargoWeightPerUnit: value as number };
+    const goods = { ...pack.goods, "good-1": invalid } as Record<GoodId, GoodDefinition>;
+    expect(() => validateDefinitionPack({ ...pack, goods })).toThrow(
+      /GoodDefinition "good-1": cargoWeightPerUnit must be a strictly positive finite number/,
+    );
+  });
+
+  it("accepts explicit distinct positive weights without normalizing them", () => {
+    const pack = minimalPack();
+    const goods = {
+      ...pack.goods,
+      "good-1": { ...goodDefinition("good-1"), cargoWeightPerUnit: 0.25 },
+      "good-2": { ...goodDefinition("good-2"), cargoWeightPerUnit: 32 },
+    } as Record<GoodId, GoodDefinition>;
+    expect(() => validateDefinitionPack({ ...pack, goods })).not.toThrow();
+    expect(goods["good-1" as GoodId].cargoWeightPerUnit).toBe(0.25);
+    expect(goods["good-2" as GoodId].cargoWeightPerUnit).toBe(32);
   });
 
   // REQ-CONFIG-005, Issue #509: `outputGoodId` was the recipe's one scalar Good reference
