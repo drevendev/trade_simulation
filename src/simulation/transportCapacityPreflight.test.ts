@@ -12,8 +12,10 @@ const seededWorld = buildInitialWorld({
   ...baselineScenario,
   transportLinks: [{ ...baselineScenario.transportLinks[0]!, bidirectional: true }],
 }, baselineDefinitionPack, config, 77);
-const [forward, reverse] = [...seededWorld.transportLinks.values()];
-if (!forward || !reverse) throw new Error("test fixture requires two directed edges");
+const directedLinks = [...seededWorld.transportLinks.values()];
+if (directedLinks.length !== 2) throw new Error("test fixture requires two directed edges");
+const forward: TransportLinkState = directedLinks[0]!;
+const reverse: TransportLinkState = directedLinks[1]!;
 
 function linkWithCapacity(link: TransportLinkState, baseCapacity = 20, condition = 0.5): TransportLinkState {
   return { ...link, seed: { ...link.seed, baseCapacity, condition } };
