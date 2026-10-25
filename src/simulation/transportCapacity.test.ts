@@ -73,10 +73,11 @@ describe("M5 directed transport physical capacity (#669)", () => {
   });
 
   it("requires resolved operational controls instead of quietly using invented defaults", () => {
-    const invalidTrade = {
-      ...config,
-      trade: { ...config.trade, transportConditionMinimum: undefined },
-    };
+    // The old optional-config case must be a genuinely missing property,
+    // not an explicit undefined (exactOptionalPropertyTypes).
+    const trade = { ...config.trade };
+    delete trade.transportConditionMinimum;
+    const invalidTrade = { ...config, trade };
     expect(() => hasUsableTransportCapacity(route(), invalidTrade, 1)).toThrow();
     expect(() => hasUsableTransportCapacity(route(), {
       ...config,
