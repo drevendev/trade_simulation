@@ -51,7 +51,7 @@ export function hasUsableTransportCapacity(
   if (minimum === undefined || !Number.isFinite(minimum) || minimum < 0 || minimum > 1) {
     throw new Error("resolved TradeConfig.transportConditionMinimum must be finite in [0,1]");
   }
-  if (!Number.isFinite(epsilon) || epsilon < 0) {
+  if (epsilon === undefined || !Number.isFinite(epsilon) || epsilon < 0) {
     throw new Error("NumericConfig.quantityEpsilon must be non-negative and finite");
   }
   const effectiveCapacity = effectiveTransportLinkCapacity(link, externalInfrastructureCapacityFactor);
