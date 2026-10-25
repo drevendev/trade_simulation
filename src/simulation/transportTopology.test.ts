@@ -43,8 +43,7 @@ describe("M5 sparse directed transport topology (#669)", () => {
     ]));
 
     // Reverse is not a duplicate forward edge even though both share seed provenance.
-    const original = world.transportLinks.get(routes[1][0] as keyof never);
-    const reverse = world.transportLinks.get(routes[2][0] as keyof never);
+    const [, original, reverse] = [...world.transportLinks.values()];
     expect(original?.seed.key).toBe(reverse?.seed.key);
     expect(original?.fromRegionId).toBe(reverse?.toRegionId);
     expect(original?.toRegionId).toBe(reverse?.fromRegionId);
