@@ -35,8 +35,11 @@ export interface TransportLinkSeed {
   readonly baseCapacity: number;
   readonly condition: number;
   readonly baseTransportCost: number;
+  /** Integer transport duration in ticks; canonical M5 topology expands directed links. */
   readonly transitTicks?: number;
   readonly feeReceiverStateKey?: string | null;
+  /** Optional physical attrition per shipment, not a monetary transport fee. */
+  readonly routinePhysicalLossRate?: number;
 }
 
 export interface M4ProductionPlanningPolicySeed {
