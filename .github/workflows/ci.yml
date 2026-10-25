@@ -35,7 +35,7 @@ jobs:
         run: |
           if command -v dotnet >/dev/null 2>&1; then
             dotnet --list-sdks
-            if dotnet --list-sdks | grep -Eq '^9\\.0\\.'; then
+            if dotnet --list-sdks | grep -Eq '^9[.]0[.]'; then
               echo "available=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -49,7 +49,7 @@ jobs:
         shell: bash
         run: |
           dotnet --list-sdks
-          dotnet --list-sdks | grep -Eq '^9\\.0\\.' || {
+          dotnet --list-sdks | grep -Eq '^9[.]0[.]' || {
             echo "::error::Retained legacy CI requires a .NET 9 SDK"
             exit 1
           }
