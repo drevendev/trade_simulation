@@ -1568,9 +1568,9 @@ describe("production and labor config ownership (REQ-CONFIG-006)", () => {
 
   it("leaves every sibling placeholder empty", () => {
     const config = createDefaultSimulationConfig();
-    // `population` left this list when REQ-CONFIG-007 filled it; every other M5+
-    // block is still an untouched placeholder.
-    for (const key of ["trade", "clans", "fiscal", "monetary", "expansion", "events", "performance"] as const) {
+    // `population` and the bounded M5 TradeConfig surface have concrete defaults;
+    // later untouched milestone blocks are still placeholders.
+    for (const key of ["clans", "fiscal", "monetary", "expansion", "events", "performance"] as const) {
       expect(config[key]).toEqual({});
     }
   });
