@@ -46,6 +46,7 @@ import type {
 } from "../config/scenarioDefinition";
 import type { DefinitionPack } from "../config/definitionPack";
 import { validateTradeConfig, type SimulationConfig } from "../config/simulationConfig";
+import { validateFxPoolGenesis } from "../config/fxPoolGenesisValidation";
 import { validateDefinitionPack, validateLaborConfig, validatePopulationConfig, validateProductionConfig } from "../config/validation";
 import { validateM4ProductionPolicyGenesis } from "./m4ProductionPolicyGenesisValidation";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
@@ -274,6 +275,7 @@ export function buildInitialWorld(
 ): WorldState {
   // Step 1: Validate schema versions, uniqueness, references, finite values and config bounds
   validateWorldGenesis(scenarioDefinition, definitionPack, resolvedConfig);
+  validateFxPoolGenesis(scenarioDefinition);
   validateDefinitionPack(definitionPack);
 
   // Step 2: Resolve stable runtime IDs from sorted human keys
