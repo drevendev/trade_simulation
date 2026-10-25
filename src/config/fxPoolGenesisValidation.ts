@@ -63,7 +63,7 @@ export function validateFxPoolGenesis(scenario: ScenarioDefinition): void {
       }
       for (const currencyKey of cashKeys) {
         const amount = pool.cash[currencyKey];
-        if (!Number.isFinite(amount) || amount < 0) {
+        if (typeof amount !== "number" || !Number.isFinite(amount) || amount < 0) {
           throw new Error(`${owner}: cash["${currencyKey}"] must be non-negative and finite`);
         }
       }
