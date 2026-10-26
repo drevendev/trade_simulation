@@ -101,24 +101,44 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     } finally { await page.close(); }
   }, 60_000);
 
-  it("scrubs measured M4 samples without interpolating unobserved ticks", async () => {
+  it("scrubs real M4 samples and binds every metric and unit to the selected sample", async () => {
     const page = await pageAt("", 1280, false);
     try {
-      const samples = artifact().samples;
+      const preview = artifact();
+      const samples = preview.samples;
       const last = samples[samples.length - 1]!;
       const first = samples[0]!;
+      expect(samples.length).toBeGreaterThan(1);
+
+      const formatted = (value: number) => value.toLocaleString("en-US", {
+        minimumFractionDigits: 2, maximumFractionDigits: 2,
+      });
+      const assertCards = async (sample: typeof first) => {
+        const expected = [
+          ["outputProduced", "Realized output", formatted(sample.outputProduced), `${preview.region.goodsUnitLabel} / tick`],
+          ["employedWorkers", "Employment", formatted(sample.employedWorkers), preview.region.workerUnitLabel],
+          ["essentialCoverage", "Essential-need coverage", `${(sample.essentialCoverage * 100).toFixed(1)}%`, "of target"],
+          ["grossWagesPaid", "Gross wages paid", formatted(sample.grossWagesPaid), `${preview.region.currencyCode} / tick`],
+          ["installedCapital", "Installed capital", formatted(sample.installedCapital), preview.region.capitalUnitLabel],
+        ] as const;
+        expect(await page.locator("#spotlight-metrics [data-spotlight]").count()).toBe(expected.length);
+        for (const [field, label, value, unit] of expected) {
+          const card = page.locator(`#spotlight-metrics [data-spotlight="${field}"]`);
+          expect(await card.locator("dt").innerText(), field).toBe(label);
+          expect(await card.locator("dd").innerText(), field).toContain(value);
+          expect(await card.locator("dd small").innerText(), field).toBe(unit);
+        }
+      };
+
       expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${last.tick}`);
-      const shownLast = await page.locator('[data-spotlight="outputProduced"] dd').innerText();
-      expect(shownLast).toContain(last.outputProduced.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+      await assertCards(last);
       await page.locator("#spotlight-tick").evaluate(node => {
         const slider = node as HTMLInputElement;
         slider.value = "0";
         slider.dispatchEvent(new Event("input", { bubbles: true }));
       });
       expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${first.tick}`);
-      const shownFirst = await page.locator('[data-spotlight="outputProduced"] dd').innerText();
-      expect(shownFirst).toContain(first.outputProduced.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
-      expect(await page.locator('[data-spotlight="essentialCoverage"] dd').innerText()).toContain(`${(first.essentialCoverage * 100).toFixed(1)}%`);
+      await assertCards(first);
       expect(await page.locator("#spotlight-tick").getAttribute("max")).toBe(String(samples.length - 1));
     } finally { await page.close(); }
   }, 60_000);
