@@ -374,10 +374,14 @@ describe("README conformance (REQ-VISUALIZATION-007)", () => {
     // would silently miss five of the six history panels.
     expect(chapters.map((match) => match[1])).toEqual(expectedChapters.map(([id]) => id));
     for (const [index, [, , attributes, body]] of chapters.entries()) {
+      const expectedChapter = expectedChapters[index];
+      if (expectedChapter === undefined) {
+        throw new Error(`Unexpected milestone chapter at index ${index}`);
+      }
       expect(attributes).not.toMatch(/\bopen(?:\s|=|$)/);
-      expect(body).toContain(expectedChapters[index][1]);
+      expect(body).toContain(expectedChapter[1]);
       for (const [otherId, otherBody] of expectedChapters) {
-        if (otherId !== expectedChapters[index][0]) {
+        if (otherId !== expectedChapter[0]) {
           expect(body).not.toContain(otherBody);
         }
       }
