@@ -353,7 +353,7 @@ describe("README conformance (REQ-VISUALIZATION-007)", () => {
     const pagesBlocks = readmeBlocks().filter((block) => block.includes(PAGES_URL));
     expect(pagesBlocks.length).toBeGreaterThan(0);
     for (const block of pagesBlocks) {
-      expect(block).toContain("M3");
+      expect(block).toContain("M4");
     }
   });
 
@@ -367,14 +367,14 @@ describe("README conformance (REQ-VISUALIZATION-007)", () => {
       ["legacy", 'id="app"'],
     ] as const;
     const chapters = [
-      ...pagesDocument.matchAll(/<details id="chapter-([^"]+)"([^>]*)>([\\s\\S]*?)<\\/details>/g),
+      ...pagesDocument.matchAll(/<details id="chapter-([^"]+)"([^>]*)>([\s\S]*?)<\/details>/g),
     ];
 
     // New chapter boundaries must be discrete: a single first-details check
     // would silently miss five of the six history panels.
     expect(chapters.map((match) => match[1])).toEqual(expectedChapters.map(([id]) => id));
     for (const [index, [, , attributes, body]] of chapters.entries()) {
-      expect(attributes).not.toMatch(/\\bopen(?:\\s|=|$)/);
+      expect(attributes).not.toMatch(/\bopen(?:\s|=|$)/);
       expect(body).toContain(expectedChapters[index][1]);
       for (const [otherId, otherBody] of expectedChapters) {
         if (otherId !== expectedChapters[index][0]) {
