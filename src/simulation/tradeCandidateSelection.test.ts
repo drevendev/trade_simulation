@@ -84,7 +84,7 @@ describe("M5 #670 Phase-7 aggregate opportunity selection, not reservation", () 
   it("takes the minimum independent stock, demand, cargo-weight and legal bounds", () => {
     const available = select([candidate("plan:weight", {
       exportableQuantity: 10, residualImportDemandQuantity: 9,
-      cargoWeightPerUnit: 1e6, buyerRemainingBudgetDest: 1e6,
+      cargoWeightPerUnit: 1e10, buyerRemainingBudgetDest: 1e6,
       legalQuantityCap: 3,
     })]);
     expect(available).toHaveLength(0); // route weight makes a sub-minimum lot
