@@ -173,29 +173,17 @@ describe("REQ-VISUALIZATION-006: M3 Pages render smoke", () => {
     expect(html).toContain('<html lang="en">');
   });
 
-  it("makes the M3 experience the default view and demotes M0-M2 into a collapsed disclosure", async () => {
+  it("shows the M4 sampled spotlight and keeps every chapter collapsed until invited", async () => {
     const page = await renderM3InBrowser(1280);
     try {
-      // Acceptance criterion 1: the visible default is the consolidated M3 experience, not
-      // a stack of milestone status cards.
-      expect(await page.locator("#m3-preview").isVisible()).toBe(true);
+      expect(await page.locator("#showcase-player").isVisible()).toBe(true);
+      for (const id of ["chapter-m4", "chapter-m3", "chapter-m2", "chapter-m1", "chapter-m0", "chapter-legacy"]) {
+        expect(await page.locator(`#${id}`).evaluate(node => (node as HTMLDetailsElement).open), id).toBe(false);
+      }
+      expect(await page.locator("#m3-preview").isVisible()).toBe(false);
+      await page.locator('[data-open-chapter="chapter-m3"]').click();
+      expect(await page.locator("#chapter-m3").evaluate(node => (node as HTMLDetailsElement).open)).toBe(true);
       expect(await page.locator("#m3-preview-body").isVisible()).toBe(true);
-
-      const disclosure = page.locator("#earlier-milestones");
-      expect(await disclosure.count()).toBe(1);
-      expect(await disclosure.evaluate((node) => (node as HTMLDetailsElement).open)).toBe(false);
-      expect(await page.locator("#m0-preview").isVisible()).toBe(false);
-      expect(await page.locator("#m1-preview").isVisible()).toBe(false);
-      expect(await page.locator("#m2-preview").isVisible()).toBe(false);
-
-      // The M3 section precedes the disclosure in document order, so it is what a reader
-      // meets first rather than merely being present somewhere on the page.
-      const m3BeforeHistory = await page.evaluate(() => {
-        const m3 = document.getElementById("m3-preview")!;
-        const history = document.getElementById("earlier-milestones")!;
-        return (m3.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-      });
-      expect(m3BeforeHistory).toBe(true);
     } finally {
       await page.close();
     }
@@ -337,7 +325,7 @@ describe("REQ-VISUALIZATION-006: M3 Pages render smoke", () => {
     // (marketPricing.ts); the only lagged input is `expectedUseEma`, consulted solely as
     // the denominator of inventory coverage. Presence checks cannot pin accuracy in
     // general, but they can stop this specific reversal from returning green.
-    const lead = new JSDOM(pageHtml()).window.document.querySelector("main > p");
+    const lead = new JSDOM(pageHtml()).window.document.querySelector("#chapter-m3 > p");
     expect(lead).not.toBeNull();
     const sentences = (lead!.textContent ?? "")
       .replace(/\s+/g, " ")
@@ -379,6 +367,7 @@ describe("REQ-VISUALIZATION-006: M3 Pages render smoke", () => {
   it("renders the M3 experience readably at a desktop viewport (1280px)", async () => {
     const page = await renderM3InBrowser(1280);
     try {
+      await page.locator("#chapter-m3 > summary").click();
       for (const selector of ["#m3-metrics", "#m3-charts", "#m3-balance", "#m3-settlement", "#m3-table"]) {
         expect(await page.locator(selector).isVisible(), selector).toBe(true);
         const box = await page.locator(selector).boundingBox();
@@ -394,6 +383,7 @@ describe("REQ-VISUALIZATION-006: M3 Pages render smoke", () => {
   it("renders the M3 experience readably at a narrow viewport (360px) with nothing overflowing", async () => {
     const page = await renderM3InBrowser(360);
     try {
+      await page.locator("#chapter-m3 > summary").click();
       for (const selector of ["#m3-metrics", "#m3-charts", "#m3-balance", "#m3-settlement", "#m3-table"]) {
         expect(await page.locator(selector).isVisible(), selector).toBe(true);
         const box = await page.locator(selector).boundingBox();
