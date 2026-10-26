@@ -108,7 +108,7 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
   it("shares one actual physical endpoint even across multiple SELL intents", () => {
     const first = seller("a", 10, "same-unit");
     const second = seller("b", 10, "same-unit");
-    const buy = buyer("b", 20);
+    const buy = buyer("buyer", 20);
     const b = budgets([first, second], [buy], 10);
     expect(() => match([request("a", 11, [first, second], [buy])], b))
       .toThrow("cannot cover aggregate reservation");
