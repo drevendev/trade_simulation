@@ -69,7 +69,7 @@ function budgets(
   return { sellerExportableByEndpoint: endpoint, buyerCashByActorCurrency: cash };
 }
 const match = (requests: readonly Phase7ActorMatchRequest[], b: Phase7ActorMatchBudgets) =>
-  matchPhase7ActorIntents(requests, b, 1e-8, 1e-8);
+  matchPhase7ActorIntents(requests, b, 1e-9, 1e-9, 1e-9);
 
 describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
   it("proportionally splits both sides, emits O(S+B) stable matched lots and preserves ownership/buckets", () => {
@@ -181,6 +181,73 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
       .toThrow(/lost numeric precision/);
     expect(cash.buyerCashByActorCurrency.get(
       phase7BuyerActorCashKey(b.intent.actor, currency))).toBe(1e18);
+  });
+
+  it("rejects observed binary64 over-debits in all five actor and physical residual pools", () => {
+    // 1e16 - 3 changes the stock, but the observable debit is 4, not 3.
+    // Each of these residual maps would otherwise claim an uncommitted unit.
+    const smallSeller = seller("s", 3), smallBuyer = buyer("b", 3);
+    const original = request("a", 3, [smallSeller], [smallBuyer]);
+    const cases: Array<{ name: string; r: Phase7ActorMatchRequest; b: Phase7ActorMatchBudgets }> = [
+      {
+        name: "seller intent quantity",
+        r: request("a", 3, [seller("s", 1e16)], [smallBuyer]),
+        b: budgets([seller("s", 1e16)], [smallBuyer], 3),
+      },
+      {
+        name: "physical seller endpoint",
+        r: original,
+        b: budgets([smallSeller], [smallBuyer], 1e16),
+      },
+      {
+        name: "buyer intent quantity",
+        r: request("a", 3, [smallSeller], [buyer("b", 1e16)]),
+        b: budgets([smallSeller], [buyer("b", 1e16)]),
+      },
+      {
+        name: "buyer intent spend",
+        r: request("a", 3, [smallSeller], [{
+          ...smallBuyer, intent: { ...smallBuyer.intent, maxSpend: 1e16 },
+        }]),
+        b: budgets([smallSeller], [smallBuyer]),
+      },
+      {
+        name: "physical buyer wallet",
+        r: original,
+        b: budgets([smallSeller], [smallBuyer], undefined, 1e16),
+      },
+    ];
+    for (const { name, r, b } of cases) {
+      const physicalBefore = [...b.sellerExportableByEndpoint.entries()];
+      const cashBefore = [...b.buyerCashByActorCurrency.entries()];
+      expect(() => match([r], b), name).toThrow(/lost numeric precision/);
+      expect([...b.sellerExportableByEndpoint.entries()]).toEqual(physicalBefore);
+      expect([...b.buyerCashByActorCurrency.entries()]).toEqual(cashBefore);
+    }
+  });
+
+  it("accepts observable exact large debits and harmless decimal rounding", () => {
+    const s = seller("s", 4), b = buyer("b", 4);
+    const exact = match([request("a", 4, [s], [b])], budgets([s], [b], 1e16, 1e16));
+    expect(exact.remainingSellerByEndpoint.get(phase7SellerEndpointKey(s.intent))).toBe(1e16 - 4);
+    expect(exact.remainingBuyerCashByActorCurrency.get(
+      phase7BuyerActorCashKey(b.intent.actor, currency))).toBe(1e16 - 4);
+    const decimalSeller = seller("ds", 0.3), decimalBuyer = buyer("db", 0.3);
+    const decimal = match(
+      [request("a", 0.1, [decimalSeller], [decimalBuyer])],
+      budgets([decimalSeller], [decimalBuyer], 0.3, 0.3),
+    );
+    expect(decimal.lots.reduce((sum, lot) => sum + lot.quantity, 0)).toBeCloseTo(0.1);
+    expect(decimal.remainingSellerByEndpoint.get(
+      phase7SellerEndpointKey(decimalSeller.intent))).toBeCloseTo(0.2);
+  });
+
+  it("requires separately resolved quantity and money tolerances", () => {
+    const s = seller("s", 2), b = buyer("b", 2), r = request("a", 1, [s], [b]);
+    expect(() => matchPhase7ActorIntents([r], budgets([s], [b]), 1e-8, 1e-9, NaN))
+      .toThrow(/requires resolved numeric epsilons/);
+    expect(() => matchPhase7ActorIntents([r], budgets([s], [b]), 1e-8, 1e-9, -1))
+      .toThrow(/requires resolved numeric epsilons/);
   });
 
   it("rejects wrong-side/region, unknown endpoint and forged aggregate reservations before matching", () => {
