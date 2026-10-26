@@ -282,6 +282,6 @@ export function reservePhase7AggregateTrades(
     remainingImportDemandByDestinationGood: remainingDemand,
     remainingBuyerCashByDestinationCurrency: remainingCash,
     remainingFxOutputByPairCurrency: remainingFx,
-    remainingCargoWeightByLink: links,
+    remainingCargoWeightByLink: new Map([...links].sort(([a], [b]) => cmp(a, b))),
   };
 }
