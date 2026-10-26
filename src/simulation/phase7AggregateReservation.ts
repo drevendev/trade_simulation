@@ -103,12 +103,18 @@ function requiredBudget(budgets: ReadonlyMap<string, number>, key: string, label
   return amount;
 }
 
-function consume(budget: number, used: number, label: string): number {
+function consume(budget: number, used: number, label: string, precisionTolerance: number): number {
   if (used === 0) return budget;
   positive(used, label + " use");
   if (used > budget) throw new Error(label + " reservation would overdraw shared budget");
   const next = budget - used;
-  if (next === budget || next < 0 || !Number.isFinite(next)) {
+  // An observable change is not necessarily the requested debit: IEEE-754
+  // rounds 1e16 - 3 to a decrement of FOUR. Do not publish a residual
+  // that consumes more (or less) than the allocation actually reserved.
+  const observedUse = budget - next;
+  if (next === budget || next < 0 || !Number.isFinite(next) ||
+      !Number.isFinite(observedUse) ||
+      Math.abs(observedUse - used) > precisionTolerance) {
     throw new Error(label + " reservation lost numeric precision");
   }
   return next;
@@ -132,12 +138,15 @@ export function reservePhase7AggregateTrades(
   }
   const scoreEpsilon = config.numeric.rateEpsilon;
   const quantityEpsilon = config.numeric.quantityEpsilon;
+  const moneyEpsilon = config.numeric.moneyEpsilon;
   const minimumShipment = config.trade.shipmentMinimumQuantity;
-  if (scoreEpsilon === undefined || quantityEpsilon === undefined || minimumShipment === undefined) {
+  if (scoreEpsilon === undefined || quantityEpsilon === undefined ||
+      moneyEpsilon === undefined || minimumShipment === undefined) {
     throw new Error("Phase-7 requires resolved score, quantity and shipment minimum thresholds");
   }
   positive(scoreEpsilon, "rateEpsilon");
   nonnegative(quantityEpsilon, "quantityEpsilon");
+  nonnegative(moneyEpsilon, "moneyEpsilon");
   positive(minimumShipment, "shipmentMinimumQuantity");
 
   const remainingStock = copyBudgets(budgets.exportableByOriginGood);
@@ -258,11 +267,11 @@ export function reservePhase7AggregateTrades(
           quantity = cargoUse = cashUse = fxUse = 0;
         } else {
           // Commit only to LOCAL ephemeral maps after every leg is proven.
-          const afterStock = consume(stock, quantity, "export stock");
-          const afterDemand = consume(demand, quantity, "import demand");
-          const afterCash = consume(cash, cashUse, "buyer cash");
-          const afterLink = consume(capacity, cargoUse, "cargo weight");
-          const afterFx = item.fxKey === null ? null : consume(fx, fxUse, "FX pool output");
+          const afterStock = consume(stock, quantity, "export stock", quantityEpsilon);
+          const afterDemand = consume(demand, quantity, "import demand", quantityEpsilon);
+          const afterCash = consume(cash, cashUse, "buyer cash", moneyEpsilon);
+          const afterLink = consume(capacity, cargoUse, "cargo weight", quantityEpsilon);
+          const afterFx = item.fxKey === null ? null : consume(fx, fxUse, "FX pool output", moneyEpsilon);
           remainingStock.set(item.stockKey, afterStock);
           remainingDemand.set(item.demandKey, afterDemand);
           remainingCash.set(item.cashKey, afterCash);
