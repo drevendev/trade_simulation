@@ -6,7 +6,8 @@ is browser-capable today; the full Worker-backed interactive observatory around 
 scheduled for M11. The current [GitHub Pages](https://drevendev.github.io/trade_simulation/)
 experience is a static milestone-viewer surface, not the canonical engine running in-browser.
 The current repository `docs/index.html` source leads with an M4 saved-run, sampled-tick
-closed-economy story (production, employment, needs, wages and capital). Six independently collapsed
+closed-economy story (production, employment, needs, wages and capital), and a saved-run selector
+switches the spotlight to M3 market prices, quantities and settled money. Six independently collapsed
 chapters provide the detailed M4 and M3 LocalMarket views, M2/M1/M0 milestone previews and the
 legacy C# viewer; all figures derive from the existing checked-in artifacts.
 The freshness of the deployed Pages build has not been independently re-verified here.
@@ -40,7 +41,7 @@ Its 240-tick deterministic acceptance gate and milestone representation are reco
 [implementation ledger](docs/spec/implementation_status.csv). The release was published after
 machine-recorded merge provenance, through the repository's mechanical release workflow.
 
-**Interactive viewer:** [Open the GitHub Pages milestone viewer](https://drevendev.github.io/trade_simulation/) — the repository source leads with an M4 saved-run snapshot and provides six separately expandable M4, M3, M2, M1, M0 and legacy chapters. Existing M3 price/quantity charts and milestone data remain available inside their chapters. This source-level note does not assert that the latest Pages build has deployed.
+**Interactive viewer:** [Open the GitHub Pages milestone viewer](https://drevendev.github.io/trade_simulation/) — the repository source defaults to an M4 saved-run spotlight, can switch to the real M3 market ticks, and provides six separately expandable M4, M3, M2, M1, M0 and legacy chapters. Existing M3 price/quantity charts and milestone data remain available inside their chapters. This source-level note does not assert that the latest Pages build has deployed.
 
 ## Understanding M3 local markets
 
