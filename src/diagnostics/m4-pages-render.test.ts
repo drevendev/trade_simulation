@@ -312,6 +312,38 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     }
   }, 60_000);
 
+  it("preserves the selected M3 provenance when an unrelated M4 fetch fails late", async () => {
+    const page = await browser.newPage();
+    let releaseM4: (() => void) | undefined;
+    const delayedM4 = new Promise<void>(resolve => { releaseM4 = resolve; });
+    await page.route("**/m4-preview.json", async route => {
+      await delayedM4;
+      await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+    });
+    try {
+      // M3 can load and become the active showcase while the independent M4
+      // request is still outstanding. Failing M4 must not rewrite M3's status.
+      await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+      await page.locator("#showcase-milestone").selectOption("m3");
+      await page.waitForFunction(() =>
+        (document.getElementById("m4-run-summary")?.textContent ?? "").startsWith("Selected market:")
+      );
+      const selectedSummary = await page.locator("#m4-run-summary").innerText();
+      expect(await page.locator('#spotlight-metrics [data-spotlight="sellerNetPrice"]').count()).toBe(1);
+
+      releaseM4?.();
+      await page.waitForFunction(() =>
+        (document.getElementById("m4-preview-body")?.textContent ?? "").includes("M4 preview unavailable")
+      );
+      expect(await page.locator("#m4-run-summary").innerText()).toBe(selectedSummary);
+      expect(await page.locator('#spotlight-metrics [data-spotlight="sellerNetPrice"]').count()).toBe(1);
+      expect(await page.locator("#showcase-milestone").inputValue()).toBe("m3");
+    } finally {
+      releaseM4?.();
+      await page.close();
+    }
+  }, 60_000);
+
   it("keeps plain-English causal and one-way-observation copy in the published page", () => {
     const html = readFileSync(path.join(docsDir, "index.html"), "utf8");
     for (const phrase of ["Phase&nbsp;2", "Phase&nbsp;3", "Phase&nbsp;5", "Phase&nbsp;8", "Phase&nbsp;9", "Phase&nbsp;12", "Phase&nbsp;15", "one-way observation", "does not control the simulation"]) {
