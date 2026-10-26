@@ -106,13 +106,15 @@ function compareCanonicalIds(a: Phase7EligibleTradeCandidate, b: Phase7EligibleT
 }
 
 /**
- * Score-descending first, then epsilon-tie groups in canonical ID order.
+ * Score-first ranking with deterministic anchor-bounded epsilon tie bands.
  *
- * A direct epsilon-aware Array.sort comparator is non-transitive (A~B and
- * B~C need not imply A~C), and its output can depend on input insertion
- * order. Form groups from the score-sorted adjacent epsilon-tie relation,
- * so its transitive closure is deterministic. Within each group the
- * canonical-ID comparison alone determines order.
+ * Handoff/04 §36 / HANDOFF-REPAIR-M5-001: sorting directly with an epsilon
+ * comparator is non-transitive, but chaining adjacent near-ties can invert
+ * two scores whose difference is greater than epsilon. First sort by exact
+ * score descending (canonical IDs break exact-score ties). Anchor each band
+ * at its highest remaining score; admit only scores within epsilon of that
+ * anchor, then sort those members by IDs. Later bands retain score precedence
+ * even if candidates on opposite sides of a boundary are epsilon-near.
  */
 function rankWithEpsilonTies(
   candidates: readonly Phase7EligibleTradeCandidate[],
@@ -122,7 +124,7 @@ function rankWithEpsilonTies(
   const ranked: Phase7EligibleTradeCandidate[] = [];
   for (let start = 0; start < sorted.length;) {
     let end = start + 1;
-    while (end < sorted.length && sorted[end - 1]!.score - sorted[end]!.score <= scoreEpsilon) {
+    while (end < sorted.length && sorted[start]!.score - sorted[end]!.score <= scoreEpsilon) {
       end++;
     }
     ranked.push(...sorted.slice(start, end).sort(compareCanonicalIds));
