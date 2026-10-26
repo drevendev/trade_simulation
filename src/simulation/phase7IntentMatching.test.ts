@@ -250,6 +250,45 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
       .toThrow(/requires resolved numeric epsilons/);
   });
 
+  it("binds buyer actor charges to the accepted regional cash reservation", () => {
+    const s = seller("s", 2), ba = buyer("ba", 1), bb = buyer("bb", 1);
+    const seed = request("a", 2, [s], [ba, bb]);
+    const accepted = {
+      ...seed,
+      landedGrossUnitCostDest: 2,
+      reservation: { ...seed.reservation, buyerCashReservedDest: 4 },
+    };
+    const b = budgets([s], [ba, bb]);
+    const out = match([accepted], b);
+    expect(out.lots.map((lot) => [lot.buyerIntentId, lot.quantity])).toEqual([
+      ["mi:ba", 1], ["mi:bb", 1],
+    ]);
+    expect([...out.remainingBuyerCashByActorCurrency.values()]).toEqual([98, 98]);
+
+    // A stale actor quote must never spend more than the regional reservation,
+    // even if the concrete buyer owns plenty of cash.
+    const mismatched = [
+      { ...accepted, reservation: { ...accepted.reservation, buyerCashReservedDest: 1 } },
+      { ...accepted, reservation: { ...accepted.reservation, buyerCashReservedDest: 5 } },
+      { ...accepted, landedGrossUnitCostDest: 3 },
+      { ...accepted, reservation: { ...accepted.reservation, buyerCashReservedDest: NaN } },
+      { ...accepted, reservation: { ...accepted.reservation, buyerCashReservedDest: -1 } },
+      { ...accepted, reservation: { ...accepted.reservation, buyerCashReservedDest: Infinity } },
+    ];
+    const originalEndpoint = [...b.sellerExportableByEndpoint.entries()];
+    const originalCash = [...b.buyerCashByActorCurrency.entries()];
+    for (const bad of mismatched) {
+      expect(() => match([bad], b)).toThrow(/reserved buyer cash|does not match accepted aggregate reservation/);
+      expect([...b.sellerExportableByEndpoint.entries()]).toEqual(originalEndpoint);
+      expect([...b.buyerCashByActorCurrency.entries()]).toEqual(originalCash);
+    }
+    // Ordinary sub-epsilon binary64 cash rounding remains permissible.
+    const rounded = {
+      ...accepted, reservation: { ...accepted.reservation, buyerCashReservedDest: 4 + 5e-10 },
+    };
+    expect(match([rounded], b).lots).toEqual(out.lots);
+  });
+
   it("rejects wrong-side/region, unknown endpoint and forged aggregate reservations before matching", () => {
     const s = seller("s", 10), b = buyer("b", 10);
     const valid = request("a", 3, [s], [b]);
