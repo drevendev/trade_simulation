@@ -149,7 +149,21 @@
   }
 
   function render(preview) {
-    // The controller updates the selected-run summary from validated M4 evidence.
+    // Preserve standalone M4 run provenance for existing read-only consumers and tests.
+    // On the combined Pages viewer the selected-run controller alone owns this summary.
+    if (!window.showcaseSavedRun) {
+      const runSummary = document.getElementById("m4-run-summary");
+      if (runSummary) {
+        const scenarioId = typeof preview.scenario.scenarioId === "string" &&
+          preview.scenario.scenarioId.length > 0 ? preview.scenario.scenarioId : "unnamed scenario";
+        const samples = preview.samples;
+        const observation = samples.length === 0
+          ? "No sampled ticks or observed output values."
+          : `Samples span ticks ${samples[0].tick}–${samples[samples.length - 1].tick}; ` +
+            `last sampled output: ${exact(samples[samples.length - 1].outputProduced)} ${preview.region.goodsUnitLabel}/tick.`;
+        runSummary.textContent = `Selected scenario: ${scenarioId}. Run length: ${preview.scenario.ticksExecuted} ticks. ${observation}`;
+      }
+    }
     renderSpotlight(preview);
     if (preview.samples.length === 0) {
       state("M4 preview empty", "The artifact is valid, but the deterministic run contains no sampled ticks. No values are invented in its place.");
