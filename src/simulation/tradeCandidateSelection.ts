@@ -97,13 +97,38 @@ function positive(value: number, name: string): void {
 function cmp(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
-function rank(a: Phase7EligibleTradeCandidate, b: Phase7EligibleTradeCandidate): number {
-  return b.score - a.score ||
-    cmp(a.originRegionId, b.originRegionId) ||
+function compareCanonicalIds(a: Phase7EligibleTradeCandidate, b: Phase7EligibleTradeCandidate): number {
+  return cmp(a.originRegionId, b.originRegionId) ||
     cmp(a.destinationRegionId, b.destinationRegionId) ||
     cmp(a.goodId, b.goodId) ||
     cmp(a.linkId, b.linkId) ||
     cmp(a.tradePlanId, b.tradePlanId);
+}
+
+/**
+ * Score-descending first, then epsilon-tie groups in canonical ID order.
+ *
+ * A direct epsilon-aware Array.sort comparator is non-transitive (A~B and
+ * B~C need not imply A~C), and its output can depend on input insertion
+ * order. Form groups from the score-sorted adjacent epsilon-tie relation,
+ * so its transitive closure is deterministic. Within each group the
+ * canonical-ID comparison alone determines order.
+ */
+function rankWithEpsilonTies(
+  candidates: readonly Phase7EligibleTradeCandidate[],
+  scoreEpsilon: number,
+): Phase7EligibleTradeCandidate[] {
+  const sorted = [...candidates].sort((a, b) => b.score - a.score || compareCanonicalIds(a, b));
+  const ranked: Phase7EligibleTradeCandidate[] = [];
+  for (let start = 0; start < sorted.length;) {
+    let end = start + 1;
+    while (end < sorted.length && sorted[end - 1]!.score - sorted[end]!.score <= scoreEpsilon) {
+      end++;
+    }
+    ranked.push(...sorted.slice(start, end).sort(compareCanonicalIds));
+    start = end;
+  }
+  return ranked;
 }
 
 /**
@@ -130,12 +155,15 @@ export function selectPhase7TradeCandidates(
   }
   const epsilon = config.numeric.quantityEpsilon;
   const moneyEpsilon = config.numeric.moneyEpsilon;
+  const scoreEpsilon = config.numeric.rateEpsilon;
   const minimumShipment = config.trade.shipmentMinimumQuantity;
-  if (epsilon === undefined || moneyEpsilon === undefined || minimumShipment === undefined) {
+  if (epsilon === undefined || moneyEpsilon === undefined ||
+      scoreEpsilon === undefined || minimumShipment === undefined) {
     throw new Error("Phase-7 requires resolved numeric and shipment minimum config");
   }
   nonnegative(epsilon, "quantityEpsilon");
   positive(moneyEpsilon, "moneyEpsilon");
+  positive(scoreEpsilon, "rateEpsilon");
   positive(minimumShipment, "shipmentMinimumQuantity");
 
   const seenIds = new Set<string>();
@@ -257,5 +285,5 @@ export function selectPhase7TradeCandidates(
       maximumOwnQuantity,
     });
   }
-  return selected.sort(rank);
+  return rankWithEpsilonTies(selected, scoreEpsilon);
 }
