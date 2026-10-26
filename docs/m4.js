@@ -139,73 +139,17 @@
 
 
   function spotlightUnavailable(message) {
-    const slider = document.getElementById("spotlight-tick");
-    const readout = document.getElementById("spotlight-readout");
-    const metrics = document.getElementById("spotlight-metrics");
-    if (slider) { slider.disabled = true; slider.value = "0"; }
-    if (readout) readout.textContent = message;
-    if (metrics) metrics.textContent = "No verified sampled values are available.";
+    window.showcaseSavedRun?.failure("m4", message);
   }
 
   function renderSpotlight(preview) {
-    const slider = document.getElementById("spotlight-tick");
-    const readout = document.getElementById("spotlight-readout");
-    const metrics = document.getElementById("spotlight-metrics");
-    if (!slider || !readout || !metrics) return;
-    if (preview.samples.length === 0) {
-      spotlightUnavailable("This run has no sampled ticks");
-      return;
-    }
-    slider.min = "0";
-    slider.max = String(preview.samples.length - 1);
-    slider.step = "1";
-    slider.value = slider.max;
-    slider.disabled = false;
-    const show = () => {
-      const index = Number(slider.value);
-      const sample = preview.samples[index];
-      if (!sample) { spotlightUnavailable("Selected sample unavailable"); return; }
-      readout.textContent = `tick ${sample.tick} · sample ${index + 1} of ${preview.samples.length}`;
-      const cards = [
-        ["outputProduced", "Realized output", number(sample.outputProduced), `${preview.region.goodsUnitLabel} / tick`],
-        ["employedWorkers", "Employment", number(sample.employedWorkers), preview.region.workerUnitLabel],
-        ["essentialCoverage", "Essential-need coverage", percent(sample.essentialCoverage), "of target"],
-        ["grossWagesPaid", "Gross wages paid", number(sample.grossWagesPaid), `${preview.region.currencyCode} / tick`],
-        ["installedCapital", "Installed capital", number(sample.installedCapital), preview.region.capitalUnitLabel],
-      ];
-      const nodes = cards.map(([field, label, value, unit]) => {
-        const card = document.createElement("div");
-        card.dataset.spotlight = field;
-        const dt = document.createElement("dt");
-        dt.textContent = label;
-        const dd = document.createElement("dd");
-        dd.append(document.createTextNode(value));
-        const small = document.createElement("small");
-        small.textContent = unit;
-        dd.appendChild(small);
-        card.append(dt, dd);
-        return card;
-      });
-      metrics.replaceChildren(...nodes);
-    };
-    slider.addEventListener("input", show);
-    show();
+    // The shared controller owns the timeline so M3 and M4 cannot overwrite
+    // each other's active values when their independent requests resolve.
+    window.showcaseSavedRun?.ready("m4", preview);
   }
 
   function render(preview) {
-    // Read provenance from the selected artifact, never the fixed fixture's prose.
-    // Text-only insertion prevents a scenario identifier from becoming markup.
-    const runSummary = document.getElementById("m4-run-summary");
-    if (runSummary) {
-      const scenarioId = typeof preview.scenario.scenarioId === "string" &&
-        preview.scenario.scenarioId.length > 0 ? preview.scenario.scenarioId : "unnamed scenario";
-      const samples = preview.samples;
-      const observation = samples.length === 0
-        ? "No sampled ticks or observed output values."
-        : `Samples span ticks ${samples[0].tick}–${samples[samples.length - 1].tick}; ` +
-          `last sampled output: ${exact(samples[samples.length - 1].outputProduced)} ${preview.region.goodsUnitLabel}/tick.`;
-      runSummary.textContent = `Selected scenario: ${scenarioId}. Run length: ${preview.scenario.ticksExecuted} ticks. ${observation}`;
-    }
+    // The controller updates the selected-run summary from validated M4 evidence.
     renderSpotlight(preview);
     if (preview.samples.length === 0) {
       state("M4 preview empty", "The artifact is valid, but the deterministic run contains no sampled ticks. No values are invented in its place.");
