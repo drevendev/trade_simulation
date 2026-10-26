@@ -144,6 +144,45 @@ function proportional(caps: readonly Cap[], quantity: number, epsilon: number): 
 }
 
 /**
+ * Each physical endpoint or wallet is ONE shared resource, even when its
+ * owner issues several intents. Split that resource pro rata among the
+ * eligible intents before applying the aggregate regional reservation.
+ *
+ * Importantly, no *provisional* per-intent maximum is consumed here: doing
+ * so would give the first stable ID all available stock/cash even if its
+ * eventual matched fill were much smaller.
+ */
+function fairSharedCaps(
+  caps: readonly Cap[],
+  groupKey: (evidence: Phase7ActorResidualIntent) => string,
+  sharedCapacity: (key: string) => number,
+  epsilon: number,
+): Cap[] {
+  const groups = new Map<string, Cap[]>();
+  for (const cap of caps) {
+    const key = groupKey(cap.evidence);
+    const group = groups.get(key) ?? [];
+    group.push(cap);
+    groups.set(key, group);
+  }
+  const shares = new Map<MarketIntentId, number>();
+  for (const [key, group] of groups) {
+    const capacity = sharedCapacity(key);
+    if (Number.isNaN(capacity) || capacity < 0) {
+      throw new Error("Phase-7 shared actor capacity invalid");
+    }
+    const total = group.reduce((sum, entry) => sum + entry.cap, 0);
+    if (!Number.isFinite(total)) {
+      throw new Error("Phase-7 shared actor intent capacity not finite");
+    }
+    for (const share of proportional(group, Math.min(total, capacity), epsilon)) {
+      shares.set(share.evidence.intent.id, share.fill);
+    }
+  }
+  return caps.map((cap) => ({ ...cap, cap: shares.get(cap.evidence.intent.id)! }));
+}
+
+/**
  * Match in deterministic anchored candidate order. Complexity is sorting
  * plus O(S+B) per accepted candidate, not an actor Cartesian product.
  *
@@ -230,32 +269,31 @@ export function matchPhase7ActorIntents(
     const quantity = request.reservation.allocatedQuantity;
     if (quantity === 0) continue;
     const quote = request.landedGrossUnitCostDest;
-    // Sparse candidate-local previews: cloning every world actor's wallet and
-    // every stock endpoint once PER candidate would be O(C * worldSize).
-    const sellerShadow = new Map<string, number>();
-    const buyerShadow = new Map<string, number>();
-    const sellers: Cap[] = ordered(request.sellers).map((e) => {
-      const key = phase7SellerEndpointKey(e.intent);
-      const available = sellerShadow.get(key) ?? endpoint.get(key)!;
-      const cap = Math.min(sellerRemain.get(e.intent.id)!, available);
-      sellerShadow.set(key, consume(available, cap, "provisional seller endpoint"));
-      return { evidence: e, cap };
-    });
-    const buyers: Cap[] = ordered(request.buyers).map((e) => {
-      const key = phase7BuyerActorCashKey(e.intent.actor, c.destinationCurrencyId);
-      const cashAvailable = buyerShadow.get(key) ?? actorCash.get(key)!;
+    // Fairly split shared physical stock across all intents from an endpoint.
+    // An intent's full potential is NOT a committed debit. Only actual matched
+    // fills below will be consumed from the canonical residual preview maps.
+    const sellerCaps: Cap[] = ordered(request.sellers).map((e) => ({
+      evidence: e, cap: sellerRemain.get(e.intent.id)!,
+    }));
+    const sellers = fairSharedCaps(
+      sellerCaps, (e) => phase7SellerEndpointKey(e.intent),
+      (key) => endpoint.get(key)!, quantityEpsilon,
+    );
+    const buyerCaps: Cap[] = ordered(request.buyers).map((e) => {
       const cap = Math.min(
-        buyerRemain.get(e.intent.id)!, quote > 0 ? buyerSpend.get(e.intent.id)! / quote : Number.POSITIVE_INFINITY,
-        quote > 0 ? cashAvailable / quote : Number.POSITIVE_INFINITY,
+        buyerRemain.get(e.intent.id)!,
+        quote > 0 ? buyerSpend.get(e.intent.id)! / quote : Number.POSITIVE_INFINITY,
       );
-      if (!Number.isFinite(cap) || cap < 0) throw new Error("Phase-7 buyer quantity bound invalid");
-      const provisionalCash = cap * quote;
-      if (!Number.isFinite(provisionalCash) || (quote > 0 && cap > 0 && provisionalCash === 0)) {
-        throw new Error("Phase-7 buyer provisional payment lost numeric precision");
+      if (!Number.isFinite(cap) || cap < 0) {
+        throw new Error("Phase-7 buyer quantity bound invalid");
       }
-      buyerShadow.set(key, consume(cashAvailable, provisionalCash, "provisional buyer cash"));
       return { evidence: e, cap };
     });
+    const buyers = fairSharedCaps(
+      buyerCaps, (e) => phase7BuyerActorCashKey(e.intent.actor, c.destinationCurrencyId),
+      (key) => quote > 0 ? actorCash.get(key)! / quote : Number.POSITIVE_INFINITY,
+      quantityEpsilon,
+    );
     const sellerFills = proportional(sellers, quantity, quantityEpsilon);
     const buyerFills = proportional(buyers, quantity, quantityEpsilon);
     // Stage every actor mutation in local copies. Nothing in canonical WorldState
