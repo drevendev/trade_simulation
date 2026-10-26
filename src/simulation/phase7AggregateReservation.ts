@@ -12,7 +12,7 @@
  * economic stock has changed.
  */
 import type { SimulationConfig } from "../config/simulationConfig";
-import type { CurrencyId, FxPairId, GoodId, RegionId, TransportLinkId } from "../domain/id";
+import type { CurrencyId, GoodId, RegionId, TransportLinkId } from "../domain/id";
 import { cargoCapacityUse, effectiveTransportLinkCapacity, hasUsableTransportCapacity } from "./transportCapacity";
 import { rankWithEpsilonTies, type Phase7EligibleTradeCandidate } from "./tradeCandidateSelection";
 import type { WorldState } from "./worldState";
@@ -25,7 +25,7 @@ export function phase7RegionCashKey(region: RegionId, currency: CurrencyId): str
   return JSON.stringify([region, currency]);
 }
 
-export function phase7FxOutputKey(pair: FxPairId, currency: CurrencyId): string {
+export function phase7FxOutputKey(pair: string, currency: CurrencyId): string {
   return JSON.stringify([pair, currency]);
 }
 
@@ -45,7 +45,7 @@ export interface Phase7AggregateReservationRequest {
   /** Buyer total debit per unit, including transport, tariffs and FX spread. */
   readonly landedGrossUnitCostDest: number;
   /** Required only for cross-currency purchases; pair direction is explicit. */
-  readonly fxPoolPairId?: FxPairId;
+  readonly fxPoolPairId?: string;
 }
 
 export type Phase7AggregateRefusal =
