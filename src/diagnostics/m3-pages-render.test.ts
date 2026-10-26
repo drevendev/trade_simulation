@@ -325,7 +325,7 @@ describe("REQ-VISUALIZATION-006: M3 Pages render smoke", () => {
     // (marketPricing.ts); the only lagged input is `expectedUseEma`, consulted solely as
     // the denominator of inventory coverage. Presence checks cannot pin accuracy in
     // general, but they can stop this specific reversal from returning green.
-    const lead = new JSDOM(pageHtml()).window.document.querySelector("#chapter-m3 > p");
+    const lead = new JSDOM(pageHtml()).window.document.querySelector("#chapter-m3 > .chapter-body > p");
     expect(lead).not.toBeNull();
     const sentences = (lead!.textContent ?? "")
       .replace(/\s+/g, " ")
