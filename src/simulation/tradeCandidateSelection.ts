@@ -116,7 +116,7 @@ function compareCanonicalIds(a: Phase7EligibleTradeCandidate, b: Phase7EligibleT
  * anchor, then sort those members by IDs. Later bands retain score precedence
  * even if candidates on opposite sides of a boundary are epsilon-near.
  */
-function rankWithEpsilonTies(
+export function rankWithEpsilonTies(
   candidates: readonly Phase7EligibleTradeCandidate[],
   scoreEpsilon: number,
 ): Phase7EligibleTradeCandidate[] {
