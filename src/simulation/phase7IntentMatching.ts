@@ -243,12 +243,22 @@ export function matchPhase7ActorIntents(
       throw new Error("Phase-7 actor matcher requires unique plan IDs and finite scores");
     }
     validNonnegative(r.allocatedQuantity, "Phase-7 reserved quantity");
+    validNonnegative(r.buyerCashReservedDest, "Phase-7 reserved buyer cash");
     validNonnegative(c.maximumOwnQuantity, "Phase-7 candidate own bound");
     validNonnegative(request.landedGrossUnitCostDest, "Phase-7 landed quote");
     if (r.tradePlanId !== c.tradePlanId || r.linkId !== c.linkId ||
         r.goodId !== c.goodId || r.allocatedQuantity > c.maximumOwnQuantity ||
         (r.refusal !== null && r.allocatedQuantity !== 0)) {
       throw new Error("Phase-7 actor request does not match accepted aggregate reservation");
+    }
+    // The actor-level quote must be the *same* one whose cash was reserved
+    // at the regional boundary. Do not spend a different amount merely
+    // because individual actor wallets could afford it.
+    const expectedBuyerCash = r.allocatedQuantity * request.landedGrossUnitCostDest;
+    if (!Number.isFinite(expectedBuyerCash) ||
+        (r.allocatedQuantity > 0 && request.landedGrossUnitCostDest > 0 && expectedBuyerCash === 0) ||
+        Math.abs(expectedBuyerCash - r.buyerCashReservedDest) > moneyEpsilon) {
+      throw new Error("Phase-7 actor buyer cash does not match accepted aggregate reservation");
     }
     const seen = new Set<string>();
     for (const entry of request.sellers) {
@@ -307,6 +317,7 @@ export function matchPhase7ActorIntents(
     const nextSeller = new Map<MarketIntentId, number>();
     const nextBuyer = new Map<MarketIntentId, number>();
     const nextSpend = new Map<MarketIntentId, number>();
+    let stagedBuyerCash = 0;
     for (const s of sellerFills) {
       const id = s.evidence.intent.id;
       const key = phase7SellerEndpointKey(s.evidence.intent);
@@ -323,6 +334,13 @@ export function matchPhase7ActorIntents(
       nextBuyer.set(id, consume(nextBuyer.get(id) ?? buyerRemain.get(id)!, b.fill, quantityEpsilon, "buyer intent"));
       nextSpend.set(id, consume(nextSpend.get(id) ?? buyerSpend.get(id)!, payment, moneyEpsilon, "buyer intent spend"));
       nextCash.set(key, consume(nextCash.get(key) ?? actorCash.get(key)!, payment, moneyEpsilon, "buyer actor cash"));
+      stagedBuyerCash += payment;
+    }
+    // Preserve the regional cash reservation through proportional splitting,
+    // not merely the regional goods quantity.
+    if (!Number.isFinite(stagedBuyerCash) ||
+        Math.abs(stagedBuyerCash - request.reservation.buyerCashReservedDest) > moneyEpsilon) {
+      throw new Error("Phase-7 actor payments cannot reconcile accepted buyer cash reservation");
     }
 
     const planned: Phase7ActorMatchLot[] = [];
