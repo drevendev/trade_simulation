@@ -10,6 +10,7 @@
  *
  * No stock, wallet, shipment, transaction or MarketIntent input is mutated.
  */
+import type { NumericConfig } from "../config/simulationConfig";
 import type { GoodId, RegionId } from "../domain/id";
 import { stableOrderBy } from "../domain/ordering";
 import { validateMarketIntent, type MarketIntent, type MarketIntentId } from "./marketIntent";
@@ -34,12 +35,23 @@ function positiveFinite(value: number, field: string): void {
   }
 }
 
-function subtractExactObservable(before: number, debit: number, label: string): number {
+type ResidualPrecision = Readonly<Required<Pick<NumericConfig, "quantityEpsilon" | "moneyEpsilon">>>;
+
+function subtractExactObservable(
+  before: number, debit: number, label: string, precisionTolerance: number,
+): number {
   if (debit > before) {
     throw new Error(`Phase-7 committed residual ${label} exceeds remaining intent budget`);
   }
   const after = before - debit;
-  if (!Number.isFinite(after) || after < 0 || after >= before) {
+  // A changed binary64 value is not enough: 1e16 - 3 changes the stored
+  // balance by FOUR, silently consuming one unit that never shipped/settled.
+  // Compare the actually representable decrement to the authenticated debit
+  // using its explicit quantity/money tolerance, not a magnitude-scaled ULP.
+  const observedDebit = before - after;
+  if (!Number.isFinite(after) || after < 0 || after >= before ||
+      !Number.isFinite(observedDebit) ||
+      Math.abs(observedDebit - debit) > precisionTolerance) {
     throw new Error(`Phase-7 committed residual ${label} loses binary64 debit precision`);
   }
   return after;
@@ -58,7 +70,12 @@ function subtractExactObservable(before: number, debit: number, label: string): 
 export function projectPhase8CommittedTradeResiduals(
   mainIntents: readonly MarketIntent[],
   committedLots: readonly CommittedPhase7ShipmentLot[],
+  numeric: ResidualPrecision,
 ): MarketIntent[] {
+  if (!numeric || !Number.isFinite(numeric.quantityEpsilon) || numeric.quantityEpsilon < 0 ||
+      !Number.isFinite(numeric.moneyEpsilon) || numeric.moneyEpsilon < 0) {
+    throw new Error("Phase-7 committed residual requires finite nonnegative quantity and money precision");
+  }
   const remaining = new Map<MarketIntentId, MarketIntent>();
   for (const intent of mainIntents) {
     validateMarketIntent(intent);
@@ -92,13 +109,13 @@ export function projectPhase8CommittedTradeResiduals(
     }
 
     const sellerRemaining = subtractExactObservable(
-      seller.desiredQuantity, lot.dispatchedQuantity, "seller quantity",
+      seller.desiredQuantity, lot.dispatchedQuantity, "seller quantity", numeric.quantityEpsilon,
     );
     const buyerRemaining = subtractExactObservable(
-      buyer.desiredQuantity, lot.dispatchedQuantity, "buyer quantity",
+      buyer.desiredQuantity, lot.dispatchedQuantity, "buyer quantity", numeric.quantityEpsilon,
     );
     const buyerCashRemaining = subtractExactObservable(
-      buyer.maxSpend, lot.buyerTotalDebitDest, "buyer destination-currency spend",
+      buyer.maxSpend, lot.buyerTotalDebitDest, "buyer destination-currency spend", numeric.moneyEpsilon,
     );
     remaining.set(seller.id, { ...seller, desiredQuantity: sellerRemaining });
     remaining.set(buyer.id, {
