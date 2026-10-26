@@ -68,13 +68,15 @@ function mustHave(map: ReadonlyMap<string, number>, key: string, label: string):
   validNonnegative(value, label);
   return value;
 }
-function consume(balance: number, use: number, label: string): number {
+/** Reject unobservable AND misrepresented binary64 debits (1e16 - 3 observes 4). */
+function consume(balance: number, use: number, epsilon: number, label: string): number {
   validNonnegative(balance, label + " balance");
   validNonnegative(use, label + " use");
   if (use > balance) throw new Error(label + " overdraw");
   if (use === 0) return balance;
   const after = balance - use;
-  if (!Number.isFinite(after) || after < 0 || after === balance) {
+  if (!Number.isFinite(after) || after < 0 || after === balance ||
+      Math.abs((balance - after) - use) > epsilon) {
     throw new Error(label + " lost numeric precision");
   }
   return after;
@@ -195,9 +197,11 @@ export function matchPhase7ActorIntents(
   budgets: Phase7ActorMatchBudgets,
   scoreEpsilon: number,
   quantityEpsilon: number,
+  moneyEpsilon: number,
 ): Phase7ActorMatchResult {
   if (!Number.isFinite(scoreEpsilon) || scoreEpsilon <= 0 ||
-      !Number.isFinite(quantityEpsilon) || quantityEpsilon < 0) {
+      !Number.isFinite(quantityEpsilon) || quantityEpsilon < 0 ||
+      !Number.isFinite(moneyEpsilon) || moneyEpsilon < 0) {
     throw new Error("Phase-7 actor matcher requires resolved numeric epsilons");
   }
   const endpoint = new Map(budgets.sellerExportableByEndpoint);
@@ -306,8 +310,8 @@ export function matchPhase7ActorIntents(
     for (const s of sellerFills) {
       const id = s.evidence.intent.id;
       const key = phase7SellerEndpointKey(s.evidence.intent);
-      nextSeller.set(id, consume(nextSeller.get(id) ?? sellerRemain.get(id)!, s.fill, "seller intent"));
-      nextEndpoints.set(key, consume(nextEndpoints.get(key) ?? endpoint.get(key)!, s.fill, "seller physical endpoint"));
+      nextSeller.set(id, consume(nextSeller.get(id) ?? sellerRemain.get(id)!, s.fill, quantityEpsilon, "seller intent"));
+      nextEndpoints.set(key, consume(nextEndpoints.get(key) ?? endpoint.get(key)!, s.fill, quantityEpsilon, "seller physical endpoint"));
     }
     for (const b of buyerFills) {
       const id = b.evidence.intent.id;
@@ -316,9 +320,9 @@ export function matchPhase7ActorIntents(
       if (!Number.isFinite(payment) || (b.fill > 0 && quote > 0 && payment === 0)) {
         throw new Error("Phase-7 buyer payment lost numeric precision");
       }
-      nextBuyer.set(id, consume(nextBuyer.get(id) ?? buyerRemain.get(id)!, b.fill, "buyer intent"));
-      nextSpend.set(id, consume(nextSpend.get(id) ?? buyerSpend.get(id)!, payment, "buyer intent spend"));
-      nextCash.set(key, consume(nextCash.get(key) ?? actorCash.get(key)!, payment, "buyer actor cash"));
+      nextBuyer.set(id, consume(nextBuyer.get(id) ?? buyerRemain.get(id)!, b.fill, quantityEpsilon, "buyer intent"));
+      nextSpend.set(id, consume(nextSpend.get(id) ?? buyerSpend.get(id)!, payment, moneyEpsilon, "buyer intent spend"));
+      nextCash.set(key, consume(nextCash.get(key) ?? actorCash.get(key)!, payment, moneyEpsilon, "buyer actor cash"));
     }
 
     const planned: Phase7ActorMatchLot[] = [];
