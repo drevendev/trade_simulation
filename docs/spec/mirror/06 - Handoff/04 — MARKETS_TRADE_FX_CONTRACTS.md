@@ -762,7 +762,8 @@ Shipment matching: sellerKey \-\> buyerKey \-\> good \-\> link.
 FX reservations: inherited trade-candidate/bundle order.  
 Due shipment delivery: arrivalTick \-\> shipmentId.
 
-Floating ties within configured epsilon are treated as ties and resolved by IDs, not machine-specific incidental ordering.
+Floating ties within configured epsilon are treated as ties and resolved by IDs, not machine-specific incidental ordering.  
+HANDOFF-REPAIR-M5-001 (2026-10-26) — Phase-7 score epsilon tie-chain clarification: sort candidates by descending finite score, using canonical originRegionId, destinationRegionId, goodId, linkId and tradePlanId only for exactly equal scores. Starting with the highest remaining score S (the band anchor), include subsequent score-descending candidates in that band only if S \- candidate.score \<= SimulationConfig.numeric.rateEpsilon (inclusive). Do NOT extend a band using the distance from the previous candidate: adjacent epsilon ties are not transitive. Resolve ID precedence within each anchored band, then concatenate bands in descending anchor order. No two candidates separated by more than epsilon may be inverted by tie-breaking; when overlapping pairwise near-ties cross a band boundary, band priority takes precedence over the lower band's IDs. The same inputs produce the same bands irrespective of insertion order. Require finite scores and positive finite rateEpsilon, and test a two-good near-tie and a three-good overlapping near-tie chain with score-separated endpoints. This is a deterministic ordering clarification, not a new trade policy, weight, price rule or default.
 
 37\. Failure semantics
 
