@@ -76,27 +76,69 @@ afterAll(async () => {
   await new Promise<void>((resolve, reject) => server?.close(error => error ? reject(error) : resolve()));
 });
 
-async function pageAt(query = "", width = 1280): Promise<Page> {
+async function pageAt(query = "", width = 1280, openChapter = true): Promise<Page> {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   await page.goto(`${baseUrl}${query}`);
   await page.waitForFunction(() => !(document.getElementById("m4-preview-body")?.textContent ?? "").includes("Loading the M4 economy"));
+  if (openChapter) await page.locator("#chapter-m4 > summary").click();
   return page;
 }
 
 describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
-  it("makes the M4 one-region economy the first visible milestone without removing M3 history", async () => {
-    const page = await pageAt();
+  it("starts with the real M4 sample timeline while M0–M4 and legacy stay folded", async () => {
+    const page = await pageAt("", 1280, false);
     try {
+      expect(await page.locator("#showcase-player").isVisible()).toBe(true);
+      expect(await page.locator("#spotlight-tick").isEnabled()).toBe(true);
+      expect(await page.locator("#m4-preview").isVisible()).toBe(false);
+      expect(await page.locator("#m3-preview").isVisible()).toBe(false);
+      for (const id of ["chapter-m0", "chapter-m1", "chapter-m2", "chapter-m3", "chapter-m4", "chapter-legacy"]) {
+        expect(await page.locator(`#${id}`).evaluate(node => (node as HTMLDetailsElement).open), id).toBe(false);
+      }
+      await page.locator('[data-open-chapter="chapter-m4"]').click();
       expect(await page.locator("#m4-preview").isVisible()).toBe(true);
       expect(await page.locator("#m4-preview-body").isVisible()).toBe(true);
-      expect(await page.locator("#m3-preview").isVisible()).toBe(true);
-      const m4BeforeM3 = await page.evaluate(() => {
-        const m4 = document.getElementById("m4-preview")!;
-        const m3 = document.getElementById("m3-preview")!;
-        return (m4.compareDocumentPosition(m3) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    } finally { await page.close(); }
+  }, 60_000);
+
+  it("scrubs measured M4 samples without interpolating unobserved ticks", async () => {
+    const page = await pageAt("", 1280, false);
+    try {
+      const samples = artifact().samples;
+      const last = samples[samples.length - 1]!;
+      const first = samples[0]!;
+      expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${last.tick}`);
+      const shownLast = await page.locator('[data-spotlight="outputProduced"] dd').innerText();
+      expect(shownLast).toContain(last.outputProduced.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+      await page.locator("#spotlight-tick").evaluate(node => {
+        const slider = node as HTMLInputElement;
+        slider.value = "0";
+        slider.dispatchEvent(new Event("input", { bubbles: true }));
       });
-      expect(m4BeforeM3).toBe(true);
-      expect(await page.locator("#earlier-milestones").evaluate(node => (node as HTMLDetailsElement).open)).toBe(false);
+      expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${first.tick}`);
+      const shownFirst = await page.locator('[data-spotlight="outputProduced"] dd').innerText();
+      expect(shownFirst).toContain(first.outputProduced.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+      expect(await page.locator('[data-spotlight="essentialCoverage"] dd').innerText()).toContain(`${(first.essentialCoverage * 100).toFixed(1)}%`);
+      expect(await page.locator("#spotlight-tick").getAttribute("max")).toBe(String(samples.length - 1));
+    } finally { await page.close(); }
+  }, 60_000);
+
+  it("fails closed in the showcase when the selected saved run is invalid", async () => {
+    const page = await pageAt("?m4=m4-preview-wrong.json", 1280, false);
+    try {
+      expect(await page.locator("#spotlight-tick").isDisabled()).toBe(true);
+      expect(await page.locator("#spotlight-readout").innerText()).toContain("could not be displayed");
+      expect(await page.locator("#spotlight-metrics").innerText()).toContain("No verified sampled values");
+      expect(await page.locator('[data-spotlight="outputProduced"]').count()).toBe(0);
+    } finally { await page.close(); }
+  }, 60_000);
+
+  it("opens chapters from deep links without forcing all other chapters open", async () => {
+    const page = await pageAt("#m1-preview", 1280, false);
+    try {
+      expect(await page.locator("#chapter-m1").evaluate(node => (node as HTMLDetailsElement).open)).toBe(true);
+      expect(await page.locator("#chapter-m4").evaluate(node => (node as HTMLDetailsElement).open)).toBe(false);
+      expect(await page.locator("#m1-preview").isVisible()).toBe(true);
     } finally { await page.close(); }
   }, 60_000);
 
