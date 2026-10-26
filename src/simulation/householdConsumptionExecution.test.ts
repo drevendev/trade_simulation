@@ -53,6 +53,7 @@ function good(id: GoodId, spoilageRatePerTick: number): GoodDefinition {
     id,
     name: String(id),
     unitLabel: "units",
+    cargoWeightPerUnit: 1,
     spoilageRatePerTick,
     consumerNeedCategory: "test",
     necessityWeight: 1,
