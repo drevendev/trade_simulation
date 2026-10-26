@@ -10,11 +10,14 @@
 import type { DefinitionPack, GoodDefinition, RecipeDefinition } from "../definitionPack";
 import type { GoodId } from "../../domain/id";
 
-// Good definitions with proper typing
+// Good definitions with proper typing.
+// Every baseline Good explicitly declares one normalized capacity-weight unit per
+// fixture good unit. These are scenario data, not a hidden global/default weight.
 const food: GoodDefinition = {
   id: "good:food" as GoodId,
   name: "Food",
   unitLabel: "units",
+  cargoWeightPerUnit: 1,
   spoilageRatePerTick: 0.05,
   consumerNeedCategory: "subsistence",
   necessityWeight: 0.4,
@@ -27,6 +30,7 @@ const wood: GoodDefinition = {
   id: "good:wood" as GoodId,
   name: "Wood",
   unitLabel: "units",
+  cargoWeightPerUnit: 1,
   spoilageRatePerTick: 0.01,
   consumerNeedCategory: "material",
   necessityWeight: 0.2,
@@ -39,6 +43,7 @@ const iron: GoodDefinition = {
   id: "good:iron" as GoodId,
   name: "Iron",
   unitLabel: "units",
+  cargoWeightPerUnit: 1,
   spoilageRatePerTick: 0.0,
   consumerNeedCategory: null,
   referencePrice: 15,
@@ -49,6 +54,7 @@ const tools: GoodDefinition = {
   id: "good:tools" as GoodId,
   name: "Tools",
   unitLabel: "units",
+  cargoWeightPerUnit: 1,
   spoilageRatePerTick: 0.02,
   consumerNeedCategory: null,
   referencePrice: 50,
@@ -60,6 +66,7 @@ const cloth: GoodDefinition = {
   id: "good:cloth" as GoodId,
   name: "Cloth",
   unitLabel: "units",
+  cargoWeightPerUnit: 1,
   spoilageRatePerTick: 0.02,
   consumerNeedCategory: "clothing",
   necessityWeight: 0.15,
@@ -72,6 +79,7 @@ const stone: GoodDefinition = {
   id: "good:stone" as GoodId,
   name: "Stone",
   unitLabel: "units",
+  cargoWeightPerUnit: 1,
   spoilageRatePerTick: 0.0,
   consumerNeedCategory: null,
   referencePrice: 5,
@@ -83,6 +91,7 @@ const copper: GoodDefinition = {
   id: "good:copper" as GoodId,
   name: "Copper",
   unitLabel: "units",
+  cargoWeightPerUnit: 1,
   spoilageRatePerTick: 0.0,
   consumerNeedCategory: null,
   referencePrice: 12,
@@ -93,6 +102,7 @@ const grain: GoodDefinition = {
   id: "good:grain" as GoodId,
   name: "Grain",
   unitLabel: "units",
+  cargoWeightPerUnit: 1,
   spoilageRatePerTick: 0.03,
   consumerNeedCategory: "subsistence",
   necessityWeight: 0.3,
