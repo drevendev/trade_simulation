@@ -115,6 +115,10 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
     expect(b.sellerExportableByEndpoint.get(phase7SellerEndpointKey(first.intent))).toBe(10);
     const out = match([request("a", 10, [second, first], [buy])], b);
     expect(out.lots.reduce((sum, lot) => sum + lot.quantity, 0)).toBe(10);
+    // Same physical stock must be shared, not monopolized by the first ID.
+    expect(out.lots.map((lot) => [lot.sellerIntentId, lot.quantity])).toEqual([
+      ["mi:a", 5], ["mi:b", 5],
+    ]);
     expect(out.remainingSellerByEndpoint.get(phase7SellerEndpointKey(first.intent))).toBe(0);
   });
 
@@ -126,8 +130,34 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
     expect(() => match([request("a", 11, [sell], [first, second])], b))
       .toThrow("cannot cover aggregate reservation");
     const out = match([request("a", 10, [sell], [second, first])], b);
+    // One actual wallet also splits the available spend pro rata.
+    expect(out.lots.map((lot) => [lot.buyerIntentId, lot.quantity])).toEqual([
+      ["mi:a", 5], ["mi:b", 5],
+    ]);
     expect(out.remainingBuyerCashByActorCurrency.get(
       phase7BuyerActorCashKey(first.intent.actor, currency))).toBe(0);
+  });
+
+  it("capacity-bounds unequal shared-stock and shared-wallet shares independent of insertion order", () => {
+    const sa = seller("sa", 9, "same-unit"), sb = seller("sb", 3, "same-unit");
+    const ba = buyer("ba", 9, "same-cohort"), bb = buyer("bb", 3, "same-cohort");
+    const balances = budgets([sa, sb], [ba, bb], 6, 6);
+    const left = match([request("a", 6, [sb, sa], [bb, ba])], balances);
+    const right = match([request("a", 6, [sa, sb], [ba, bb])], balances);
+    expect(right.lots).toEqual(left.lots);
+    expect(left.lots.map((lot) => [lot.sellerIntentId, lot.buyerIntentId, lot.quantity])).toEqual([
+      ["mi:sa", "mi:ba", 4.5], ["mi:sb", "mi:bb", 1.5],
+    ]);
+    expect(left.remainingSellerByIntent.get(sa.intent.id)).toBe(4.5);
+    expect(left.remainingSellerByIntent.get(sb.intent.id)).toBe(1.5);
+    expect(left.remainingBuyerByIntent.get(ba.intent.id)).toBe(4.5);
+    expect(left.remainingBuyerByIntent.get(bb.intent.id)).toBe(1.5);
+    expect(left.remainingSellerByEndpoint.get(phase7SellerEndpointKey(sa.intent))).toBe(0);
+    expect(left.remainingBuyerCashByActorCurrency.get(
+      phase7BuyerActorCashKey(ba.intent.actor, currency))).toBe(0);
+    // Planning cannot mutate its original owner-authored balances.
+    expect(balances.sellerExportableByEndpoint.get(phase7SellerEndpointKey(sa.intent))).toBe(6);
+    expect(balances.buyerCashByActorCurrency.get(phase7BuyerActorCashKey(ba.intent.actor, currency))).toBe(6);
   });
 
   it("carries Phase-8 residuals across plans without double-selling or double-buying", () => {
