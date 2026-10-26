@@ -230,42 +230,46 @@ export function matchPhase7ActorIntents(
     const quantity = request.reservation.allocatedQuantity;
     if (quantity === 0) continue;
     const quote = request.landedGrossUnitCostDest;
-    const sellerShadow = new Map(endpoint);
-    const buyerShadow = new Map(actorCash);
+    // Sparse candidate-local previews: cloning every world actor's wallet and
+    // every stock endpoint once PER candidate would be O(C * worldSize).
+    const sellerShadow = new Map<string, number>();
+    const buyerShadow = new Map<string, number>();
     const sellers: Cap[] = ordered(request.sellers).map((e) => {
       const key = phase7SellerEndpointKey(e.intent);
-      const cap = Math.min(sellerRemain.get(e.intent.id)!, sellerShadow.get(key)!);
-      sellerShadow.set(key, consume(sellerShadow.get(key)!, cap, "provisional seller endpoint"));
+      const available = sellerShadow.get(key) ?? endpoint.get(key)!;
+      const cap = Math.min(sellerRemain.get(e.intent.id)!, available);
+      sellerShadow.set(key, consume(available, cap, "provisional seller endpoint"));
       return { evidence: e, cap };
     });
     const buyers: Cap[] = ordered(request.buyers).map((e) => {
       const key = phase7BuyerActorCashKey(e.intent.actor, c.destinationCurrencyId);
+      const cashAvailable = buyerShadow.get(key) ?? actorCash.get(key)!;
       const cap = Math.min(
         buyerRemain.get(e.intent.id)!, quote > 0 ? buyerSpend.get(e.intent.id)! / quote : Number.POSITIVE_INFINITY,
-        quote > 0 ? buyerShadow.get(key)! / quote : Number.POSITIVE_INFINITY,
+        quote > 0 ? cashAvailable / quote : Number.POSITIVE_INFINITY,
       );
       if (!Number.isFinite(cap) || cap < 0) throw new Error("Phase-7 buyer quantity bound invalid");
       const provisionalCash = cap * quote;
       if (!Number.isFinite(provisionalCash) || (quote > 0 && cap > 0 && provisionalCash === 0)) {
         throw new Error("Phase-7 buyer provisional payment lost numeric precision");
       }
-      buyerShadow.set(key, consume(buyerShadow.get(key)!, provisionalCash, "provisional buyer cash"));
+      buyerShadow.set(key, consume(cashAvailable, provisionalCash, "provisional buyer cash"));
       return { evidence: e, cap };
     });
     const sellerFills = proportional(sellers, quantity, quantityEpsilon);
     const buyerFills = proportional(buyers, quantity, quantityEpsilon);
     // Stage every actor mutation in local copies. Nothing in canonical WorldState
     // or an external intent/budget Map changes on error.
-    const nextEndpoints = new Map(endpoint);
-    const nextCash = new Map(actorCash);
-    const nextSeller = new Map(sellerRemain);
-    const nextBuyer = new Map(buyerRemain);
-    const nextSpend = new Map(buyerSpend);
+    const nextEndpoints = new Map<string, number>();
+    const nextCash = new Map<string, number>();
+    const nextSeller = new Map<MarketIntentId, number>();
+    const nextBuyer = new Map<MarketIntentId, number>();
+    const nextSpend = new Map<MarketIntentId, number>();
     for (const s of sellerFills) {
       const id = s.evidence.intent.id;
       const key = phase7SellerEndpointKey(s.evidence.intent);
-      nextSeller.set(id, consume(nextSeller.get(id)!, s.fill, "seller intent"));
-      nextEndpoints.set(key, consume(nextEndpoints.get(key)!, s.fill, "seller physical endpoint"));
+      nextSeller.set(id, consume(nextSeller.get(id) ?? sellerRemain.get(id)!, s.fill, "seller intent"));
+      nextEndpoints.set(key, consume(nextEndpoints.get(key) ?? endpoint.get(key)!, s.fill, "seller physical endpoint"));
     }
     for (const b of buyerFills) {
       const id = b.evidence.intent.id;
@@ -274,9 +278,9 @@ export function matchPhase7ActorIntents(
       if (!Number.isFinite(payment) || (b.fill > 0 && quote > 0 && payment === 0)) {
         throw new Error("Phase-7 buyer payment lost numeric precision");
       }
-      nextBuyer.set(id, consume(nextBuyer.get(id)!, b.fill, "buyer intent"));
-      nextSpend.set(id, consume(nextSpend.get(id)!, payment, "buyer intent spend"));
-      nextCash.set(key, consume(nextCash.get(key)!, payment, "buyer actor cash"));
+      nextBuyer.set(id, consume(nextBuyer.get(id) ?? buyerRemain.get(id)!, b.fill, "buyer intent"));
+      nextSpend.set(id, consume(nextSpend.get(id) ?? buyerSpend.get(id)!, payment, "buyer intent spend"));
+      nextCash.set(key, consume(nextCash.get(key) ?? actorCash.get(key)!, payment, "buyer actor cash"));
     }
 
     const planned: Phase7ActorMatchLot[] = [];
@@ -300,11 +304,11 @@ export function matchPhase7ActorIntents(
       throw new Error("Phase-7 concrete lots cannot reconcile accepted reservation");
     }
     lots.push(...planned);
-    sellerRemain.clear(); for (const [k, v] of nextSeller) sellerRemain.set(k, v);
-    buyerRemain.clear(); for (const [k, v] of nextBuyer) buyerRemain.set(k, v);
-    buyerSpend.clear(); for (const [k, v] of nextSpend) buyerSpend.set(k, v);
-    endpoint.clear(); for (const [k, v] of nextEndpoints) endpoint.set(k, v);
-    actorCash.clear(); for (const [k, v] of nextCash) actorCash.set(k, v);
+    for (const [k, v] of nextSeller) sellerRemain.set(k, v);
+    for (const [k, v] of nextBuyer) buyerRemain.set(k, v);
+    for (const [k, v] of nextSpend) buyerSpend.set(k, v);
+    for (const [k, v] of nextEndpoints) endpoint.set(k, v);
+    for (const [k, v] of nextCash) actorCash.set(k, v);
   }
   return {
     lots,
