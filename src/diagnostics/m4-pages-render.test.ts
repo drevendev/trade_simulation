@@ -210,7 +210,7 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     } finally { await page.close(); }
   }, 60_000);
 
-  it.each(["clearedQuantity", "buyerGrossCost"] as const)(
+  it.each(["clearedQuantity", "buyerGrossCost", "consumptionTaxCollected"] as const)(
     "refuses M3 %s samples that exceed the claimed whole-run total",
     async field => {
       const page = await browser.newPage();
@@ -238,6 +238,35 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
       } finally { await page.close(); }
     }, 60_000,
   );
+
+  it("fails closed on invalid M3 tax totals and impossible sampled tax receipts without affecting M4", async () => {
+    for (const invalid of ["negative-total", "sample-exceeds-total"] as const) {
+      const page = await browser.newPage();
+      try {
+        const m3 = JSON.parse(readFileSync(path.join(docsDir, "m3-preview.json"), "utf8")) as M3Preview;
+        const contradictory = invalid === "negative-total"
+          ? { ...m3, totals: { ...m3.totals, consumptionTaxCollected: -1 } }
+          : { ...m3, ticks: m3.ticks.map((tick, index) => index === 0
+            ? { ...tick, consumptionTaxCollected: m3.totals.consumptionTaxCollected + 1 } : tick) };
+        await page.route("**/m3-preview.json", route => route.fulfill({
+          status: 200, contentType: "application/json", body: JSON.stringify(contradictory),
+        }));
+        await page.goto(baseUrl);
+        await page.waitForFunction(() =>
+          !(document.getElementById("m4-preview-body")?.textContent ?? "").includes("Loading the M4 economy"));
+        await page.locator("#showcase-milestone").selectOption("m3");
+        await page.waitForFunction(() =>
+          !(document.getElementById("m3-preview-body")?.textContent ?? "").includes("Loading the M3 local market"));
+        expect(await page.locator("#spotlight-tick").isDisabled()).toBe(true);
+        expect(await page.locator("#spotlight-readout").innerText()).toContain(
+          invalid === "negative-total" ? "invalid M3 totals" : "observation exceeds whole-run total");
+        expect(await page.locator('[data-spotlight="consumptionTaxCollected"]').count()).toBe(0);
+        await page.locator("#showcase-milestone").selectOption("m4");
+        expect(await page.locator("#spotlight-tick").isEnabled()).toBe(true);
+        expect(await page.locator('[data-spotlight="outputProduced"]').count()).toBe(1);
+      } finally { await page.close(); }
+    }
+  }, 60_000);
 
   it("fails closed in the showcase when the selected saved run is invalid", async () => {
     const page = await pageAt("?m4=m4-preview-wrong.json", 1280, false);
