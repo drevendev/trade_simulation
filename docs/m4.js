@@ -270,13 +270,16 @@
     .catch(error => {
       const unavailable = error?.unavailable === true;
       spotlightUnavailable(unavailable ? "Saved run unavailable" : "Saved run could not be displayed");
-      // The separate live-region summary must not say "Reading…" after the body
-      // has reached a terminal state (or retain an earlier success after render fails).
-      const runSummary = document.getElementById("m4-run-summary");
-      if (runSummary) {
-        runSummary.textContent = unavailable
-          ? "Selected run unavailable. No validated observations were loaded."
-          : "Selected run could not be displayed. No validated observations are available.";
+      // Standalone M4 consumers still own their fallback summary. On the combined
+      // viewer, the shared controller alone owns provenance for the selected run:
+      // a late M4 failure must not overwrite an already selected M3 summary.
+      if (!window.showcaseSavedRun) {
+        const runSummary = document.getElementById("m4-run-summary");
+        if (runSummary) {
+          runSummary.textContent = unavailable
+            ? "Selected run unavailable. No validated observations were loaded."
+            : "Selected run could not be displayed. No validated observations are available.";
+        }
       }
       if (error?.invalidSelection === true) {
         state("M4 preview error", `Invalid M4 selected-run link; no artifact was fetched. ${error.message}.`);
