@@ -256,6 +256,7 @@ export function matchPhase7ActorIntents(
     // because individual actor wallets could afford it.
     const expectedBuyerCash = r.allocatedQuantity * request.landedGrossUnitCostDest;
     if (!Number.isFinite(expectedBuyerCash) ||
+        (r.allocatedQuantity === 0 && r.buyerCashReservedDest !== 0) ||
         (r.allocatedQuantity > 0 && request.landedGrossUnitCostDest > 0 && expectedBuyerCash === 0) ||
         Math.abs(expectedBuyerCash - r.buyerCashReservedDest) > moneyEpsilon) {
       throw new Error("Phase-7 actor buyer cash does not match accepted aggregate reservation");
