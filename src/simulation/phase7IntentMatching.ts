@@ -108,7 +108,7 @@ interface Cap {
   readonly cap: number;
 }
 interface Fill extends Cap {
-  readonly fill: number;
+  fill: number;
 }
 
 /** Proportional, capacity bounded, stable-key residual correction. */
