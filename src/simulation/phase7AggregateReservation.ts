@@ -238,6 +238,13 @@ export function reservePhase7AggregateTrades(
           cargoUse = cargoCapacityUse(quantity, weight);
           cashUse = quantity * unitCost;
           fxUse = quantity * sourceInvoicePerUnit;
+          // Even finite, strictly positive unit costs can underflow to zero
+          // when multiplied by a legitimate shipment quantity. Never grant
+          // a positive shipment free cargo, FX output or payable cash.
+          if (cargoUse === 0 || (unitCost > 0 && cashUse === 0) ||
+              (item.fxKey !== null && fxUse === 0)) {
+            throw new Error("Phase-7 aggregate required positive resource use lost numeric precision");
+          }
           if (Number.isFinite(cashUse) && Number.isFinite(fxUse) &&
               cargoUse <= capacity && cashUse <= cash && fxUse <= fx) {
             fits = true;
