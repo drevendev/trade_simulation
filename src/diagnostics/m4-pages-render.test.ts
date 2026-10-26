@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import * as path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import type { M4Preview } from "./m4Preview";
+import type { M3Preview } from "./m3Preview";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const docsDir = path.join(repoRoot, "docs");
@@ -140,6 +141,72 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
       expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${first.tick}`);
       await assertCards(first);
       expect(await page.locator("#spotlight-tick").getAttribute("max")).toBe(String(samples.length - 1));
+    } finally { await page.close(); }
+  }, 60_000);
+
+  it("switches all spotlight numbers and units between the validated M4 and M3 runs", async () => {
+    const page = await pageAt("", 1280, false);
+    try {
+      const m3 = JSON.parse(readFileSync(path.join(docsDir, "m3-preview.json"), "utf8")) as M3Preview;
+      await page.waitForFunction(() => !(document.getElementById("m3-preview-body")?.textContent ?? "").includes("Loading the M3 local market"));
+      expect(await page.locator("#showcase-milestone").inputValue()).toBe("m4");
+      await page.locator("#showcase-milestone").selectOption("m3");
+      expect(await page.locator("#showcase-mode-tag").innerText()).toBe("M3 MARKET RUN");
+      expect(await page.locator("#m4-run-summary").innerText()).toContain(m3.market.regionName);
+      expect(await page.locator("#m4-run-summary").innerText()).toContain(m3.market.currencyCode);
+      expect(await page.locator("#spotlight-tick").isEnabled()).toBe(true);
+      expect(await page.locator("#spotlight-metrics [data-spotlight]").count()).toBe(6);
+      expect(await page.locator('[data-spotlight="installedCapital"]').count()).toBe(0);
+
+      const assertM3 = async (index: number) => {
+        const tick = m3.ticks[index]!;
+        expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${tick.tick}`);
+        const price = page.locator('[data-spotlight="sellerNetPrice"]');
+        expect(await price.locator("dd").innerText()).toContain(tick.sellerNetPrice.toLocaleString("en-US", {
+          minimumFractionDigits: 2, maximumFractionDigits: 2,
+        }));
+        expect(await price.locator("dd small").innerText()).toBe(`${m3.market.currencyCode} / ${m3.market.quantityUnitLabel}`);
+        const cleared = page.locator('[data-spotlight="clearedQuantity"]');
+        expect(await cleared.locator("dd").innerText()).toContain(tick.clearedQuantity.toLocaleString("en-US", {
+          minimumFractionDigits: 2, maximumFractionDigits: 2,
+        }));
+        expect(await cleared.locator("dd small").innerText()).toBe(`${m3.market.quantityUnitLabel} / tick`);
+      };
+      await assertM3(m3.ticks.length - 1);
+      await page.locator("#spotlight-tick").evaluate(node => {
+        const input = node as HTMLInputElement;
+        input.value = "0";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await assertM3(0);
+      expect(await page.locator("#spotlight-tick").getAttribute("max")).toBe(String(m3.ticks.length - 1));
+
+      await page.locator("#showcase-milestone").selectOption("m4");
+      expect(await page.locator("#showcase-mode-tag").innerText()).toBe("M4 SAVED RUN");
+      expect(await page.locator("#m4-run-summary").innerText()).toContain("Selected scenario:");
+      expect(await page.locator("#spotlight-metrics [data-spotlight]").count()).toBe(5);
+      expect(await page.locator('[data-spotlight="sellerNetPrice"]').count()).toBe(0);
+      expect(await page.locator("#chapter-m3").evaluate(node => (node as HTMLDetailsElement).open)).toBe(false);
+    } finally { await page.close(); }
+  }, 60_000);
+
+  it("does not leak M4 metrics into a malformed M3 selection and recovers independently", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.route("**/m3-preview.json", route => route.fulfill({
+        status: 200, contentType: "application/json",
+        body: JSON.stringify({ milestone: "M3", requirement: "REQ-VISUALIZATION-006", ticks: [{ tick: 1 }], market: {} }),
+      }));
+      await page.goto(baseUrl);
+      await page.waitForFunction(() => !(document.getElementById("m4-preview-body")?.textContent ?? "").includes("Loading the M4 economy"));
+      await page.locator("#showcase-milestone").selectOption("m3");
+      await page.waitForFunction(() => !(document.getElementById("m3-preview-body")?.textContent ?? "").includes("Loading the M3 local market"));
+      expect(await page.locator("#spotlight-tick").isDisabled()).toBe(true);
+      expect(await page.locator("#spotlight-metrics").innerText()).toContain("No verified sampled values");
+      expect(await page.locator('[data-spotlight="outputProduced"]').count()).toBe(0);
+      await page.locator("#showcase-milestone").selectOption("m4");
+      expect(await page.locator("#spotlight-tick").isEnabled()).toBe(true);
+      expect(await page.locator('[data-spotlight="outputProduced"]').count()).toBe(1);
     } finally { await page.close(); }
   }, 60_000);
 
