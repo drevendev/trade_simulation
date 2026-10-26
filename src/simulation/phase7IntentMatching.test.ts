@@ -282,6 +282,13 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
       expect([...b.sellerExportableByEndpoint.entries()]).toEqual(originalEndpoint);
       expect([...b.buyerCashByActorCurrency.entries()]).toEqual(originalCash);
     }
+    // Refused or zero-allocation plans cannot carry even sub-epsilon cash
+    // reservations: the upstream aggregate producer always emits exact zero.
+    const zero = request("a", 0, [s], [ba]);
+    const staleZero = {
+      ...zero, reservation: { ...zero.reservation, buyerCashReservedDest: 5e-10 },
+    };
+    expect(() => match([staleZero], b)).toThrow(/does not match accepted aggregate reservation/);
     // Ordinary sub-epsilon binary64 cash rounding remains permissible.
     const rounded = {
       ...accepted, reservation: { ...accepted.reservation, buyerCashReservedDest: 4 + 5e-10 },
