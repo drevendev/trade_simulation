@@ -147,6 +147,50 @@ describe("M5 #670 Phase-7 aggregate opportunity selection, not reservation", () 
     expect(a.every((item) => item.maximumOwnQuantity === 4)).toBe(true);
   });
 
+  it("orders epsilon-near scores by canonical IDs regardless of evidence/registry insertion", () => {
+    const ironNearTie = candidate("plan:iron", {
+      goodId: iron, landedGrossUnitCostDest: 12.000000000002,
+    });
+    const woodSlightlyStronger = candidate("plan:wood");
+    const reversedWorld = {
+      regions: new Map([...world.regions].reverse()),
+      transportLinks: new Map([...world.transportLinks].reverse()),
+    };
+    const forward = select([woodSlightlyStronger, ironNearTie]);
+    const reversed = select(
+      [ironNearTie, woodSlightlyStronger], reversedWorld,
+      [other.linkId, link.linkId],
+      new Map([[other.linkId, 1], [link.linkId, 1]]),
+    );
+
+    // The iron score is slightly lower but within the configured rate/score
+    // epsilon. Exact floating-point sort would incorrectly put wood first.
+    expect(forward.map((item) => item.tradePlanId)).toEqual(["plan:iron", "plan:wood"]);
+    expect(reversed).toEqual(forward);
+    expect(forward[1]!.score - forward[0]!.score).toBeGreaterThan(0);
+    expect(forward[1]!.score - forward[0]!.score).toBeLessThan(config.numeric.rateEpsilon!);
+
+    // A materially different score must still outrank canonical ID order.
+    const lowerIron = { ...ironNearTie, landedGrossUnitCostDest: 12.0000000002 };
+    expect(select([lowerIron, woodSlightlyStronger]).map((item) => item.tradePlanId))
+      .toEqual(["plan:wood", "plan:iron"]);
+  });
+
+  it("groups a chain of epsilon-near scores deterministically, not with a non-transitive comparator", () => {
+    const copper = "good:copper" as GoodId;
+    // Adjacent scores are epsilon ties, but highest to lowest is > epsilon.
+    // Their connected group must be ordered solely by canonical GoodId.
+    const trio = [
+      candidate("plan:wood", { goodId: wood, landedGrossUnitCostDest: 12 }),
+      candidate("plan:iron", { goodId: iron, landedGrossUnitCostDest: 12.000000000012 }),
+      candidate("plan:copper", { goodId: copper, landedGrossUnitCostDest: 12.000000000024 }),
+    ];
+    // Difference in score for adjacent entries is 6e-13 < rateEpsilon.
+    const expected = ["plan:copper", "plan:iron", "plan:wood"];
+    expect(select(trio).map((item) => item.tradePlanId)).toEqual(expected);
+    expect(select([...trio].reverse()).map((item) => item.tradePlanId)).toEqual(expected);
+  });
+
   it("takes legal eligibility from the frozen Phase-1 decision, not later controller state", () => {
     const planned = candidate("plan:jurisdiction");
     const original = select([planned]);
