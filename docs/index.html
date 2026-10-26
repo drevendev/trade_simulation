@@ -172,6 +172,7 @@
   .showcase-player-head h2 { margin: .25rem 0 .45rem; font-size: 1.45rem; }
   .showcase-timeline { margin: 1rem 0; }
   .showcase-timeline input:disabled { opacity: .5; }
+  .showcase-timeline select { font: inherit; min-height: 44px; max-width: 100%; border-radius: 8px; padding: .45rem; border: 1px solid var(--line); color: var(--ink); background: var(--bg); }
   .showcase-metrics { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,150px),1fr)); gap: .7rem; margin: 1rem 0; }
   .showcase-metrics > div { border: 1px solid var(--line); background: var(--bg); border-radius: 9px; padding: .85rem; min-width: 0; }
   .showcase-metrics dt { font-size: .78rem; color: var(--muted); }
@@ -218,16 +219,18 @@
   </header>
 
   <section id="showcase-player" class="panel" aria-labelledby="showcase-player-title">
-    <div class="showcase-player-head"><div><span class="chapter-index">M4 SAVED RUN</span><h2 id="showcase-player-title">An economy at a glance</h2></div><span class="showcase-provenance">Physical production · labor · essential needs</span></div>
-    <p>Scrub actual sampled ticks from a validated M4 one-region run. Unobserved ticks are not interpolated; these measurements show <em>what</em> happened, not a proven causal explanation of <em>why</em>.</p>
+    <div class="showcase-player-head"><div><span id="showcase-mode-tag" class="chapter-index">M4 SAVED RUN</span><h2 id="showcase-player-title">An economy at a glance</h2></div><span class="showcase-provenance">Physical production · labor · essential needs</span></div>
+    <p id="showcase-run-description">Scrub actual sampled ticks from a validated M4 one-region run. Unobserved ticks are not interpolated; these measurements show <em>what</em> happened, not a proven causal explanation of <em>why</em>.</p>
     <p id="m4-run-summary" class="m4-note" role="status">Reading the selected deterministic artifact…</p>
     <div class="player showcase-timeline">
+      <label for="showcase-milestone">Saved milestone</label>
+      <select id="showcase-milestone" aria-label="Select saved-run milestone"><option value="m4" selected>M4 · Closed economy</option><option value="m3">M3 · Local market</option></select>
       <label for="spotlight-tick">Observed tick</label>
       <input type="range" id="spotlight-tick" min="0" max="0" step="1" value="0" disabled aria-describedby="spotlight-readout">
       <output id="spotlight-readout" class="turn-readout" for="spotlight-tick" role="status">Loading samples…</output>
     </div>
     <dl id="spotlight-metrics" class="showcase-metrics" aria-label="Measured quantities at the selected tick"><div class="showcase-empty">Loading verified measurements…</div></dl>
-    <p class="showcase-source">Selected tick values come directly from <code>m4-preview.json</code> or the explicitly selected M4 artifact. All quantities and currencies are labeled; detailed charts and exact values live in the M4 chapter.</p>
+    <p id="showcase-source" class="showcase-source">Selected tick values come directly from the validated M4 artifact. Detailed charts and exact values live in the M4 chapter.</p>
   </section>
 
   <section class="chapters" aria-labelledby="chapters-heading">
@@ -351,6 +354,7 @@
   </details>
 
   </section>
+  <script src="showcase.js"></script>
   <script src="m4.js"></script>
   <script>
   (() => {
@@ -802,8 +806,10 @@
       const problem = validate(preview);
       if (problem !== null) throw new Error(problem);
       render(preview);
+      window.showcaseSavedRun?.ready("m3", preview);
     })
     .catch(error => {
+      window.showcaseSavedRun?.failure("m3", error.unavailable === true ? "Saved run unavailable" : "Saved run could not be displayed");
       if (error.unavailable === true) {
         showState(
           "M3 local market unavailable",
