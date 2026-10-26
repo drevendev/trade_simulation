@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
-import type { FxPairId, GoodId, TransportLinkId } from "../domain/id";
+import type { GoodId, TransportLinkId } from "../domain/id";
 import type { Phase7EligibleTradeCandidate } from "./tradeCandidateSelection";
 import {
   phase7FxOutputKey,
@@ -25,7 +25,7 @@ const foreign = allLinks.find((l) => baseline.regions.get(l.fromRegionId)!.settl
 if (!domestic || !foreign) throw new Error("Phase-7 fixture requires domestic and foreign routes");
 const wood = "good:wood" as GoodId;
 const iron = "good:iron" as GoodId;
-const pair = "fx:test-alpha-beta" as FxPairId;
+const pair = "fx:test-alpha-beta";
 
 function edge(link: TransportLinkState, baseCapacity = 100): TransportLinkState {
   return { ...link, seed: { ...link.seed, condition: 1, baseCapacity } };
