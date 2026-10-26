@@ -223,6 +223,42 @@ describe("M5 #670 shared Phase-7 aggregate resource preflight", () => {
     expect(stopped.reservations[0]?.allocatedQuantity).toBe(0);
   });
 
+  it("fails closed when positive cross-currency shipment would reserve zero cargo and FX output", () => {
+    const link = edge(foreign, 100);
+    const ordinary = req("tiny-cross", link, wood, 1, { fxPoolPairId: pair });
+    const tiny = {
+      ...ordinary,
+      cargoWeightPerUnit: Number.MIN_VALUE,
+      candidate: {
+        ...ordinary.candidate,
+        maximumOwnQuantity: 0.1,
+        sourceSellerNetUnitPrice: Number.MIN_VALUE,
+      },
+    };
+    const budget = balances([tiny], 10, 10, 100, 10);
+    expect(0.1 * Number.MIN_VALUE).toBe(0);
+    expect(() => reserve([tiny], budget, [link])).toThrow(/numeric precision/);
+    expect(budget.exportableByOriginGood.get(
+      phase7RegionGoodKey(link.fromRegionId, wood))).toBe(10);
+    expect(budget.fxOutputByPairCurrency.get(
+      phase7FxOutputKey(pair, tiny.candidate.sourceCurrencyId))).toBe(10);
+  });
+
+  it("rejects rounded-zero cargo or payable buyer cash on domestic positive shipments", () => {
+    const link = edge(domestic, 100);
+    const ordinary = req("tiny-domestic", link, wood, 1);
+    const budget = balances([ordinary], 10, 10, 100);
+    const quantity = { ...ordinary.candidate, maximumOwnQuantity: 0.1 };
+    expect(() => reserve([{
+      ...ordinary, candidate: quantity, cargoWeightPerUnit: Number.MIN_VALUE,
+    }], budget, [link])).toThrow(/numeric precision/);
+    expect(() => reserve([{
+      ...ordinary, candidate: quantity, landedGrossUnitCostDest: Number.MIN_VALUE,
+    }], budget, [link])).toThrow(/numeric precision/);
+    expect(budget.buyerCashByDestinationCurrency.get(
+      phase7RegionCashKey(link.toRegionId, ordinary.candidate.destinationCurrencyId))).toBe(100);
+  });
+
   it("rejects invisible arithmetic instead of creating a phantom cash reservation", () => {
     const link = edge(domestic, 100);
     const a = req("a", link, wood, 1);
