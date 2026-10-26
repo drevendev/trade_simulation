@@ -35,8 +35,17 @@
             "buyerGrossCost", "consumptionTaxCollected"].every(k => nonnegative(tick[k]))) return "invalid M3 metric";
       previous = tick.tick;
     }
-    if (p.ticks.length && (!p.totals || !nonnegative(p.totals.clearedQuantity) ||
-        !nonnegative(p.totals.buyerGrossCost))) return "invalid M3 totals";
+    if (p.ticks.length) {
+      if (!p.totals || !nonnegative(p.totals.clearedQuantity) ||
+          !nonnegative(p.totals.buyerGrossCost)) return "invalid M3 totals";
+      // An observed per-tick realized flow cannot exceed its whole-run sum.
+      // Sparse tick histories need not sum to the totals, but an impossible
+      // individual quantity or payment must not be presented as verified.
+      if (p.ticks.some(tick => tick.clearedQuantity > p.totals.clearedQuantity ||
+          tick.buyerGrossCost > p.totals.buyerGrossCost)) {
+        return "M3 observation exceeds whole-run total";
+      }
+    }
     return null;
   }
 
