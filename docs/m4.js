@@ -137,6 +137,61 @@
     return group;
   }
 
+
+  function spotlightUnavailable(message) {
+    const slider = document.getElementById("spotlight-tick");
+    const readout = document.getElementById("spotlight-readout");
+    const metrics = document.getElementById("spotlight-metrics");
+    if (slider) { slider.disabled = true; slider.value = "0"; }
+    if (readout) readout.textContent = message;
+    if (metrics) metrics.textContent = "No verified sampled values are available.";
+  }
+
+  function renderSpotlight(preview) {
+    const slider = document.getElementById("spotlight-tick");
+    const readout = document.getElementById("spotlight-readout");
+    const metrics = document.getElementById("spotlight-metrics");
+    if (!slider || !readout || !metrics) return;
+    if (preview.samples.length === 0) {
+      spotlightUnavailable("This run has no sampled ticks");
+      return;
+    }
+    slider.min = "0";
+    slider.max = String(preview.samples.length - 1);
+    slider.step = "1";
+    slider.value = slider.max;
+    slider.disabled = false;
+    const show = () => {
+      const index = Number(slider.value);
+      const sample = preview.samples[index];
+      if (!sample) { spotlightUnavailable("Selected sample unavailable"); return; }
+      readout.textContent = `tick ${sample.tick} · sample ${index + 1} of ${preview.samples.length}`;
+      const cards = [
+        ["outputProduced", "Realized output", number(sample.outputProduced), `${preview.region.goodsUnitLabel} / tick`],
+        ["employedWorkers", "Employment", number(sample.employedWorkers), preview.region.workerUnitLabel],
+        ["essentialCoverage", "Essential-need coverage", percent(sample.essentialCoverage), "of target"],
+        ["grossWagesPaid", "Gross wages paid", number(sample.grossWagesPaid), `${preview.region.currencyCode} / tick`],
+        ["installedCapital", "Installed capital", number(sample.installedCapital), preview.region.capitalUnitLabel],
+      ];
+      const nodes = cards.map(([field, label, value, unit]) => {
+        const card = document.createElement("div");
+        card.dataset.spotlight = field;
+        const dt = document.createElement("dt");
+        dt.textContent = label;
+        const dd = document.createElement("dd");
+        dd.append(document.createTextNode(value));
+        const small = document.createElement("small");
+        small.textContent = unit;
+        dd.appendChild(small);
+        card.append(dt, dd);
+        return card;
+      });
+      metrics.replaceChildren(...nodes);
+    };
+    slider.addEventListener("input", show);
+    show();
+  }
+
   function render(preview) {
     // Read provenance from the selected artifact, never the fixed fixture's prose.
     // Text-only insertion prevents a scenario identifier from becoming markup.
@@ -151,6 +206,7 @@
           `last sampled output: ${exact(samples[samples.length - 1].outputProduced)} ${preview.region.goodsUnitLabel}/tick.`;
       runSummary.textContent = `Selected scenario: ${scenarioId}. Run length: ${preview.scenario.ticksExecuted} ticks. ${observation}`;
     }
+    renderSpotlight(preview);
     if (preview.samples.length === 0) {
       state("M4 preview empty", "The artifact is valid, but the deterministic run contains no sampled ticks. No values are invented in its place.");
       return;
@@ -255,6 +311,7 @@
     })
     .catch(error => {
       const unavailable = error?.unavailable === true;
+      spotlightUnavailable(unavailable ? "Saved run unavailable" : "Saved run could not be displayed");
       // The separate live-region summary must not say "Reading…" after the body
       // has reached a terminal state (or retain an earlier success after render fails).
       const runSummary = document.getElementById("m4-run-summary");
