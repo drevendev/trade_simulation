@@ -2,9 +2,17 @@ import { describe, expect, it } from "vitest";
 import type { CohortId, GoodId, ProductionUnitId, RegionId } from "../domain/id";
 import { createMarketIntentId, type MarketIntent } from "./marketIntent";
 import {
-  projectPhase8CommittedTradeResiduals,
+  projectPhase8CommittedTradeResiduals as projectWithPrecision,
   type CommittedPhase7ShipmentLot,
 } from "./phase7CommittedIntentResiduals";
+
+// Handoff/03 §3: canonical numeric quantity/money precision (both 1e-9).
+const precision = { quantityEpsilon: 1e-9, moneyEpsilon: 1e-9 } as const;
+function projectPhase8CommittedTradeResiduals(
+  intents: readonly MarketIntent[], lots: readonly CommittedPhase7ShipmentLot[],
+): MarketIntent[] {
+  return projectWithPrecision(intents, lots, precision);
+}
 
 const origin = "region:origin" as RegionId;
 const destination = "region:destination" as RegionId;
@@ -126,6 +134,47 @@ describe("M5 #670 committed Phase-7 -> Phase-8 MAIN residual projection", () => 
     expect(() => projectPhase8CommittedTradeResiduals([seller, buyer], [
       committed("not-a-shipment", 1, 1),
     ])).toThrow(/unique persistent shipment IDs/);
+  });
+
+  it("refuses a rounded goods subtraction that changes stock by MORE than the committed quantity", () => {
+    const hugeSeller = { ...seller, desiredQuantity: 1e16 };
+    // 1e16 - 3 rounds to 1e16 - 4. A merely observable debit is not correct.
+    expect(hugeSeller.desiredQuantity - (hugeSeller.desiredQuantity - 3)).toBe(4);
+    expect(() => projectPhase8CommittedTradeResiduals([hugeSeller, buyer], [
+      committed("sh:three-units", 3, 3),
+    ])).toThrow(/seller quantity loses binary64 debit precision/);
+
+    // Exact representable decrement at the same scale is still allowed.
+    const exact = projectPhase8CommittedTradeResiduals([hugeSeller, buyer], [
+      committed("sh:four-units", 4, 4),
+    ]);
+    expect(byId(exact, seller.id).desiredQuantity).toBe(1e16 - 4);
+  });
+
+  it("refuses a rounded buyer-cash subtraction that spends MORE than the settled debit", () => {
+    const hugeWalletBuyer = { ...buyer, maxSpend: 1e16 };
+    expect(hugeWalletBuyer.maxSpend - (hugeWalletBuyer.maxSpend - 3)).toBe(4);
+    expect(() => projectPhase8CommittedTradeResiduals([seller, hugeWalletBuyer], [
+      committed("sh:three-cash", 1, 3),
+    ])).toThrow(/buyer destination-currency spend loses binary64 debit precision/);
+  });
+
+  it("permits harmless sub-epsilon binary64 rounding and rejects invalid configured tolerances", () => {
+    const decimalBuyer = { ...buyer, desiredQuantity: 0.3, maxSpend: 0.3 };
+    const decimalSeller = { ...seller, desiredQuantity: 0.3 };
+    const residuals = projectPhase8CommittedTradeResiduals([decimalSeller, decimalBuyer], [
+      committed("sh:decimal", 0.1, 0.1),
+    ]);
+    expect(byId(residuals, buyer.id).maxSpend).toBeCloseTo(0.2, 12);
+
+    for (const invalid of [NaN, Infinity, -1]) {
+      expect(() => projectWithPrecision([seller, buyer], [], {
+        quantityEpsilon: invalid, moneyEpsilon: 1e-9,
+      })).toThrow(/finite nonnegative quantity and money precision/);
+      expect(() => projectWithPrecision([seller, buyer], [], {
+        quantityEpsilon: 1e-9, moneyEpsilon: invalid,
+      })).toThrow(/finite nonnegative quantity and money precision/);
+    }
   });
 
   it("refuses positive binary64 debits that leave authority numerically unchanged", () => {
