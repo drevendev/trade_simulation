@@ -176,19 +176,42 @@ describe("M5 #670 Phase-7 aggregate opportunity selection, not reservation", () 
       .toEqual(["plan:wood", "plan:iron"]);
   });
 
-  it("groups a chain of epsilon-near scores deterministically, not with a non-transitive comparator", () => {
+  it("bounds overlapping epsilon-tie chains by the highest band score, preserving score-first precedence", () => {
     const copper = "good:copper" as GoodId;
-    // Adjacent scores are epsilon ties, but highest to lowest is > epsilon.
-    // Their connected group must be ordered solely by canonical GoodId.
+    // Adjacent scores differ by < epsilon, while wood - copper is > epsilon.
+    // A transitive adjacent-near-tie group would wrongly let copper outrank wood.
     const trio = [
       candidate("plan:wood", { goodId: wood, landedGrossUnitCostDest: 12 }),
       candidate("plan:iron", { goodId: iron, landedGrossUnitCostDest: 12.000000000012 }),
       candidate("plan:copper", { goodId: copper, landedGrossUnitCostDest: 12.000000000024 }),
     ];
-    // Difference in score for adjacent entries is 6e-13 < rateEpsilon.
-    const expected = ["plan:copper", "plan:iron", "plan:wood"];
-    expect(select(trio).map((item) => item.tradePlanId)).toEqual(expected);
-    expect(select([...trio].reverse()).map((item) => item.tradePlanId)).toEqual(expected);
+    // Anchored high-score band = { wood, iron }; IDs put iron before wood.
+    // Copper starts the next band because its score is > epsilon below wood.
+    const expected = ["plan:iron", "plan:wood", "plan:copper"];
+    const original = select(trio);
+    expect(original.map((item) => item.tradePlanId)).toEqual(expected);
+    expect(original[1]!.score - original[0]!.score).toBeGreaterThan(0);
+    expect(original[1]!.score - original[0]!.score).toBeLessThan(config.numeric.rateEpsilon!);
+    expect(original[1]!.score - original[2]!.score).toBeGreaterThan(config.numeric.rateEpsilon!);
+    expect(original[0]!.score - original[2]!.score).toBeLessThan(config.numeric.rateEpsilon!);
+
+    const reversedWorld = {
+      regions: new Map([...world.regions].reverse()),
+      transportLinks: new Map([...world.transportLinks].reverse()),
+    };
+    const reversedFactors = new Map<TransportLinkId, number>([
+      [other.linkId, 1], [link.linkId, 1],
+    ]);
+    for (const permutation of [
+      [trio[2]!, trio[1]!, trio[0]!],
+      [trio[1]!, trio[0]!, trio[2]!],
+      [trio[2]!, trio[0]!, trio[1]!],
+      [trio[0]!, trio[2]!, trio[1]!],
+      [trio[1]!, trio[2]!, trio[0]!],
+    ]) {
+      expect(select(permutation, reversedWorld,
+        [other.linkId, link.linkId], reversedFactors)).toEqual(original);
+    }
   });
 
   it("takes legal eligibility from the frozen Phase-1 decision, not later controller state", () => {
