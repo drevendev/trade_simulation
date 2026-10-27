@@ -187,4 +187,57 @@ describe("M5 #670 committed Phase-7 -> Phase-8 MAIN residual projection", () => 
       committed("sh:one", 1, 0.01),
     ])).toThrow(/buyer destination-currency spend loses binary64 debit precision/);
   });
+  it("rejects cumulative seller receipt drift even though each shipment decrement fits epsilon", () => {
+    const largeSeller = { ...seller, desiredQuantity: 10_000_000 };
+    const largeBuyer = { ...buyer, desiredQuantity: 10_000_000, maxSpend: 10_000_000 };
+    const receipts = [committed("sh:a", 0.3, 0.3), committed("sh:b", 0.3, 0.3)];
+    // Each subtraction is individually tolerable (7.45e-10 error).
+    // Their combined observed loss exceeds the SAME 1e-9 intent tolerance.
+    const final = 10_000_000 - 0.3 - 0.3;
+    expect(Math.abs((10_000_000 - final) - 0.6)).toBeGreaterThan(precision.quantityEpsilon);
+    expect(() => projectPhase8CommittedTradeResiduals(
+      [largeSeller, largeBuyer], receipts,
+    )).toThrow(/seller quantity cumulative binary64 debit precision/);
+    expect(largeSeller.desiredQuantity).toBe(10_000_000);
+    expect(largeBuyer.maxSpend).toBe(10_000_000);
+    expect(receipts[0]?.dispatchedQuantity).toBe(0.3);
+  });
+
+  it("rejects cumulative buyer quantity loss independently of ordinary seller and spend", () => {
+    const smallSeller = { ...seller, desiredQuantity: 2 };
+    const largeBuyer = { ...buyer, desiredQuantity: 10_000_000, maxSpend: 2 };
+    const receipts = [committed("sh:a", 0.3, 0.3), committed("sh:b", 0.3, 0.3)];
+    expect(() => projectPhase8CommittedTradeResiduals(
+      [smallSeller, largeBuyer], receipts,
+    )).toThrow(/buyer quantity cumulative binary64 debit precision/);
+    expect(largeBuyer.desiredQuantity).toBe(10_000_000);
+  });
+
+  it("rejects cumulative destination-currency spend loss without quantity drift", () => {
+    const smallSeller = { ...seller, desiredQuantity: 2 };
+    const cashRichBuyer = { ...buyer, desiredQuantity: 2, maxSpend: 10_000_000 };
+    const receipts = [committed("sh:a", 0.3, 0.3), committed("sh:b", 0.3, 0.3)];
+    expect(() => projectPhase8CommittedTradeResiduals(
+      [smallSeller, cashRichBuyer], receipts,
+    )).toThrow(/buyer destination-currency spend cumulative binary64 debit precision/);
+    expect(cashRichBuyer.maxSpend).toBe(10_000_000);
+  });
+
+  it("retains legitimate repeated decimal receipts, canonical order and unchanged inputs", () => {
+    const regularSeller = { ...seller, desiredQuantity: 2 };
+    const regularBuyer = { ...buyer, desiredQuantity: 2, maxSpend: 2 };
+    const receipts = [committed("sh:b", 0.3, 0.3), committed("sh:a", 0.3, 0.3)];
+    const originals = [regularSeller, regularBuyer];
+    const first = projectPhase8CommittedTradeResiduals(originals, receipts);
+    const reordered = projectPhase8CommittedTradeResiduals(
+      [...originals].reverse(), [...receipts].reverse(),
+    );
+    expect(first).toEqual(reordered);
+    expect(byId(first, seller.id).desiredQuantity).toBeCloseTo(1.4, 12);
+    expect(byId(first, buyer.id).desiredQuantity).toBeCloseTo(1.4, 12);
+    expect(byId(first, buyer.id).maxSpend).toBeCloseTo(1.4, 12);
+    expect(originals).toEqual([regularSeller, regularBuyer]);
+    expect(receipts).toEqual([committed("sh:b", 0.3, 0.3), committed("sh:a", 0.3, 0.3)]);
+  });
+
 });
