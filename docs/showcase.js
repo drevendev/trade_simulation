@@ -144,7 +144,15 @@
     slider.min = "0";
     slider.max = String(samples.length - 1);
     slider.step = "1";
-    slider.value = slider.max;
+    // Lead with the earliest observed working-economy sample, not a later
+    // zero-activity ending. Retain every actual tick for manual exploration.
+    // An entirely inactive run truthfully starts at its first observation.
+    const workingIndex = m4
+      ? samples.findIndex(tick => tick.outputProduced > 0 &&
+          tick.employedWorkers > 0 && tick.grossWagesPaid > 0 &&
+          tick.essentialCoverage > 0)
+      : -1;
+    slider.value = String(m4 ? Math.max(workingIndex, 0) : samples.length - 1);
     renderTick();
   }
 
