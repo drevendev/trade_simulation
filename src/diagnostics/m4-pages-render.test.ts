@@ -289,7 +289,8 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
         const m3 = JSON.parse(readFileSync(path.join(docsDir, "m3-preview.json"), "utf8")) as M3Preview;
         const forged = mismatch === "tick"
           ? { ...m3, ticks: m3.ticks.map((tick, index) => index === 0
-              ? { ...tick, sellerNetReceipt: tick.sellerNetReceipt + 7 } : tick) }
+              ? { ...tick, sellerNetReceipt: tick.sellerNetReceipt + 7 }
+              : index === 1 ? { ...tick, sellerNetReceipt: tick.sellerNetReceipt - 7 } : tick) }
           : mismatch === "cumulative"
             ? { ...m3, totals: { ...m3.totals, sellerNetReceipt: m3.totals.sellerNetReceipt + 7 } }
             : { ...m3, settlementIdentity: { ...m3.settlementIdentity,
