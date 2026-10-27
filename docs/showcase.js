@@ -38,13 +38,22 @@
     if (p.ticks.length) {
       if (!p.totals || !nonnegative(p.totals.clearedQuantity) ||
           !nonnegative(p.totals.buyerGrossCost) || !nonnegative(p.totals.consumptionTaxCollected)) return "invalid M3 totals";
-      // An observed per-tick realized flow (goods, buyer payments or tax) cannot exceed its whole-run sum.
-      // Sparse tick histories need not sum to the totals, but an impossible
-      // individual quantity or payment must not be presented as verified.
-      if (p.ticks.some(tick => tick.clearedQuantity > p.totals.clearedQuantity ||
-          tick.buyerGrossCost > p.totals.buyerGrossCost ||
-          tick.consumptionTaxCollected > p.totals.consumptionTaxCollected)) {
+      // Every observed realized flow must fit its whole-run total, individually
+      // AND together. Sparse histories need not equal the full run, but their
+      // sampled subtotals cannot exceed it. Allow only floating-point summation
+      // noise, not a missing physical or monetary source.
+      const flowFields = ["clearedQuantity", "buyerGrossCost", "consumptionTaxCollected"];
+      if (p.ticks.some(tick => flowFields.some(field => tick[field] > p.totals[field]))) {
         return "M3 observation exceeds whole-run total";
+      }
+      for (const field of flowFields) {
+        const sampled = p.ticks.reduce((sum, tick) => sum + tick[field], 0);
+        const total = p.totals[field];
+        const roundingMargin = Math.max(1e-9,
+          8 * Number.EPSILON * p.ticks.length * Math.max(1, sampled, total));
+        if (!Number.isFinite(sampled) || sampled - total > roundingMargin) {
+          return "M3 observations exceed whole-run total";
+        }
       }
     }
     return null;
