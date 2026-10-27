@@ -57,6 +57,19 @@
         return `sample ${index}.grossWagesPaid exceeds totals.grossWagesPaid`;
       }
     }
+    // A sparse series need not equal the whole-run totals, but the sum of
+    // observed non-negative flows cannot exceed them. Per-tick checks alone
+    // miss multiple individually legal observations that overstate the run.
+    for (const key of ["outputProduced", "grossWagesPaid"]) {
+      let observed = 0;
+      for (const sample of preview.samples) observed += sample[key];
+      const total = preview.totals[key];
+      const summationMargin = Math.max(1e-9,
+        8 * Number.EPSILON * preview.samples.length * Math.max(1, observed, total));
+      if (!Number.isFinite(observed) || observed - total > summationMargin) {
+        return `sampled ${key} exceeds totals.${key}`;
+      }
+    }
     return null;
   }
 
