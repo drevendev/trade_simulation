@@ -386,6 +386,8 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
         await page.goto(baseUrl);
         await page.waitForFunction(() =>
           (document.getElementById("m4-preview-body")?.textContent ?? "").includes("M4 preview error"));
+        expect(await page.locator("#chapter-m4").getAttribute("open")).toBeNull();
+        await page.locator("#chapter-m4 > summary").click();
         expect(await page.locator("#m4-preview-body").innerText()).toContain(`sampled ${field} exceeds totals.${field}`);
         expect(await page.locator("#m4-preview-body svg").count()).toBe(0);
         expect(await page.locator("#spotlight-tick").isDisabled()).toBe(true);
