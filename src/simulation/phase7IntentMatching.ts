@@ -87,6 +87,26 @@ function consume(balance: number, use: number, epsilon: number, label: string): 
   }
   return after;
 }
+/**
+ * Sum actual before-minus-after stock/cash changes once per physical owner
+ * key (never once per intent). Individual <=epsilon binary64 drift may
+ * accumulate past the single absolute reservation tolerance.
+ */
+function observableDebits(
+  before: ReadonlyMap<string, number>,
+  after: ReadonlyMap<string, number>,
+  label: string,
+): number {
+  let total = 0;
+  for (const key of [...after.keys()].sort(cmp)) {
+    if (!before.has(key)) throw new Error(label + " introduced an unknown owner");
+    const debit = before.get(key)! - after.get(key)!;
+    validNonnegative(debit, label + " observed debit");
+    total += debit;
+  }
+  if (!Number.isFinite(total)) throw new Error(label + " observed debit total not finite");
+  return total;
+}
 function bucket(intent: MarketIntent): Phase7ActorMatchLot["sellerInventoryBucket"] {
   return intent.inventoryBucket ?? "GENERAL";
 }
@@ -295,6 +315,8 @@ export function matchPhase7ActorIntents(
 
   const lots: Phase7ActorMatchLot[] = [];
   const ranked = rankWithEpsilonTies(requests.map((r) => r.candidate), scoreEpsilon);
+  let totalReservedQuantity = 0;
+  let totalReservedBuyerCash = 0;
   for (const c of ranked) {
     const request = byPlan.get(c.tradePlanId)!;
     const quantity = request.reservation.allocatedQuantity;
@@ -360,6 +382,15 @@ export function matchPhase7ActorIntents(
       throw new Error("Phase-7 actor payments cannot reconcile accepted buyer cash reservation");
     }
 
+    // Reconcile *observable* changes to unique owner balances, not merely
+    // requested actor fills. Three individually legal ~0.3 debits from
+    // 10_000_000 can cumulatively exceed the single 1e-9 tolerance.
+    if (Math.abs(observableDebits(endpoint, nextEndpoints, "seller endpoint") - quantity) > quantityEpsilon ||
+        Math.abs(observableDebits(actorCash, nextCash, "buyer wallet") -
+          request.reservation.buyerCashReservedDest) > moneyEpsilon) {
+      throw new Error("Phase-7 observable actor debits cannot reconcile aggregate reservation");
+    }
+
     const planned: Phase7ActorMatchLot[] = [];
     let s = 0, b = 0;
     let sLeft = sellerFills[0]?.fill ?? 0, bLeft = buyerFills[0]?.fill ?? 0;
@@ -386,6 +417,18 @@ export function matchPhase7ActorIntents(
     for (const [k, v] of nextSpend) buyerSpend.set(k, v);
     for (const [k, v] of nextEndpoints) endpoint.set(k, v);
     for (const [k, v] of nextCash) actorCash.set(k, v);
+    totalReservedQuantity += quantity;
+    totalReservedBuyerCash += request.reservation.buyerCashReservedDest;
+  }
+  // Per-plan tolerated binary64 drift must not accumulate across plans.
+  // Snapshot original physical owners (not intent IDs), including keys
+  // shared by several accepted plans, to avoid double counting.
+  if (!Number.isFinite(totalReservedQuantity) || !Number.isFinite(totalReservedBuyerCash) ||
+      Math.abs(observableDebits(budgets.sellerExportableByEndpoint, endpoint, "seller endpoint") -
+        totalReservedQuantity) > quantityEpsilon ||
+      Math.abs(observableDebits(budgets.buyerCashByActorCurrency, actorCash, "buyer wallet") -
+        totalReservedBuyerCash) > moneyEpsilon) {
+    throw new Error("Phase-7 cumulative observable actor debits cannot reconcile reservations");
   }
   return {
     lots,
