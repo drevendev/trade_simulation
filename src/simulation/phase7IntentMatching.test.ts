@@ -243,6 +243,71 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
       phase7SellerEndpointKey(decimalSeller.intent))).toBeCloseTo(0.2);
   });
 
+  it("rejects cumulative observable wallet drift across three individually legal buyers", () => {
+    const q = 0.3 + 0.3 + 0.3;
+    const s = seller("sum-s", q);
+    const bs = [buyer("sum-b1", 0.3), buyer("sum-b2", 0.3), buyer("sum-b3", 0.3)];
+    const b = budgets([s], bs, undefined, 10_000_000);
+    const originalCash = [...b.buyerCashByActorCurrency.entries()];
+    const originalStock = [...b.sellerExportableByEndpoint.entries()];
+    const accepted = request("a", q, [s], bs);
+    // 10_000_000 - (10_000_000 - 0.3) = 0.300000000745...
+    // Each <1e-9 excess is legal in isolation, three exceed it in total.
+    for (const buyers of [bs, [...bs].reverse()]) {
+      expect(() => match([{ ...accepted, buyers }], b))
+        .toThrow(/observable actor debits cannot reconcile aggregate reservation/);
+    }
+    expect([...b.buyerCashByActorCurrency.entries()]).toEqual(originalCash);
+    expect([...b.sellerExportableByEndpoint.entries()]).toEqual(originalStock);
+  });
+
+  it("rejects cumulative observable stock drift across three individually legal sellers", () => {
+    const q = 0.3 + 0.3 + 0.3;
+    const ss = [seller("sum-s1", 0.3), seller("sum-s2", 0.3), seller("sum-s3", 0.3)];
+    const b = buyer("sum-b", q);
+    const balances = budgets(ss, [b], 10_000_000, 100);
+    const originalStock = [...balances.sellerExportableByEndpoint.entries()];
+    const originalCash = [...balances.buyerCashByActorCurrency.entries()];
+    const accepted = request("a", q, ss, [b]);
+    for (const sellers of [ss, [...ss].reverse()]) {
+      expect(() => match([{ ...accepted, sellers }], balances))
+        .toThrow(/observable actor debits cannot reconcile aggregate reservation/);
+    }
+    expect([...balances.sellerExportableByEndpoint.entries()]).toEqual(originalStock);
+    expect([...balances.buyerCashByActorCurrency.entries()]).toEqual(originalCash);
+  });
+
+  it("accepts one actor's observable decimal drift within the absolute tolerance", () => {
+    const s = seller("one-s", 0.3), b = buyer("one-b", 0.3);
+    const balances = budgets([s], [b], 10_000_000, 10_000_000);
+    const result = match([request("a", 0.3, [s], [b])], balances);
+    const physicalDebit = balances.sellerExportableByEndpoint.get(phase7SellerEndpointKey(s.intent))! -
+      result.remainingSellerByEndpoint.get(phase7SellerEndpointKey(s.intent))!;
+    const walletDebit = balances.buyerCashByActorCurrency.get(
+      phase7BuyerActorCashKey(b.intent.actor, currency))! -
+      result.remainingBuyerCashByActorCurrency.get(phase7BuyerActorCashKey(b.intent.actor, currency))!;
+    expect(Math.abs(physicalDebit - 0.3)).toBeLessThanOrEqual(1e-9);
+    expect(Math.abs(walletDebit - 0.3)).toBeLessThanOrEqual(1e-9);
+    expect(result.lots.map((lot) => lot.quantity)).toEqual([0.3]);
+    expect([...balances.sellerExportableByEndpoint.values()]).toEqual([10_000_000]);
+    expect([...balances.buyerCashByActorCurrency.values()]).toEqual([10_000_000]);
+  });
+
+  it("rejects drift accumulated over multiple otherwise legal reserved plans", () => {
+    const ss = ["a", "b", "c"].map((id) => seller("multi-" + id, 0.3));
+    const bs = ["a", "b", "c"].map((id) => buyer("multi-" + id, 0.3));
+    const balances = budgets(ss, bs, 10_000_000, 10_000_000);
+    const originalStock = [...balances.sellerExportableByEndpoint.entries()];
+    const originalCash = [...balances.buyerCashByActorCurrency.entries()];
+    const plans = ss.map((s, i) => request(["a", "b", "c"][i]!, 0.3, [s], [bs[i]!]));
+    for (const incoming of [plans, [...plans].reverse()]) {
+      expect(() => match(incoming, balances))
+        .toThrow(/cumulative observable actor debits cannot reconcile reservations/);
+    }
+    expect([...balances.sellerExportableByEndpoint.entries()]).toEqual(originalStock);
+    expect([...balances.buyerCashByActorCurrency.entries()]).toEqual(originalCash);
+  });
+
   it("requires separately resolved quantity and money tolerances", () => {
     const s = seller("s", 2), b = buyer("b", 2), r = request("a", 1, [s], [b]);
     expect(() => matchPhase7ActorIntents([r], budgets([s], [b]), 1e-8, 1e-9, NaN))
