@@ -281,6 +281,41 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     }, 60_000,
   );
 
+  it.each(["tick", "cumulative", "receipt"] as const)(
+    "refuses %s M3 cash conservation contradictions in both the spotlight and detailed chapter",
+    async mismatch => {
+      const page = await browser.newPage();
+      try {
+        const m3 = JSON.parse(readFileSync(path.join(docsDir, "m3-preview.json"), "utf8")) as M3Preview;
+        const forged = mismatch === "tick"
+          ? { ...m3, ticks: m3.ticks.map((tick, index) => index === 0
+              ? { ...tick, sellerNetReceipt: tick.sellerNetReceipt + 7 } : tick) }
+          : mismatch === "cumulative"
+            ? { ...m3, totals: { ...m3.totals, sellerNetReceipt: m3.totals.sellerNetReceipt + 7 } }
+            : { ...m3, settlementIdentity: { ...m3.settlementIdentity,
+                buyerGrossCost: m3.settlementIdentity.buyerGrossCost + 7 } };
+        await page.route("**/m3-preview.json", route => route.fulfill({
+          status: 200, contentType: "application/json", body: JSON.stringify(forged),
+        }));
+        await page.goto(baseUrl);
+        await page.waitForFunction(() =>
+          !(document.getElementById("m4-preview-body")?.textContent ?? "").includes("Loading the M4 economy"));
+        await page.locator("#showcase-milestone").selectOption("m3");
+        await page.waitForFunction(() =>
+          !(document.getElementById("m3-preview-body")?.textContent ?? "").includes("Loading the M3 local market"));
+        const expected = mismatch === "tick" ? "tick settlement mismatch"
+          : mismatch === "cumulative" ? "cumulative settlement mismatch" : "settlement receipt mismatch";
+        expect(await page.locator("#spotlight-readout").innerText()).toContain(expected);
+        expect(await page.locator("#spotlight-tick").isDisabled()).toBe(true);
+        expect(await page.locator("#m3-preview-body").innerText()).toContain(expected);
+        expect(await page.locator("#m3-preview-body svg").count()).toBe(0);
+        await page.locator("#showcase-milestone").selectOption("m4");
+        expect(await page.locator("#spotlight-tick").isEnabled()).toBe(true);
+        expect(await page.locator('[data-spotlight="outputProduced"]').count()).toBe(1);
+      } finally { await page.close(); }
+    }, 60_000,
+  );
+
   it("accepts genuinely sparse M3 samples with totals covering more unobserved flow", async () => {
     const page = await browser.newPage();
     try {
