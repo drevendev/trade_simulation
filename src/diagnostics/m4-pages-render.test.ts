@@ -91,6 +91,14 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     try {
       expect(await page.locator("#showcase-player").isVisible()).toBe(true);
       expect(await page.locator("#spotlight-tick").isEnabled()).toBe(true);
+      // The first frame must show genuine production, not the zero-output ending.
+      const firstSample = artifact().samples[0]!;
+      expect(firstSample.outputProduced).toBeGreaterThan(0);
+      expect(await page.locator("#spotlight-tick").inputValue()).toBe("0");
+      expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${firstSample.tick}`);
+      expect(await page.locator('[data-spotlight="outputProduced"] dd').innerText()).toContain(
+        firstSample.outputProduced.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      );
       expect(await page.locator("#m4-preview").isVisible()).toBe(false);
       expect(await page.locator("#m3-preview").isVisible()).toBe(false);
       for (const id of ["chapter-m0", "chapter-m1", "chapter-m2", "chapter-m3", "chapter-m4", "chapter-legacy"]) {
@@ -131,15 +139,18 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
         }
       };
 
-      expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${last.tick}`);
-      await assertCards(last);
-      await page.locator("#spotlight-tick").evaluate(node => {
-        const slider = node as HTMLInputElement;
-        slider.value = "0";
-        slider.dispatchEvent(new Event("input", { bubbles: true }));
-      });
+      // Before any interaction the active, actual M4 sample is selected.
+      expect(await page.locator("#spotlight-tick").inputValue()).toBe("0");
       expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${first.tick}`);
       await assertCards(first);
+      // The full unchanged history, including its near-empty final tick, remains scrub-able.
+      await page.locator("#spotlight-tick").evaluate(node => {
+        const slider = node as HTMLInputElement;
+        slider.value = slider.max;
+        slider.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${last.tick}`);
+      await assertCards(last);
       expect(await page.locator("#spotlight-tick").getAttribute("max")).toBe(String(samples.length - 1));
     } finally { await page.close(); }
   }, 60_000);
