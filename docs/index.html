@@ -803,7 +803,8 @@
       } catch (parseError) {
         throw new Error(`the artifact is not valid JSON (${parseError.message})`);
       }
-      const problem = validate(preview);
+      const problem = validate(preview) ?? (window.showcaseSavedRun?.validateM3
+        ? window.showcaseSavedRun.validateM3(preview) : "M3 provenance validator unavailable");
       if (problem !== null) throw new Error(problem);
       render(preview);
       window.showcaseSavedRun?.ready("m3", preview);
