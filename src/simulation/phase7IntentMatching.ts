@@ -107,6 +107,27 @@ function observableDebits(
   if (!Number.isFinite(total)) throw new Error(label + " observed debit total not finite");
   return total;
 }
+/**
+ * A per-intent Phase-8 residual is a separate accounting identity from the
+ * shared physical owner. Opposite rounding errors can cancel at the owner,
+ * so reconcile each original intent balance against ALL accepted fills.
+ */
+function reconcileIntentDebits(
+  initial: ReadonlyMap<MarketIntentId, number>,
+  remaining: ReadonlyMap<MarketIntentId, number>,
+  allocated: ReadonlyMap<MarketIntentId, number>,
+  epsilon: number,
+  label: string,
+): void {
+  for (const [id, requested] of allocated) {
+    const before = initial.get(id);
+    const after = remaining.get(id);
+    if (before === undefined || after === undefined || !Number.isFinite(requested) ||
+        !Number.isFinite(before - after) || Math.abs((before - after) - requested) > epsilon) {
+      throw new Error("Phase-7 cumulative observable " + label + " debits cannot reconcile allocations");
+    }
+  }
+}
 function bucket(intent: MarketIntent): Phase7ActorMatchLot["sellerInventoryBucket"] {
   return intent.inventoryBucket ?? "GENERAL";
 }
@@ -313,6 +334,15 @@ export function matchPhase7ActorIntents(
     byPlan.set(c.tradePlanId, request);
   }
 
+  // Keep the first owner-verified residual separately from its staged preview.
+  // Each intent may recur across ranked plans; one absolute epsilon applies
+  // across the whole call, NOT once per plan or debit.
+  const originalSeller = new Map(sellerRemain);
+  const originalBuyer = new Map(buyerRemain);
+  const originalSpend = new Map(buyerSpend);
+  const allocatedSeller = new Map<MarketIntentId, number>();
+  const allocatedBuyer = new Map<MarketIntentId, number>();
+  const allocatedSpend = new Map<MarketIntentId, number>();
   const lots: Phase7ActorMatchLot[] = [];
   const ranked = rankWithEpsilonTies(requests.map((r) => r.candidate), scoreEpsilon);
   let totalReservedQuantity = 0;
@@ -412,6 +442,15 @@ export function matchPhase7ActorIntents(
       throw new Error("Phase-7 concrete lots cannot reconcile accepted reservation");
     }
     lots.push(...planned);
+    for (const s of sellerFills) {
+      const id = s.evidence.intent.id;
+      allocatedSeller.set(id, (allocatedSeller.get(id) ?? 0) + s.fill);
+    }
+    for (const b of buyerFills) {
+      const id = b.evidence.intent.id;
+      allocatedBuyer.set(id, (allocatedBuyer.get(id) ?? 0) + b.fill);
+      allocatedSpend.set(id, (allocatedSpend.get(id) ?? 0) + b.fill * quote);
+    }
     for (const [k, v] of nextSeller) sellerRemain.set(k, v);
     for (const [k, v] of nextBuyer) buyerRemain.set(k, v);
     for (const [k, v] of nextSpend) buyerSpend.set(k, v);
@@ -430,6 +469,11 @@ export function matchPhase7ActorIntents(
         totalReservedBuyerCash) > moneyEpsilon) {
     throw new Error("Phase-7 cumulative observable actor debits cannot reconcile reservations");
   }
+  // An owner-level total alone cannot prove Phase-8 intent residuals: distinct
+  // intents at one endpoint may have individually accumulated opposite drift.
+  reconcileIntentDebits(originalSeller, sellerRemain, allocatedSeller, quantityEpsilon, "seller intent");
+  reconcileIntentDebits(originalBuyer, buyerRemain, allocatedBuyer, quantityEpsilon, "buyer intent");
+  reconcileIntentDebits(originalSpend, buyerSpend, allocatedSpend, moneyEpsilon, "buyer intent spend");
   return {
     lots,
     remainingSellerByIntent: sellerRemain,
