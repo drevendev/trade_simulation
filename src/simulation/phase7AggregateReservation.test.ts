@@ -202,6 +202,27 @@ describe("M5 #670 shared Phase-7 aggregate resource preflight", () => {
     expect(result.remainingCargoWeightByLink.get(link.linkId)).toBe(100);
   });
 
+  it("rejects duplicate directed-link/good requests with distinct plan IDs before allocating", () => {
+    const link = edge(domestic, 100);
+    // The selector allows only one aggregate plan per directed link and good.
+    // Replaying its cap with a new planId must never create a second allocation.
+    const first = req("policy-cap-a", link, wood, 2, {
+      candidate: candidate("policy-cap-a", link, wood, 2, { maximumOwnQuantity: 3 }),
+    });
+    const second = req("policy-cap-b", link, wood, 1, {
+      candidate: candidate("policy-cap-b", link, wood, 1, { maximumOwnQuantity: 3 }),
+    });
+    const budget = balances([first, second], 20, 20, 100);
+    const original = [...budget.exportableByOriginGood];
+    for (const order of [[first, second], [second, first]]) {
+      expect(() => reserve(order, budget, [link]))
+        .toThrow(/duplicate aggregate Phase-7 candidate for directed link and good/);
+    }
+    expect([...budget.exportableByOriginGood]).toEqual(original);
+    // The existing multi-good/same-link and same-good/multi-link tests remain
+    // positive controls; uniqueness is only for the same directed link + good.
+  });
+
   it("fails closed on missing budgets, duplicate plans, stale currency, invalid price and FX pair", () => {
     const link = edge(domestic);
     const a = req("a", link, wood, 1);
