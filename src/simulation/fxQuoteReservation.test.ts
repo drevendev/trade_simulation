@@ -91,6 +91,46 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     expect(quoteFxForPool(pool(), BASE, QUOTE, 0).requiredInputForFeasibleOutput).toBe(0);
   });
 
+  it("rejects positive output whose required input underflows to zero in quote and planner", () => {
+    const tiny = pool({
+      cash: new Map([[BASE, 50], [QUOTE, 2e-200]]),
+      spotRateQuotePerBase: 1e200,
+      transactionSpread: 0,
+      minOperationalReserveBase: 0,
+      minOperationalReserveQuote: 0,
+    });
+    const budgetKey = fxPayerCurrencyKey("buyer", BASE);
+    const budgets = new Map([[budgetKey, 1]]);
+    expect(() => quoteFxForPool(tiny, BASE, QUOTE, 1e-200, { maxInputAmount: 1 }))
+      .toThrow(/positive output.*zero input/);
+    expect(() => reserveFxForPool(
+      tiny, [{ ...request("underflow", "buyer", 1e-200), maxInputAmount: 1 }], budgets,
+    )).toThrow(/positive output.*zero input/);
+    expect(tiny.cash.get(QUOTE)).toBe(2e-200);
+    expect(budgets.get(budgetKey)).toBe(1);
+  });
+
+  it("still permits tiny FX fills when the positive input cost is representable", () => {
+    const tiny = pool({
+      cash: new Map([[BASE, 50], [QUOTE, 2e-150]]),
+      spotRateQuotePerBase: 1e150,
+      transactionSpread: 0,
+      minOperationalReserveBase: 0,
+      minOperationalReserveQuote: 0,
+    });
+    const q = quoteFxForPool(tiny, BASE, QUOTE, 1e-150, { maxInputAmount: 1 });
+    expect(q.feasibleOutputAmount).toBe(1e-150);
+    expect(q.requiredInputForFeasibleOutput).toBeGreaterThan(0);
+    expect(q.requiredInputForFeasibleOutput / 1e-300).toBeCloseTo(1, 12);
+    const key = fxPayerCurrencyKey("buyer", BASE);
+    const plan = reserveFxForPool(
+      tiny, [{ ...request("tiny", "buyer", 1e-150), maxInputAmount: 1 }],
+      new Map([[key, 1]]),
+    );
+    expect(plan.reservedOutputByCurrency.get(QUOTE)).toBe(1e-150);
+    expect(plan.reservedInputByPayerCurrency.get(key)).toBeGreaterThan(0);
+  });
+
   it("fails closed on malformed pair, extra currency, reserve and quote evidence", () => {
     expect(() => quoteFxForPool(pool(), BASE, THIRD, 1)).toThrow(/pair\/direction/);
     expect(() => quoteFxForPool(pool({ baseCurrencyId: QUOTE }), BASE, QUOTE, 1))
