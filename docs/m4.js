@@ -65,7 +65,7 @@
       for (const sample of preview.samples) observed += sample[key];
       const total = preview.totals[key];
       const summationMargin = Math.max(1e-9,
-        8 * Number.EPSILON * preview.samples.length * Math.max(1, observed, total));
+        8 * Number.EPSILON * preview.samples.length * Math.max(1, Math.max(observed, total)));
       if (!Number.isFinite(observed) || observed - total > summationMargin) {
         return `sampled ${key} exceeds totals.${key}`;
       }
