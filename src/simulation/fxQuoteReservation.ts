@@ -77,6 +77,46 @@ export function fxPayerCurrencyKey(payerKey: string, currencyId: CurrencyId): st
   return JSON.stringify([payerKey, currencyId]);
 }
 
+/**
+ * Each published FX aggregate must be replayable as its constituent money
+ * reservations. Binary64 can round a nonzero debit UP (1e16 + 3 -> 1e16 + 4)
+ * without disappearing; checking next !== previous misses that discrepancy.
+ * Compare each observable increment and its compensated cumulative drift to
+ * the Handoff/03 default fixed moneyEpsilon, never to a relative tolerance.
+ */
+const FX_RESERVATION_MONEY_EPSILON = 1e-9;
+
+interface ReservationDrift {
+  readonly sum: number;
+  readonly correction: number;
+}
+
+function assertReconciledReservationIncrement(
+  driftByKey: Map<string, ReservationDrift>,
+  key: string,
+  previous: number,
+  next: number,
+  quoted: number,
+  label: string,
+): void {
+  const drift = (next - previous) - quoted;
+  if (!Number.isFinite(drift) || Math.abs(drift) > FX_RESERVATION_MONEY_EPSILON) {
+    throw new Error(`FX ${label} reservation cannot reconcile at money precision`);
+  }
+  const prior = driftByKey.get(key) ?? { sum: 0, correction: 0 };
+  // Neumaier accumulation: sub-epsilon errors from individual accepted quotes
+  // must not silently compound beyond one fixed absolute tolerance.
+  const sum = prior.sum + drift;
+  const correction = prior.correction + (Math.abs(prior.sum) >= Math.abs(drift)
+    ? (prior.sum - sum) + drift
+    : (drift - sum) + prior.sum);
+  if (!Number.isFinite(sum) || !Number.isFinite(correction) ||
+      Math.abs(sum + correction) > FX_RESERVATION_MONEY_EPSILON) {
+    throw new Error(`FX ${label} cumulative reservation cannot reconcile at money precision`);
+  }
+  driftByKey.set(key, { sum, correction });
+}
+
 function finiteNonnegative(value: number, label: string): void {
   if (!Number.isFinite(value) || value < 0) {
     throw new Error(label + " must be finite and non-negative");
@@ -249,6 +289,8 @@ export function reserveFxForPool(
 
   const reservedOutputs = new Map<CurrencyId, number>();
   const reservedInputs = new Map<string, number>();
+  const inputDrift = new Map<string, ReservationDrift>();
+  const outputDrift = new Map<string, ReservationDrift>();
   const results: FxReservation[] = [];
   let desiredDemandForBase = 0;
   let desiredSupplyOfBase = 0;
@@ -285,6 +327,16 @@ export function reserveFxForPool(
         (quote.feasibleOutputAmount > 0 && nextOutput === alreadyOutput)) {
       throw new Error("FX reservation would overdraw or disappear at budget precision");
     }
+    // Check observable aggregate deltas, not only whether an increment vanished.
+    // A rounded-UP increment may otherwise promise more money than its quote.
+    assertReconciledReservationIncrement(
+      inputDrift, key, alreadyInput, nextInput,
+      quote.requiredInputForFeasibleOutput, "payer input",
+    );
+    assertReconciledReservationIncrement(
+      outputDrift, request.toCurrencyId, alreadyOutput, nextOutput,
+      quote.feasibleOutputAmount, "pool output",
+    );
     reservedInputs.set(key, nextInput);
     reservedOutputs.set(request.toCurrencyId, nextOutput);
     results.push({ requestId: request.requestId, payerKey: request.payerKey, quote });
