@@ -199,6 +199,90 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     expect(a.pressure.filledDemandForBase).toBe(40);
   });
 
+  it("fails closed when a shared payer/pool rounds a 3-unit quote up to 4", () => {
+    const big = 1e16;
+    const source = pool({
+      cash: new Map([[BASE, 50], [QUOTE, big + 8]]),
+      spotRateQuotePerBase: 1,
+      transactionSpread: 0,
+      minOperationalReserveBase: 0,
+      minOperationalReserveQuote: 0,
+    });
+    const key = fxPayerCurrencyKey("buyer", BASE);
+    const requests = [
+      { ...request("large", "buyer", big, 2), maxInputAmount: big },
+      { ...request("small", "buyer", 3, 1), maxInputAmount: 3 },
+    ];
+    // Both raw quotes fit. Yet binary64 records 1e16 + 3 as 1e16 + 4:
+    // the aggregate would overstate both the payer debit and pool output by 1.
+    expect(quoteFxForPool(source, BASE, QUOTE, 3).requiredInputForFeasibleOutput).toBe(3);
+    expect(big + 3).toBe(big + 4);
+    expect(() => reserveFxForPool(source, requests, new Map([[key, big + 4]])))
+      .toThrow(/reconcile.*precision/);
+    expect(source.cash.get(QUOTE)).toBe(big + 8);
+  });
+
+  it("refuses pool-output overcount even when payer inputs belong to different actors", () => {
+    const big = 1e16;
+    const source = pool({
+      cash: new Map([[BASE, 50], [QUOTE, big + 8]]),
+      spotRateQuotePerBase: 1,
+      transactionSpread: 0,
+      minOperationalReserveBase: 0,
+      minOperationalReserveQuote: 0,
+    });
+    expect(() => reserveFxForPool(source, [
+      { ...request("large", "a", big, 2), maxInputAmount: big },
+      { ...request("small", "b", 3, 1), maxInputAmount: 3 },
+    ], new Map([
+      [fxPayerCurrencyKey("a", BASE), big],
+      [fxPayerCurrencyKey("b", BASE), 3],
+    ]))).toThrow(/pool output.*reconcile.*precision/);
+  });
+
+  it("refuses payer-input overcount when the pool-output increment is still precise", () => {
+    const big = 1e16;
+    const source = pool({
+      cash: new Map([[BASE, 50], [QUOTE, 10000 + 1e-8]]),
+      spotRateQuotePerBase: 1e-12,
+      transactionSpread: 0,
+      minOperationalReserveBase: 0,
+      minOperationalReserveQuote: 0,
+    });
+    const large = { ...request("large", "buyer", 10000, 2), maxInputAmount: big };
+    const small = { ...request("small", "buyer", 3e-12, 1), maxInputAmount: 3 };
+    expect(quoteFxForPool(source, BASE, QUOTE, 3e-12).requiredInputForFeasibleOutput).toBe(3);
+    expect(() => reserveFxForPool(source, [small, large], new Map([
+      [fxPayerCurrencyKey("buyer", BASE), big + 4],
+    ]))).toThrow(/payer input.*reconcile.*precision/);
+  });
+
+  it("preserves exact, insertion-order-independent totals when large and small increments fit", () => {
+    const big = 1e12;
+    const source = pool({
+      cash: new Map([[BASE, 50], [QUOTE, big + 8]]),
+      spotRateQuotePerBase: 1,
+      transactionSpread: 0,
+      minOperationalReserveBase: 0,
+      minOperationalReserveQuote: 0,
+    });
+    const key = fxPayerCurrencyKey("buyer", BASE);
+    const budgets = new Map([[key, big + 4]]);
+    const requests = [
+      { ...request("large", "buyer", big, 2), maxInputAmount: big },
+      { ...request("small", "buyer", 3, 1), maxInputAmount: 3 },
+    ];
+    const first = reserveFxForPool(source, requests, budgets);
+    expect(reserveFxForPool(source, [...requests].reverse(), budgets)).toEqual(first);
+    expect(first.reservations.map(({ quote }) => [
+      quote.feasibleOutputAmount, quote.requiredInputForFeasibleOutput,
+    ])).toEqual([[big, big], [3, 3]]);
+    expect(first.reservedInputByPayerCurrency.get(key)).toBe(big + 3);
+    expect(first.reservedOutputByCurrency.get(QUOTE)).toBe(big + 3);
+    expect(budgets.get(key)).toBe(big + 4);
+    expect(source.cash.get(QUOTE)).toBe(big + 8);
+  });
+
   it("rejects invalid/duplicate requests before publishing any provisional reservation", () => {
     const inputs = new Map([[fxPayerCurrencyKey("buyer", BASE), 100]]);
     const good = request("same", "buyer", 3);
