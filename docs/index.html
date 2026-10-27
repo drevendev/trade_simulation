@@ -467,6 +467,43 @@
     return null;
   }
 
+  // The M3 detailed viewer must remain independently renderable without the
+  // optional external spotlight script (also in the jsdom Pages harness).
+  // Never render its cash-split charts from a contradictory settlement receipt.
+  function validateMoneySplit(preview) {
+    if (!Array.isArray(preview.ticks) || !preview.ticks.length) return null;
+    const totals = preview.totals, receipt = preview.settlementIdentity;
+    const nonnegative = n => typeof n === "number" && Number.isFinite(n) && n >= 0;
+    if (!totals || !receipt ||
+        !["buyerGrossCost", "sellerNetReceipt", "consumptionTaxCollected"].every(k => nonnegative(totals[k])) ||
+        !nonnegative(receipt.buyerGrossCost) ||
+        !nonnegative(receipt.sellerNetReceiptPlusTax) ||
+        !Number.isFinite(receipt.residual) ||
+        !nonnegative(receipt.moneyEpsilon)) return "invalid M3 settlement receipt";
+    const epsilon = Math.min(receipt.moneyEpsilon, 1e-9);
+    const closeMoney = (a, b) => Number.isFinite(a) && Number.isFinite(b) &&
+      Math.abs(a - b) <= Math.max(epsilon,
+        8 * Number.EPSILON * Math.max(1, Math.abs(a), Math.abs(b)));
+    if (!closeMoney(totals.buyerGrossCost,
+          totals.sellerNetReceipt + totals.consumptionTaxCollected)) {
+      return "M3 cumulative settlement mismatch";
+    }
+    if (!closeMoney(receipt.buyerGrossCost, totals.buyerGrossCost) ||
+        !closeMoney(receipt.sellerNetReceiptPlusTax,
+          totals.sellerNetReceipt + totals.consumptionTaxCollected) ||
+        !closeMoney(receipt.residual, receipt.buyerGrossCost - receipt.sellerNetReceiptPlusTax)) {
+      return "M3 settlement receipt mismatch";
+    }
+    for (const tick of preview.ticks) {
+      if (!tick || !nonnegative(tick.sellerNetReceipt) || !nonnegative(tick.buyerGrossCost) ||
+          !nonnegative(tick.consumptionTaxCollected) ||
+          !closeMoney(tick.buyerGrossCost, tick.sellerNetReceipt + tick.consumptionTaxCollected)) {
+        return "M3 tick settlement mismatch";
+      }
+    }
+    return null;
+  }
+
   // ---- charts -------------------------------------------------------------
 
   /**
@@ -786,6 +823,7 @@
     show(preview.ticks.length);
   }
 
+  let spotlightReceivedArtifact = false;
   fetch("m3-preview.json")
     .then(response => {
       if (!response.ok) {
@@ -803,14 +841,20 @@
       } catch (parseError) {
         throw new Error(`the artifact is not valid JSON (${parseError.message})`);
       }
-      const problem = validate(preview) ?? (window.showcaseSavedRun?.validateM3
-        ? window.showcaseSavedRun.validateM3(preview) : "M3 provenance validator unavailable");
+      const problem = validate(preview);
       if (problem !== null) throw new Error(problem);
+      // Let the spotlight preserve its own more specific provenance refusal
+      // if the detailed settlement validator also rejects this artifact.
+      if (window.showcaseSavedRun) {
+        window.showcaseSavedRun.ready("m3", preview);
+        spotlightReceivedArtifact = true;
+      }
+      const settlementProblem = validateMoneySplit(preview);
+      if (settlementProblem !== null) throw new Error(settlementProblem);
       render(preview);
-      window.showcaseSavedRun?.ready("m3", preview);
     })
     .catch(error => {
-      window.showcaseSavedRun?.failure("m3", error.unavailable === true ? "Saved run unavailable" : "Saved run could not be displayed");
+      if (!spotlightReceivedArtifact) window.showcaseSavedRun?.failure("m3", error.unavailable === true ? "Saved run unavailable" : "Saved run could not be displayed");
       if (error.unavailable === true) {
         showState(
           "M3 local market unavailable",
