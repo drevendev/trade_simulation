@@ -307,7 +307,7 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
           : mismatch === "cumulative" ? "cumulative settlement mismatch" : "settlement receipt mismatch";
         expect(await page.locator("#spotlight-readout").innerText()).toContain(expected);
         expect(await page.locator("#spotlight-tick").isDisabled()).toBe(true);
-        expect(await page.locator("#m3-preview-body").innerText()).toContain(expected);
+        expect(await page.locator("#m3-preview-body").textContent()).toContain(expected);
         expect(await page.locator("#m3-preview-body svg").count()).toBe(0);
         await page.locator("#showcase-milestone").selectOption("m4");
         expect(await page.locator("#spotlight-tick").isEnabled()).toBe(true);
