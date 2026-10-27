@@ -308,6 +308,84 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
     expect([...balances.buyerCashByActorCurrency.entries()]).toEqual(originalCash);
   });
 
+  it("refuses opposite cumulative seller-intent drift hidden by one shared endpoint", () => {
+    // Opposite 0.7 and 0.3 rounding errors cancel at the physical endpoint,
+    // but each distinct intent would publish a materially false Phase-8 stock.
+    const sa = seller("drift-sa", 9_000_000, "same-unit");
+    const sb = seller("drift-sb", 9_000_000, "same-unit");
+    const plans = ["a", "b", "c", "d", "e", "f"].map((id, i) => {
+      const q = i < 3 ? 0.7 : 0.3;
+      const region = (`r:drift-${id}`) as RegionId;
+      const linkId = (`link:drift-${id}`) as TransportLinkId;
+      const originalBuyer = buyer("drift-b-" + id, q);
+      const b = { ...originalBuyer, intent: { ...originalBuyer.intent, regionId: region } };
+      const r = request(id, q, [i < 3 ? sa : sb], [b]);
+      return {
+        ...r,
+        candidate: { ...r.candidate, linkId, destinationRegionId: region },
+        reservation: { ...r.reservation, linkId },
+      };
+    });
+    const balances = budgets([sa, sb], plans.map((p) => p.buyers[0]!), 10_000_000, 100);
+    const beforeStock = [...balances.sellerExportableByEndpoint.entries()];
+    const beforeCash = [...balances.buyerCashByActorCurrency.entries()];
+    for (const orderedPlans of [plans, [...plans].reverse()]) {
+      expect(() => match(orderedPlans, balances))
+        .toThrow(/cumulative observable seller intent debits cannot reconcile allocations/);
+    }
+    expect([...balances.sellerExportableByEndpoint.entries()]).toEqual(beforeStock);
+    expect([...balances.buyerCashByActorCurrency.entries()]).toEqual(beforeCash);
+  });
+
+  it("refuses cumulative BUY-intent quantity drift despite a valid shared wallet", () => {
+    const b = buyer("drift-quantity-b", 9_000_000);
+    const sellers = ["a", "b", "c"].map((id) => seller("drift-quantity-s-" + id, 0.3));
+    const plans = sellers.map((s, i) => {
+      const id = ["a", "b", "c"][i]!;
+      const linkId = (`link:drift-buyer-qty-${id}`) as TransportLinkId;
+      const r = request(id, 0.3, [s], [b]);
+      return { ...r, candidate: { ...r.candidate, linkId },
+        reservation: { ...r.reservation, linkId } };
+    });
+    const balances = budgets(sellers, [b]);
+    expect(match([plans[0]!], balances).lots).toHaveLength(1);
+    const beforeStock = [...balances.sellerExportableByEndpoint.entries()];
+    const beforeCash = [...balances.buyerCashByActorCurrency.entries()];
+    for (const orderedPlans of [plans, [...plans].reverse()]) {
+      expect(() => match(orderedPlans, balances))
+        .toThrow(/cumulative observable buyer intent debits cannot reconcile allocations/);
+    }
+    expect([...balances.sellerExportableByEndpoint.entries()]).toEqual(beforeStock);
+    expect([...balances.buyerCashByActorCurrency.entries()]).toEqual(beforeCash);
+  });
+
+  it("refuses cumulative BUY-intent commitment drift when quantity and wallet reconcile", () => {
+    const initial = buyer("drift-spend-b", 1);
+    const b = {
+      ...initial,
+      intent: { ...initial.intent, maxSpend: 9_000_000 },
+      remainingBuyerSpend: 9_000_000,
+    };
+    const sellers = ["a", "b", "c"].map((id) => seller("drift-spend-s-" + id, 0.3));
+    const plans = sellers.map((s, i) => {
+      const id = ["a", "b", "c"][i]!;
+      const linkId = (`link:drift-buyer-spend-${id}`) as TransportLinkId;
+      const r = request(id, 0.3, [s], [b]);
+      return { ...r, candidate: { ...r.candidate, linkId },
+        reservation: { ...r.reservation, linkId } };
+    });
+    const balances = budgets(sellers, [b]);
+    expect(match([plans[0]!], balances).lots).toHaveLength(1);
+    const beforeStock = [...balances.sellerExportableByEndpoint.entries()];
+    const beforeCash = [...balances.buyerCashByActorCurrency.entries()];
+    for (const orderedPlans of [plans, [...plans].reverse()]) {
+      expect(() => match(orderedPlans, balances))
+        .toThrow(/cumulative observable buyer intent spend debits cannot reconcile allocations/);
+    }
+    expect([...balances.sellerExportableByEndpoint.entries()]).toEqual(beforeStock);
+    expect([...balances.buyerCashByActorCurrency.entries()]).toEqual(beforeCash);
+  });
+
   it("requires separately resolved quantity and money tolerances", () => {
     const s = seller("s", 2), b = buyer("b", 2), r = request("a", 1, [s], [b]);
     expect(() => matchPhase7ActorIntents([r], budgets([s], [b]), 1e-8, 1e-9, NaN))
