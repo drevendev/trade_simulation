@@ -91,6 +91,66 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     expect(quoteFxForPool(pool(), BASE, QUOTE, 0).requiredInputForFeasibleOutput).toBe(0);
   });
 
+  it("protects a sub-ulp operational floor in both quote sizing and actual reservation promises", () => {
+    const big = 1e16;
+    const near = big - 2; // adjacent representable binary64 value below 1e16
+    const source = pool({
+      cash: new Map([[BASE, big], [QUOTE, big]]),
+      spotRateQuotePerBase: 1,
+      transactionSpread: 0,
+      minOperationalReserveBase: 0,
+      minOperationalReserveQuote: 1,
+    });
+    // Previously stock - floor rounded UP to the full stock and promised
+    // 1e16, leaving zero QUOTE despite an operational reserve floor of 1.
+    expect(big - 1).toBe(big); // load-bearing numeric witness
+    const quote = quoteFxForPool(source, BASE, QUOTE, big, { maxInputAmount: big });
+    expect(quote.maxOutputByPoolReserve).toBe(near);
+    expect(quote.feasibleOutputAmount).toBe(near);
+    expect(big - quote.feasibleOutputAmount).toBe(2);
+    expect(quote.reserveLimited).toBe(true);
+
+    const buyerKey = fxPayerCurrencyKey("buyer", BASE);
+    const budgets = new Map([[buyerKey, big]]);
+    const plan = reserveFxForPool(
+      source,
+      [{ ...request("full-stock", "buyer", big), maxInputAmount: big }],
+      budgets,
+    );
+    expect(plan.reservedOutputByCurrency.get(QUOTE)).toBe(near);
+    expect(plan.reservedInputByPayerCurrency.get(buyerKey)).toBe(near);
+    expect(big - plan.reservedOutputByCurrency.get(QUOTE)!).toBeGreaterThanOrEqual(1);
+    expect(source.cash.get(QUOTE)).toBe(big);
+    expect(budgets.get(buyerKey)).toBe(big);
+
+    // A neighboring representable fill remains valid; only the amount
+    // that would consume the protected floor is excluded.
+    expect(quoteFxForPool(source, BASE, QUOTE, near, { maxInputAmount: big })
+      .feasibleOutputAmount).toBe(near);
+  });
+
+  it("refuses a previously reserved full-stock promise when a tiny floor cannot survive", () => {
+    const big = 1e16;
+    const source = pool({
+      cash: new Map([[BASE, big], [QUOTE, big]]),
+      spotRateQuotePerBase: 1,
+      transactionSpread: 0,
+      minOperationalReserveBase: 1,
+      minOperationalReserveQuote: 1,
+    });
+    expect(() => quoteFxForPool(source, BASE, QUOTE, 2, {
+      reservedOutputAmount: big,
+      maxInputAmount: big,
+    })).toThrow(/prior FX reservations exceed/);
+    expect(() => quoteFxForPool(source, QUOTE, BASE, 2, {
+      reservedOutputAmount: big,
+      maxInputAmount: big,
+    })).toThrow(/prior FX reservations exceed/);
+    // The reverse exchange respects the BASE floor as well.
+    expect(quoteFxForPool(source, QUOTE, BASE, big, { maxInputAmount: big })
+      .feasibleOutputAmount).toBe(big - 2);
+  });
+
   it("rejects positive output whose required input underflows to zero in quote and planner", () => {
     const tiny = pool({
       cash: new Map([[BASE, 50], [QUOTE, 2e-200]]),
