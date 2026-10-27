@@ -103,15 +103,54 @@ function requiredBudget(budgets: ReadonlyMap<string, number>, key: string, label
   return amount;
 }
 
-function consume(budget: number, used: number, label: string): number {
+function consume(budget: number, used: number, label: string, precisionTolerance: number): number {
   if (used === 0) return budget;
   positive(used, label + " use");
   if (used > budget) throw new Error(label + " reservation would overdraw shared budget");
   const next = budget - used;
-  if (next === budget || next < 0 || !Number.isFinite(next)) {
+  // An observable change is not necessarily the requested debit: IEEE-754
+  // rounds 1e16 - 3 to a decrement of FOUR. Do not publish a residual
+  // that consumes more (or less) than the allocation actually reserved.
+  const observedUse = budget - next;
+  if (next === budget || next < 0 || !Number.isFinite(next) ||
+      !Number.isFinite(observedUse) ||
+      Math.abs(observedUse - used) > precisionTolerance) {
     throw new Error(label + " reservation lost numeric precision");
   }
   return next;
+}
+
+/**
+ * Compensated sum of accepted allocations: a fixed *absolute* epsilon cannot
+ * be spent anew with every candidate sharing one stock/cash/cargo/FX pool.
+ */
+interface DebitSum { readonly sum: number; readonly correction: number }
+
+function recordDebit(totals: Map<string, DebitSum>, key: string, used: number): void {
+  if (used === 0) return;
+  const previous = totals.get(key) ?? { sum: 0, correction: 0 };
+  const next = previous.sum + used;
+  const error = Math.abs(previous.sum) >= Math.abs(used)
+    ? previous.sum - next + used
+    : used - next + previous.sum;
+  totals.set(key, { sum: next, correction: previous.correction + error });
+}
+
+function validateCumulativeDebits(
+  original: ReadonlyMap<string, number>,
+  remaining: ReadonlyMap<string, number>,
+  totals: ReadonlyMap<string, DebitSum>,
+  label: string,
+  tolerance: number,
+): void {
+  for (const [key, { sum, correction }] of totals) {
+    const committed = sum + correction;
+    const observed = requiredBudget(original, key, label) - requiredBudget(remaining, key, label);
+    if (!Number.isFinite(committed) || !Number.isFinite(observed) ||
+        Math.abs(observed - committed) > tolerance) {
+      throw new Error(label + " cumulative reservation lost numeric precision");
+    }
+  }
 }
 
 /**
@@ -132,12 +171,15 @@ export function reservePhase7AggregateTrades(
   }
   const scoreEpsilon = config.numeric.rateEpsilon;
   const quantityEpsilon = config.numeric.quantityEpsilon;
+  const moneyEpsilon = config.numeric.moneyEpsilon;
   const minimumShipment = config.trade.shipmentMinimumQuantity;
-  if (scoreEpsilon === undefined || quantityEpsilon === undefined || minimumShipment === undefined) {
+  if (scoreEpsilon === undefined || quantityEpsilon === undefined ||
+      moneyEpsilon === undefined || minimumShipment === undefined) {
     throw new Error("Phase-7 requires resolved score, quantity and shipment minimum thresholds");
   }
   positive(scoreEpsilon, "rateEpsilon");
   nonnegative(quantityEpsilon, "quantityEpsilon");
+  nonnegative(moneyEpsilon, "moneyEpsilon");
   positive(minimumShipment, "shipmentMinimumQuantity");
 
   const remainingStock = copyBudgets(budgets.exportableByOriginGood);
@@ -207,6 +249,18 @@ export function reservePhase7AggregateTrades(
   });
 
   const byId = new Map(prepared.map((item) => [item.request.candidate.tradePlanId, item]));
+  // Frozen initial budgets are witnesses for whole-call conservation. These are
+  // independent copies, never the caller-owned maps or WorldState.
+  const initialStock = new Map(remainingStock);
+  const initialDemand = new Map(remainingDemand);
+  const initialCash = new Map(remainingCash);
+  const initialFx = new Map(remainingFx);
+  const initialLinks = new Map(links);
+  const stockDebits = new Map<string, DebitSum>();
+  const demandDebits = new Map<string, DebitSum>();
+  const cashDebits = new Map<string, DebitSum>();
+  const linkDebits = new Map<string, DebitSum>();
+  const fxDebits = new Map<string, DebitSum>();
   const reservations: Phase7AggregateReservation[] = [];
   for (const candidate of rankWithEpsilonTies(requests.map((request) => request.candidate), scoreEpsilon)) {
     const item = byId.get(candidate.tradePlanId)!;
@@ -266,16 +320,21 @@ export function reservePhase7AggregateTrades(
           quantity = cargoUse = cashUse = fxUse = 0;
         } else {
           // Commit only to LOCAL ephemeral maps after every leg is proven.
-          const afterStock = consume(stock, quantity, "export stock");
-          const afterDemand = consume(demand, quantity, "import demand");
-          const afterCash = consume(cash, cashUse, "buyer cash");
-          const afterLink = consume(capacity, cargoUse, "cargo weight");
-          const afterFx = item.fxKey === null ? null : consume(fx, fxUse, "FX pool output");
+          const afterStock = consume(stock, quantity, "export stock", quantityEpsilon);
+          const afterDemand = consume(demand, quantity, "import demand", quantityEpsilon);
+          const afterCash = consume(cash, cashUse, "buyer cash", moneyEpsilon);
+          const afterLink = consume(capacity, cargoUse, "cargo weight", quantityEpsilon);
+          const afterFx = item.fxKey === null ? null : consume(fx, fxUse, "FX pool output", moneyEpsilon);
           remainingStock.set(item.stockKey, afterStock);
           remainingDemand.set(item.demandKey, afterDemand);
           remainingCash.set(item.cashKey, afterCash);
           links.set(linkId, afterLink);
           if (item.fxKey !== null) remainingFx.set(item.fxKey, afterFx!);
+          recordDebit(stockDebits, item.stockKey, quantity);
+          recordDebit(demandDebits, item.demandKey, quantity);
+          recordDebit(cashDebits, item.cashKey, cashUse);
+          recordDebit(linkDebits, linkId, cargoUse);
+          if (item.fxKey !== null) recordDebit(fxDebits, item.fxKey, fxUse);
         }
       }
     }
@@ -290,6 +349,16 @@ export function reservePhase7AggregateTrades(
       refusal,
     });
   }
+
+  // An individually acceptable binary64 subtraction can still accumulate
+  // beyond ONE absolute epsilon: e.g. two 0.3 debits from 10_000_000 each
+  // deviate < 1e-9, while their combined observed debit deviates > 1e-9.
+  // Fail closed before publishing any provisional Phase-8 residuals.
+  validateCumulativeDebits(initialStock, remainingStock, stockDebits, "export stock", quantityEpsilon);
+  validateCumulativeDebits(initialDemand, remainingDemand, demandDebits, "import demand", quantityEpsilon);
+  validateCumulativeDebits(initialCash, remainingCash, cashDebits, "buyer cash", moneyEpsilon);
+  validateCumulativeDebits(initialLinks, links, linkDebits, "cargo weight", quantityEpsilon);
+  validateCumulativeDebits(initialFx, remainingFx, fxDebits, "FX pool output", moneyEpsilon);
 
   return {
     reservations,
