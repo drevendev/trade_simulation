@@ -37,7 +37,26 @@
     }
     if (p.ticks.length) {
       if (!p.totals || !nonnegative(p.totals.clearedQuantity) ||
-          !nonnegative(p.totals.buyerGrossCost) || !nonnegative(p.totals.consumptionTaxCollected)) return "invalid M3 totals";
+          !nonnegative(p.totals.buyerGrossCost) || !nonnegative(p.totals.consumptionTaxCollected) ||
+          !nonnegative(p.totals.sellerNetReceipt)) return "invalid M3 totals";
+      // Every observed realized flow must fit its whole-run total, individually
+      // AND together. Sparse histories need not equal the full run, but their
+      // sampled subtotals cannot exceed it. Allow only floating-point summation
+      // noise, not a missing physical or monetary source.
+      const flowFields = ["clearedQuantity", "sellerNetReceipt", "buyerGrossCost", "consumptionTaxCollected"];
+      if (p.ticks.some(tick => flowFields.some(field => tick[field] > p.totals[field]))) {
+        return "M3 observation exceeds whole-run total";
+      }
+      for (const field of flowFields) {
+        const sampled = p.ticks.reduce((sum, tick) => sum + tick[field], 0);
+        const total = p.totals[field];
+        const roundingMargin = Math.max(1e-9,
+          8 * Number.EPSILON * p.ticks.length * Math.max(1, sampled, total));
+        if (!Number.isFinite(sampled) || sampled - total > roundingMargin) {
+          return "M3 observations exceed whole-run total";
+        }
+      }
+
       // The buyer's observed debit must equal the seller's receipt plus the
       // treasury's tax. A valid aggregate cannot excuse a fabricated tick, and
       // the receipt advertised by the detailed M3 panel must agree with totals.
@@ -67,23 +86,6 @@
       if (p.ticks.some(tick => !closeMoney(tick.buyerGrossCost,
             tick.sellerNetReceipt + tick.consumptionTaxCollected))) {
         return "M3 tick settlement mismatch";
-      }
-      // Every observed realized flow must fit its whole-run total, individually
-      // AND together. Sparse histories need not equal the full run, but their
-      // sampled subtotals cannot exceed it. Allow only floating-point summation
-      // noise, not a missing physical or monetary source.
-      const flowFields = ["clearedQuantity", "sellerNetReceipt", "buyerGrossCost", "consumptionTaxCollected"];
-      if (p.ticks.some(tick => flowFields.some(field => tick[field] > p.totals[field]))) {
-        return "M3 observation exceeds whole-run total";
-      }
-      for (const field of flowFields) {
-        const sampled = p.ticks.reduce((sum, tick) => sum + tick[field], 0);
-        const total = p.totals[field];
-        const roundingMargin = Math.max(1e-9,
-          8 * Number.EPSILON * p.ticks.length * Math.max(1, sampled, total));
-        if (!Number.isFinite(sampled) || sampled - total > roundingMargin) {
-          return "M3 observations exceed whole-run total";
-        }
       }
     }
     return null;
