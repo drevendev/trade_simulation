@@ -58,6 +58,48 @@ function subtractExactObservable(
 }
 
 /**
+ * Accumulate authenticated debits by intent with Neumaier compensation:
+ * many individually admissible binary64 decrements may otherwise disguise
+ * a material cumulative loss at a large initial balance.
+ */
+interface CommittedTotal {
+  readonly sum: number;
+  readonly correction: number;
+}
+
+function addCommitted(
+  totals: Map<MarketIntentId, CommittedTotal>,
+  id: MarketIntentId,
+  debit: number,
+): void {
+  const previous = totals.get(id) ?? { sum: 0, correction: 0 };
+  const sum = previous.sum + debit;
+  const rounding = Math.abs(previous.sum) >= Math.abs(debit)
+    ? (previous.sum - sum) + debit
+    : (debit - sum) + previous.sum;
+  const correction = previous.correction + rounding;
+  if (!Number.isFinite(sum) || !Number.isFinite(correction)) {
+    throw new Error("Phase-7 committed residual cumulative receipt debit is nonfinite");
+  }
+  totals.set(id, { sum, correction });
+}
+
+function assertCumulativeDebit(
+  initial: number,
+  final: number,
+  committed: CommittedTotal,
+  epsilon: number,
+  label: string,
+): void {
+  const observed = initial - final;
+  const expected = committed.sum + committed.correction;
+  if (!Number.isFinite(observed) || !Number.isFinite(expected) ||
+      Math.abs(observed - expected) > epsilon) {
+    throw new Error(`Phase-7 committed residual ${label} cumulative binary64 debit precision`);
+  }
+}
+
+/**
  * Canonical Phase-8 MAIN intents after REALIZED Phase-7 dispatch.
  *
  * All input intents are from the same tick after Phase-4 consumption. This
@@ -85,6 +127,11 @@ export function projectPhase8CommittedTradeResiduals(
     remaining.set(intent.id, { ...intent });
   }
 
+  // Preserve the post-Phase-4 starting intents: final residuals must agree
+  // with the complete set of committed receipts, not just each individual lot.
+  const initial = new Map(remaining);
+  const committedQuantities = new Map<MarketIntentId, CommittedTotal>();
+  const committedBuyerSpend = new Map<MarketIntentId, CommittedTotal>();
   const seenShipmentIds = new Set<string>();
   for (const lot of stableOrderBy(committedLots, (item) => item.shipmentId)) {
     if (typeof lot.shipmentId !== "string" || !lot.shipmentId.startsWith("sh:") ||
@@ -121,6 +168,36 @@ export function projectPhase8CommittedTradeResiduals(
     remaining.set(buyer.id, {
       ...buyer, desiredQuantity: buyerRemaining, maxSpend: buyerCashRemaining,
     });
+    addCommitted(committedQuantities, seller.id, lot.dispatchedQuantity);
+    addCommitted(committedQuantities, buyer.id, lot.dispatchedQuantity);
+    addCommitted(committedBuyerSpend, buyer.id, lot.buyerTotalDebitDest);
+  }
+
+  // A fixed absolute tolerance is a TOTAL conservation budget per intent,
+  // not a fresh permission to lose up to epsilon on each shipment. In
+  // particular, 10_000_000 - 0.3 - 0.3 over-debits by >1e-9 although each
+  // of the two individual binary64 subtractions is within 1e-9.
+  for (const [id, total] of committedQuantities) {
+    const first = initial.get(id);
+    const last = remaining.get(id);
+    if (!first || !last) {
+      throw new Error("Phase-7 committed residual lost intent during reconciliation");
+    }
+    assertCumulativeDebit(
+      first.desiredQuantity, last.desiredQuantity, total,
+      numeric.quantityEpsilon, first.side === "SELL" ? "seller quantity" : "buyer quantity",
+    );
+  }
+  for (const [id, total] of committedBuyerSpend) {
+    const first = initial.get(id);
+    const last = remaining.get(id);
+    if (!first || !last || first.maxSpend === undefined || last.maxSpend === undefined) {
+      throw new Error("Phase-7 committed residual lost BUY cash during reconciliation");
+    }
+    assertCumulativeDebit(
+      first.maxSpend, last.maxSpend, total, numeric.moneyEpsilon,
+      "buyer destination-currency spend",
+    );
   }
 
   return stableOrderBy(remaining.values(), (intent) => intent.id);
