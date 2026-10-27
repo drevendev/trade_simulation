@@ -147,6 +147,9 @@ export function reservePhase7AggregateTrades(
   const links = new Map<TransportLinkId, number>();
   const linkUsable = new Map<TransportLinkId, boolean>();
   const seen = new Set<string>();
+  // A scored aggregate candidate is unique per directed link and good.
+  // Different plan IDs cannot replay one route/good's legal or policy cap.
+  const seenDirectedLinkGoods = new Set<string>();
   const prepared = requests.map((request) => {
     const c = request.candidate;
     if (!c || typeof c.tradePlanId !== "string" || !c.tradePlanId.trim() || seen.has(c.tradePlanId)) {
@@ -156,6 +159,11 @@ export function reservePhase7AggregateTrades(
     if (typeof c.goodId !== "string" || !c.goodId || !Number.isFinite(c.score)) {
       throw new Error("Phase-7 aggregate candidate good/score is invalid");
     }
+    const directedLinkGood = JSON.stringify([c.linkId, c.goodId]);
+    if (seenDirectedLinkGoods.has(directedLinkGood)) {
+      throw new Error("duplicate aggregate Phase-7 candidate for directed link and good");
+    }
+    seenDirectedLinkGoods.add(directedLinkGood);
     positive(c.maximumOwnQuantity, "maximumOwnQuantity");
     positive(request.cargoWeightPerUnit, "cargoWeightPerUnit");
     nonnegative(request.landedGrossUnitCostDest, "landedGrossUnitCostDest");
