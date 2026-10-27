@@ -117,6 +117,46 @@ function assertReconciledReservationIncrement(
   driftByKey.set(key, { sum, correction });
 }
 
+/**
+ * Exact comparison of two finite nonnegative monetary obligations with stock.
+ * Comparing just (output + floor) <= stock can lose a positive reserve floor
+ * when IEEE-754 rounds that sum down to stock (e.g. 1e16 + 1 === 1e16).
+ * TwoSum exposes the discarded low part without changing the money tolerance.
+ */
+function preservesFxPoolFloor(stock: number, floor: number, output: number): boolean {
+  const total = output + floor;
+  if (!Number.isFinite(total) || total > stock) return false;
+  if (total < stock) return true;
+  const reconstructedFloor = total - output;
+  const reconstructedOutput = total - reconstructedFloor;
+  const discarded = (output - reconstructedOutput) + (floor - reconstructedFloor);
+  return discarded <= 0;
+}
+
+/** The immediately smaller positive binary64 value, without a relative haircut. */
+function nextDownPositive(value: number): number {
+  if (!(value > 0) || !Number.isFinite(value)) {
+    throw new Error("FX output budget must be finite and positive");
+  }
+  const bits = new DataView(new ArrayBuffer(8));
+  bits.setFloat64(0, value, false);
+  bits.setBigUint64(0, bits.getBigUint64(0, false) - 1n, false);
+  return bits.getFloat64(0, false);
+}
+
+/** Conservatively round an unsafe stock-minus-floor budget DOWN by one ulp. */
+function safeFxPoolOutputBudget(stock: number, floor: number): number {
+  let budget = stock - floor;
+  if (budget > 0 && !preservesFxPoolFloor(stock, floor, budget)) {
+    budget = nextDownPositive(budget);
+  }
+  if (!Number.isFinite(budget) || budget < 0 ||
+      !preservesFxPoolFloor(stock, floor, budget)) {
+    throw new Error("FX output budget cannot preserve pool reserve floor at numeric precision");
+  }
+  return budget;
+}
+
 function finiteNonnegative(value: number, label: string): void {
   if (!Number.isFinite(value) || value < 0) {
     throw new Error(label + " must be finite and non-negative");
@@ -198,8 +238,9 @@ export function quoteFxForPool(
   const floor = direction === "BASE_TO_QUOTE"
     ? pool.minOperationalReserveQuote : pool.minOperationalReserveBase;
   const stock = pool.cash.get(toCurrencyId)!;
-  const openingAvailable = stock - floor;
-  if (priorReserved > openingAvailable) {
+  const openingAvailable = safeFxPoolOutputBudget(stock, floor);
+  if (priorReserved > openingAvailable ||
+      !preservesFxPoolFloor(stock, floor, priorReserved)) {
     throw new Error("prior FX reservations exceed the operational pool output");
   }
   const available = openingAvailable - priorReserved;
@@ -229,6 +270,7 @@ export function quoteFxForPool(
   if (!Number.isFinite(feasible) || feasible < 0 ||
       !Number.isFinite(required) || required < 0 ||
       feasible > available ||
+      !preservesFxPoolFloor(stock, floor, priorReserved + feasible) ||
       (limits.maxInputAmount !== undefined && required > limits.maxInputAmount)) {
     throw new Error("FX quote would exceed cash/reserve or lose numeric precision");
   }
@@ -319,8 +361,10 @@ export function reserveFxForPool(
     const nextOutput = alreadyOutput + quote.feasibleOutputAmount;
     const floor = request.toCurrencyId === pool.baseCurrencyId
       ? pool.minOperationalReserveBase : pool.minOperationalReserveQuote;
-    const budgetOutput = pool.cash.get(request.toCurrencyId)! - floor;
+    const outputStock = pool.cash.get(request.toCurrencyId)!;
+    const budgetOutput = safeFxPoolOutputBudget(outputStock, floor);
     if (nextInput > openingCash || nextOutput > budgetOutput ||
+        !preservesFxPoolFloor(outputStock, floor, nextOutput) ||
         !Number.isFinite(nextInput) || !Number.isFinite(nextOutput) ||
         (quote.feasibleOutputAmount > 0 && !(quote.requiredInputForFeasibleOutput > 0)) ||
         (quote.requiredInputForFeasibleOutput > 0 && nextInput === alreadyInput) ||
