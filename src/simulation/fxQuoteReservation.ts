@@ -192,6 +192,11 @@ export function quoteFxForPool(
       (limits.maxInputAmount !== undefined && required > limits.maxInputAmount)) {
     throw new Error("FX quote would exceed cash/reserve or lose numeric precision");
   }
+  // Underflow can erase the price of a positive output, minting a free FX
+  // reservation even though both the spot and pool balances are finite.
+  if (feasible > 0 && required === 0) {
+    throw new Error("FX positive output has unrepresentable zero input cost");
+  }
 
   return {
     pairId: pool.pairId,
@@ -275,6 +280,7 @@ export function reserveFxForPool(
     const budgetOutput = pool.cash.get(request.toCurrencyId)! - floor;
     if (nextInput > openingCash || nextOutput > budgetOutput ||
         !Number.isFinite(nextInput) || !Number.isFinite(nextOutput) ||
+        (quote.feasibleOutputAmount > 0 && !(quote.requiredInputForFeasibleOutput > 0)) ||
         (quote.requiredInputForFeasibleOutput > 0 && nextInput === alreadyInput) ||
         (quote.feasibleOutputAmount > 0 && nextOutput === alreadyOutput)) {
       throw new Error("FX reservation would overdraw or disappear at budget precision");
