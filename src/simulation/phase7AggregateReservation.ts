@@ -121,6 +121,39 @@ function consume(budget: number, used: number, label: string, precisionTolerance
 }
 
 /**
+ * Compensated sum of accepted allocations: a fixed *absolute* epsilon cannot
+ * be spent anew with every candidate sharing one stock/cash/cargo/FX pool.
+ */
+interface DebitSum { readonly sum: number; readonly correction: number }
+
+function recordDebit(totals: Map<string, DebitSum>, key: string, used: number): void {
+  if (used === 0) return;
+  const previous = totals.get(key) ?? { sum: 0, correction: 0 };
+  const next = previous.sum + used;
+  const error = Math.abs(previous.sum) >= Math.abs(used)
+    ? previous.sum - next + used
+    : used - next + previous.sum;
+  totals.set(key, { sum: next, correction: previous.correction + error });
+}
+
+function validateCumulativeDebits(
+  original: ReadonlyMap<string, number>,
+  remaining: ReadonlyMap<string, number>,
+  totals: ReadonlyMap<string, DebitSum>,
+  label: string,
+  tolerance: number,
+): void {
+  for (const [key, { sum, correction }] of totals) {
+    const committed = sum + correction;
+    const observed = requiredBudget(original, key, label) - requiredBudget(remaining, key, label);
+    if (!Number.isFinite(committed) || !Number.isFinite(observed) ||
+        Math.abs(observed - committed) > tolerance) {
+      throw new Error(label + " cumulative reservation lost numeric precision");
+    }
+  }
+}
+
+/**
  * Reserves the SAME scored candidate order across all shared budgets. Never
  * reserves cargo capacity before checking money, goods, demand and FX: a
  * refused candidate must not take capacity away from the following one.
@@ -208,6 +241,18 @@ export function reservePhase7AggregateTrades(
   });
 
   const byId = new Map(prepared.map((item) => [item.request.candidate.tradePlanId, item]));
+  // Frozen initial budgets are witnesses for whole-call conservation. These are
+  // independent copies, never the caller-owned maps or WorldState.
+  const initialStock = new Map(remainingStock);
+  const initialDemand = new Map(remainingDemand);
+  const initialCash = new Map(remainingCash);
+  const initialFx = new Map(remainingFx);
+  const initialLinks = new Map(links);
+  const stockDebits = new Map<string, DebitSum>();
+  const demandDebits = new Map<string, DebitSum>();
+  const cashDebits = new Map<string, DebitSum>();
+  const linkDebits = new Map<string, DebitSum>();
+  const fxDebits = new Map<string, DebitSum>();
   const reservations: Phase7AggregateReservation[] = [];
   for (const candidate of rankWithEpsilonTies(requests.map((request) => request.candidate), scoreEpsilon)) {
     const item = byId.get(candidate.tradePlanId)!;
@@ -277,6 +322,11 @@ export function reservePhase7AggregateTrades(
           remainingCash.set(item.cashKey, afterCash);
           links.set(linkId, afterLink);
           if (item.fxKey !== null) remainingFx.set(item.fxKey, afterFx!);
+          recordDebit(stockDebits, item.stockKey, quantity);
+          recordDebit(demandDebits, item.demandKey, quantity);
+          recordDebit(cashDebits, item.cashKey, cashUse);
+          recordDebit(linkDebits, linkId, cargoUse);
+          if (item.fxKey !== null) recordDebit(fxDebits, item.fxKey, fxUse);
         }
       }
     }
@@ -291,6 +341,16 @@ export function reservePhase7AggregateTrades(
       refusal,
     });
   }
+
+  // An individually acceptable binary64 subtraction can still accumulate
+  // beyond ONE absolute epsilon: e.g. two 0.3 debits from 10_000_000 each
+  // deviate < 1e-9, while their combined observed debit deviates > 1e-9.
+  // Fail closed before publishing any provisional Phase-8 residuals.
+  validateCumulativeDebits(initialStock, remainingStock, stockDebits, "export stock", quantityEpsilon);
+  validateCumulativeDebits(initialDemand, remainingDemand, demandDebits, "import demand", quantityEpsilon);
+  validateCumulativeDebits(initialCash, remainingCash, cashDebits, "buyer cash", moneyEpsilon);
+  validateCumulativeDebits(initialLinks, links, linkDebits, "cargo weight", quantityEpsilon);
+  validateCumulativeDebits(initialFx, remainingFx, fxDebits, "FX pool output", moneyEpsilon);
 
   return {
     reservations,
