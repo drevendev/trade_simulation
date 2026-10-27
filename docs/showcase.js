@@ -32,17 +32,47 @@
       if (!tick || !Number.isSafeInteger(tick.tick) || tick.tick <= previous ||
           tick.tick > p.scenario.ticksExecuted) return "invalid or unordered M3 tick";
       if (!["sellerNetPrice", "householdGrossPrice", "clearedQuantity", "unmetDemandQuantity",
-            "buyerGrossCost", "consumptionTaxCollected"].every(k => nonnegative(tick[k]))) return "invalid M3 metric";
+            "sellerNetReceipt", "buyerGrossCost", "consumptionTaxCollected"].every(k => nonnegative(tick[k]))) return "invalid M3 metric";
       previous = tick.tick;
     }
     if (p.ticks.length) {
       if (!p.totals || !nonnegative(p.totals.clearedQuantity) ||
           !nonnegative(p.totals.buyerGrossCost) || !nonnegative(p.totals.consumptionTaxCollected)) return "invalid M3 totals";
+      // The buyer's observed debit must equal the seller's receipt plus the
+      // treasury's tax. A valid aggregate cannot excuse a fabricated tick, and
+      // the receipt advertised by the detailed M3 panel must agree with totals.
+      const settlement = p.settlementIdentity;
+      if (!nonnegative(p.totals.sellerNetReceipt) || !settlement ||
+          !nonnegative(settlement.buyerGrossCost) ||
+          !nonnegative(settlement.sellerNetReceiptPlusTax) ||
+          !Number.isFinite(settlement.residual) ||
+          !nonnegative(settlement.moneyEpsilon)) return "invalid M3 settlement receipt";
+      // The static M3 preview uses the canonical 1e-9 money tolerance. Do not
+      // allow a forged artifact's larger declared epsilon to bless bad money.
+      const epsilon = Math.min(settlement.moneyEpsilon, 1e-9);
+      const closeMoney = (a, b) => Number.isFinite(a) && Number.isFinite(b) &&
+        Math.abs(a - b) <= Math.max(epsilon,
+          8 * Number.EPSILON * Math.max(1, Math.abs(a), Math.abs(b)));
+      if (!closeMoney(p.totals.buyerGrossCost,
+            p.totals.sellerNetReceipt + p.totals.consumptionTaxCollected)) {
+        return "M3 cumulative settlement mismatch";
+      }
+      if (!closeMoney(settlement.buyerGrossCost, p.totals.buyerGrossCost) ||
+          !closeMoney(settlement.sellerNetReceiptPlusTax,
+            p.totals.sellerNetReceipt + p.totals.consumptionTaxCollected) ||
+          !closeMoney(settlement.residual,
+            settlement.buyerGrossCost - settlement.sellerNetReceiptPlusTax)) {
+        return "M3 settlement receipt mismatch";
+      }
+      if (p.ticks.some(tick => !closeMoney(tick.buyerGrossCost,
+            tick.sellerNetReceipt + tick.consumptionTaxCollected))) {
+        return "M3 tick settlement mismatch";
+      }
       // Every observed realized flow must fit its whole-run total, individually
       // AND together. Sparse histories need not equal the full run, but their
       // sampled subtotals cannot exceed it. Allow only floating-point summation
       // noise, not a missing physical or monetary source.
-      const flowFields = ["clearedQuantity", "buyerGrossCost", "consumptionTaxCollected"];
+      const flowFields = ["clearedQuantity", "sellerNetReceipt", "buyerGrossCost", "consumptionTaxCollected"];
       if (p.ticks.some(tick => flowFields.some(field => tick[field] > p.totals[field]))) {
         return "M3 observation exceeds whole-run total";
       }
@@ -168,6 +198,7 @@
   select.addEventListener("change", render);
   slider.addEventListener("input", renderTick);
   window.showcaseSavedRun = {
+    validateM3,
     ready(mode, data) {
       if (!Object.prototype.hasOwnProperty.call(runs, mode)) return;
       const problem = mode === "m3" ? validateM3(data) : (!data || !Array.isArray(data.samples) ? "invalid M4 observations" : null);
