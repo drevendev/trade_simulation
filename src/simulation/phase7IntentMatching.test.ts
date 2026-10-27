@@ -319,7 +319,7 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
     expect(() => match([accepted], shared)).toThrow(/cannot cover aggregate reservation/);
     // Fail closed on absent, forged, or nonfinite owner evidence.
     for (const invalid of [
-      { ...spentInPhase4, remainingBuyerSpend: undefined },
+      { intent: spentInPhase4.intent, residualQuantity: spentInPhase4.residualQuantity },
       { ...spentInPhase4, remainingBuyerSpend: NaN },
       { ...spentInPhase4, remainingBuyerSpend: -1 },
       { ...spentInPhase4, remainingBuyerSpend: 11 },
