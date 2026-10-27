@@ -47,7 +47,7 @@ export interface TransportCapacityReservation {
 export interface TransportCapacityPreflight {
   /** Score-ordered candidate results; no shipment or financial transaction. */
   readonly reservations: readonly TransportCapacityReservation[];
-  /** Weight-unit budgets are independent for each directed link ID. */
+  /** Compensated sum of accepted per-lot cargo uses, not capacity-minus-residual. */
   readonly usedByLink: ReadonlyMap<TransportLinkId, number>;
   readonly remainingByLink: ReadonlyMap<TransportLinkId, number>;
 }
@@ -126,6 +126,11 @@ export function planTransportCapacityPreflight(
 
   const budgets = new Map<TransportLinkId, number>();
   const remaining = new Map<TransportLinkId, number>();
+  // The accepted cargo lots own the spent-capacity accounting. Repeatedly
+  // subtracting fractional lots from a large budget loses their low bits;
+  // deriving usedByLink as budget - remaining would report a different sum.
+  const usedByLink = new Map<TransportLinkId, number>();
+  const useCorrections = new Map<TransportLinkId, number>();
   const usability = new Map<TransportLinkId, boolean>();
   for (const candidate of requests) {
     if (budgets.has(candidate.linkId)) continue;
@@ -135,6 +140,8 @@ export function planTransportCapacityPreflight(
     const usable = hasUsableTransportCapacity(link, config, factor);
     budgets.set(candidate.linkId, capacity);
     remaining.set(candidate.linkId, capacity);
+    usedByLink.set(candidate.linkId, 0);
+    useCorrections.set(candidate.linkId, 0);
     usability.set(candidate.linkId, usable);
   }
 
@@ -165,10 +172,22 @@ export function planTransportCapacityPreflight(
         if (!Number.isFinite(use) || use <= 0 || use > available) {
           throw new Error("transport cargo reservation exceeds or underflows available capacity");
         }
-        const after = available - use;
-        if (after === available) {
-          throw new Error("transport reservation is too small for link-budget precision");
+        // Kahan-sum each accepted lot, then derive the residual from its
+        // compensated cumulative usage. This avoids repeated cancellation
+        // against the original (possibly very large) link capacity.
+        const previousUse = usedByLink.get(request.linkId)!;
+        const correctedUse = use - useCorrections.get(request.linkId)!;
+        const nextUse = previousUse + correctedUse;
+        const nextCorrection = (nextUse - previousUse) - correctedUse;
+        const capacity = budgets.get(request.linkId)!;
+        const after = capacity - nextUse;
+        // If the lot is invisible at the precision of this link's budget,
+        // refuse the entire pure preflight rather than claim a phantom debit.
+        if (!Number.isFinite(nextUse) || nextUse > capacity || after < 0 || after >= available) {
+          throw new Error("transport reservation is too small for link-budget precision or exceeds capacity");
         }
+        usedByLink.set(request.linkId, nextUse);
+        useCorrections.set(request.linkId, nextCorrection);
         remaining.set(request.linkId, after);
       }
     }
@@ -184,9 +203,5 @@ export function planTransportCapacityPreflight(
     });
   }
 
-  const usedByLink = new Map<TransportLinkId, number>();
-  for (const [linkId, capacity] of budgets) {
-    usedByLink.set(linkId, capacity - remaining.get(linkId)!);
-  }
   return { reservations, usedByLink, remainingByLink: remaining };
 }
