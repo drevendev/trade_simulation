@@ -81,8 +81,11 @@ export function fxPayerCurrencyKey(payerKey: string, currencyId: CurrencyId): st
  * Each published FX aggregate must be replayable as its constituent money
  * reservations. Binary64 can round a nonzero debit UP (1e16 + 3 -> 1e16 + 4)
  * without disappearing; checking next !== previous misses that discrepancy.
- * Compare each observable increment and its compensated cumulative drift to
- * the Handoff/03 default fixed moneyEpsilon, never to a relative tolerance.
+ * Error-free TwoSum reconstructs the rounding residual on each addition.
+ * Subtracting previous from the rounded next aggregate loses the low part
+ * when a small reservation comes before a large one (3 + 1e16).
+ * Compare both each low part and its compensated cumulative drift to the
+ * Handoff/03 default fixed moneyEpsilon, never a relative tolerance.
  */
 const FX_RESERVATION_MONEY_EPSILON = 1e-9;
 
@@ -99,7 +102,14 @@ function assertReconciledReservationIncrement(
   quoted: number,
   label: string,
 ): void {
-  const drift = (next - previous) - quoted;
+  // Knuth TwoSum: next + exactLowPart == previous + quoted exactly as reals.
+  // The subtraction (next - previous) - quoted can cancel a full-unit
+  // overcount to zero when previous=3, quoted=1e16, next=1e16+4.
+  const reconstructedQuoted = next - previous;
+  const reconstructedPrevious = next - reconstructedQuoted;
+  const exactLowPart = (previous - reconstructedPrevious) +
+    (quoted - reconstructedQuoted);
+  const drift = -exactLowPart;
   if (!Number.isFinite(drift) || Math.abs(drift) > FX_RESERVATION_MONEY_EPSILON) {
     throw new Error(`FX ${label} reservation cannot reconcile at money precision`);
   }
@@ -333,6 +343,16 @@ export function reserveFxForPool(
   const reservedInputs = new Map<string, number>();
   const inputDrift = new Map<string, ReservationDrift>();
   const outputDrift = new Map<string, ReservationDrift>();
+  const pressureDrift = new Map<string, ReservationDrift>();
+  const addPressure = (label: string, previous: number, quoted: number): number => {
+    const next = previous + quoted;
+    // Pressure is also a published monetary aggregate. A cross-actor sum
+    // must not misstate its constituent fills even if payer keys differ.
+    assertReconciledReservationIncrement(
+      pressureDrift, label, previous, next, quoted, `pressure ${label}`,
+    );
+    return next;
+  };
   const results: FxReservation[] = [];
   let desiredDemandForBase = 0;
   let desiredSupplyOfBase = 0;
@@ -386,11 +406,19 @@ export function reserveFxForPool(
     results.push({ requestId: request.requestId, payerKey: request.payerKey, quote });
 
     if (quote.direction === "BASE_TO_QUOTE") {
-      desiredSupplyOfBase += quote.requiredInputAmountAtDesiredOutput;
-      filledSupplyOfBase += quote.requiredInputForFeasibleOutput;
+      desiredSupplyOfBase = addPressure(
+        "desired supply of base", desiredSupplyOfBase, quote.requiredInputAmountAtDesiredOutput,
+      );
+      filledSupplyOfBase = addPressure(
+        "filled supply of base", filledSupplyOfBase, quote.requiredInputForFeasibleOutput,
+      );
     } else {
-      desiredDemandForBase += request.desiredOutputAmount;
-      filledDemandForBase += quote.feasibleOutputAmount;
+      desiredDemandForBase = addPressure(
+        "desired demand for base", desiredDemandForBase, request.desiredOutputAmount,
+      );
+      filledDemandForBase = addPressure(
+        "filled demand for base", filledDemandForBase, quote.feasibleOutputAmount,
+      );
     }
   }
   for (const v of [desiredDemandForBase, desiredSupplyOfBase, filledDemandForBase, filledSupplyOfBase]) {
