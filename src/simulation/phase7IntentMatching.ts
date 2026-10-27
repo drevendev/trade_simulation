@@ -18,6 +18,12 @@ export interface Phase7ActorResidualIntent {
   readonly intent: MarketIntent;
   /** Quantity still eligible after Phase 4 and every earlier commitment. */
   readonly residualQuantity: number;
+  /**
+   * For BUY, owner-verified unspent currency commitment after Phase 4 and
+   * earlier allocations of this SAME intent. Required even when the actor's
+   * physical wallet has enough cash; never infer it from original maxSpend.
+   */
+  readonly remainingBuyerSpend?: number;
 }
 
 export interface Phase7ActorMatchRequest {
@@ -103,6 +109,7 @@ function fingerprint(entry: Phase7ActorResidualIntent): string {
     actorRefKey(i.actor), i.id, i.regionId, i.goodId, i.side, i.purpose,
     i.desiredQuantity, i.maxSpend ?? null, i.minimumReserveQuantity ?? null,
     i.sourcePlanId, bucket(i), entry.residualQuantity,
+    entry.remainingBuyerSpend ?? null,
   ]);
 }
 interface Cap {
@@ -230,8 +237,17 @@ export function matchPhase7ActorIntents(
     signatures.set(entry.intent.id, sign);
     const target = side === "SELL" ? sellerRemain : buyerRemain;
     if (!target.has(entry.intent.id)) target.set(entry.intent.id, entry.residualQuantity);
-    if (side === "BUY" && !buyerSpend.has(entry.intent.id)) {
-      buyerSpend.set(entry.intent.id, entry.intent.maxSpend!);
+    if (side === "BUY") {
+      if (entry.remainingBuyerSpend === undefined) {
+        throw new Error("Phase-7 BUY intent missing verified remaining spend");
+      }
+      validNonnegative(entry.remainingBuyerSpend, "Phase-7 BUY remaining spend");
+      if (entry.remainingBuyerSpend > entry.intent.maxSpend!) {
+        throw new Error("Phase-7 BUY remaining spend exceeds original commitment");
+      }
+      if (!buyerSpend.has(entry.intent.id)) {
+        buyerSpend.set(entry.intent.id, entry.remainingBuyerSpend);
+      }
     }
   };
 
