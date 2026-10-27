@@ -368,6 +368,57 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     }
   }, 60_000);
 
+  it.each(["outputProduced", "grossWagesPaid"] as const)(
+    "rejects M4 %s observed subtotals exceeding a claimed whole-run total",
+    async field => {
+      const page = await browser.newPage();
+      try {
+        const preview = artifact();
+        const subtotal = preview.samples.reduce((sum, sample) => sum + sample[field], 0);
+        const largest = Math.max(...preview.samples.map(sample => sample[field]));
+        expect(subtotal).toBeGreaterThan(largest);
+        const forgedTotal = largest + (subtotal - largest) / 2;
+        expect(preview.samples.every(sample => sample[field] <= forgedTotal)).toBe(true);
+        const forged = { ...preview, totals: { ...preview.totals, [field]: forgedTotal } };
+        await page.route("**/m4-preview.json", route => route.fulfill({
+          status: 200, contentType: "application/json", body: JSON.stringify(forged),
+        }));
+        await page.goto(baseUrl);
+        await page.waitForFunction(() =>
+          (document.getElementById("m4-preview-body")?.textContent ?? "").includes("M4 preview error"));
+        expect(await page.locator("#m4-preview-body").innerText()).toContain(`sampled ${field} exceeds totals.${field}`);
+        expect(await page.locator("#m4-preview-body svg").count()).toBe(0);
+        expect(await page.locator("#spotlight-tick").isDisabled()).toBe(true);
+        expect(await page.locator("#spotlight-metrics").innerText()).toContain("No verified sampled values");
+        await page.locator("#showcase-milestone").selectOption("m3");
+        await page.waitForFunction(() =>
+          (document.getElementById("m4-run-summary")?.textContent ?? "").startsWith("Selected market:"));
+        expect(await page.locator('[data-spotlight="clearedQuantity"]').count()).toBe(1);
+      } finally { await page.close(); }
+    }, 60_000,
+  );
+
+  it("accepts valid sparse M4 samples without requiring equality with whole-run flows", async () => {
+    const page = await browser.newPage();
+    try {
+      const preview = artifact();
+      const sparse = { ...preview, samples: preview.samples.filter((_, index) => index % 2 === 0) };
+      expect(sparse.samples.length).toBeLessThan(preview.samples.length);
+      expect(sparse.samples.reduce((sum, sample) => sum + sample.grossWagesPaid, 0))
+        .toBeLessThan(preview.totals.grossWagesPaid);
+      await page.route("**/m4-preview.json", route => route.fulfill({
+        status: 200, contentType: "application/json", body: JSON.stringify(sparse),
+      }));
+      await page.goto(baseUrl);
+      await page.waitForFunction(() =>
+        !(document.getElementById("m4-preview-body")?.textContent ?? "").includes("Loading the M4 economy"));
+      expect(await page.locator("#spotlight-tick").isEnabled()).toBe(true);
+      expect(await page.locator("#spotlight-tick").getAttribute("max")).toBe(String(sparse.samples.length - 1));
+      await page.locator("#chapter-m4 > summary").click();
+      expect(await page.locator(".m4-chart").count()).toBeGreaterThan(0);
+    } finally { await page.close(); }
+  }, 60_000);
+
   it("fails closed in the showcase when the selected saved run is invalid", async () => {
     const page = await pageAt("?m4=m4-preview-wrong.json", 1280, false);
     try {
