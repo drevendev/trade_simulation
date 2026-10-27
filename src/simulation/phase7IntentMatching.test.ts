@@ -294,8 +294,8 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
   });
 
   it("rejects drift accumulated over multiple otherwise legal reserved plans", () => {
-    const ss = ["a", "b", "c"].map((id) => seller("multi-" + id, 0.3));
-    const bs = ["a", "b", "c"].map((id) => buyer("multi-" + id, 0.3));
+    const ss = ["a", "b", "c"].map((id) => seller("multi-s-" + id, 0.3));
+    const bs = ["a", "b", "c"].map((id) => buyer("multi-b-" + id, 0.3));
     const balances = budgets(ss, bs, 10_000_000, 10_000_000);
     const originalStock = [...balances.sellerExportableByEndpoint.entries()];
     const originalCash = [...balances.buyerCashByActorCurrency.entries()];
