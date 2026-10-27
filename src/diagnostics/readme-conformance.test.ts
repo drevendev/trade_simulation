@@ -353,27 +353,47 @@ describe("README conformance (REQ-VISUALIZATION-007)", () => {
     const pagesBlocks = readmeBlocks().filter((block) => block.includes(PAGES_URL));
     expect(pagesBlocks.length).toBeGreaterThan(0);
     for (const block of pagesBlocks) {
-      expect(block).toContain("M3");
+      expect(block).toContain("M4");
     }
   });
 
-  it("matches the default-versus-history split that docs/index.html actually renders", () => {
-    const disclosure = /<details\b[\s\S]*?<\/details>/.exec(pagesDocument);
-    if (disclosure === null) {
-      throw new Error("docs/index.html has no <details> history disclosure");
-    }
-    const collapsed = group(disclosure, 0);
-    const defaultView = pagesDocument.replace(collapsed, "");
+  it("renders a default M4 story and six individually collapsed milestone chapters (#863)", () => {
+    const expectedChapters = [
+      ["m4", 'id="m4-preview-body"'],
+      ["m3", 'id="m3-preview-body"'],
+      ["m2", 'id="m2-preview-body"'],
+      ["m1", 'id="m1-preview-body"'],
+      ["m0", 'id="m0-preview-body"'],
+      ["legacy", 'id="app"'],
+    ] as const;
+    const chapters = [
+      ...pagesDocument.matchAll(/<details id="chapter-([^"]+)"([^>]*)>([\s\S]*?)<\/details>/g),
+    ];
 
-    // README claims the M3 experience leads and M0-M2 plus the legacy viewer are collapsed.
-    expect(defaultView).toContain('id="m3-preview-body"');
-    expect(collapsed).toContain('id="m0-preview-body"');
-    expect(collapsed).toContain('id="m1-preview-body"');
-    expect(collapsed).toContain('id="m2-preview-body"');
-    // The legacy C# run viewer mounts into #app; it is history, not the default view.
-    expect(collapsed).toContain('id="app"');
-    expect(defaultView).not.toContain('id="m0-preview-body"');
-    expect(collapsed).not.toContain('id="m3-preview-body"');
+    // New chapter boundaries must be discrete: a single first-details check
+    // would silently miss five of the six history panels.
+    expect(chapters.map((match) => match[1])).toEqual(expectedChapters.map(([id]) => id));
+    for (const [index, [, , attributes, body]] of chapters.entries()) {
+      const expectedChapter = expectedChapters[index];
+      if (expectedChapter === undefined) {
+        throw new Error(`Unexpected milestone chapter at index ${index}`);
+      }
+      expect(attributes).not.toMatch(/\bopen(?:\s|=|$)/);
+      expect(body).toContain(expectedChapter[1]);
+      for (const [otherId, otherBody] of expectedChapters) {
+        if (otherId !== expectedChapter[0]) {
+          expect(body).not.toContain(otherBody);
+        }
+      }
+    }
+
+    // The real M4 saved-run hero precedes all disclosures; M3 is accessible
+    // but cannot masquerade as the default landing story.
+    const firstChapter = pagesDocument.indexOf('id="chapter-m4"');
+    const hero = pagesDocument.slice(0, firstChapter);
+    expect(firstChapter).toBeGreaterThan(0);
+    expect(hero).toContain('id="m4-run-summary"');
+    expect(hero).not.toContain('id="m3-preview-body"');
   });
 
   it("does not describe the already published M4 milestone as an in-flight PR (#794)", () => {

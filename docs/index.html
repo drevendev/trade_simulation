@@ -158,15 +158,87 @@
   .split { display: flex; height: 16px; border-radius: 4px; overflow: hidden; border: 1px solid var(--line); margin: .3rem 0 .5rem; }
   .split > i { display: block; height: 100%; }
 
-  details#earlier-milestones { margin-top: 3rem; border-top: 1px solid var(--line); padding-top: 1rem; }
-  details#earlier-milestones > summary { cursor: pointer; font-weight: 600; font-size: 1.05rem; }
-  details#earlier-milestones > summary::marker { color: var(--muted); }
+  .showcase { padding: clamp(1.15rem,4vw,2.75rem); border: 1px solid var(--line); border-radius: 18px; background: var(--panel); }
+  .showcase-eyebrow { color: var(--muted); font-size: .76rem; font-weight: 750; letter-spacing: .13em; }
+  .showcase h1 { margin: .65rem 0 .75rem; max-width: 18ch; font-size: clamp(2.1rem,5vw,4rem); line-height: 1.12; letter-spacing: -.035em; }
+  .showcase-lead { max-width: 66ch; font-size: 1.06rem; color: var(--ink); }
+  .showcase-nav { display: flex; flex-wrap: wrap; gap: .7rem; margin: 1.5rem 0 1.15rem; }
+  .showcase-cta { display: inline-flex; align-items: center; justify-content: space-between; gap: 1.3rem; min-height: 44px; border-radius: 9px; padding: .65rem .9rem; background: var(--ink); color: var(--panel); text-decoration: none; font-weight: 650; }
+  .showcase-cta.secondary { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  .showcase-cta:hover { text-decoration: underline; }
+  .showcase-provenance,.showcase-source { font-size: .8rem; color: var(--muted); max-width: 74ch; }
+  #showcase-player { margin-top: 1.1rem; padding: clamp(1rem,3vw,1.7rem); }
+  .showcase-player-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
+  .showcase-player-head h2 { margin: .25rem 0 .45rem; font-size: 1.45rem; }
+  .showcase-timeline { margin: 1rem 0; }
+  .showcase-timeline input:disabled { opacity: .5; }
+  .showcase-timeline select { font: inherit; min-height: 44px; max-width: 100%; border-radius: 8px; padding: .45rem; border: 1px solid var(--line); color: var(--ink); background: var(--bg); }
+  .showcase-metrics { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,150px),1fr)); gap: .7rem; margin: 1rem 0; }
+  .showcase-metrics > div { border: 1px solid var(--line); background: var(--bg); border-radius: 9px; padding: .85rem; min-width: 0; }
+  .showcase-metrics dt { font-size: .78rem; color: var(--muted); }
+  .showcase-metrics dd { margin: .15rem 0 0; font-size: 1.23rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .showcase-metrics dd small { display: block; font-size: .72rem; color: var(--muted); }
+  .showcase-empty { color: var(--muted); }
+  .chapters { margin-top: 2.3rem; }
+  .chapters > h2 { font-size: 1.45rem; }
+  .chapter { border: 1px solid var(--line); border-radius: 10px; margin: .7rem 0; background: var(--panel); overflow: clip; }
+  .chapter > summary { cursor: pointer; padding: .9rem 1rem; display: flex; align-items: baseline; flex-wrap: wrap; gap: .55rem; font-weight: 700; list-style: none; }
+  .chapter > summary::-webkit-details-marker { display: none; }
+  .chapter > summary::after { content: "+"; margin-left: auto; font-size: 1.2rem; color: var(--muted); }
+  .chapter[open] > summary::after { content: "−"; }
+  .chapter > summary small { color: var(--muted); font-size: .78rem; font-weight: 400; }
+  .chapter-index { display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: .1rem .45rem; font-size: .74rem; font-weight: 750; color: var(--muted); }
+  .chapter-body { padding: .3rem clamp(.75rem,3vw,1.5rem) 1.5rem; border-top: 1px solid var(--line); min-width: 0; }
+  .chapter-body > h1 { margin-top: 1rem; }
+  .chapter-body #m4-preview { margin-bottom: 0; }
+  .chapter-body .panel { max-width: 100%; }
+  @media (max-width: 560px) {
+    .showcase-nav { flex-direction: column; }
+    .showcase-cta { width: 100%; }
+    .chapter > summary small { width: 100%; }
+    .showcase-timeline input { min-width: 130px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+  }
 </style>
 <link rel="stylesheet" href="m4.css">
 </head>
 
 <body>
 <main>
+  <header class="showcase" aria-labelledby="showcase-title">
+    <div class="showcase-eyebrow">TRADE SIMULATION <span aria-hidden="true">/</span> RECORDED ECONOMIES</div>
+    <h1 id="showcase-title">Watch an economy find its rhythm.</h1>
+    <p class="showcase-lead">Work becomes output. Wages become purchases. Shortages change what the market can clear. Explore the observations of a deterministic simulation, one tick at a time.</p>
+    <div class="showcase-nav" aria-label="Explore milestone details">
+      <a href="#chapter-m4" data-open-chapter="chapter-m4" class="showcase-cta">Explore production &amp; needs <span aria-hidden="true">↗</span></a>
+      <a href="#chapter-m3" data-open-chapter="chapter-m3" class="showcase-cta secondary">Explore market clearing <span aria-hidden="true">↗</span></a>
+    </div>
+    <p class="showcase-provenance">Real checked-in outputs of the canonical TypeScript milestones, not live controls or invented events. The older C# model is shown separately as legacy.</p>
+  </header>
+
+  <section id="showcase-player" class="panel" aria-labelledby="showcase-player-title">
+    <div class="showcase-player-head"><div><span id="showcase-mode-tag" class="chapter-index">M4 SAVED RUN</span><h2 id="showcase-player-title">An economy at a glance</h2></div><span class="showcase-provenance">Physical production · labor · essential needs</span></div>
+    <p id="showcase-run-description">Scrub actual sampled ticks from a validated M4 one-region run. Unobserved ticks are not interpolated; these measurements show <em>what</em> happened, not a proven causal explanation of <em>why</em>.</p>
+    <p id="m4-run-summary" class="m4-note" role="status">Reading the selected deterministic artifact…</p>
+    <div class="player showcase-timeline">
+      <label for="showcase-milestone">Saved milestone</label>
+      <select id="showcase-milestone" aria-label="Select saved-run milestone"><option value="m4" selected>M4 · Closed economy</option><option value="m3">M3 · Local market</option></select>
+      <label for="spotlight-tick">Observed tick</label>
+      <input type="range" id="spotlight-tick" min="0" max="0" step="1" value="0" disabled aria-describedby="spotlight-readout">
+      <output id="spotlight-readout" class="turn-readout" for="spotlight-tick" role="status">Loading samples…</output>
+    </div>
+    <dl id="spotlight-metrics" class="showcase-metrics" aria-label="Measured quantities at the selected tick"><div class="showcase-empty">Loading verified measurements…</div></dl>
+    <p id="showcase-source" class="showcase-source">Selected tick values come directly from the validated M4 artifact. Detailed charts and exact values live in the M4 chapter.</p>
+  </section>
+
+  <section class="chapters" aria-labelledby="chapters-heading">
+    <h2 id="chapters-heading">Explore the milestones</h2>
+    <p>Start with the saved run above. Open a chapter only when you want the underlying charts, contracts, and measurements. Each chapter is a read-only view of its milestone.</p>
+  <details id="chapter-m4" class="chapter">
+    <summary><span class="chapter-index">M4</span><span>Production, employment, household needs</span><small>Current canonical closed economy</small></summary>
+    <div class="chapter-body">
   <section id="m4-preview" aria-labelledby="m4-heading">
     <div class="m4-kicker">Milestone Preview <span class="m4-tag">M4</span></div>
     <h1 id="m4-heading">A one-region economy, from work to needs</h1>
@@ -185,12 +257,16 @@
       The run length and observed outcomes below come from the selected validated artifact;
       no particular steady state, recovery or shutdown is assumed.
     </p>
-    <p id="m4-run-summary" class="m4-note" role="status">Reading the selected deterministic artifact…</p>
+
     <div id="m4-preview-body" class="loading">Loading the M4 economy…</div>
   </section>
-  <script src="m4.js"></script>
-  <div class="m4-history-note">Previous milestone: M3 local-market clearing remains directly below; M0–M2 and the legacy viewer stay in the collapsed history disclosure.</div>
 
+    </div>
+  </details>
+
+  <details id="chapter-m3" class="chapter">
+    <summary><span class="chapter-index">M3</span><span>Prices and market clearing</span><small>Canonical single-market settlement</small></summary>
+    <div class="chapter-body">
   <h1>One local market, settled tick by tick</h1>
   <p>
     This is the canonical TypeScript simulation at milestone <strong>M3</strong>: local markets,
@@ -223,35 +299,14 @@
     <div id="m3-preview-body">Loading the M3 local market…</div>
   </section>
 
-  <details id="earlier-milestones">
-    <summary>Earlier milestones (M0–M2) and the legacy run viewer</summary>
-    <p>
-      Kept for history and for the migration tests. M0–M2 are diagnostic status snapshots, and the
-      run viewer at the end is the frozen legacy C# toy economy — a reference oracle, not the
-      current architecture.
-    </p>
 
-    <section class="panel m0-preview" id="m0-preview" aria-labelledby="m0-title">
-      <h3 id="m0-title" class="chart-title">Migration status — <span class="m0-tag" id="m0-milestone">M0</span></h3>
-      <div class="chart-note">
-        A one-way, static diagnostic snapshot of migration progress. It does not read or affect
-        the run below, and it does not consume simulation randomness.
-      </div>
-      <div id="m0-preview-body">Loading migration status…</div>
-    </section>
+    </div>
+  </details>
 
-    <!-- M1 Milestone Preview (REQ-VISUALIZATION-004): m1-preview.json -->
-    <section class="panel m1-preview" id="m1-preview" aria-labelledby="m1-title">
-      <h3 id="m1-title" class="chart-title">World Genesis — <span class="m1-tag" id="m1-milestone">M1</span></h3>
-      <div class="chart-note">
-        A one-way, static diagnostic snapshot of M1 canonical world generation. It does not read or affect
-        the run below, and it does not consume simulation randomness.
-      </div>
-      <div id="m1-preview-body">Loading world genesis data…</div>
-    </section>
-
-    <!-- M2 Milestone Preview (REQ-VISUALIZATION-005): m2-preview.json -->
-    <section class="panel m2-preview" id="m2-preview" aria-labelledby="m2-title">
+  <details id="chapter-m2" class="chapter">
+    <summary><span class="chapter-index">M2</span><span>Tick phases and reconciliation</span><small>Canonical orchestration</small></summary>
+    <div class="chapter-body">
+<section class="panel m2-preview" id="m2-preview" aria-labelledby="m2-title">
       <h3 id="m2-title" class="chart-title">Tick Orchestration &amp; Reconciliation — <span class="m2-tag" id="m2-milestone">M2</span></h3>
       <div class="chart-note">
         A one-way, static diagnostic snapshot of M2 canonical tick orchestration and zero-flow reconciliation.
@@ -259,9 +314,71 @@
       </div>
       <div id="m2-preview-body">Loading tick orchestration data…</div>
     </section>
-
-    <div id="app" class="loading">Loading the run…</div>
+    </div>
   </details>
+
+  <details id="chapter-m1" class="chapter">
+    <summary><span class="chapter-index">M1</span><span>World and institution genesis</span><small>Canonical world topology</small></summary>
+    <div class="chapter-body">
+<section class="panel m1-preview" id="m1-preview" aria-labelledby="m1-title">
+      <h3 id="m1-title" class="chart-title">World Genesis — <span class="m1-tag" id="m1-milestone">M1</span></h3>
+      <div class="chart-note">
+        A one-way, static diagnostic snapshot of M1 canonical world generation. It does not read or affect
+        the run below, and it does not consume simulation randomness.
+      </div>
+      <div id="m1-preview-body">Loading world genesis data…</div>
+    </section>
+    </div>
+  </details>
+
+  <details id="chapter-m0" class="chapter">
+    <summary><span class="chapter-index">M0</span><span>Migration baseline and scaffolding</span><small>Canonical migration evidence</small></summary>
+    <div class="chapter-body">
+<section class="panel m0-preview" id="m0-preview" aria-labelledby="m0-title">
+      <h3 id="m0-title" class="chart-title">Migration status — <span class="m0-tag" id="m0-milestone">M0</span></h3>
+      <div class="chart-note">
+        A one-way, static diagnostic snapshot of migration progress. It does not read or affect
+        the run below, and it does not consume simulation randomness.
+      </div>
+      <div id="m0-preview-body">Loading migration status…</div>
+    </section>
+    </div>
+  </details>
+
+  <details id="chapter-legacy" class="chapter">
+    <summary><span class="chapter-index">LEGACY</span><span>Four-city historical replay</span><small>C# reference only</small></summary>
+    <div class="chapter-body">
+      <p>This older simulation is a reference oracle, not the canonical TypeScript economic runtime. Its old city/trade graphs are retained for historical comparison and migration verification.</p>
+      <div id="app" class="loading">Loading the legacy run…</div>
+    </div>
+  </details>
+
+  </section>
+  <script src="showcase.js"></script>
+  <script src="m4.js"></script>
+  <script>
+  (() => {
+    "use strict";
+    // Native disclosures stay collapsed until the visitor navigates to one.
+    const openChapter = id => {
+      const node = document.getElementById(id);
+      if (node && node.tagName === "DETAILS" && node.classList.contains("chapter")) node.open = true;
+    };
+    document.querySelectorAll("[data-open-chapter]").forEach(link => {
+      link.addEventListener("click", () => openChapter(link.getAttribute("data-open-chapter")));
+    });
+    const openHash = () => {
+      const id = decodeURIComponent(location.hash.slice(1));
+      const target = document.getElementById(id);
+      if (!target) return;
+      const chapter = target.closest("details.chapter");
+      if (chapter) chapter.open = true;
+      else openChapter(id);
+    };
+    window.addEventListener("hashchange", openHash);
+    openHash();
+  })();
+  </script>
 
   <footer>
     The M3 view is generated by the canonical TypeScript engine into <code>docs/m3-preview.json</code>
@@ -347,6 +464,43 @@
     if (preview.requirement !== "REQ-VISUALIZATION-006") return "the artifact is not an M3 preview";
     if (!Array.isArray(preview.ticks)) return "the artifact carries no tick series";
     if (preview.market === null || typeof preview.market !== "object") return "the artifact names no market";
+    return null;
+  }
+
+  // The M3 detailed viewer must remain independently renderable without the
+  // optional external spotlight script (also in the jsdom Pages harness).
+  // Never render its cash-split charts from a contradictory settlement receipt.
+  function validateMoneySplit(preview) {
+    if (!Array.isArray(preview.ticks) || !preview.ticks.length) return null;
+    const totals = preview.totals, receipt = preview.settlementIdentity;
+    const nonnegative = n => typeof n === "number" && Number.isFinite(n) && n >= 0;
+    if (!totals || !receipt ||
+        !["buyerGrossCost", "sellerNetReceipt", "consumptionTaxCollected"].every(k => nonnegative(totals[k])) ||
+        !nonnegative(receipt.buyerGrossCost) ||
+        !nonnegative(receipt.sellerNetReceiptPlusTax) ||
+        !Number.isFinite(receipt.residual) ||
+        !nonnegative(receipt.moneyEpsilon)) return "invalid M3 settlement receipt";
+    const epsilon = Math.min(receipt.moneyEpsilon, 1e-9);
+    const closeMoney = (a, b) => Number.isFinite(a) && Number.isFinite(b) &&
+      Math.abs(a - b) <= Math.max(epsilon,
+        8 * Number.EPSILON * Math.max(1, Math.abs(a), Math.abs(b)));
+    if (!closeMoney(totals.buyerGrossCost,
+          totals.sellerNetReceipt + totals.consumptionTaxCollected)) {
+      return "M3 cumulative settlement mismatch";
+    }
+    if (!closeMoney(receipt.buyerGrossCost, totals.buyerGrossCost) ||
+        !closeMoney(receipt.sellerNetReceiptPlusTax,
+          totals.sellerNetReceipt + totals.consumptionTaxCollected) ||
+        !closeMoney(receipt.residual, receipt.buyerGrossCost - receipt.sellerNetReceiptPlusTax)) {
+      return "M3 settlement receipt mismatch";
+    }
+    for (const tick of preview.ticks) {
+      if (!tick || !nonnegative(tick.sellerNetReceipt) || !nonnegative(tick.buyerGrossCost) ||
+          !nonnegative(tick.consumptionTaxCollected) ||
+          !closeMoney(tick.buyerGrossCost, tick.sellerNetReceipt + tick.consumptionTaxCollected)) {
+        return "M3 tick settlement mismatch";
+      }
+    }
     return null;
   }
 
@@ -669,6 +823,7 @@
     show(preview.ticks.length);
   }
 
+  let spotlightReceivedArtifact = false;
   fetch("m3-preview.json")
     .then(response => {
       if (!response.ok) {
@@ -688,9 +843,18 @@
       }
       const problem = validate(preview);
       if (problem !== null) throw new Error(problem);
+      // Let the spotlight preserve its own more specific provenance refusal
+      // if the detailed settlement validator also rejects this artifact.
+      if (window.showcaseSavedRun) {
+        window.showcaseSavedRun.ready("m3", preview);
+        spotlightReceivedArtifact = true;
+      }
+      const settlementProblem = validateMoneySplit(preview);
+      if (settlementProblem !== null) throw new Error(settlementProblem);
       render(preview);
     })
     .catch(error => {
+      if (!spotlightReceivedArtifact) window.showcaseSavedRun?.failure("m3", error.unavailable === true ? "Saved run unavailable" : "Saved run could not be displayed");
       if (error.unavailable === true) {
         showState(
           "M3 local market unavailable",
