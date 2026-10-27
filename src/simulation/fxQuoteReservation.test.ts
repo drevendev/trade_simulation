@@ -282,6 +282,31 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     expect(source.cash.get(QUOTE)).toBe(big + 8);
   });
 
+  it("rejects small-before-large FX aggregate rounding hidden by subtractive drift", () => {
+    const big = 1e16;
+    const source = pool({
+      cash: new Map([[BASE, 50], [QUOTE, big + 8]]),
+      spotRateQuotePerBase: 1,
+      transactionSpread: 0,
+      minOperationalReserveBase: 0,
+      minOperationalReserveQuote: 0,
+    });
+    const key = fxPayerCurrencyKey("buyer", BASE);
+    const budgets = new Map([[key, big + 8]]);
+    const small = { ...request("small", "buyer", 3, 2), maxInputAmount: 3 };
+    const large = { ...request("large", "buyer", big, 1), maxInputAmount: big };
+    // The old (next - previous) - quoted check falsely produced zero:
+    // (3 + 1e16 - 3) - 1e16 === 0 although the rounded sum is 1e16+4.
+    expect(3 + big).toBe(big + 4);
+    expect(((3 + big) - 3) - big).toBe(0);
+    expect(() => reserveFxForPool(source, [large, small], budgets))
+      .toThrow(/reconcile.*precision/);
+    // A rejected pure plan must not touch the authoritative snapshots.
+    expect(source.cash.get(QUOTE)).toBe(big + 8);
+    expect(source.cash.get(BASE)).toBe(50);
+    expect(budgets.get(key)).toBe(big + 8);
+  });
+
   it("refuses pool-output overcount even when payer inputs belong to different actors", () => {
     const big = 1e16;
     const source = pool({
@@ -339,6 +364,22 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     ])).toEqual([[big, big], [3, 3]]);
     expect(first.reservedInputByPayerCurrency.get(key)).toBe(big + 3);
     expect(first.reservedOutputByCurrency.get(QUOTE)).toBe(big + 3);
+
+    // Invert priorities as well as insertion order: small-before-large
+    // must remain valid when the exact sum is representable.
+    const smallFirstRequests = requests.map((r) => ({
+      ...r,
+      priority: r.priority === 2 ? 1 : 2,
+    }));
+    const smallFirst = reserveFxForPool(source, smallFirstRequests, budgets);
+    expect(smallFirst.reservations.map(({ quote }) => [
+      quote.feasibleOutputAmount, quote.requiredInputForFeasibleOutput,
+    ])).toEqual([[3, 3], [big, big]]);
+    expect(smallFirst.reservedInputByPayerCurrency.get(key)).toBe(big + 3);
+    expect(smallFirst.reservedOutputByCurrency.get(QUOTE)).toBe(big + 3);
+    expect(smallFirst.pressure.filledSupplyOfBase).toBe(big + 3);
+    expect(first.pressure.filledSupplyOfBase).toBe(big + 3);
+
     expect(budgets.get(key)).toBe(big + 4);
     expect(source.cash.get(QUOTE)).toBe(big + 8);
   });
