@@ -32,7 +32,7 @@ function buyer(id: string, quantity: number, owner: string = id): Phase7ActorRes
     regionId: dest, goodId: good, side: "BUY", purpose: "CONSUMPTION",
     desiredQuantity: quantity, maxSpend: 100, sourcePlanId: "plan:" + id,
   };
-  return { intent, residualQuantity: quantity };
+  return { intent, residualQuantity: quantity, remainingBuyerSpend: 100 };
 }
 function request(
   plan: string, quantity: number,
@@ -208,6 +208,7 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
         name: "buyer intent spend",
         r: request("a", 3, [smallSeller], [{
           ...smallBuyer, intent: { ...smallBuyer.intent, maxSpend: 1e16 },
+          remainingBuyerSpend: 1e16,
         }]),
         b: budgets([smallSeller], [smallBuyer]),
       },
@@ -294,6 +295,69 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
       ...accepted, reservation: { ...accepted.reservation, buyerCashReservedDest: 4 + 5e-10 },
     };
     expect(match([rounded], b).lots).toEqual(out.lots);
+  });
+
+  it("requires the owner-verified post-Phase-4 unspent BUY commitment, not original maxSpend or wallet cash", () => {
+    const s = seller("post4-s", 2);
+    const original = buyer("post4-b", 4);
+    const spentInPhase4 = {
+      ...original,
+      intent: { ...original.intent, maxSpend: 10 },
+      residualQuantity: 2,
+      remainingBuyerSpend: 2, // Phase 4 spent 8 of this intent's planned 10.
+    };
+    const base = request("a", 2, [s], [spentInPhase4]);
+    const accepted = {
+      ...base, landedGrossUnitCostDest: 2,
+      reservation: { ...base.reservation, buyerCashReservedDest: 4 },
+    };
+    const shared = budgets([s], [spentInPhase4], undefined, 100);
+    const beforeEndpoint = [...shared.sellerExportableByEndpoint.entries()];
+    const beforeCash = [...shared.buyerCashByActorCurrency.entries()];
+    // Two units at 2 each cannot fit the verified residual commitment of 2,
+    // even though the actor still physically owns 100 currency units.
+    expect(() => match([accepted], shared)).toThrow(/cannot cover aggregate reservation/);
+    // Fail closed on absent, forged, or nonfinite owner evidence.
+    for (const invalid of [
+      { ...spentInPhase4, remainingBuyerSpend: undefined },
+      { ...spentInPhase4, remainingBuyerSpend: NaN },
+      { ...spentInPhase4, remainingBuyerSpend: -1 },
+      { ...spentInPhase4, remainingBuyerSpend: 11 },
+    ]) {
+      const plan = { ...accepted, buyers: [invalid] };
+      expect(() => match([plan], shared)).toThrow(/remaining spend/);
+    }
+    expect([...shared.sellerExportableByEndpoint.entries()]).toEqual(beforeEndpoint);
+    expect([...shared.buyerCashByActorCurrency.entries()]).toEqual(beforeCash);
+
+    const unspent = { ...spentInPhase4, remainingBuyerSpend: 10 };
+    const goodPlan = { ...accepted, buyers: [unspent] };
+    const out = match([goodPlan], budgets([s], [unspent], undefined, 100));
+    expect(out.lots.map((lot) => lot.quantity)).toEqual([2]);
+    expect(out.remainingBuyerSpendByIntent.get(unspent.intent.id)).toBe(6);
+  });
+
+  it("spends the same verified BUY-intent envelope only once across ranked trade plans", () => {
+    const s = seller("multi-s", 6);
+    const original = buyer("multi-b", 6);
+    const b = {
+      ...original,
+      intent: { ...original.intent, maxSpend: 10 },
+      remainingBuyerSpend: 5,
+    };
+    const balances = budgets([s], [b], undefined, 100);
+    const valid = match([
+      request("b", 2, [s], [b]), request("a", 3, [s], [b]),
+    ], balances);
+    expect(valid.lots.map((lot) => [lot.tradePlanId, lot.quantity])).toEqual([
+      ["a", 3], ["b", 2],
+    ]);
+    expect(valid.remainingBuyerByIntent.get(b.intent.id)).toBe(1);
+    expect(valid.remainingBuyerSpendByIntent.get(b.intent.id)).toBe(0);
+    expect(() => match([
+      request("a", 3, [s], [b]), request("b", 3, [s], [b]),
+    ], balances)).toThrow(/cannot cover aggregate reservation/);
+    expect([...balances.buyerCashByActorCurrency.values()]).toEqual([100]);
   });
 
   it("rejects wrong-side/region, unknown endpoint and forged aggregate reservations before matching", () => {
