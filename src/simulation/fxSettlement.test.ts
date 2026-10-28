@@ -208,6 +208,42 @@ describe("M5 #672 atomic settleFx / Handoff-04 §§19–21", () => {
     expect(first.transactions.length).toBe(2);
   });
 
+  it("rejects two distinct settlement IDs redeeming one same-tick reservation", () => {
+    const { world, request } = fixture();
+    const ctx = context(world, request);
+    const first = settleFx(world, request, ctx)!;
+    expect(first.receipt.outputAmount).toBe(10);
+    expect(first.ledgerLegs.map((leg) => leg.fxReservationRequestId)).toEqual([
+      ctx.reservation.requestId, ctx.reservation.requestId,
+    ]);
+
+    // The first conversion is already committed: replay must be rejected
+    // even though cash and pool stock could fund a second identical exchange.
+    const secondRequest: FxSettlementRequest = {
+      ...request, settlementId: createFxSettlementId("fxs:fixture-2"),
+    };
+    const committedPool = resolveCanonicalFxPool(first.world, request.pairId).pool;
+    const committedPayer = readActorWallet(first.world, request.payer)
+      .get(request.inputCurrencyId);
+    expect(() => settleFx(first.world, secondRequest, {
+      ...ctx, priorTransactions: first.transactions,
+    })).toThrow(/reservation already redeemed/);
+    expect(resolveCanonicalFxPool(first.world, request.pairId).pool).toBe(committedPool);
+    expect(readActorWallet(first.world, request.payer).get(request.inputCurrencyId))
+      .toBe(committedPayer);
+    expect(first.transactions).toHaveLength(2);
+  });
+
+  it("rejects a reservation already evidenced by just one FX ledger leg", () => {
+    const { world, request } = fixture();
+    const ctx = context(world, request);
+    const first = settleFx(world, request, ctx)!;
+    const distinct = { ...request, settlementId: createFxSettlementId("fxs:fixture-3") };
+    expect(() => settleFx(first.world, distinct, {
+      ...ctx, priorTransactions: [first.ledgerLegs[1]],
+    })).toThrow(/reservation already redeemed/);
+  });
+
   it("rejects large-stock rounded-up pool credits instead of silently minting money", () => {
     const { world, request } = fixture();
     const huge = withPoolCash(world, request, request.inputCurrencyId, 1e16);
