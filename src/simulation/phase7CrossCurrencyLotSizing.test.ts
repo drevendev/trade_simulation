@@ -7,6 +7,7 @@ import { actorRefKey } from "../domain/genesisLedger";
 import { quoteFx } from "./fxWorldPoolAuthority";
 import { resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 import { readActorWallet } from "./marketSettlementTransition";
+import { sumObservableTradeMoneyAmounts } from "./phase7TradeMoneyLegs";
 import {
   sizeCrossCurrencyLotBeforeDispatch, type CrossCurrencyLotSizingRequest,
 } from "./phase7CrossCurrencyLotSizing";
@@ -162,4 +163,10 @@ describe("M5 #673 Phase-7 FX lot sizing before any goods movement", () => {
     })).toThrow(/stale or mismatched/);
     expect(pool.baseCurrencyId).not.toBe(pool.quoteCurrencyId);
   });
+  it("conserves the exact sum of named destination charges, including large plus small legs", () => {
+    expect(sumObservableTradeMoneyAmounts([1e16, 1, 3], 1e-9)).toBe(1e16 + 4);
+    expect(() => sumObservableTradeMoneyAmounts([1e16, 1], 1e-9))
+      .toThrow(/cannot be represented/);
+  });
+
 });
