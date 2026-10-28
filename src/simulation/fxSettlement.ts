@@ -204,7 +204,8 @@ export function settleFx(
     throw new Error("settleFx: settlement exceeds its reservation");
   }
 
-  const tolerance = world.simulationConfig.numeric.moneyEpsilon;
+  // Optional in older fixtures; Handoff/03 fixes the baseline to 1e-9.
+  const tolerance = world.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
   amount(tolerance, "moneyEpsilon", true);
   const inputPoolBefore = pool.cash.get(request.inputCurrencyId);
   const outputPoolBefore = pool.cash.get(request.outputCurrencyId);
