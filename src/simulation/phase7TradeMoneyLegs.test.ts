@@ -149,7 +149,7 @@ describe("M5 #673 conserving Phase-7 trade money legs", () => {
       expect(() => applyConservingTradeMoneyLegs(input.world, candidate)).toThrow();
       expect(cash(input.world, input.buyer, input.currencyId)).toBe(100);
       expect(cash(input.world, input.seller, input.currencyId)).toBe(10);
-      expect(input.world.shipments.size).toBe(0);
+      expect(input.world.shipments?.size).toBe(0);
     }
   });
 
