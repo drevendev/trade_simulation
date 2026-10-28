@@ -107,6 +107,9 @@ export function validateTradeShipmentState(
     throw new Error("Shipment id must carry the sh: prefix");
   }
   requiredId(shipment.goodId, "goodId");
+  if (!Object.prototype.hasOwnProperty.call(world.definitionRegistry.goods, shipment.goodId)) {
+    throw new Error("Shipment goodId references an unknown GoodDefinition");
+  }
   requiredId(shipment.originRegionId, "originRegionId");
   requiredId(shipment.destinationRegionId, "destinationRegionId");
   requiredId(shipment.transportLinkId, "transportLinkId");
