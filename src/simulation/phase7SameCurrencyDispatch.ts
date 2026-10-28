@@ -293,3 +293,7 @@ export function settleSameCurrencyTradeDispatch(
     transactions: [...request.priorTransactions, ...newTransactions],
   };
 }
+
+// Shared pure physical endpoint helpers for the cross-currency coordinator.
+export { actorLocation as assertPhase7ActorLocation,
+  debitSellerGoods as debitPhase7SellerGoods };
