@@ -168,6 +168,14 @@ describe("M5 #673 conserving Phase-7 trade money legs", () => {
     ];
     expect(() => applyConservingTradeMoneyLegs(f.world, bundle))
       .toThrow(/cannot be represented/);
+    // Move the micro-leg ahead of the large leg in sorted legId order. The
+    // same promised payment must still fail; compensation is order-independent.
+    const microFirst = [
+      { ...bundle[0]!, legId: "z-goods" },
+      { ...bundle[1]!, legId: "a-micro" },
+    ];
+    expect(() => applyConservingTradeMoneyLegs(f.world, microFirst))
+      .toThrow(/cannot be represented/);
     expect(cash(f.world, f.buyer, f.currencyId)).toBe(2e16);
     expect(cash(f.world, f.seller, f.currencyId)).toBe(0);
   });
