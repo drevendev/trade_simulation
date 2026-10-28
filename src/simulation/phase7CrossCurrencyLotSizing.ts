@@ -14,6 +14,7 @@ import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import { quoteFxForPool, type FxQuote, type FxReservation } from "./fxQuoteReservation";
 import { resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 import { readActorWallet } from "./marketSettlementTransition";
+import { sumObservableTradeMoneyAmounts } from "./phase7TradeMoneyLegs";
 import type { WorldState } from "./worldState";
 
 export interface CrossCurrencyLotSizingRequest {
@@ -68,25 +69,6 @@ function nextDown(value: number): number {
   bits.setFloat64(0, value);
   bits.setBigUint64(0, bits.getBigUint64(0) - 1n);
   return bits.getFloat64(0);
-}
-
-/**
- * Total buyer debit is advisory evidence for the final all-or-nothing money
- * poster. Refuse totals where binary64 silently erases any positive named fee.
- * The final FX + money-leg posting still must repeat the stock/flow checks.
- */
-function buyerGross(fxInput: number, fees: readonly number[]): number {
-  const all = [fxInput, ...fees];
-  let total = 0;
-  for (const part of all) {
-    nonnegative(part, "buyer payment component");
-    const next = total + part;
-    if (!Number.isFinite(next) || (part > 0 && next === total)) {
-      return invalid("buyer gross loses a positive payment at numeric precision");
-    }
-    total = next;
-  }
-  return total;
 }
 
 /**
@@ -154,7 +136,19 @@ export function sizeCrossCurrencyLotBeforeDispatch(
   if (!Number.isFinite(maximumQuantity) || maximumQuantity < 0) {
     return invalid("quantity cap is not representable");
   }
-  let quantity = maximumQuantity;
+  const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
+  positive(moneyEpsilon, "moneyEpsilon");
+  // Budget the ENTIRE per-unit FX input plus all independent fee/tax promises.
+  // This analytical bound avoids converging slowly on a fee-constrained wallet.
+  const unitFxInput = quoteFxForPool(
+    pool, destinationCurrency, sourceCurrency, request.sourceSellerNetUnitPrice,
+  ).requiredInputAmountAtDesiredOutput;
+  const unitGross = sumObservableTradeMoneyAmounts([
+    unitFxInput, request.transportFeePerUnitDest, request.tariffPerUnitDest,
+    request.consumptionTaxPerUnitDest,
+  ], moneyEpsilon);
+  positive(unitGross, "destination unit gross");
+  let quantity = Math.min(maximumQuantity, buyerCash / unitGross);
   // Each retry is strict monotonic shrink. If an IEEE-754 boundary does not
   // converge within a bounded number of re-quotes, fail closed, never dispatch.
   for (let attempt = 0; attempt < 24; attempt++) {
@@ -169,6 +163,11 @@ export function sizeCrossCurrencyLotBeforeDispatch(
       ["tariff", tariffAmountDest],
       ["consumption tax", consumptionTaxAmountDest],
     ] as const) nonnegative(value, name);
+    if ((request.transportFeePerUnitDest > 0 && transportFeeAmountDest === 0) ||
+        (request.tariffPerUnitDest > 0 && tariffAmountDest === 0) ||
+        (request.consumptionTaxPerUnitDest > 0 && consumptionTaxAmountDest === 0)) {
+      return invalid("positive per-unit charge vanished at numeric precision");
+    }
 
     const quote = quoteFxForPool(pool, destinationCurrency, sourceCurrency,
       sourceInvoiceAmount, {
@@ -186,9 +185,10 @@ export function sizeCrossCurrencyLotBeforeDispatch(
         quote.feasibleOutputAmount > reservation.quote.feasibleOutputAmount) {
       return invalid("live quote exceeds the tick-local FX reservation");
     }
-    const buyerGrossDebitDest = buyerGross(quote.requiredInputForFeasibleOutput, [
+    const buyerGrossDebitDest = sumObservableTradeMoneyAmounts([
+      quote.requiredInputForFeasibleOutput,
       transportFeeAmountDest, tariffAmountDest, consumptionTaxAmountDest,
-    ]);
+    ], moneyEpsilon);
     if (buyerGrossDebitDest > buyerCash) {
       quantity = nextDown(quantity * (buyerCash / buyerGrossDebitDest));
       continue;
