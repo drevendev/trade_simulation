@@ -7,7 +7,7 @@
  * both the returned WorldState and journal together, never an intermediate state.
  */
 import { actorRefKey } from "../domain/genesisLedger";
-import type { GoodId, ShipmentId } from "../domain/id";
+import type { ShipmentId } from "../domain/id";
 import { readMarketActorInventory } from "./marketSettlementTransition";
 import { validateTradeShipmentRegistry, type TradeShipmentState } from "./tradeShipmentState";
 import {
