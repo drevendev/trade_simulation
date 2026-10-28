@@ -219,6 +219,34 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
     unchanged(world, subnormal, () => settleSameCurrencyTradeDispatch(world, subnormal));
   });
 
+  it("rejects a 49% underpayment even when the entire invoice is below money epsilon", () => {
+    const { world, request } = fixture();
+    // SLP-874-01: 2 * 5e-11 = 1e-10, but 5.1e-11 pays only 51%.
+    // The old min(moneyEpsilon, priced * 0.5) guard accepted this.
+    const underpaid = { ...request, shipment: {
+      ...request.shipment, sellerNetUnitPrice: 5e-11,
+      buyerGoodsPaymentAmount: 5.1e-11,
+    }};
+    expect(underpaid.shipment.quantity * underpaid.shipment.sellerNetUnitPrice)
+      .toBe(1e-10);
+    unchanged(world, underpaid,
+      () => settleSameCurrencyTradeDispatch(world, underpaid));
+  });
+
+  it("accepts the fully paid microscopic invoice without weakening conservation", () => {
+    const { world, request, seller, buyer } = fixture();
+    const paid = { ...request, shipment: {
+      ...request.shipment, sellerNetUnitPrice: 5e-11,
+      buyerGoodsPaymentAmount: 1e-10,
+    }};
+    const result = settleSameCurrencyTradeDispatch(world, paid);
+    expect(result.world.shipments?.get(request.shipment.id)?.quantity).toBe(2);
+    expect(stock(result.world, paid)).toBe(8);
+    expect(cash(result.world, seller, paid)).toBe(cash(world, seller, paid) + 1e-10);
+    expect(cash(result.world, buyer, paid)).toBeLessThan(cash(world, buyer, paid));
+    expect(stock(world, paid)).toBe(10);
+  });
+
   it("fails closed on missing tax authority or positive fee with no recipient", () => {
     const { world, request } = fixture();
     const jurisdictions = new Map(request.effectiveJurisdictionByRegion);
