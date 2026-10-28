@@ -254,7 +254,9 @@ describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
         ...c, wallet: new Map(c.wallet).set(f.sourceCurrency, 1e16),
       }),
     };
-    unchanged(huge, f.request, () => settleCrossCurrencyTradeDispatch(huge, f.request));
+    // A +6 balance change at 1e16 is representable; +3 rounds up to +4.
+    const oneUnit = { ...f.request, plannedQuantity: 1 };
+    unchanged(huge, oneUnit, () => settleCrossCurrencyTradeDispatch(huge, oneUnit));
   });
 
   it("rolls back a fee-recipient precision failure that occurs AFTER FX staging", () => {
@@ -278,7 +280,9 @@ describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
         ...c, householdInventory: new Map(c.householdInventory).set(GOOD, 1e16),
       }),
     };
-    unchanged(huge, f.request, () => settleCrossCurrencyTradeDispatch(huge, f.request));
+    // Subtracting 2 from 1e16 is representable; subtracting 1 is not.
+    const oneUnit = { ...f.request, plannedQuantity: 1 };
+    unchanged(huge, oneUnit, () => settleCrossCurrencyTradeDispatch(huge, oneUnit));
   });
 
   it("preserves a foreign transport receiver's destination-currency funds without implicit FX", () => {
