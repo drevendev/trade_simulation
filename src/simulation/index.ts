@@ -15,6 +15,7 @@ export {
   type LocalMarketState,
   type MarketExpectationState,
   type MonetaryAuthorityState,
+  type FxLiquidityPoolState,
   type ProductionUnitState,
   type RegionState,
   type StateState,
@@ -203,3 +204,9 @@ export {
   executeM4ClosedEconomyTick,
   type M4ClosedEconomyOptions,
 } from "./m4ClosedEconomyOrchestrator";
+
+export {
+  resolveCanonicalFxPool,
+  quoteFx,
+  type CanonicalFxPoolLocation,
+} from "./fxWorldPoolAuthority";

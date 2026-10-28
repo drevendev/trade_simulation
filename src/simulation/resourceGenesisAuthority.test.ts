@@ -207,7 +207,7 @@ describe("Issue #590 resource genesis authority", () => {
     }
   });
 
-  it("rejects a non-finite resource reconciliation tolerance even when stock matches", () => {
+  it("rejects a non-finite shared reconciliation tolerance even when stock matches", () => {
     const { scenario } = scenarioWithDuplicateMineDeposits();
     const config = createDefaultSimulationConfig();
     const world = buildInitialWorld(scenario, baselineDefinitionPack, config, 597);
@@ -222,7 +222,9 @@ describe("Issue #590 resource genesis authority", () => {
     const result = reconcileGenesisStocks(world, world.worldGenesisLedger, nonFiniteToleranceConfig);
     expect(result.success).toBe(false);
     expect(result.errorMessage).toMatch(/non-finite reconciliation evidence/);
-    expect(result.details).toMatchObject({ category: "RESOURCE" });
+    // Money is now the earliest fail-closed boundary for this shared config
+    // tolerance. Resource-specific non-finite balances are tested above.
+    expect(result.details).toMatchObject({ category: "MONEY" });
   });
 
   it("depletes the aggregated live deposit once and the depleted authority binds later extraction to zero", () => {

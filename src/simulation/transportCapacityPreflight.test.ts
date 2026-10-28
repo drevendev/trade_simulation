@@ -141,6 +141,33 @@ describe("M5 shared directed-link cargo reservation (#852)", () => {
       .toThrow(/precision/);
   });
 
+  it("reconciles fractional cargo lots against one high-capacity link without lost debits (#866)", () => {
+    const link = linkWithCapacity(forward, 100_000_000, 1);
+    const requests = Array.from({ length: 200 }, (_, i) =>
+      candidate(`fraction-${i.toString().padStart(3, "0")}`, link, wood, 200 - i, 1, 0.1));
+    const result = preflight(requests, [link]);
+    expect(result.reservations).toHaveLength(200);
+    expect(result.reservations.every((r) => r.refusal === null && r.reservedQuantity === 1))
+      .toBe(true);
+
+    const acceptedLots = result.reservations.reduce((sum, r) => sum + r.capacityUsed, 0);
+    const booked = result.usedByLink.get(link.linkId)!;
+    // The old repeatedly-decremented-budget implementation reports
+    // 19.999998807907104 rather than 20 here, exceeding the existing epsilon.
+    expect(Math.abs(acceptedLots - booked)).toBeLessThanOrEqual(config.numeric.quantityEpsilon!);
+    expect(booked).toBe(20);
+    expect(result.remainingByLink.get(link.linkId)).toBe(link.seed.baseCapacity - booked);
+    expect(booked + result.remainingByLink.get(link.linkId)!).toBe(link.seed.baseCapacity);
+    expect(preflight([...requests].reverse(), [link])).toEqual(result);
+
+    // Integral usage is the positive control: it should not be rejected merely
+    // because the starting budget is large.
+    const integral = preflight(requests.map((r) => ({ ...r, cargoWeightPerUnit: 1 })), [link]);
+    expect(integral.reservations.every((r) => r.refusal === null)).toBe(true);
+    expect(integral.usedByLink.get(link.linkId)).toBe(200);
+    expect(integral.remainingByLink.get(link.linkId)).toBe(99_999_800);
+  });
+
   it("rejects invalid ID/score/quantity/cargo arithmetic and cannot expose a partial plan", () => {
     const good = candidate("ok", forward, wood, 1, 2, 1);
     const bad: TransportCapacityRequest[] = [

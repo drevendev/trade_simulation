@@ -286,4 +286,180 @@ describe("M5 #670 shared Phase-7 aggregate resource preflight", () => {
     expect(() => reserve([a], balances([a], 1, 1, 1e24), [link]))
       .toThrow(/numeric precision/);
   });
+
+  it("rejects observable-but-inaccurate goods and demand reservation decrements", () => {
+    const link = edge(domestic, 100);
+    const base = req("precision-goods", link, wood, 1);
+    const request = { ...base, candidate: { ...base.candidate, maximumOwnQuantity: 3 },
+      landedGrossUnitCostDest: 1 };
+    const huge = 1e16;
+    expect(huge - 3).toBe(huge - 4); // binary64 stores a debit of FOUR
+
+    const highStock = balances([request], huge, 10, 100);
+    expect(() => reserve([request], highStock, [link]))
+      .toThrow(/export stock reservation lost numeric precision/);
+    expect(highStock.exportableByOriginGood.get(
+      phase7RegionGoodKey(link.fromRegionId, wood))).toBe(huge);
+
+    const highDemand = balances([request], 10, huge, 100);
+    expect(() => reserve([request], highDemand, [link]))
+      .toThrow(/import demand reservation lost numeric precision/);
+    expect(highDemand.importDemandByDestinationGood.get(
+      phase7RegionGoodKey(link.toRegionId, wood))).toBe(huge);
+  });
+
+  it("rejects observable-but-inaccurate buyer cash, cargo and FX output decrements", () => {
+    const huge = 1e16;
+    const link = edge(domestic, 100);
+    const base = req("precision-cash", link, wood, 1);
+    const request = { ...base, candidate: { ...base.candidate, maximumOwnQuantity: 3 },
+      landedGrossUnitCostDest: 1 };
+    const highCash = balances([request], 10, 10, huge);
+    expect(() => reserve([request], highCash, [link]))
+      .toThrow(/buyer cash reservation lost numeric precision/);
+
+    const enormousLink = edge(domestic, huge);
+    const highCargoBase = req("precision-cargo", enormousLink, wood, 1);
+    const highCargo = { ...highCargoBase,
+      candidate: { ...highCargoBase.candidate, maximumOwnQuantity: 3 },
+      landedGrossUnitCostDest: 1 };
+    expect(() => reserve([highCargo], balances([highCargo], 10, 10, 100), [enormousLink]))
+      .toThrow(/cargo weight reservation lost numeric precision/);
+
+    const cross = edge(foreign, 100);
+    const foreignBase = req("precision-fx", cross, wood, 1, { fxPoolPairId: pair });
+    const foreignRequest = { ...foreignBase,
+      candidate: { ...foreignBase.candidate, maximumOwnQuantity: 3,
+        sourceSellerNetUnitPrice: 1 },
+      landedGrossUnitCostDest: 1 };
+    const highFx = balances([foreignRequest], 10, 10, 100, huge);
+    expect(() => reserve([foreignRequest], highFx, [cross]))
+      .toThrow(/FX pool output reservation lost numeric precision/);
+    expect(highFx.fxOutputByPairCurrency.get(
+      phase7FxOutputKey(pair, foreignRequest.candidate.sourceCurrencyId))).toBe(huge);
+  });
+
+  it("accepts exact large debits and harmless decimal representation noise", () => {
+    const huge = 1e16;
+    const giantLink = edge(domestic, huge);
+    const base = req("precision-exact", giantLink, wood, 1);
+    const exact = { ...base, candidate: { ...base.candidate, maximumOwnQuantity: 4 },
+      landedGrossUnitCostDest: 1 };
+    const result = reserve([exact], balances([exact], huge, huge, huge), [giantLink]);
+    expect(result.reservations[0]).toMatchObject({
+      allocatedQuantity: 4, cargoWeightReserved: 4, buyerCashReservedDest: 4, refusal: null,
+    });
+    expect(result.remainingExportableByOriginGood.get(
+      phase7RegionGoodKey(giantLink.fromRegionId, wood))).toBe(huge - 4);
+    expect(result.remainingImportDemandByDestinationGood.get(
+      phase7RegionGoodKey(giantLink.toRegionId, wood))).toBe(huge - 4);
+    expect(result.remainingBuyerCashByDestinationCurrency.get(
+      phase7RegionCashKey(giantLink.toRegionId, exact.candidate.destinationCurrencyId)))
+      .toBe(huge - 4);
+    expect(result.remainingCargoWeightByLink.get(giantLink.linkId)).toBe(huge - 4);
+
+    const normalLink = edge(domestic, 100);
+    const decimalBase = req("precision-decimal", normalLink, wood, 1);
+    const decimal = { ...decimalBase,
+      candidate: { ...decimalBase.candidate, maximumOwnQuantity: 0.1 },
+      landedGrossUnitCostDest: 1 };
+    const decimalResult = reserve([decimal], balances([decimal], 0.3, 0.3, 0.3), [normalLink]);
+    expect(decimalResult.reservations[0]?.allocatedQuantity).toBe(0.1);
+    expect(decimalResult.reservations[0]?.refusal).toBeNull();
+  });
+
+  it("rejects cumulative multi-link seller-stock and buyer-demand drift even when each 0.3 debit fits epsilon", () => {
+    const huge = 10_000_000;
+    const first = edge(domestic, 100);
+    const second = { ...first, linkId: "link:precision-cumulative-two" as TransportLinkId };
+    const tiny = (plan: string, link: TransportLinkState, score: number) => {
+      const base = req(plan, link, wood, score);
+      return { ...base, candidate: { ...base.candidate, maximumOwnQuantity: 0.3 },
+        landedGrossUnitCostDest: 1 };
+    };
+    const a = tiny("cumulative-a", first, 3);
+    const b = tiny("cumulative-b", second, 2);
+    const observedSingle = huge - (huge - 0.3);
+    const observedTotal = huge - ((huge - 0.3) - 0.3);
+    expect(Math.abs(observedSingle - 0.3)).toBeLessThan(config.numeric.quantityEpsilon!);
+    expect(Math.abs(observedTotal - 0.6)).toBeGreaterThan(config.numeric.quantityEpsilon!);
+
+    const stock = balances([a, b], huge, 10, 10);
+    const originalStock = [...stock.exportableByOriginGood];
+    expect(() => reserve([b, a], stock, [second, first]))
+      .toThrow(/export stock cumulative reservation lost numeric precision/);
+    expect([...stock.exportableByOriginGood]).toEqual(originalStock);
+
+    const demand = balances([a, b], 10, huge, 10);
+    const originalDemand = [...demand.importDemandByDestinationGood];
+    expect(() => reserve([a, b], demand, [first, second]))
+      .toThrow(/import demand cumulative reservation lost numeric precision/);
+    expect([...demand.importDemandByDestinationGood]).toEqual(originalDemand);
+  });
+
+  it("rejects accumulated precision loss in a shared destination-currency buyer wallet", () => {
+    const first = edge(domestic, 100);
+    const second = { ...first, linkId: "link:precision-cash-two" as TransportLinkId };
+    const baseA = req("cash-a", first, wood, 3);
+    const baseB = req("cash-b", second, wood, 2);
+    const a = { ...baseA, candidate: { ...baseA.candidate, maximumOwnQuantity: 0.3 },
+      landedGrossUnitCostDest: 1 };
+    const b = { ...baseB, candidate: { ...baseB.candidate, maximumOwnQuantity: 0.3 },
+      landedGrossUnitCostDest: 1 };
+    const budget = balances([a, b], 10, 10, 10_000_000);
+    const originalCash = [...budget.buyerCashByDestinationCurrency];
+    expect(() => reserve([a, b], budget, [first, second]))
+      .toThrow(/buyer cash cumulative reservation lost numeric precision/);
+    expect([...budget.buyerCashByDestinationCurrency]).toEqual(originalCash);
+  });
+
+  it("rejects accumulated cargo-weight loss on one directed link across distinct goods", () => {
+    const link = edge(domestic, 10_000_000);
+    const baseA = req("cargo-wood", link, wood, 3);
+    const baseB = req("cargo-iron", link, iron, 2);
+    const a = { ...baseA, candidate: { ...baseA.candidate, maximumOwnQuantity: 0.3 },
+      landedGrossUnitCostDest: 1 };
+    const b = { ...baseB, candidate: { ...baseB.candidate, maximumOwnQuantity: 0.3 },
+      landedGrossUnitCostDest: 1 };
+    expect(() => reserve([b, a], balances([a, b], 10, 10, 10), [link]))
+      .toThrow(/cargo weight cumulative reservation lost numeric precision/);
+    expect(link.seed.baseCapacity).toBe(10_000_000);
+  });
+
+  it("rejects accumulated FX liquidity error across distinct cross-currency links", () => {
+    const first = edge(foreign, 100);
+    const second = { ...first, linkId: "link:precision-fx-two" as TransportLinkId };
+    const baseA = req("fx-a", first, wood, 3, { fxPoolPairId: pair });
+    const baseB = req("fx-b", second, wood, 2, { fxPoolPairId: pair });
+    const a = { ...baseA, candidate: { ...baseA.candidate, maximumOwnQuantity: 0.3,
+      sourceSellerNetUnitPrice: 1 }, landedGrossUnitCostDest: 1 };
+    const b = { ...baseB, candidate: { ...baseB.candidate, maximumOwnQuantity: 0.3,
+      sourceSellerNetUnitPrice: 1 }, landedGrossUnitCostDest: 1 };
+    const budget = balances([a, b], 10, 10, 10, 10_000_000);
+    const originalFx = [...budget.fxOutputByPairCurrency];
+    expect(() => reserve([b, a], budget, [second, first]))
+      .toThrow(/FX pool output cumulative reservation lost numeric precision/);
+    expect([...budget.fxOutputByPairCurrency]).toEqual(originalFx);
+  });
+
+  it("retains valid small fractional reservations, stable order and immutable source budgets", () => {
+    const first = edge(domestic, 100);
+    const second = { ...first, linkId: "link:precision-small-two" as TransportLinkId };
+    const baseA = req("fraction-a", first, wood, 3);
+    const baseB = req("fraction-b", second, wood, 2);
+    const a = { ...baseA, candidate: { ...baseA.candidate, maximumOwnQuantity: 0.3 },
+      landedGrossUnitCostDest: 1 };
+    const b = { ...baseB, candidate: { ...baseB.candidate, maximumOwnQuantity: 0.3 },
+      landedGrossUnitCostDest: 1 };
+    const budget = balances([a, b], 10, 10, 10);
+    const before = [...budget.exportableByOriginGood];
+    const one = reserve([a, b], budget, [first, second]);
+    const other = reserve([b, a], budget, [second, first]);
+    expect(one).toEqual(other);
+    expect(one.reservations.map((r) => [r.tradePlanId, r.allocatedQuantity, r.refusal]))
+      .toEqual([["fraction-a", 0.3, null], ["fraction-b", 0.3, null]]);
+    expect(one.remainingExportableByOriginGood.get(
+      phase7RegionGoodKey(first.fromRegionId, wood))).toBeCloseTo(9.4, 9);
+    expect([...budget.exportableByOriginGood]).toEqual(before);
+  });
 });

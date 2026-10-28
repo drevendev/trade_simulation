@@ -57,6 +57,19 @@
         return `sample ${index}.grossWagesPaid exceeds totals.grossWagesPaid`;
       }
     }
+    // A sparse series need not equal the whole-run totals, but the sum of
+    // observed non-negative flows cannot exceed them. Per-tick checks alone
+    // miss multiple individually legal observations that overstate the run.
+    for (const key of ["outputProduced", "grossWagesPaid"]) {
+      let observed = 0;
+      for (const sample of preview.samples) observed += sample[key];
+      const total = preview.totals[key];
+      const summationMargin = Math.max(1e-9,
+        8 * Number.EPSILON * preview.samples.length * Math.max(1, Math.max(observed, total)));
+      if (!Number.isFinite(observed) || observed - total > summationMargin) {
+        return `sampled ${key} exceeds totals.${key}`;
+      }
+    }
     return null;
   }
 
@@ -137,20 +150,34 @@
     return group;
   }
 
+
+  function spotlightUnavailable(message) {
+    window.showcaseSavedRun?.failure("m4", message);
+  }
+
+  function renderSpotlight(preview) {
+    // The shared controller owns the timeline so M3 and M4 cannot overwrite
+    // each other's active values when their independent requests resolve.
+    window.showcaseSavedRun?.ready("m4", preview);
+  }
+
   function render(preview) {
-    // Read provenance from the selected artifact, never the fixed fixture's prose.
-    // Text-only insertion prevents a scenario identifier from becoming markup.
-    const runSummary = document.getElementById("m4-run-summary");
-    if (runSummary) {
-      const scenarioId = typeof preview.scenario.scenarioId === "string" &&
-        preview.scenario.scenarioId.length > 0 ? preview.scenario.scenarioId : "unnamed scenario";
-      const samples = preview.samples;
-      const observation = samples.length === 0
-        ? "No sampled ticks or observed output values."
-        : `Samples span ticks ${samples[0].tick}–${samples[samples.length - 1].tick}; ` +
-          `last sampled output: ${exact(samples[samples.length - 1].outputProduced)} ${preview.region.goodsUnitLabel}/tick.`;
-      runSummary.textContent = `Selected scenario: ${scenarioId}. Run length: ${preview.scenario.ticksExecuted} ticks. ${observation}`;
+    // Preserve standalone M4 run provenance for existing read-only consumers and tests.
+    // On the combined Pages viewer the selected-run controller alone owns this summary.
+    if (!window.showcaseSavedRun) {
+      const runSummary = document.getElementById("m4-run-summary");
+      if (runSummary) {
+        const scenarioId = typeof preview.scenario.scenarioId === "string" &&
+          preview.scenario.scenarioId.length > 0 ? preview.scenario.scenarioId : "unnamed scenario";
+        const samples = preview.samples;
+        const observation = samples.length === 0
+          ? "No sampled ticks or observed output values."
+          : `Samples span ticks ${samples[0].tick}–${samples[samples.length - 1].tick}; ` +
+            `last sampled output: ${exact(samples[samples.length - 1].outputProduced)} ${preview.region.goodsUnitLabel}/tick.`;
+        runSummary.textContent = `Selected scenario: ${scenarioId}. Run length: ${preview.scenario.ticksExecuted} ticks. ${observation}`;
+      }
     }
+    renderSpotlight(preview);
     if (preview.samples.length === 0) {
       state("M4 preview empty", "The artifact is valid, but the deterministic run contains no sampled ticks. No values are invented in its place.");
       return;
@@ -255,13 +282,17 @@
     })
     .catch(error => {
       const unavailable = error?.unavailable === true;
-      // The separate live-region summary must not say "Reading…" after the body
-      // has reached a terminal state (or retain an earlier success after render fails).
-      const runSummary = document.getElementById("m4-run-summary");
-      if (runSummary) {
-        runSummary.textContent = unavailable
-          ? "Selected run unavailable. No validated observations were loaded."
-          : "Selected run could not be displayed. No validated observations are available.";
+      spotlightUnavailable(unavailable ? "Saved run unavailable" : "Saved run could not be displayed");
+      // Standalone M4 consumers still own their fallback summary. On the combined
+      // viewer, the shared controller alone owns provenance for the selected run:
+      // a late M4 failure must not overwrite an already selected M3 summary.
+      if (!window.showcaseSavedRun) {
+        const runSummary = document.getElementById("m4-run-summary");
+        if (runSummary) {
+          runSummary.textContent = unavailable
+            ? "Selected run unavailable. No validated observations were loaded."
+            : "Selected run could not be displayed. No validated observations are available.";
+        }
       }
       if (error?.invalidSelection === true) {
         state("M4 preview error", `Invalid M4 selected-run link; no artifact was fetched. ${error.message}.`);

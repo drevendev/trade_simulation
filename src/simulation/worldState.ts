@@ -18,6 +18,7 @@ import type {
   MonetaryAuthorityId,
   ProductionUnitId,
   RegionId,
+  ShipmentId,
   StateId,
   TransportLinkId,
 } from "../domain/id";
@@ -47,6 +48,8 @@ import type {
 import type { DefinitionPack } from "../config/definitionPack";
 import { validateTradeConfig, type SimulationConfig } from "../config/simulationConfig";
 import { validateFxPoolGenesis } from "../config/fxPoolGenesisValidation";
+import type { FxQuotePoolSnapshot } from "./fxQuoteReservation";
+import { validateTradeShipmentRegistry, type TradeShipmentState } from "./tradeShipmentState";
 import { validateDefinitionPack, validateLaborConfig, validatePopulationConfig, validateProductionConfig } from "../config/validation";
 import { validateM4ProductionPolicyGenesis } from "./m4ProductionPolicyGenesisValidation";
 import { assertFiniteCanonicalNumber } from "../domain/numeric";
@@ -115,6 +118,13 @@ export interface WorldState {
   readonly productionUnits: ReadonlyMap<ProductionUnitId, ProductionUnitState>;
   readonly markets: ReadonlyMap<MarketId, LocalMarketState>;
   readonly transportLinks: ReadonlyMap<TransportLinkId, TransportLinkState>;
+  /**
+   * Canonical persistent in-transit goods ownership (M5). New worlds always
+   * materialize an empty registry; optional only for pre-M5 manual fixtures.
+   * A shipment may enter this registry only with an atomic Phase-7 goods and
+   * payments bundle; a quote or actor-match allocation is not a shipment.
+   */
+  readonly shipments?: ReadonlyMap<ShipmentId, TradeShipmentState>;
   /** Derived sparse outgoing-route index; canonical genesis always populates it. Optional for old fixtures. */
   readonly outgoingTransportLinkIdsByRegion?: ReadonlyMap<RegionId, readonly TransportLinkId[]>;
   /** Last canonical tick whose Phase-5 physical production transition was persisted; -1 at genesis. */
@@ -176,11 +186,25 @@ export interface CurrencyState {
   readonly issuerAuthorityId: MonetaryAuthorityId | null;
 }
 
+/**
+ * Live, base-issuer-owned FX stock. Unlike the immutable seed, this is the
+ * canonical pool snapshot carried from one tick to the next by settlement.
+ * The two currency balances belong to the pool, not to the authority wallet.
+ * Handoff/04 §17; quotes consume this exact shape without copying stock.
+ */
+export interface FxLiquidityPoolState extends FxQuotePoolSnapshot {
+  readonly targetBaseReserveShare: number;
+  readonly flowPressureEma: number;
+  readonly maxRateMovePerTick: number;
+}
+
 export interface MonetaryAuthorityState {
   readonly authorityId: MonetaryAuthorityId;
   readonly seed: MonetaryAuthoritySeed;
   readonly currencyId: CurrencyId;
   readonly memberStateIds: readonly StateId[];
+  /** Sole persistent storage of pools whose base currency this authority issues. */
+  readonly fxPools: ReadonlyMap<string, FxLiquidityPoolState>;
 }
 
 /**
@@ -735,6 +759,7 @@ export function buildInitialWorld(
     productionUnits: productionUnitRegistry,
     markets: marketRegistry,
     transportLinks: transportLinkRegistry,
+    shipments: new Map<ShipmentId, TradeShipmentState>(),
   };
 
   const reconciliationResult = reconcileGenesisStocks(tempWorldState, worldGenesisLedger, frozenConfig);
@@ -766,6 +791,7 @@ export function buildInitialWorld(
     productionUnits: productionUnitRegistry,
     markets: marketRegistry,
     transportLinks: transportLinkRegistry,
+    shipments: new Map<ShipmentId, TradeShipmentState>(),
     outgoingTransportLinkIdsByRegion,
     lastProductionExecutionTransitionTick: -1,
     lastWageSettlementTransitionTick: -1,
@@ -774,6 +800,7 @@ export function buildInitialWorld(
     pendingTransitions: createEmptyPendingTransitions(),
   };
 
+  validateTradeShipmentRegistry(worldState);
   return Object.freeze(worldState);
 }
 
@@ -919,11 +946,37 @@ function buildMonetaryAuthorityState(seed: MonetaryAuthoritySeed, idMap: IdMaps)
     .map((key) => idMap.stateIds.get(key))
     .filter((id) => id !== undefined) as StateId[];
 
+  // Explicitly declared orientation, never lexical pair sorting. A reciprocal
+  // base/quote seed is a different pool belonging to the other base issuer.
+  const fxPools = new Map<string, FxLiquidityPoolState>(
+    stableOrderBy(seed.fxPools ?? [], (pool) => pool.key).map((pool) => {
+      const baseCurrencyId = idMap.currencyIds.get(pool.baseCurrencyKey)!;
+      const quoteCurrencyId = idMap.currencyIds.get(pool.quoteCurrencyKey)!;
+      return [pool.key, {
+        pairId: pool.key,
+        baseCurrencyId,
+        quoteCurrencyId,
+        cash: new Map<CurrencyId, number>([
+          [baseCurrencyId, pool.cash[pool.baseCurrencyKey]!],
+          [quoteCurrencyId, pool.cash[pool.quoteCurrencyKey]!],
+        ]),
+        spotRateQuotePerBase: pool.spotRateQuotePerBase,
+        targetBaseReserveShare: pool.targetBaseReserveShare,
+        flowPressureEma: pool.flowPressureEma,
+        transactionSpread: pool.transactionSpread,
+        minOperationalReserveBase: pool.minOperationalReserveBase,
+        minOperationalReserveQuote: pool.minOperationalReserveQuote,
+        maxRateMovePerTick: pool.maxRateMovePerTick,
+      }] as const;
+    }),
+  );
+
   return {
     authorityId: idMap.authorityIds.get(seed.key)!,
     seed,
     currencyId: idMap.currencyIds.get(seed.currencyKey)!,
     memberStateIds,
+    fxPools,
   };
 }
 
