@@ -285,9 +285,9 @@ describe("M5 #672 atomic settleFx / Handoff-04 §§19–21", () => {
       fxPayerCurrencyKey(payerKey, request.inputCurrencyId),
       readActorWallet(first.world, request.payer).get(request.inputCurrencyId) ?? 0,
     ]]), 8);
-    expect(freshPlan.reservations[0].tick).toBe(8);
+    expect(freshPlan.reservations[0]!.tick).toBe(8);
     const second = settleFx(first.world, nextRequest, {
-      ...tick7, tick: 8, reservation: freshPlan.reservations[0],
+      ...tick7, tick: 8, reservation: freshPlan.reservations[0]!,
       priorTransactions: first.transactions,
     });
     expect(second?.receipt.outputAmount).toBeGreaterThan(0);
