@@ -115,7 +115,7 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     const plan = reserveFxForPool(
       source,
       [{ ...request("full-stock", "buyer", big), maxInputAmount: big }],
-      budgets,
+      budgets, 7,
     );
     expect(plan.reservedOutputByCurrency.get(QUOTE)).toBe(near);
     expect(plan.reservedInputByPayerCurrency.get(buyerKey)).toBe(near);
@@ -164,7 +164,7 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     expect(() => quoteFxForPool(tiny, BASE, QUOTE, 1e-200, { maxInputAmount: 1 }))
       .toThrow(/positive output.*zero input/);
     expect(() => reserveFxForPool(
-      tiny, [{ ...request("underflow", "buyer", 1e-200), maxInputAmount: 1 }], budgets,
+      tiny, [{ ...request("underflow", "buyer", 1e-200), maxInputAmount: 1 }], budgets, 7,
     )).toThrow(/positive output.*zero input/);
     expect(tiny.cash.get(QUOTE)).toBe(2e-200);
     expect(budgets.get(budgetKey)).toBe(1);
@@ -185,7 +185,7 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     const key = fxPayerCurrencyKey("buyer", BASE);
     const plan = reserveFxForPool(
       tiny, [{ ...request("tiny", "buyer", 1e-150), maxInputAmount: 1 }],
-      new Map([[key, 1]]),
+      new Map([[key, 1]]), 7,
     );
     expect(plan.reservedOutputByCurrency.get(QUOTE)).toBe(1e-150);
     expect(plan.reservedInputByPayerCurrency.get(key)).toBeGreaterThan(0);
@@ -217,8 +217,8 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     const first = request("first", "buyer-a", 60, 5);
     const second = request("second", "buyer-b", 60, 2);
     const source = pool();
-    const a = reserveFxForPool(source, [second, first], inputs);
-    const b = reserveFxForPool(source, [first, second], inputs);
+    const a = reserveFxForPool(source, [second, first], inputs, 7);
+    const b = reserveFxForPool(source, [first, second], inputs, 7);
     expect(a).toEqual(b);
     expect(a.reservations.map((x) => [x.requestId, x.quote.feasibleOutputAmount]))
       .toEqual([["first", 60], ["second", 20]]);
@@ -234,7 +234,7 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
   it("shares one payer's input cash across different requests, without overdraft", () => {
     const inputs = new Map([[fxPayerCurrencyKey("buyer", BASE), 30]]);
     const planned = reserveFxForPool(
-      pool(), [request("b", "buyer", 40), request("a", "buyer", 40)], inputs,
+      pool(), [request("b", "buyer", 40), request("a", "buyer", 40)], inputs, 7,
     );
     expect(planned.reservations.map((x) => x.requestId)).toEqual(["a", "b"]);
     const totalInput = planned.reservedInputByPayerCurrency.get(fxPayerCurrencyKey("buyer", BASE))!;
@@ -252,7 +252,7 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     const a = reserveFxForPool(pool(), [
       request("base-to-quote", "a", 80, 3),
       request("quote-to-base", "b", 100, 2, QUOTE, BASE),
-    ], inputs);
+    ], inputs, 7);
     expect(a.reservedOutputByCurrency.get(QUOTE)).toBe(80);
     expect(a.reservedOutputByCurrency.get(BASE)).toBe(40);
     expect(a.pressure.desiredDemandForBase).toBe(100);
@@ -277,7 +277,7 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     // the aggregate would overstate both the payer debit and pool output by 1.
     expect(quoteFxForPool(source, BASE, QUOTE, 3).requiredInputForFeasibleOutput).toBe(3);
     expect(big + 3).toBe(big + 4);
-    expect(() => reserveFxForPool(source, requests, new Map([[key, big + 4]])))
+    expect(() => reserveFxForPool(source, requests, new Map([[key, big + 4]]), 7))
       .toThrow(/reconcile.*precision/);
     expect(source.cash.get(QUOTE)).toBe(big + 8);
   });
@@ -299,7 +299,7 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     // (3 + 1e16 - 3) - 1e16 === 0 although the rounded sum is 1e16+4.
     expect(3 + big).toBe(big + 4);
     expect(((3 + big) - 3) - big).toBe(0);
-    expect(() => reserveFxForPool(source, [large, small], budgets))
+    expect(() => reserveFxForPool(source, [large, small], budgets, 7))
       .toThrow(/reconcile.*precision/);
     // A rejected pure plan must not touch the authoritative snapshots.
     expect(source.cash.get(QUOTE)).toBe(big + 8);
@@ -322,7 +322,7 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     ], new Map([
       [fxPayerCurrencyKey("a", BASE), big],
       [fxPayerCurrencyKey("b", BASE), 3],
-    ]))).toThrow(/pool output.*reconcile.*precision/);
+    ]), 7)).toThrow(/pool output.*reconcile.*precision/);
   });
 
   it("refuses payer-input overcount when the pool-output increment is still precise", () => {
@@ -339,7 +339,7 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     expect(quoteFxForPool(source, BASE, QUOTE, 3e-12).requiredInputForFeasibleOutput).toBe(3);
     expect(() => reserveFxForPool(source, [small, large], new Map([
       [fxPayerCurrencyKey("buyer", BASE), big + 4],
-    ]))).toThrow(/payer input.*reconcile.*precision/);
+    ]), 7)).toThrow(/payer input.*reconcile.*precision/);
   });
 
   it("preserves exact, insertion-order-independent totals when large and small increments fit", () => {
@@ -357,8 +357,8 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
       { ...request("large", "buyer", big, 2), maxInputAmount: big },
       { ...request("small", "buyer", 3, 1), maxInputAmount: 3 },
     ];
-    const first = reserveFxForPool(source, requests, budgets);
-    expect(reserveFxForPool(source, [...requests].reverse(), budgets)).toEqual(first);
+    const first = reserveFxForPool(source, requests, budgets, 7);
+    expect(reserveFxForPool(source, [...requests].reverse(), budgets, 7)).toEqual(first);
     expect(first.reservations.map(({ quote }) => [
       quote.feasibleOutputAmount, quote.requiredInputForFeasibleOutput,
     ])).toEqual([[big, big], [3, 3]]);
@@ -371,7 +371,7 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
       ...r,
       priority: r.priority === 2 ? 1 : 2,
     }));
-    const smallFirst = reserveFxForPool(source, smallFirstRequests, budgets);
+    const smallFirst = reserveFxForPool(source, smallFirstRequests, budgets, 7);
     expect(smallFirst.reservations.map(({ quote }) => [
       quote.feasibleOutputAmount, quote.requiredInputForFeasibleOutput,
     ])).toEqual([[3, 3], [big, big]]);
@@ -387,13 +387,28 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
   it("rejects invalid/duplicate requests before publishing any provisional reservation", () => {
     const inputs = new Map([[fxPayerCurrencyKey("buyer", BASE), 100]]);
     const good = request("same", "buyer", 3);
-    expect(() => reserveFxForPool(pool(), [good, good], inputs)).toThrow(/unique/);
-    expect(() => reserveFxForPool(pool(), [good, request("other", "unfunded", 3)], inputs))
+    expect(() => reserveFxForPool(pool(), [good, good], inputs, 7)).toThrow(/unique/);
+    expect(() => reserveFxForPool(pool(), [good, request("other", "unfunded", 3)], inputs, 7))
       .toThrow(/missing FX payer/);
-    expect(() => reserveFxForPool(pool(), [{ ...good, priority: Infinity }], inputs))
+    expect(() => reserveFxForPool(pool(), [{ ...good, priority: Infinity }], inputs, 7))
       .toThrow(/priority/);
-    expect(() => reserveFxForPool(pool(), [{ ...good, desiredOutputAmount: -1 }], inputs))
+    expect(() => reserveFxForPool(pool(), [{ ...good, desiredOutputAmount: -1 }], inputs, 7))
       .toThrow(/positive/);
     expect(inputs.get(fxPayerCurrencyKey("buyer", BASE))).toBe(100);
   });
+  it("binds each reservation to its producing tick and rejects invalid tick values", () => {
+    const source = pool();
+    const candidate = request("tick-bound", "buyer", 10);
+    const budgets = new Map([[fxPayerCurrencyKey("buyer", BASE), 100]]);
+    const tick7 = reserveFxForPool(source, [candidate], budgets, 7);
+    const tick8 = reserveFxForPool(source, [candidate], budgets, 8);
+    expect(tick7.reservations[0].tick).toBe(7);
+    expect(tick8.reservations[0].tick).toBe(8);
+    expect(tick8.reservations[0].quote).toEqual(tick7.reservations[0].quote);
+    expect(() => reserveFxForPool(source, [candidate], budgets, -1)).toThrow(/tick/);
+    expect(() => reserveFxForPool(source, [candidate], budgets, 7.5)).toThrow(/tick/);
+    expect(() => reserveFxForPool(source, [candidate], budgets, Number.NaN)).toThrow(/tick/);
+    expect(source.cash.get(QUOTE)).toBe(100);
+  });
+
 });
