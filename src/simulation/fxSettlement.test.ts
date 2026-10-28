@@ -10,6 +10,7 @@ import {
   createTransactionBundleId,
 } from "./tickOrchestrator";
 import { quoteFx } from "./fxWorldPoolAuthority";
+import { fxPayerCurrencyKey, reserveFxForPool } from "./fxQuoteReservation";
 import { resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 import {
   settleFx,
@@ -51,6 +52,7 @@ function context(world: WorldState, request: FxSettlementRequest, reservedDesire
     recipientAcceptsOutputCurrency: true,
     priorTransactions: [],
     reservation: {
+      tick: 7,
       requestId: "fx-request-1",
       payerKey: actorRefKey(request.payer),
       quote: quoteFx(
@@ -242,6 +244,56 @@ describe("M5 #672 atomic settleFx / Handoff-04 §§19–21", () => {
     expect(() => settleFx(first.world, distinct, {
       ...ctx, priorTransactions: [first.ledgerLegs[1]],
     })).toThrow(/reservation already redeemed/);
+  });
+
+
+  it("expires the tick-7 promise on tick 8 but accepts a new tick-8 plan", () => {
+    const { world, request } = fixture();
+    const tick7 = context(world, request);
+    const first = settleFx(world, request, tick7)!;
+    const committedPool = resolveCanonicalFxPool(first.world, request.pairId).pool;
+    const committedPayer = readActorWallet(first.world, request.payer)
+      .get(request.inputCurrencyId);
+    const committedJournal = [...first.transactions];
+    const nextRequest = {
+      ...request, settlementId: createFxSettlementId("fxs:tick-8"),
+      originatingBundleId: createTransactionBundleId("tb:tick-8"),
+    };
+
+    // Same expired promise is invalid even when both ledger legs are present,
+    // or only one leg survives in the caller-supplied journal.
+    for (const priorTransactions of [first.transactions, [first.ledgerLegs[1]]]) {
+      expect(() => settleFx(first.world, nextRequest, {
+        ...tick7, tick: 8, reservation: tick7.reservation, priorTransactions,
+      })).toThrow(/expired|stale|reservation/);
+      expect(resolveCanonicalFxPool(first.world, request.pairId).pool).toBe(committedPool);
+      expect(readActorWallet(first.world, request.payer).get(request.inputCurrencyId))
+        .toBe(committedPayer);
+    }
+    expect(first.transactions).toEqual(committedJournal);
+
+    // A genuinely newly produced Phase-7 tick-8 reservation is allowed;
+    // it must have its own requestId and use post-tick-7 live wallet/pool.
+    const payerKey = actorRefKey(request.payer);
+    const freshPlan = reserveFxForPool(committedPool, [{
+      requestId: "fx-request-8", payerKey, priority: 1,
+      fromCurrencyId: request.inputCurrencyId,
+      toCurrencyId: request.outputCurrencyId,
+      desiredOutputAmount: request.desiredOutputAmount,
+      maxInputAmount: request.maxInputAmount,
+    }], new Map([[
+      fxPayerCurrencyKey(payerKey, request.inputCurrencyId),
+      readActorWallet(first.world, request.payer).get(request.inputCurrencyId) ?? 0,
+    ]]), 8);
+    expect(freshPlan.reservations[0].tick).toBe(8);
+    const second = settleFx(first.world, nextRequest, {
+      ...tick7, tick: 8, reservation: freshPlan.reservations[0],
+      priorTransactions: first.transactions,
+    });
+    expect(second?.receipt.outputAmount).toBeGreaterThan(0);
+    expect(second?.ledgerLegs.every((leg) => leg.tick === 8)).toBe(true);
+    expect(second?.ledgerLegs.map((leg) => leg.fxReservationRequestId))
+      .toEqual(["fx-request-8", "fx-request-8"]);
   });
 
   it("rejects large-stock rounded-up pool credits instead of silently minting money", () => {
