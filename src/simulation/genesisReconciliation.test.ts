@@ -1233,7 +1233,9 @@ describe("reconcileGenesisStocks", () => {
       const worldState = buildInitialWorld(baselineScenario, baselineDefinitionPack, config, 42);
       const authority = [...worldState.monetaryAuthorities.values()]
         .find((item) => item.seed.key === "authority:alpha")!;
-      const [[firstId, first], [secondId, second]] = [...authority.fxPools];
+      const [firstEntry, secondEntry] = [...authority.fxPools];
+      const [firstId, first] = firstEntry!;
+      const [secondId, second] = secondEntry!;
       expect(first.baseCurrencyId).toBe(second.baseCurrencyId);
       const currency = first.baseCurrencyId;
       const moved = 100;
