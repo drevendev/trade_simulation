@@ -226,32 +226,26 @@ export function reconcileGenesisStocks(
     });
   });
 
-  // Project FX pool reserves by pool identity + currency (REQ-CONFIG-004)
+  // Project the canonical LIVE pool balances, not the seed snapshot. Otherwise
+  // a failed pool materialization or a corrupted opening stock reconciles
+  // against its own seed and passes despite missing money (REQ-CONFIG-004).
   worldState.monetaryAuthorities.forEach((authority) => {
-    (authority.seed.fxPools ?? []).forEach((fxPool) => {
-      // Process base currency side
-      if (fxPool.baseCurrencyKey && fxPool.cash) {
-        const baseCurrencyId = Array.from(worldState.currencies.entries()).find(
-          ([_, cs]) => cs.seed.key === fxPool.baseCurrencyKey,
-        )?.[0];
-        const amount = fxPool.cash[fxPool.baseCurrencyKey];
-        if (baseCurrencyId && typeof amount === "number" && amount > 0) {
-          const fxPoolKey = `FX_POOL:${authority.seed.key}.fxPool.${fxPool.key}.base:${baseCurrencyId}`;
-          const current = actualMoneyByOwnerCurrency.get(fxPoolKey) ?? 0;
-          actualMoneyByOwnerCurrency.set(fxPoolKey, current + amount);
-        }
+    authority.fxPools.forEach((pool, pairId) => {
+      if (pairId !== pool.pairId ||
+          pool.baseCurrencyId === pool.quoteCurrencyId ||
+          pool.baseCurrencyId !== authority.currencyId ||
+          pool.cash.size !== 2 ||
+          !pool.cash.has(pool.baseCurrencyId) ||
+          !pool.cash.has(pool.quoteCurrencyId)) {
+        throw new Error(`Invalid canonical FX pool state under ${authority.seed.key}: ${pairId}`);
       }
-      // Process quote currency side
-      if (fxPool.quoteCurrencyKey && fxPool.cash) {
-        const quoteCurrencyId = Array.from(worldState.currencies.entries()).find(
-          ([_, cs]) => cs.seed.key === fxPool.quoteCurrencyKey,
-        )?.[0];
-        const amount = fxPool.cash[fxPool.quoteCurrencyKey];
-        if (quoteCurrencyId && typeof amount === "number" && amount > 0) {
-          const fxPoolKey = `FX_POOL:${authority.seed.key}.fxPool.${fxPool.key}.quote:${quoteCurrencyId}`;
-          const current = actualMoneyByOwnerCurrency.get(fxPoolKey) ?? 0;
-          actualMoneyByOwnerCurrency.set(fxPoolKey, current + amount);
-        }
+      for (const [side, currencyId] of [
+        ["base", pool.baseCurrencyId],
+        ["quote", pool.quoteCurrencyId],
+      ] as const) {
+        const amount = pool.cash.get(currencyId)!;
+        const key = `FX_POOL:${authority.seed.key}.fxPool.${pairId}.${side}:${currencyId}`;
+        actualMoneyByOwnerCurrency.set(key, (actualMoneyByOwnerCurrency.get(key) ?? 0) + amount);
       }
     });
 
