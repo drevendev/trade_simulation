@@ -129,6 +129,60 @@ describe("M5 #673 conserving Phase-7 trade money legs", () => {
     expect(cash(lostCredit.world, lostCredit.seller, lostCredit.currencyId)).toBe(1e16);
   });
 
+  it("refuses a fee silently lost by rounded compensated gross debits and credits", () => {
+    const f = fixture(2e16, 0, 0);
+    const bundle: Phase7TradeMoneyLeg[] = [
+      { legId: "goods", from: f.buyer, to: f.seller, currencyId: f.currencyId, amount: 1e16 },
+      { legId: "fee", from: f.buyer, to: f.seller, currencyId: f.currencyId, amount: 1 },
+    ];
+    expect(() => applyConservingTradeMoneyLegs(f.world, bundle))
+      .toThrow(/cannot be represented|precision/);
+    expect(cash(f.world, f.buyer, f.currencyId)).toBe(2e16);
+    expect(cash(f.world, f.seller, f.currencyId)).toBe(0);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("permits exactly representable large single and combined money legs", () => {
+    const f = fixture(2e16, 0, 0);
+    const large: Phase7TradeMoneyLeg = {
+      legId: "goods", from: f.buyer, to: f.seller, currencyId: f.currencyId, amount: 1e16,
+    };
+    const single = applyConservingTradeMoneyLegs(f.world, [large]);
+    expect(cash(single, f.buyer, f.currencyId)).toBe(1e16);
+    expect(cash(single, f.seller, f.currencyId)).toBe(1e16);
+    const withExactFee = applyConservingTradeMoneyLegs(f.world, [
+      large,
+      { ...large, legId: "fee", amount: 2 },
+    ]);
+    expect(cash(withExactFee, f.buyer, f.currencyId)).toBe(1e16 - 2);
+    expect(cash(withExactFee, f.seller, f.currencyId)).toBe(1e16 + 2);
+    expect(cash(f.world, f.buyer, f.currencyId)).toBe(2e16);
+    expect(cash(f.world, f.seller, f.currencyId)).toBe(0);
+  });
+
+  it("rejects a swallowed positive micro-leg even when it is below moneyEpsilon", () => {
+    const f = fixture(2e16, 0, 0);
+    const bundle: Phase7TradeMoneyLeg[] = [
+      { legId: "goods", from: f.buyer, to: f.seller, currencyId: f.currencyId, amount: 1e16 },
+      { legId: "micropayment", from: f.buyer, to: f.seller, currencyId: f.currencyId, amount: 1e-10 },
+    ];
+    expect(() => applyConservingTradeMoneyLegs(f.world, bundle))
+      .toThrow(/cannot be represented/);
+    expect(cash(f.world, f.buyer, f.currencyId)).toBe(2e16);
+    expect(cash(f.world, f.seller, f.currencyId)).toBe(0);
+  });
+
+  it("permits compensated ordinary decimal money legs within numerical epsilon", () => {
+    const f = fixture(10, 0, 0);
+    const bundle: Phase7TradeMoneyLeg[] = [
+      { legId: "goods", from: f.buyer, to: f.seller, currencyId: f.currencyId, amount: 0.1 },
+      { legId: "fee", from: f.buyer, to: f.seller, currencyId: f.currencyId, amount: 0.2 },
+    ];
+    const result = applyConservingTradeMoneyLegs(f.world, bundle);
+    expect(cash(result, f.buyer, f.currencyId)).toBeCloseTo(9.7, 12);
+    expect(cash(result, f.seller, f.currencyId)).toBeCloseTo(0.3, 12);
+  });
+
   it("rejects duplicate IDs, unknown currency, self-payments, bad amounts and insufficient money", () => {
     const input = fixture();
     const valid = legs(input)[0]!;
