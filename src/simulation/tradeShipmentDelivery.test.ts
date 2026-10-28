@@ -63,8 +63,8 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
     expect(tooEarly.newTransactions).toEqual([]);
     const result = deliverDueTradeShipments(inTransit,
       { tick: 8, phase: 1, priorTransactions: [] });
-    expect(result.world.shipments.size).toBe(0);
-    expect(inTransit.shipments.get(shipment.id)).toBe(shipment);
+    expect(result.world.shipments?.size).toBe(0);
+    expect(inTransit.shipments?.get(shipment.id)).toBe(shipment);
     expect(stateGoods(result.world, buyer)).toBe(initial + 3);
     expect(stateGoods(inTransit, buyer)).toBe(initial);
     expect(inTransit.states).toBe(originalStates);
@@ -124,7 +124,7 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
       { tick: 8, phase: 7, priorTransactions: [] });
     expect(result.newTransactions[0]?.phase).toBe(7);
     expect(stateGoods(result.world, buyer)).toBe(before + 3);
-    expect(result.world.shipments.size).toBe(0);
+    expect(result.world.shipments?.size).toBe(0);
   });
 
   it("is insensitive to shipment Map order and preserves stable transaction IDs", () => {
@@ -167,7 +167,7 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
     expect(() => deliverDueTradeShipments(invalid,
       { tick: 8, phase: 1, priorTransactions: [] })).toThrow(/quantity/);
     expect(stateGoods(inTransit, buyer)).toBe(before);
-    expect(inTransit.shipments.get(shipment.id)).toBe(shipment);
+    expect(inTransit.shipments?.get(shipment.id)).toBe(shipment);
   });
 
   it("refuses binary64 lost credits, overflowing stock, and cumulative precision loss", () => {
