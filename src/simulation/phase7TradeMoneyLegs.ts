@@ -31,6 +31,8 @@ export interface Phase7TradeMoneyLeg {
 interface CompensatedSum {
   sum: number;
   correction: number;
+  /** Smallest promised positive leg; independent of legId sorting. */
+  smallestLeg?: number;
 }
 interface EndpointStage {
   readonly key: string;
@@ -65,7 +67,8 @@ function representableGross(sum: CompensatedSum, moneyEpsilon: number): number {
   const rounded = total(sum);
   const lostRemainder = sum.correction - (rounded - sum.sum);
   if (!Number.isFinite(rounded) || !Number.isFinite(lostRemainder) ||
-      Math.abs(lostRemainder) > moneyEpsilon) {
+      Math.abs(lostRemainder) > moneyEpsilon ||
+      (sum.smallestLeg !== undefined && rounded - sum.smallestLeg === rounded)) {
     return fail("gross money leg amount cannot be represented without precision loss");
   }
   return rounded;
@@ -117,13 +120,9 @@ export function applyConservingTradeMoneyLegs(
       endpoint = { key, actor, currencyId, debits: emptySum(), credits: emptySum() };
       endpoints.set(key, endpoint);
     }
-    const previous = endpoint[kind].sum;
-    add(endpoint[kind], amount);
-    // A positive leg must not vanish into an existing large endpoint total.
-    // Do not let moneyEpsilon convert an unobservable micro-leg into a receipt.
-    if (endpoint[kind].sum === previous) {
-      return fail("positive money leg cannot be represented at this endpoint precision");
-    }
+    const gross = endpoint[kind];
+    gross.smallestLeg = Math.min(gross.smallestLeg ?? Infinity, amount);
+    add(gross, amount);
   };
 
   for (const leg of ordered) {
