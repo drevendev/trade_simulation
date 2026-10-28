@@ -253,10 +253,13 @@ export function settleSameCurrencyTradeDispatch(
     .filter((part) => part.amount > 0 || part.suffix === "goods")
     .map((part) => ({
       tick, phase: 7, type: part.type, transactionId: tx(part.suffix), bundleId,
-      source: shipment.buyer, destination: part.receiver ?? undefined,
-      currencyId: currency, goodId: part.suffix === "goods" ? shipment.goodId : undefined,
-      quantity: part.suffix === "goods" ? shipment.quantity : undefined,
-      unitPrice: part.suffix === "goods" ? shipment.sellerNetUnitPrice : undefined,
+      source: shipment.buyer,
+      ...(part.receiver ? { destination: part.receiver } : {}),
+      currencyId: currency,
+      ...(part.suffix === "goods" ? {
+        goodId: shipment.goodId, quantity: shipment.quantity,
+        unitPrice: shipment.sellerNetUnitPrice,
+      } : {}),
       sourceRegionId: shipment.originRegionId,
       destinationRegionId: shipment.destinationRegionId,
       moneyAmount: part.amount, amount: part.amount,
