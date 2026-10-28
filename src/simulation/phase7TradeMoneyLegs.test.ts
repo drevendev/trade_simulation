@@ -160,6 +160,37 @@ describe("M5 #673 conserving Phase-7 trade money legs", () => {
     expect(cash(f.world, f.seller, f.currencyId)).toBe(0);
   });
 
+  it("accepts multiple small named fees when their exact combined gross is representable", () => {
+    const f = fixture(2e16, 0, 0);
+    const bundle: Phase7TradeMoneyLeg[] = [
+      { legId: "a-goods", from: f.buyer, to: f.seller, currencyId: f.currencyId, amount: 1e16 },
+      { legId: "b-fee1", from: f.buyer, to: f.seller, currencyId: f.currencyId, amount: 1 },
+      { legId: "c-fee3", from: f.buyer, to: f.seller, currencyId: f.currencyId, amount: 3 },
+    ];
+    // Neither fee has to be separately distinguishable when subtracted from
+    // the final gross; 1e16 + 1 + 3 is exactly representable as a whole.
+    for (const ordered of [bundle, [...bundle].reverse()]) {
+      const result = applyConservingTradeMoneyLegs(f.world, ordered);
+      expect(cash(result, f.buyer, f.currencyId)).toBe(1e16 - 4);
+      expect(cash(result, f.seller, f.currencyId)).toBe(1e16 + 4);
+      expect(result.shipments).toBe(f.world.shipments);
+    }
+    expect(cash(f.world, f.buyer, f.currencyId)).toBe(2e16);
+    expect(cash(f.world, f.seller, f.currencyId)).toBe(0);
+  });
+
+  it("refuses an inexact large gross even if one positive leg nearly fits the rounding gap", () => {
+    const f = fixture(2e16, 0, 0);
+    const candidate: Phase7TradeMoneyLeg[] = [
+      { legId: "goods", from: f.buyer, to: f.seller, currencyId: f.currencyId, amount: 1e16 },
+      { legId: "fee", from: f.buyer, to: f.seller, currencyId: f.currencyId, amount: 3 },
+    ];
+    expect(() => applyConservingTradeMoneyLegs(f.world, candidate))
+      .toThrow(/gross money leg amount cannot be represented/);
+    expect(cash(f.world, f.buyer, f.currencyId)).toBe(2e16);
+    expect(cash(f.world, f.seller, f.currencyId)).toBe(0);
+  });
+
   it("rejects a swallowed positive micro-leg even when it is below moneyEpsilon", () => {
     const f = fixture(2e16, 0, 0);
     const bundle: Phase7TradeMoneyLeg[] = [
