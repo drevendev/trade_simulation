@@ -57,6 +57,8 @@ export interface FxLedgerLeg extends EconomicTransaction {
   readonly type: "FX_INPUT" | "FX_OUTPUT";
   readonly bundleId: TransactionBundleId;
   readonly fxSettlementId: FxSettlementId;
+  /** Consumption identity of the tick-local Phase-7 liquidity promise. */
+  readonly fxReservationRequestId: string;
   readonly currencyId: CurrencyId;
   readonly moneyAmount: number;
   readonly fromAccount: FxLedgerAccountRef;
@@ -173,6 +175,14 @@ export function settleFx(
       reservation.quote.spread !== pool.transactionSpread) {
     throw new Error("settleFx: missing, mismatched or stale Phase-7 reservation");
   }
+  // A reservation is a tick-local promise, not an indefinitely reusable quote.
+  // Persist its request ID on both ledger legs and reject any second redemption
+  // in this tick even if the caller changes fxSettlementId or bundleId.
+  if (context.priorTransactions.some((tx) =>
+    tx.tick === context.tick &&
+    tx.fxReservationRequestId === reservation.requestId)) {
+    throw new Error("settleFx: Phase-7 reservation already redeemed in this tick");
+  }
   amount(reservation.quote.feasibleOutputAmount, "reserved output");
   amount(reservation.quote.requiredInputForFeasibleOutput, "reserved input");
   if (reservation.quote.feasibleOutputAmount > reservation.quote.desiredOutputAmount ||
@@ -262,6 +272,7 @@ export function settleFx(
     tick: context.tick, phase: 7, type: "FX_INPUT",
     transactionId: inputTxId, bundleId: request.originatingBundleId,
     fxSettlementId: request.settlementId,
+    fxReservationRequestId: reservation.requestId,
     source: request.payer,
     currencyId: request.inputCurrencyId,
     moneyAmount: input, amount: input,
@@ -272,6 +283,7 @@ export function settleFx(
     tick: context.tick, phase: 7, type: "FX_OUTPUT",
     transactionId: outputTxId, bundleId: request.originatingBundleId,
     fxSettlementId: request.settlementId,
+    fxReservationRequestId: reservation.requestId,
     destination: request.recipient,
     currencyId: request.outputCurrencyId,
     moneyAmount: output, amount: output,
