@@ -53,6 +53,8 @@ export interface FxReservationRequest {
 }
 
 export interface FxReservation {
+  /** Producing Phase-7 tick; this promise expires after its own tick. */
+  readonly tick: number;
   readonly requestId: string;
   readonly payerKey: string;
   readonly quote: FxQuote;
@@ -315,7 +317,11 @@ export function reserveFxForPool(
   pool: FxQuotePoolSnapshot,
   requests: readonly FxReservationRequest[],
   openingInputCashByPayerCurrency: ReadonlyMap<string, number>,
+  tick: number,
 ): FxReservationPlan {
+  if (!Number.isSafeInteger(tick) || tick < 0) {
+    throw new Error("FX reservation tick must be a nonnegative safe integer");
+  }
   validateFxQuotePool(pool);
   if (!(openingInputCashByPayerCurrency instanceof Map)) {
     throw new Error("FX reservation requires explicit actor input cash budgets");
@@ -403,7 +409,7 @@ export function reserveFxForPool(
     );
     reservedInputs.set(key, nextInput);
     reservedOutputs.set(request.toCurrencyId, nextOutput);
-    results.push({ requestId: request.requestId, payerKey: request.payerKey, quote });
+    results.push({ tick, requestId: request.requestId, payerKey: request.payerKey, quote });
 
     if (quote.direction === "BASE_TO_QUOTE") {
       desiredSupplyOfBase = addPressure(
