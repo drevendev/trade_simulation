@@ -53,6 +53,23 @@ function add(sum: CompensatedSum, amount: number): void {
 function total(sum: CompensatedSum): number {
   return sum.sum + sum.correction;
 }
+
+/**
+ * The compensated remainder is part of the promised GROSS amount, not optional
+ * rounding slack. A binary64 total may round it back out (for example, 1e16 + 1
+ * becomes 1e16), even when equal debit/credit endpoints still conserve cash.
+ * Reject the loss before any transfer. Ordinary sub-epsilon decimal arithmetic
+ * roundoff (such as 0.1 + 0.2) remains permissible.
+ */
+function representableGross(sum: CompensatedSum, moneyEpsilon: number): number {
+  const rounded = total(sum);
+  const lostRemainder = sum.correction - (rounded - sum.sum);
+  if (!Number.isFinite(rounded) || !Number.isFinite(lostRemainder) ||
+      Math.abs(lostRemainder) > moneyEpsilon) {
+    return fail("gross money leg amount cannot be represented without precision loss");
+  }
+  return rounded;
+}
 function emptySum(): CompensatedSum {
   return { sum: 0, correction: 0 };
 }
@@ -100,7 +117,13 @@ export function applyConservingTradeMoneyLegs(
       endpoint = { key, actor, currencyId, debits: emptySum(), credits: emptySum() };
       endpoints.set(key, endpoint);
     }
+    const previous = endpoint[kind].sum;
     add(endpoint[kind], amount);
+    // A positive leg must not vanish into an existing large endpoint total.
+    // Do not let moneyEpsilon convert an unobservable micro-leg into a receipt.
+    if (endpoint[kind].sum === previous) {
+      return fail("positive money leg cannot be represented at this endpoint precision");
+    }
   };
 
   for (const leg of ordered) {
@@ -132,8 +155,8 @@ export function applyConservingTradeMoneyLegs(
   const byCurrency = new Map<CurrencyId, CompensatedSum>();
   const expected = new Map<string, number>();
   for (const endpoint of [...endpoints.values()].sort((a, b) => compare(a.key, b.key))) {
-    const debit = total(endpoint.debits);
-    const credit = total(endpoint.credits);
+    const debit = representableGross(endpoint.debits, moneyEpsilon);
+    const credit = representableGross(endpoint.credits, moneyEpsilon);
     const opening = readActorWallet(world, endpoint.actor).get(endpoint.currencyId) ?? 0;
     if (![debit, credit, opening].every((value) =>
       Number.isFinite(value) && value >= 0)) {
