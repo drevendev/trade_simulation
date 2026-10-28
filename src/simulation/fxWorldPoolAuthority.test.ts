@@ -116,8 +116,9 @@ describe("M5 #671 canonical WorldState FX pool ownership (Handoff/04 §17)", () 
     ["base", Number.NaN],
     ["quote", Number.POSITIVE_INFINITY],
     ["quote", Number.NEGATIVE_INFINITY],
+    ["base", -1],
   ] as const)(
-    "fails opening money reconciliation for non-finite live FX %s cash (%s)",
+    "fails opening money reconciliation for invalid live FX %s cash (%s)",
     (side, invalidAmount) => {
       const world = genesis();
       const authority = authorityByKey(world, "authority:alpha");
@@ -125,7 +126,7 @@ describe("M5 #671 canonical WorldState FX pool ownership (Handoff/04 §17)", () 
       const currencyId = side === "base" ? pool.baseCurrencyId : pool.quoteCurrencyId;
 
       // Preserve identity, map shape and the original ledger: only the live cash
-      // changes. A NaN residual or Infinity tolerance must not mean SUCCESS.
+      // changes. Non-finite or negative pool money must not mean SUCCESS.
       const corruptedCash = new Map(pool.cash);
       corruptedCash.set(currencyId, invalidAmount);
       const authorities = new Map(world.monetaryAuthorities);
@@ -140,7 +141,11 @@ describe("M5 #671 canonical WorldState FX pool ownership (Handoff/04 §17)", () 
       );
 
       expect(result.success).toBe(false);
-      expect(result.errorMessage).toMatch(/non-finite reconciliation evidence/);
+      if (!Number.isFinite(invalidAmount)) {
+        expect(result.errorMessage).toMatch(/non-finite reconciliation evidence/);
+      } else {
+        expect(result.errorMessage).toMatch(/Money reconciliation failed/);
+      }
       expect(result.details?.category).toBe("MONEY");
       expect(result.details?.key).toContain(PAIR);
       expect(result.details?.actual).toBe(invalidAmount);
