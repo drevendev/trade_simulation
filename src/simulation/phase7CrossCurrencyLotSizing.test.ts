@@ -88,6 +88,44 @@ describe("M5 #673 Phase-7 FX lot sizing before any goods movement", () => {
     expect(world.shipments?.size).toBe(0);
   });
 
+  it("shrinks against a genuinely thin persisted FX pool, preserving its reserve floor", () => {
+    const { world, request } = fixture();
+    const { pool, owningAuthorityId } = resolveCanonicalFxPool(world, PAIR);
+    const owner = world.monetaryAuthorities.get(owningAuthorityId)!;
+    const thinPool = {
+      ...pool,
+      cash: new Map(pool.cash).set(
+        pool.baseCurrencyId, pool.minOperationalReserveBase + 2,
+      ),
+    };
+    const thinWorld: WorldState = {
+      ...world,
+      monetaryAuthorities: new Map(world.monetaryAuthorities).set(
+        owningAuthorityId, {
+          ...owner, fxPools: new Map(owner.fxPools).set(PAIR, thinPool),
+        },
+      ),
+    };
+    const source = thinWorld.regions.get(request.originRegionId)!.settlementCurrencyId;
+    const destination = thinWorld.regions.get(request.destinationRegionId)!.settlementCurrencyId;
+    const reservation = {
+      ...request.reservation,
+      quote: quoteFx(thinWorld, PAIR, destination, source, 30, {
+        maxInputAmount: 100,
+      }),
+    };
+    const result = sizeCrossCurrencyLotBeforeDispatch(thinWorld, {
+      ...request, reservation,
+    })!;
+    expect(result.quantity).toBeGreaterThan(0);
+    expect(result.quantity).toBeLessThan(2);
+    expect(result.sourceInvoiceAmount).toBeLessThanOrEqual(2);
+    expect(result.quote.feasibleOutputAmount).toBe(result.sourceInvoiceAmount);
+    expect(resolveCanonicalFxPool(thinWorld, PAIR).pool.cash.get(pool.baseCurrencyId))
+      .toBe(pool.minOperationalReserveBase + 2);
+    expect(thinWorld.shipments?.size).toBe(0);
+  });
+
   it("resizes again for fees from the buyer's actual opening wallet, not just FX principal", () => {
     const { world, request } = fixture(5, 30);
     const result = sizeCrossCurrencyLotBeforeDispatch(world, request)!;
