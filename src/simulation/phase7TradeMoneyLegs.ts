@@ -31,8 +31,10 @@ export interface Phase7TradeMoneyLeg {
 interface CompensatedSum {
   sum: number;
   correction: number;
-  /** Smallest promised positive leg; independent of legId sorting. */
-  smallestLeg?: number;
+  /** Exact positive gross in 2^-1074 binary64 units, including every named leg. */
+  exactUnits: bigint;
+  /** Smallest individual positive leg, in the same exact units. */
+  smallestUnits?: bigint;
 }
 interface EndpointStage {
   readonly key: string;
@@ -40,6 +42,22 @@ interface EndpointStage {
   readonly currencyId: CurrencyId;
   readonly debits: CompensatedSum;
   readonly credits: CompensatedSum;
+}
+
+// Every finite nonnegative binary64 number is an integer multiple of 2^-1074.
+// Summing those units exactly lets small named legs combine into a perfectly
+ // representable gross (1e16 + 1 + 3), without silently losing a fee (1e16 + 1).
+const significandMask = (1n << 52n) - 1n;
+const implicitBit = 1n << 52n;
+const floatBits = new DataView(new ArrayBuffer(8));
+function binary64Units(amount: number): bigint {
+  floatBits.setFloat64(0, amount);
+  const bits = floatBits.getBigUint64(0);
+  const exponent = Number((bits >> 52n) & 0x7ffn);
+  const significand = bits & significandMask;
+  return exponent === 0
+    ? significand
+    : (implicitBit | significand) << BigInt(exponent - 1);
 }
 
 function add(sum: CompensatedSum, amount: number): void {
@@ -52,29 +70,47 @@ function add(sum: CompensatedSum, amount: number): void {
   sum.sum = next;
 }
 
+function addGross(sum: CompensatedSum, amount: number): void {
+  const units = binary64Units(amount);
+  sum.exactUnits += units;
+  sum.smallestUnits = sum.smallestUnits === undefined
+    ? units
+    : (units < sum.smallestUnits ? units : sum.smallestUnits);
+  add(sum, amount);
+}
+
 function total(sum: CompensatedSum): number {
   return sum.sum + sum.correction;
 }
 
 /**
- * The compensated remainder is part of the promised GROSS amount, not optional
- * rounding slack. A binary64 total may round it back out (for example, 1e16 + 1
- * becomes 1e16), even when equal debit/credit endpoints still conserve cash.
- * Reject the loss before any transfer. Ordinary sub-epsilon decimal arithmetic
- * roundoff (such as 0.1 + 0.2) remains permissible.
+ * Check the ENTIRE promised gross, rather than asking whether subtracting each
+ * member from it is separately observable. Binary64 can represent 1e16+1+3
+ * exactly even though subtracting the 1 alone rounds away. The exact dyadic
+ * sum detects genuine lost/created value on both debit and credit endpoints.
+ *
+ * Ordinary decimal addition may round by far less than the smallest leg. Such
+ * roundoff is allowed only inside BOTH the configured absolute money epsilon
+ * and half the smallest promised leg. Thus even sub-epsilon micro-payments
+ * cannot vanish completely into a much larger payment.
  */
 function representableGross(sum: CompensatedSum, moneyEpsilon: number): number {
   const rounded = total(sum);
-  const lostRemainder = sum.correction - (rounded - sum.sum);
-  if (!Number.isFinite(rounded) || !Number.isFinite(lostRemainder) ||
-      Math.abs(lostRemainder) > moneyEpsilon ||
-      (sum.smallestLeg !== undefined && rounded - sum.smallestLeg === rounded)) {
+  if (!Number.isFinite(rounded)) {
+    return fail("gross money leg amount cannot be represented without precision loss");
+  }
+  const roundedUnits = binary64Units(rounded);
+  const difference = sum.exactUnits >= roundedUnits
+    ? sum.exactUnits - roundedUnits
+    : roundedUnits - sum.exactUnits;
+  if (difference > binary64Units(moneyEpsilon) ||
+      (sum.smallestUnits !== undefined && difference * 2n >= sum.smallestUnits)) {
     return fail("gross money leg amount cannot be represented without precision loss");
   }
   return rounded;
 }
 function emptySum(): CompensatedSum {
-  return { sum: 0, correction: 0 };
+  return { sum: 0, correction: 0, exactUnits: 0n };
 }
 function compare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -121,8 +157,7 @@ export function applyConservingTradeMoneyLegs(
       endpoints.set(key, endpoint);
     }
     const gross = endpoint[kind];
-    gross.smallestLeg = Math.min(gross.smallestLeg ?? Infinity, amount);
-    add(gross, amount);
+    addGross(gross, amount);
   };
 
   for (const leg of ordered) {
