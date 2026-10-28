@@ -90,6 +90,30 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
       [...state.treasury.entries()])).toEqual(beforeTreasury);
   });
 
+  it("rejects unknown goods in both single-record and persistent registry validation", () => {
+    const valid = sample();
+    expect(Object.prototype.hasOwnProperty.call(
+      world.definitionRegistry.goods, valid.goodId,
+    )).toBe(true);
+    expect(() => validateTradeShipmentState(world, valid)).not.toThrow();
+
+    const unknown = { ...valid, goodId: "good:not-defined" as GoodId };
+    expect(Object.prototype.hasOwnProperty.call(
+      world.definitionRegistry.goods, unknown.goodId,
+    )).toBe(false);
+    expect(() => validateTradeShipmentState(world, unknown))
+      .toThrow(/goodId.*unknown GoodDefinition/);
+
+    const stored = new Map([[unknown.id, unknown]]);
+    const candidate: WorldState = { ...world, shipments: stored };
+    expect(() => validateTradeShipmentRegistry(candidate))
+      .toThrow(/goodId.*unknown GoodDefinition/);
+    // Rejection must never remove or rewrite the invalid candidate or alter genesis.
+    expect(candidate.shipments).toBe(stored);
+    expect(stored.get(unknown.id)).toEqual(unknown);
+    expect(world.shipments?.size).toBe(0);
+  });
+
   it("requires FX evidence only when the frozen invoice/payment currencies differ", () => {
     const shipment = sample();
     const other = differentCurrency(shipment.buyerPaymentCurrencyId);
