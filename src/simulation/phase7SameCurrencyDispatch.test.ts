@@ -245,7 +245,7 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
     }};
     unchanged(enormousWorld, tiny,
       () => settleSameCurrencyTradeDispatch(enormousWorld, tiny));
-    const enormousCapacity = { ...f.request,
+    const enormousCapacity = { ...tiny,
       remainingCargoWeightByLink: new Map([[f.request.shipment.transportLinkId, 1e16]]) };
     unchanged(f.world, enormousCapacity,
       () => settleSameCurrencyTradeDispatch(f.world, enormousCapacity));
