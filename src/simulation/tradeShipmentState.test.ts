@@ -96,9 +96,9 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
     const foreign = { ...shipment, invoiceCurrencyId: other,
       fxSettlementId: "fxs:verified" };
     expect(() => validateTradeShipmentState(world, foreign)).not.toThrow();
-    expect(() => validateTradeShipmentState(world, {
-      ...foreign, fxSettlementId: undefined,
-    })).toThrow(/fxSettlementId/);
+    const { fxSettlementId: _ignored, ...foreignWithoutFx } = foreign;
+    expect(() => validateTradeShipmentState(world, foreignWithoutFx))
+      .toThrow(/fxSettlementId/);
     // A historical same-currency dispatch may outlive a later region policy change.
     const { fxSettlementId: _used, ...withoutFx } = foreign;
     const same = { ...withoutFx,
@@ -171,9 +171,9 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
     expect(() => validateTradeShipmentRegistry({
       ...world, shipments: new Map([["sh:wrong" as ShipmentId, valid]]),
     })).toThrow(/registry key/);
-    expect(() => validateTradeShipmentRegistry({
-      ...world, shipments: undefined,
-    })).toThrow(/registry is missing/);
+    const { shipments: _legacy, ...worldWithoutShipments } = world;
+    expect(() => validateTradeShipmentRegistry(worldWithoutShipments))
+      .toThrow(/registry is missing/);
   });
 
   it("does not mistake an uncommitted actor match or quote for a stock movement", () => {
