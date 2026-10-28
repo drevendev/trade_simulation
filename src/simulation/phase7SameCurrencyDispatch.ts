@@ -169,15 +169,19 @@ export function settleSameCurrencyTradeDispatch(
     return refuse("seller goods removal loses physical quantity precision");
   }
   const priced = shipment.quantity * shipment.sellerNetUnitPrice;
-  // Absolute money epsilon alone cannot approve a near-free shipment:
-  // e.g. a positive 1e-12 invoice and a zero buyer payment would pass 1e-9.
-  // Reject any complete disappearance of a positive physical sale price,
-  // and bound rounding error by a fraction of the actual invoice as well.
+  // The absolute money epsilon is NOT a license to underpay small invoices.
+  // Compare the prepriced invoice within at most one relative binary64 rounding
+  // step, capped by canonical money epsilon. At 1e-10, an absolute 1e-9
+  // tolerance would otherwise permit even a 49% invoice shortfall.
   const priceGap = Math.abs(priced - shipment.buyerGoodsPaymentAmount);
+  const invoiceRoundingTolerance = Math.min(
+    moneyEpsilon,
+    Number.EPSILON * Math.max(Math.abs(priced), Math.abs(shipment.buyerGoodsPaymentAmount)),
+  );
   if (!Number.isFinite(priced) ||
       (shipment.sellerNetUnitPrice > 0 &&
         (priced === 0 || shipment.buyerGoodsPaymentAmount === 0)) ||
-      priceGap > Math.min(moneyEpsilon, priced * 0.5)) {
+      priceGap > invoiceRoundingTolerance) {
     return refuse("buyer goods payment contradicts the seller invoice");
   }
   if (!(request.remainingCargoWeightByLink instanceof Map)) {
