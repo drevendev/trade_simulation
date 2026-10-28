@@ -120,6 +120,29 @@ function fail(reason: string): never {
 }
 
 /**
+ * Reuse the exact dyadic sum used by Phase-7 money postings when a cross-FX
+ * preflight needs to budget several named charges in the buyer's currency.
+ * A promised small fee may not silently vanish into a larger FX input, while
+ * a collectively representable gross (1e16 + 1 + 3) remains valid.
+ */
+export function sumObservableTradeMoneyAmounts(
+  amounts: readonly number[],
+  moneyEpsilon: number,
+): number {
+  if (!Number.isFinite(moneyEpsilon) || moneyEpsilon <= 0) {
+    return fail("moneyEpsilon must be finite and positive");
+  }
+  const sum = emptySum();
+  for (const value of amounts) {
+    if (!Number.isFinite(value) || value < 0) {
+      return fail("preflight money amount must be finite and nonnegative");
+    }
+    if (value > 0) addGross(sum, value);
+  }
+  return representableGross(sum, moneyEpsilon);
+}
+
+/**
  * Stage and atomically apply already-priced, same-currency transfers.
  *
  * Gross outgoing money must exist at the OPENING of this bundle: circular
