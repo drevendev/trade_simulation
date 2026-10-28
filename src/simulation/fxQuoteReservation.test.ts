@@ -402,9 +402,9 @@ describe("M5 finite FX pool quote and reservations — Issue #671", () => {
     const budgets = new Map([[fxPayerCurrencyKey("buyer", BASE), 100]]);
     const tick7 = reserveFxForPool(source, [candidate], budgets, 7);
     const tick8 = reserveFxForPool(source, [candidate], budgets, 8);
-    expect(tick7.reservations[0].tick).toBe(7);
-    expect(tick8.reservations[0].tick).toBe(8);
-    expect(tick8.reservations[0].quote).toEqual(tick7.reservations[0].quote);
+    expect(tick7.reservations[0]!.tick).toBe(7);
+    expect(tick8.reservations[0]!.tick).toBe(8);
+    expect(tick8.reservations[0]!.quote).toEqual(tick7.reservations[0]!.quote);
     expect(() => reserveFxForPool(source, [candidate], budgets, -1)).toThrow(/tick/);
     expect(() => reserveFxForPool(source, [candidate], budgets, 7.5)).toThrow(/tick/);
     expect(() => reserveFxForPool(source, [candidate], budgets, Number.NaN)).toThrow(/tick/);
