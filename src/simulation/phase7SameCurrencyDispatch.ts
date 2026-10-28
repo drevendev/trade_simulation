@@ -169,8 +169,15 @@ export function settleSameCurrencyTradeDispatch(
     return refuse("seller goods removal loses physical quantity precision");
   }
   const priced = shipment.quantity * shipment.sellerNetUnitPrice;
+  // Absolute money epsilon alone cannot approve a near-free shipment:
+  // e.g. a positive 1e-12 invoice and a zero buyer payment would pass 1e-9.
+  // Reject any complete disappearance of a positive physical sale price,
+  // and bound rounding error by a fraction of the actual invoice as well.
+  const priceGap = Math.abs(priced - shipment.buyerGoodsPaymentAmount);
   if (!Number.isFinite(priced) ||
-      Math.abs(priced - shipment.buyerGoodsPaymentAmount) > moneyEpsilon) {
+      (shipment.sellerNetUnitPrice > 0 &&
+        (priced === 0 || shipment.buyerGoodsPaymentAmount === 0)) ||
+      priceGap > Math.min(moneyEpsilon, priced * 0.5)) {
     return refuse("buyer goods payment contradicts the seller invoice");
   }
   if (!(request.remainingCargoWeightByLink instanceof Map)) {
