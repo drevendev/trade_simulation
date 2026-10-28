@@ -202,6 +202,23 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
     unchanged(world, swapped, () => settleSameCurrencyTradeDispatch(world, swapped));
   });
 
+  it("rejects positive shipment invoices erased or underpaid within absolute money epsilon", () => {
+    const { world, request } = fixture();
+    const erased = { ...request, shipment: {
+      ...request.shipment, sellerNetUnitPrice: 1e-12, buyerGoodsPaymentAmount: 0,
+    }};
+    unchanged(world, erased, () => settleSameCurrencyTradeDispatch(world, erased));
+    const underpaid = { ...request, shipment: {
+      ...request.shipment, sellerNetUnitPrice: 1e-12, buyerGoodsPaymentAmount: 1e-16,
+    }};
+    unchanged(world, underpaid, () => settleSameCurrencyTradeDispatch(world, underpaid));
+    const subnormal = { ...request, shipment: {
+      ...request.shipment, sellerNetUnitPrice: Number.MIN_VALUE,
+      buyerGoodsPaymentAmount: 0,
+    }};
+    unchanged(world, subnormal, () => settleSameCurrencyTradeDispatch(world, subnormal));
+  });
+
   it("fails closed on missing tax authority or positive fee with no recipient", () => {
     const { world, request } = fixture();
     const jurisdictions = new Map(request.effectiveJurisdictionByRegion);
