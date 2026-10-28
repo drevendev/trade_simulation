@@ -403,6 +403,29 @@ export function reconcileGenesisStocks(
     const residual = Math.abs(expected - actual);
     const relativeTolerance = tolerance * Math.max(Math.abs(expected), Math.abs(actual), 1);
 
+    // NaN and Infinity must never pass as an apparently balanced live money stock.
+    // IEEE-754 comparisons with NaN (or Infinity - Infinity) are not reliable.
+    if (
+      !Number.isFinite(tolerance) ||
+      !Number.isFinite(expected) ||
+      !Number.isFinite(actual) ||
+      !Number.isFinite(relativeTolerance) ||
+      !Number.isFinite(residual)
+    ) {
+      return {
+        success: false,
+        errorMessage: `Money reconciliation failed for ${key}: non-finite reconciliation evidence`,
+        details: {
+          category: "MONEY",
+          key,
+          expected,
+          actual,
+          tolerance: relativeTolerance,
+          residual,
+        },
+      };
+    }
+
     if (residual > relativeTolerance) {
       return {
         success: false,
