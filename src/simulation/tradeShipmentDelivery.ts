@@ -107,9 +107,11 @@ export function deliverDueTradeShipments(
   if (epsilon === undefined || !Number.isFinite(epsilon) || epsilon < 0) {
     return fail("invalid canonical quantity precision");
   }
+  const registry = world.shipments;
+  if (!(registry instanceof Map)) return fail("missing canonical shipment registry");
   validateTradeShipmentRegistry(world);
   const due: TradeShipmentState[] = [];
-  for (const shipment of world.shipments.values()) {
+  for (const shipment of registry.values()) {
     if (shipment.arrivalTick < request.tick) return fail("overdue shipment was not delivered");
     if (shipment.arrivalTick !== request.tick) continue;
     if (request.phase === 1 && shipment.departureTick >= request.tick) {
