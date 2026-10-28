@@ -160,6 +160,12 @@ export function settleFx(
 
   const payerKey = actorRefKey(request.payer);
   const reservation = context.reservation;
+  // Validate the producing planner's tick, not merely the independent caller
+  // context or ledger history: an old promise must never cross a tick boundary.
+  if (!reservation || !Number.isSafeInteger(reservation.tick) ||
+      reservation.tick !== context.tick) {
+    throw new Error("settleFx: expired or mismatched Phase-7 reservation tick");
+  }
   const { owningAuthorityId, pool } = resolveCanonicalFxPool(world, request.pairId);
   const direction = request.inputCurrencyId === pool.baseCurrencyId &&
     request.outputCurrencyId === pool.quoteCurrencyId ? "BASE_TO_QUOTE" :
