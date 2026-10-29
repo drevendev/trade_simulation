@@ -18,6 +18,9 @@ import {
   type Phase7PreparedMixedExecutionInput,
 } from "./phase7PreparedFxExecution";
 import { buildInitialWorld, type WorldState } from "./worldState";
+import type { PhaseHandler } from "./tickOrchestrator";
+import { createTransactionId } from "./tickOrchestrator";
+import { executeM5PreparedTradeTick } from "./m5PreparedTradeTick";
 
 const GOOD = "good:food" as GoodId;
 const FX_ID = "plan:7:fx";
@@ -479,5 +482,168 @@ describe("M5 #673 shared buyer-wallet and directed-route adversarial regressions
       .toBe(walletOpening);
     expect(tightWorld.shipments?.size).toBe(0);
     expect([...input.remainingCargoWeightByLink]).toEqual([[linkId, 50]]);
+  });
+});
+
+describe("M5 #673 committed prepared trade in the canonical 0..15 tick", () => {
+  const noWorldTransition = (_phase: number, world: WorldState) => world;
+  const phase1AndPhase8: PhaseHandler = (world, context) => {
+    if (context.phase === 1) {
+      return {
+        ...context,
+        effectiveJurisdictionByRegion: new Map(
+          [...world.regions].map(([id, region]) => [id, region.controllerStateId]),
+        ),
+      };
+    }
+    return context;
+  };
+  const currentTradeInput = (f: ReturnType<typeof fixture>) =>
+    (_world: WorldState, context: Parameters<PhaseHandler>[1]) => ({
+      ...f.input,
+      tick: context.tick,
+      priorTransactions: context.transactions,
+      effectiveJurisdictionByRegion: context.effectiveJurisdictionByRegion,
+    });
+
+  it("publishes both settlement types and Phase-8 committed residuals, then delivers two ticks later without paying again", () => {
+    const f = fixture();
+    const transportLinks = new Map(f.world.transportLinks);
+    for (const linkId of [f.fxRoute.link.linkId, f.domesticRoute.link.linkId]) {
+      transportLinks.set(linkId, { ...transportLinks.get(linkId)!, travelTicks: 2 });
+    }
+    const opening: WorldState = { ...f.world, transportLinks };
+    const beforeCashByBuyer = new Map(
+      [f.fx.buying.actor, f.dom.buying.actor].map(actor =>
+        [actorRefKey(actor), [...readActorWallet(opening, actor)]],
+      ),
+    );
+    const buyers = new Map(
+      [f.fx.buying.actor, f.dom.buying.actor].map(actor => [actorRefKey(actor), actor]),
+    );
+    const phase8Views: { tick: number; residuals: number[] | undefined; dispatches: number }[] = [];
+    const observer: PhaseHandler = (world, context, pending) => {
+      const next = phase1AndPhase8(world, context, pending);
+      if (next.phase === 8) {
+        phase8Views.push({
+          tick: next.tick,
+          residuals: next.phase7MainIntents?.map(intent => intent.desiredQuantity),
+          dispatches: next.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH").length,
+        });
+      }
+      return next;
+    };
+
+    const first = executeM5PreparedTradeTick(
+      opening, 7, observer, noWorldTransition, currentTradeInput(f),
+    );
+    const replay = executeM5PreparedTradeTick(
+      opening, 7, phase1AndPhase8, noWorldTransition, currentTradeInput(f),
+    );
+    expect(first.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(first.phaseBoundaryError).toBeUndefined();
+    expect(first.context.transactions).toEqual(replay.context.transactions);
+    expect(first.world.shipments).toEqual(replay.world.shipments);
+    expect(first.context.phase7MainIntents).toEqual(replay.context.phase7MainIntents);
+    expect(first.context.transactions.filter(tx => tx.type === "FX_INPUT")).toHaveLength(1);
+    expect(first.context.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH")).toHaveLength(2);
+    expect(first.context.transactions.some(tx => tx.type === "SHIPMENT_DELIVERY")).toBe(false);
+    expect(first.world.shipments?.size).toBe(2);
+    expect(first.context.phase7MainIntents?.map(intent => intent.desiredQuantity))
+      .toEqual([3, 3, 3, 3]);
+    expect(phase8Views[0]).toEqual({ tick: 7, residuals: [3, 3, 3, 3], dispatches: 2 });
+    const shippedGoods = new Map<string, number>();
+    for (const shipment of first.world.shipments!.values()) {
+      const buyer = actorRefKey(shipment.beneficialOwner);
+      shippedGoods.set(buyer, (shippedGoods.get(buyer) ?? 0) + shipment.quantity);
+      expect(shipment.arrivalTick).toBe(9);
+    }
+    for (const buyer of buyers.values()) {
+      const key = actorRefKey(buyer);
+      const before = readMarketActorInventory(opening, buyer, "GENERAL").get(GOOD) ?? 0;
+      const dispatched = readMarketActorInventory(first.world, buyer, "GENERAL").get(GOOD) ?? 0;
+      expect(dispatched).toBe(before);
+      expect([...readActorWallet(opening, buyer)]).toEqual(beforeCashByBuyer.get(key));
+    }
+    expect(opening.shipments?.size).toBe(0);
+
+    const second = executeM5PreparedTradeTick(
+      first.world, 8, phase1AndPhase8, noWorldTransition, () => null,
+    );
+    expect(second.world.shipments?.size).toBe(2);
+    expect(second.context.transactions).toEqual([]);
+    expect(second.context.phase7MainIntents).toBeUndefined();
+    const third = executeM5PreparedTradeTick(
+      second.world, 9, phase1AndPhase8, noWorldTransition, () => null,
+    );
+    expect(third.world.shipments?.size).toBe(0);
+    expect(third.context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY"))
+      .toHaveLength(2);
+    expect(third.context.transactions.some(tx => tx.type === "FX_INPUT" ||
+      tx.type === "IMPORT_TARIFF" || tx.type === "TRANSPORT_FEE")).toBe(false);
+    for (const buyer of buyers.values()) {
+      const key = actorRefKey(buyer);
+      const beforeGoods = readMarketActorInventory(opening, buyer, "GENERAL").get(GOOD) ?? 0;
+      const arrivedGoods = readMarketActorInventory(third.world, buyer, "GENERAL").get(GOOD) ?? 0;
+      expect(arrivedGoods - beforeGoods).toBeCloseTo(shippedGoods.get(key) ?? 0, 8);
+      expect([...readActorWallet(third.world, buyer)])
+        .toEqual([...readActorWallet(first.world, buyer)]);
+    }
+  });
+
+  it("delivers zero-travel committed shipments before Phase-8 reads the reduced plan", () => {
+    const f = fixture();
+    const transportLinks = new Map(f.world.transportLinks);
+    for (const linkId of [f.fxRoute.link.linkId, f.domesticRoute.link.linkId]) {
+      transportLinks.set(linkId, { ...transportLinks.get(linkId)!, travelTicks: 0 });
+    }
+    let observedPhase8 = false;
+    const handler: PhaseHandler = (world, context, pending) => {
+      const next = phase1AndPhase8(world, context, pending);
+      if (next.phase === 8) {
+        observedPhase8 = true;
+        expect(world.shipments?.size).toBe(0);
+        expect(next.phase7MainIntents?.every(intent => intent.desiredQuantity === 3))
+          .toBe(true);
+        expect(next.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY"))
+          .toHaveLength(2);
+      }
+      return next;
+    };
+    const result = executeM5PreparedTradeTick(
+      { ...f.world, transportLinks }, 7, handler,
+      noWorldTransition, currentTradeInput(f),
+    );
+    expect(observedPhase8).toBe(true);
+    expect(result.world.shipments?.size).toBe(0);
+    expect(result.context.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH"))
+      .toHaveLength(2);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("rejects a stale tick, stale journal or fabricated Phase-1 jurisdiction before settlement", () => {
+    const f = fixture();
+    const opening = f.world;
+    const builder = currentTradeInput(f);
+    expect(() => executeM5PreparedTradeTick(
+      opening, 7, phase1AndPhase8, noWorldTransition,
+      (world, context) => ({ ...builder(world, context), tick: 6 }),
+    )).toThrow(/current canonical tick/);
+    expect(() => executeM5PreparedTradeTick(
+      opening, 7, phase1AndPhase8, noWorldTransition,
+      (world, context) => ({
+        ...builder(world, context),
+        priorTransactions: [{ tick: 7, phase: 5, type: "FORGED",
+          transactionId: createTransactionId("tx:forged:old") }],
+      }),
+    )).toThrow(/live committed tick journal/);
+    expect(() => executeM5PreparedTradeTick(
+      opening, 7, phase1AndPhase8, noWorldTransition,
+      (world, context) => ({
+        ...builder(world, context), effectiveJurisdictionByRegion: new Map(),
+      }),
+    )).toThrow(/current Phase-1 jurisdiction/);
+    expect(opening.shipments?.size).toBe(0);
+    expect(f.input.priorTransactions).toEqual([]);
   });
 });
