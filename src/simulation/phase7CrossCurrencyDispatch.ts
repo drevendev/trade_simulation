@@ -42,6 +42,7 @@ import {
   type FxSettlementId, type TransactionBundleId,
 } from "./tickOrchestrator";
 import type { FxReservation } from "./fxQuoteReservation";
+import { applyRoutineDispatchLoss } from "./routineDispatchLoss";
 import type { WorldState } from "./worldState";
 
 export interface CrossCurrencyDispatchRequest {
@@ -233,6 +234,8 @@ export function settleCrossCurrencyTradeDispatch(
     destinationInventoryBucket: request.destinationInventoryBucket,
   };
   validateTradeShipmentState(world, shipment);
+  const routineLoss = applyRoutineDispatchLoss(world, shipment, request.bundleId);
+  validateTradeShipmentState(world, routineLoss.survivingShipment);
 
   const destinationTreasury: ActorRef | null = destinationController === null ? null :
     { type: "STATE", stateId: destinationController };
@@ -251,7 +254,8 @@ export function settleCrossCurrencyTradeDispatch(
     { suffix: "tax", type: "CONSUMPTION_TAX",
       amount: sizing.consumptionTaxAmountDest, receiver: destinationTreasury },
   ] as const;
-  const ids = [saleId, dispatchId, ...charges.map((part) => tx(part.suffix))];
+  const ids = [saleId, dispatchId, ...charges.map((part) => tx(part.suffix)),
+    ...(routineLoss.destruction ? [routineLoss.destruction.transactionId] : [])];
   const usedIds = new Set(request.priorTransactions.map((part) => part.transactionId));
   if (ids.some((id) => usedIds.has(id))) {
     return refuse("reused journal transaction identity");
@@ -311,7 +315,7 @@ export function settleCrossCurrencyTradeDispatch(
   const debitedWorld = debitPhase7SellerGoods(chargedWorld,
     request.seller, request.sellerInventoryBucket, request.goodId, closingGoods);
   const frozenShipment: TradeShipmentState = Object.freeze({
-    ...shipment,
+    ...routineLoss.survivingShipment,
     seller: Object.freeze({ ...shipment.seller }),
     buyer: Object.freeze({ ...shipment.buyer }),
     beneficialOwner: Object.freeze({ ...shipment.beneficialOwner }),
@@ -356,14 +360,15 @@ export function settleCrossCurrencyTradeDispatch(
     tick: request.tick, phase: 7, type: "SHIPMENT_DISPATCH",
     transactionId: dispatchId, bundleId: request.bundleId,
     source: request.seller, destination: request.buyer,
-    goodId: shipment.goodId, quantity: shipment.quantity,
-    amount: shipment.quantity,
+    goodId: shipment.goodId, quantity: frozenShipment.quantity,
+    amount: frozenShipment.quantity,
     sourceRegionId: shipment.originRegionId,
     destinationRegionId: shipment.destinationRegionId,
     reason: "PHASE7_TRANSFER_TO_IN_TRANSIT_STOCK",
   };
   const newTransactions: EconomicTransaction[] = [
     sale, ...fx.ledgerLegs, ...feeTransactions, dispatch,
+    ...(routineLoss.destruction ? [routineLoss.destruction] : []),
   ];
   return {
     world: committedWorld,

@@ -10,6 +10,7 @@ import {
   settleSameCurrencyTradeDispatch, type SameCurrencyDispatchRequest,
 } from "./phase7SameCurrencyDispatch";
 import { createTransactionBundleId } from "./tickOrchestrator";
+import { deliverDueTradeShipments } from "./tradeShipmentDelivery";
 import { buildInitialWorld, type WorldState } from "./worldState";
 
 const GOOD = "good:food" as GoodId;
@@ -115,6 +116,47 @@ function unchanged(world: WorldState, request: SameCurrencyDispatchRequest, act:
 }
 
 describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
+  it("destroys directed-link attrition exactly once without a cash refund or arrival re-loss", () => {
+    const f = fixture();
+    const link = f.world.transportLinks.get(f.request.shipment.transportLinkId)!;
+    const world: WorldState = {
+      ...f.world,
+      transportLinks: new Map(f.world.transportLinks).set(link.linkId, {
+        ...link, seed: { ...link.seed, routinePhysicalLossRate: 0.25 },
+      }),
+    };
+    const buyerOpening = readMarketActorInventory(world, f.buyer, "GENERAL").get(GOOD) ?? 0;
+    const result = settleSameCurrencyTradeDispatch(world, f.request);
+    const transit = result.world.shipments!.get(f.request.shipment.id)!;
+    const destruction = result.newTransactions.filter(tx => tx.type === "GOODS_TRANSPORT_LOSS");
+    expect(transit.quantity).toBe(1.5);
+    expect(stock(result.world, f.request)).toBe(8);
+    expect(destruction).toHaveLength(1);
+    expect(destruction[0]).toMatchObject({
+      bundleId: f.request.bundleId, source: f.buyer, quantity: 0.5, amount: 0.5,
+      goodId: GOOD, phase: 7,
+    });
+    expect(destruction[0]!.moneyAmount).toBeUndefined();
+    expect(result.newTransactions.find(tx => tx.type === "TRADE_GOODS_SALE")?.quantity).toBe(2);
+    expect(result.newTransactions.find(tx => tx.type === "SHIPMENT_DISPATCH")?.quantity).toBe(1.5);
+    expect(10 - stock(result.world, f.request)).toBeCloseTo(transit.quantity + 0.5, 12);
+    expect(result.newTransactions.filter(tx => tx.type === "TRANSPORT_FEE")).toHaveLength(1);
+    const delivered = deliverDueTradeShipments(result.world, {
+      tick: transit.arrivalTick,
+      phase: transit.arrivalTick === transit.departureTick ? 7 : 1,
+      priorTransactions: result.transactions,
+    });
+    expect(delivered.world.shipments?.size).toBe(0);
+    expect(readMarketActorInventory(delivered.world, f.buyer, "GENERAL").get(GOOD))
+      .toBeCloseTo(buyerOpening + 1.5, 12);
+    expect(delivered.transactions.filter(tx => tx.type === "GOODS_TRANSPORT_LOSS")).toHaveLength(1);
+    const repeat = deliverDueTradeShipments(delivered.world, {
+      tick: transit.arrivalTick, phase: transit.arrivalTick === transit.departureTick ? 7 : 1,
+      priorTransactions: delivered.transactions,
+    });
+    expect(repeat.newTransactions).toEqual([]);
+  });
+
   it("commits goods to in-transit stock, all money recipients, capacity and journal together", () => {
     const { world, request, seller, buyer, receiver, destinationState } = fixture();
     const treasuryBefore = cash(world, destinationState, request);

@@ -7,6 +7,7 @@ import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import { readActorWallet, readMarketActorInventory } from "./marketSettlementTransition";
 import { quoteFx, resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 import { validateTradeShipmentRegistry } from "./tradeShipmentState";
+import { deliverDueTradeShipments } from "./tradeShipmentDelivery";
 import { createFxSettlementId, createTransactionBundleId } from "./tickOrchestrator";
 import {
   settleCrossCurrencyTradeDispatch, type CrossCurrencyDispatchRequest,
@@ -139,6 +140,55 @@ function unchanged(world: WorldState, request: CrossCurrencyDispatchRequest,
 }
 
 describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
+  it("keeps the gross FX invoice, destroys routine cargo once and delivers only survivors", () => {
+    const f = fixture();
+    const link = f.world.transportLinks.get(f.request.transportLinkId)!;
+    const world: WorldState = {
+      ...f.world,
+      transportLinks: new Map(f.world.transportLinks).set(link.linkId, {
+        ...link, seed: { ...link.seed, routinePhysicalLossRate: 0.25 },
+      }),
+    };
+    const buyerOpening = readMarketActorInventory(world, f.buyer, "GENERAL").get(GOOD) ?? 0;
+    const result = settleCrossCurrencyTradeDispatch(world, f.request)!;
+    const replay = settleCrossCurrencyTradeDispatch(world, f.request)!;
+    expect(result.transactions).toEqual(replay.transactions);
+    expect(result.shipment.quantity).toBe(1.5);
+    expect(result.sizing.quantity).toBe(2);
+    expect(result.fxReceipt.outputAmount).toBe(6);
+    expect(stock(result.world, f.request)).toBe(8);
+    const destroyed = result.newTransactions.filter(tx => tx.type === "GOODS_TRANSPORT_LOSS");
+    expect(destroyed).toHaveLength(1);
+    expect(destroyed[0]).toMatchObject({
+      source: f.buyer, goodId: GOOD, quantity: 0.5, amount: 0.5,
+      bundleId: f.request.bundleId,
+    });
+    expect(destroyed[0]!.currencyId).toBeUndefined();
+    expect(destroyed[0]!.moneyAmount).toBeUndefined();
+    expect(result.newTransactions.find(tx => tx.type === "SHIPMENT_DISPATCH")?.quantity).toBe(1.5);
+    expect(result.newTransactions.find(tx => tx.type === "TRADE_GOODS_SALE")?.quantity).toBe(2);
+    const delivered = deliverDueTradeShipments(result.world, {
+      tick: result.shipment.arrivalTick,
+      phase: result.shipment.arrivalTick === result.shipment.departureTick ? 7 : 1,
+      priorTransactions: result.transactions,
+    });
+    expect(readMarketActorInventory(delivered.world, f.buyer, "GENERAL").get(GOOD))
+      .toBeCloseTo(buyerOpening + 1.5, 12);
+    expect(delivered.transactions.filter(tx => tx.type === "GOODS_TRANSPORT_LOSS")).toHaveLength(1);
+  });
+
+  it("rejects unrepresentable physical attrition before any FX, goods or journal effects", () => {
+    const f = fixture();
+    const link = f.world.transportLinks.get(f.request.transportLinkId)!;
+    const world: WorldState = {
+      ...f.world,
+      transportLinks: new Map(f.world.transportLinks).set(link.linkId, {
+        ...link, seed: { ...link.seed, routinePhysicalLossRate: 1 - Number.EPSILON },
+      }),
+    };
+    unchanged(world, f.request, () => settleCrossCurrencyTradeDispatch(world, f.request));
+  });
+
   it("commits one FX pair, seller goods, destination fees and shipment as one bundle", () => {
     const f = fixture();
     const { world, request } = f;

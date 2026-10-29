@@ -25,6 +25,7 @@ import {
 import {
   createTransactionId, type EconomicTransaction, type TransactionBundleId,
 } from "./tickOrchestrator";
+import { applyRoutineDispatchLoss } from "./routineDispatchLoss";
 import type { WorldState } from "./worldState";
 
 export interface SameCurrencyDispatchRequest {
@@ -121,6 +122,8 @@ export function settleSameCurrencyTradeDispatch(
     return refuse("canonical shipment registry missing");
   }
   validateTradeShipmentState(world, shipment);
+  const routineLoss = applyRoutineDispatchLoss(world, shipment, bundleId);
+  validateTradeShipmentState(world, routineLoss.survivingShipment);
   if (world.shipments.has(shipment.id)) {
     return refuse("duplicate shipment identity");
   }
@@ -229,6 +232,7 @@ export function settleSameCurrencyTradeDispatch(
   const tx = (suffix: string) => createTransactionId("tx:" + bundleId + ":" + suffix);
   const transactionIds = steps.filter((part) => part.amount > 0).map((part) => tx(part.suffix));
   transactionIds.push(tx("dispatch"));
+  if (routineLoss.destruction) transactionIds.push(routineLoss.destruction.transactionId);
   // Even a zero-price sale remains an explicit journal record for stock provenance.
   if (!transactionIds.includes(tx("goods"))) transactionIds.push(tx("goods"));
   const seen = new Set(request.priorTransactions.map((item) => item.transactionId));
@@ -250,7 +254,7 @@ export function settleSameCurrencyTradeDispatch(
     paidWorld, shipment.seller, request.sellerInventoryBucket, shipment.goodId, closing,
   );
   const frozenShipment: TradeShipmentState = Object.freeze({
-    ...shipment,
+    ...routineLoss.survivingShipment,
     routeLinkIds: Object.freeze([...shipment.routeLinkIds]),
     seller: Object.freeze({ ...shipment.seller }),
     buyer: Object.freeze({ ...shipment.buyer }),
@@ -280,11 +284,12 @@ export function settleSameCurrencyTradeDispatch(
     tick, phase: 7, type: "SHIPMENT_DISPATCH",
     transactionId: tx("dispatch"), bundleId, source: shipment.seller,
     destination: shipment.buyer, goodId: shipment.goodId,
-    quantity: shipment.quantity, amount: shipment.quantity,
+    quantity: frozenShipment.quantity, amount: frozenShipment.quantity,
     sourceRegionId: shipment.originRegionId,
     destinationRegionId: shipment.destinationRegionId,
     reason: "PHASE7_TRANSFER_TO_IN_TRANSIT_STOCK",
   });
+  if (routineLoss.destruction) newTransactions.push(routineLoss.destruction);
   return {
     world: committedWorld,
     remainingCargoWeightByLink: new Map(request.remainingCargoWeightByLink)
