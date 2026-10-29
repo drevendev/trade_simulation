@@ -436,7 +436,7 @@ describe("M5 #673 shared buyer-wallet and directed-route adversarial regressions
     const cohortId = f.fxRoute.buyer.cohortId;
     const cohort = f.world.cohorts.get(cohortId)!;
     const cohorts = new Map(f.world.cohorts);
-    const walletOpening = oneLotDebit + 1e-4; // Below a minimum shipment's cost.
+    const walletOpening = oneLotDebit * 1.75; // Funds one full and one partial lot.
     cohorts.set(cohortId, {
       ...cohort, wallet: new Map(cohort.wallet).set(currency, walletOpening),
     });
@@ -445,19 +445,36 @@ describe("M5 #673 shared buyer-wallet and directed-route adversarial regressions
       ...f.input, remainingCargoWeightByLink: new Map([[linkId, 50]]),
     };
     const result = executePreparedMixedCurrencyTradePlan(tightWorld, input);
+    const replay = executePreparedMixedCurrencyTradePlan(tightWorld, input);
     expect(result.prepared.actorMatches.lots).toHaveLength(2);
-    expect(result.committedLots).toHaveLength(1);
+    expect(result.committedLots).toHaveLength(2);
     expect(result.committedLots[0]!.dispatchedQuantity).toBe(1);
-    expect(result.unfilledLotOrdinals).toEqual([f.fxLots[1]!.ordinal]);
-    expect(result.remainingCargoWeightByLink.get(linkId)).toBe(49);
-    expect(result.world.shipments?.size).toBe(1);
+    const secondQuantity = result.committedLots[1]!.dispatchedQuantity;
+    expect(secondQuantity).toBeGreaterThan(0);
+    expect(secondQuantity).toBeLessThan(1);
+    expect(result.unfilledLotOrdinals).toEqual([]);
+    const dispatched = result.committedLots.reduce(
+      (total, lot) => total + lot.dispatchedQuantity, 0,
+    );
+    expect(dispatched).toBeGreaterThan(1);
+    expect(dispatched).toBeLessThan(2);
+    expect(result.remainingCargoWeightByLink.get(linkId))
+      .toBeCloseTo(50 - dispatched, 8);
+    expect(result.world.shipments?.size).toBe(2);
     const remaining = readActorWallet(result.world, f.fx.buying.actor).get(currency)!;
     expect(remaining).toBeGreaterThanOrEqual(0);
-    expect(walletOpening - remaining)
-      .toBeCloseTo(result.committedLots[0]!.buyerTotalDebitDest, 8);
+    const committedDebit = result.committedLots.reduce(
+      (total, lot) => total + lot.buyerTotalDebitDest, 0,
+    );
+    expect(committedDebit).toBeLessThanOrEqual(walletOpening);
+    expect(walletOpening - remaining).toBeCloseTo(committedDebit, 8);
     expect(result.phase8MainIntents.find(
       i => i.id === f.fxLots[1]!.lot.buyerIntentId,
-    )?.desiredQuantity).toBe(5);
+    )?.desiredQuantity).toBeCloseTo(5 - secondQuantity, 8);
+    expect(result.phase8MainIntents.find(
+      i => i.id === f.fx.selling.id,
+    )?.desiredQuantity).toBeCloseTo(5 - dispatched, 8);
+    expect(result.transactions).toEqual(replay.transactions);
     expect(readActorWallet(tightWorld, f.fx.buying.actor).get(currency))
       .toBe(walletOpening);
     expect(tightWorld.shipments?.size).toBe(0);
