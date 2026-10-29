@@ -220,3 +220,10 @@ export {
   type Phase7PreparedTradePlanInput,
   type Phase7TradePlanActors,
 } from "./phase7TradePlan";
+
+export {
+  executePreparedSameCurrencyTradePlan,
+  type Phase7SameCurrencyExecutionInput,
+  type Phase7SameCurrencyExecutionResult,
+  type Phase7SameCurrencyPriceTerms,
+} from "./phase7PreparedSameCurrencyExecution";
