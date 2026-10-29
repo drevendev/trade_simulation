@@ -634,7 +634,7 @@ describe("M5 #673 committed prepared trade in the canonical 0..15 tick", () => {
       (world, context) => ({
         ...builder(world, context),
         priorTransactions: [{ tick: 7, phase: 5, type: "FORGED",
-          transactionId: createTransactionId("tx:forged:old") }],
+          transactionId: createTransactionId("tx:forged:old"), amount: 0 }],
       }),
     )).toThrow(/live committed tick journal/);
     expect(() => executeM5PreparedTradeTick(
