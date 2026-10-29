@@ -329,3 +329,155 @@ describe("M5 #673 mixed prepared same-currency + FX execution", () => {
     expect(f.world.shipments?.size).toBe(0);
   });
 });
+
+
+/**
+ * Two DISTINCT buy intents of one physical actor can receive two matched lots
+ * from ONE FX route/good candidate. The actor wallet and directed link are
+ * shared stocks, never duplicated per buyer intent or per shipment ID.
+ * Planning budgets here deliberately reflect the earlier tick; execution
+ * must re-check tighter LIVE cash/cargo rather than trusting that preview.
+ */
+function sharedBuyerAndRouteFixture() {
+  const f = fixture();
+  const secondBuyer: MarketIntent = {
+    ...f.fx.buying,
+    id: createMarketIntentId("mi:7:fx:buyer-second"),
+    sourcePlanId: "plan:7:fx:buyer-second",
+  };
+  const fxActors = f.input.planInput.actorsByTradePlanId.get(FX_ID)!;
+  const planInput: Phase7PreparedTradePlanInput = {
+    ...f.input.planInput,
+    opportunities: f.input.planInput.opportunities.filter(q => q.planId === FX_ID),
+    actorsByTradePlanId: new Map([[FX_ID, {
+      ...fxActors,
+      buyers: [...fxActors.buyers, {
+        intent: secondBuyer, residualQuantity: 5, remainingBuyerSpend: 50,
+      }],
+    }]]),
+  };
+  const prepared = preparePhase7TradePlan(f.world, f.world.simulationConfig, planInput);
+  const fxLots = prepared.actorMatches.lots.map((lot, ordinal) => ({ lot, ordinal }))
+    .filter(({ lot }) => lot.tradePlanId === FX_ID);
+  if (fxLots.length !== 2 || fxLots.some(({ lot }) => lot.quantity !== 1)) {
+    throw new Error("shared-buyer fixture requires two real one-unit FX lots");
+  }
+  const initialReservation = f.input.fxReservationByLotOrdinal.get(f.fxOrdinal)!;
+  const input: Phase7PreparedMixedExecutionInput = {
+    ...f.input,
+    planInput,
+    phase8MainIntents: [f.fx.selling, f.fx.buying, secondBuyer],
+    fxReservationByLotOrdinal: new Map(fxLots.map(({ ordinal }) =>
+      [ordinal, {
+        ...initialReservation,
+        requestId: "fx:req:shared-buyer:" + ordinal,
+      }])),
+  };
+  return { ...f, input, fxLots, secondBuyer };
+}
+
+describe("M5 #673 shared buyer-wallet and directed-route adversarial regressions", () => {
+  it("does not dispatch a second FX shipment against already used link capacity", () => {
+    const f = sharedBuyerAndRouteFixture();
+    const linkId = f.fxRoute.link.linkId;
+    const currency = f.fxRoute.destination.settlementCurrencyId;
+    const input: Phase7PreparedMixedExecutionInput = {
+      ...f.input,
+      remainingCargoWeightByLink: new Map([[linkId, 1]]),
+    };
+    const buyerCashBefore = readActorWallet(f.world, f.fx.buying.actor).get(currency)!;
+    const sellerGoodsBefore = readMarketActorInventory(
+      f.world, f.fx.selling.actor, "GENERAL",
+    ).get(GOOD)!;
+    const result = executePreparedMixedCurrencyTradePlan(f.world, input);
+    const replay = executePreparedMixedCurrencyTradePlan(f.world, input);
+
+    expect(result.prepared.actorMatches.lots).toHaveLength(2);
+    expect(result.committedLots).toHaveLength(1);
+    expect(result.committedLots[0]!.dispatchedQuantity).toBe(1);
+    expect(result.unfilledLotOrdinals).toEqual([f.fxLots[1]!.ordinal]);
+    expect(result.remainingCargoWeightByLink.get(linkId)).toBe(0);
+    expect(result.world.shipments?.size).toBe(1);
+    expect(result.transactions.filter(tx => tx.type === "FX_INPUT")).toHaveLength(1);
+    expect(result.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH"))
+      .toHaveLength(1);
+    const buyerCashAfter = readActorWallet(result.world, f.fx.buying.actor).get(currency)!;
+    const sellerGoodsAfter = readMarketActorInventory(
+      result.world, f.fx.selling.actor, "GENERAL",
+    ).get(GOOD)!;
+    expect(buyerCashBefore - buyerCashAfter)
+      .toBeCloseTo(result.committedLots[0]!.buyerTotalDebitDest, 8);
+    expect(sellerGoodsBefore - sellerGoodsAfter).toBe(1);
+
+    const settledBuyerIntent = result.committedLots[0]!.buyerIntentId;
+    const unfilledBuyerIntent = f.fxLots[1]!.lot.buyerIntentId;
+    expect(result.phase8MainIntents.find(i => i.id === settledBuyerIntent)?.desiredQuantity)
+      .toBe(4);
+    expect(result.phase8MainIntents.find(i => i.id === unfilledBuyerIntent)?.desiredQuantity)
+      .toBe(5);
+    expect(result.phase8MainIntents.find(i => i.id === f.fx.selling.id)?.desiredQuantity)
+      .toBe(4);
+    expect(result.transactions).toEqual(replay.transactions);
+    expect(result.world.shipments).toEqual(replay.world.shipments);
+    expect(f.world.shipments?.size).toBe(0);
+    expect([...input.remainingCargoWeightByLink]).toEqual([[linkId, 1]]);
+    expect(f.input.priorTransactions).toEqual([]);
+  });
+
+  it("rechecks the SAME actor wallet across two distinct prepared FX buyer intents", () => {
+    const f = sharedBuyerAndRouteFixture();
+    const linkId = f.fxRoute.link.linkId;
+    const currency = f.fxRoute.destination.settlementCurrencyId;
+    const oneLot = executePreparedMixedCurrencyTradePlan(f.world, {
+      ...f.input, remainingCargoWeightByLink: new Map([[linkId, 1]]),
+    });
+    expect(oneLot.committedLots).toHaveLength(1);
+    const oneLotDebit = oneLot.committedLots[0]!.buyerTotalDebitDest;
+    const cohortId = f.fxRoute.buyer.cohortId;
+    const cohort = f.world.cohorts.get(cohortId)!;
+    const cohorts = new Map(f.world.cohorts);
+    const walletOpening = oneLotDebit * 1.75; // Funds one full and one partial lot.
+    cohorts.set(cohortId, {
+      ...cohort, wallet: new Map(cohort.wallet).set(currency, walletOpening),
+    });
+    const tightWorld: WorldState = { ...f.world, cohorts };
+    const input: Phase7PreparedMixedExecutionInput = {
+      ...f.input, remainingCargoWeightByLink: new Map([[linkId, 50]]),
+    };
+    const result = executePreparedMixedCurrencyTradePlan(tightWorld, input);
+    const replay = executePreparedMixedCurrencyTradePlan(tightWorld, input);
+    expect(result.prepared.actorMatches.lots).toHaveLength(2);
+    expect(result.committedLots).toHaveLength(2);
+    expect(result.committedLots[0]!.dispatchedQuantity).toBe(1);
+    const secondQuantity = result.committedLots[1]!.dispatchedQuantity;
+    expect(secondQuantity).toBeGreaterThan(0);
+    expect(secondQuantity).toBeLessThan(1);
+    expect(result.unfilledLotOrdinals).toEqual([]);
+    const dispatched = result.committedLots.reduce(
+      (total, lot) => total + lot.dispatchedQuantity, 0,
+    );
+    expect(dispatched).toBeGreaterThan(1);
+    expect(dispatched).toBeLessThan(2);
+    expect(result.remainingCargoWeightByLink.get(linkId))
+      .toBeCloseTo(50 - dispatched, 8);
+    expect(result.world.shipments?.size).toBe(2);
+    const remaining = readActorWallet(result.world, f.fx.buying.actor).get(currency)!;
+    expect(remaining).toBeGreaterThanOrEqual(0);
+    const committedDebit = result.committedLots.reduce(
+      (total, lot) => total + lot.buyerTotalDebitDest, 0,
+    );
+    expect(committedDebit).toBeLessThanOrEqual(walletOpening);
+    expect(walletOpening - remaining).toBeCloseTo(committedDebit, 8);
+    expect(result.phase8MainIntents.find(
+      i => i.id === f.fxLots[1]!.lot.buyerIntentId,
+    )?.desiredQuantity).toBeCloseTo(5 - secondQuantity, 8);
+    expect(result.phase8MainIntents.find(
+      i => i.id === f.fx.selling.id,
+    )?.desiredQuantity).toBeCloseTo(5 - dispatched, 8);
+    expect(result.transactions).toEqual(replay.transactions);
+    expect(readActorWallet(tightWorld, f.fx.buying.actor).get(currency))
+      .toBe(walletOpening);
+    expect(tightWorld.shipments?.size).toBe(0);
+    expect([...input.remainingCargoWeightByLink]).toEqual([[linkId, 50]]);
+  });
+});
