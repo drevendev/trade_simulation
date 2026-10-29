@@ -97,6 +97,23 @@ export function executePreparedSameCurrencyTradePlan(
     invalid("unresolved canonical numeric tolerances");
   }
 
+  // MAIN intents are independent post-Phase-4 evidence. An opaque intent ID
+  // alone cannot identify who actually paid or surrendered inventory: reject a
+  // same-ID actor/bucket substitution before staging any settlement. The
+  // residual projector also verifies good, region, side and quantity/budget.
+  const mainById = new Map(input.phase8MainIntents.map((intent) => [intent.id, intent]));
+  for (const lot of prepared.actorMatches.lots) {
+    const sellerMain = mainById.get(lot.sellerIntentId);
+    const buyerMain = mainById.get(lot.buyerIntentId);
+    if (!sellerMain || !buyerMain ||
+        actorRefKey(sellerMain.actor) !== actorRefKey(lot.seller) ||
+        actorRefKey(buyerMain.actor) !== actorRefKey(lot.buyer) ||
+        (sellerMain.inventoryBucket ?? "GENERAL") !== lot.sellerInventoryBucket ||
+        (buyerMain.inventoryBucket ?? "GENERAL") !== lot.buyerInventoryBucket) {
+      invalid("stale Phase-8 MAIN intent actor/owner or inventory bucket for prepared lot");
+    }
+  }
+
   // Do not silently discard prepared FX trades when executing a same-currency
   // batch. In particular, reject BEFORE settling any earlier domestic lot.
   for (const reservation of prepared.aggregate.reservations) {
@@ -195,7 +212,11 @@ export function executePreparedSameCurrencyTradePlan(
         actorRefKey(sales[0]!.source!) !== actorRefKey(lot.buyer) ||
         dispatches[0]!.quantity !== persisted.quantity ||
         actorRefKey(persisted.seller) !== actorRefKey(lot.seller) ||
-        actorRefKey(persisted.buyer) !== actorRefKey(lot.buyer)) {
+        actorRefKey(persisted.buyer) !== actorRefKey(lot.buyer) ||
+        actorRefKey(persisted.beneficialOwner) !== actorRefKey(lot.buyer) ||
+        persisted.destinationInventoryBucket !== lot.buyerInventoryBucket ||
+        actorRefKey(dispatches[0]!.source!) !== actorRefKey(lot.seller) ||
+        actorRefKey(dispatches[0]!.destination!) !== actorRefKey(lot.buyer)) {
       invalid("atomic dispatch did not commit matching goods, shipment and journal");
     }
     const charged = settled.newTransactions
