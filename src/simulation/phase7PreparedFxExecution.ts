@@ -152,7 +152,10 @@ export function executePreparedCrossCurrencyTradePlan(
         candidate.sourceCurrencyId === candidate.destinationCurrencyId) {
       refuse("matched FX lot lacks an authorized candidate, pair or frozen quote");
     }
-    for (const [name, value] of Object.entries(terms)) nonnegative(value, name);
+    for (const [name, value] of Object.entries(terms)) {
+      if (typeof value !== "number") refuse(name + " must be numeric");
+      nonnegative(value, name);
+    }
     if (terms.sourceSellerNetUnitPrice <= 0 ||
         terms.sourceSellerNetUnitPrice !== candidate.sourceSellerNetUnitPrice) {
       refuse("seller invoice differs from ranked candidate");
