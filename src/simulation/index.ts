@@ -197,8 +197,11 @@ export {
 export {
   executeStatefulTick,
   type PhaseWorldTransition,
+  type PhaseWorldAndContextCommit,
   type StatefulTickExecutionResult,
 } from "./statefulTickOrchestrator";
+
+export { executeM5ShipmentDeliveryTick } from "./m5ShipmentDeliveryTick";
 
 export {
   executeM4ClosedEconomyTick,

@@ -3,9 +3,8 @@
  * explicit state transition to become visible to a later phase in the same canonical tick.
  *
  * `tickOrchestrator.ts` remains the sole owner of the 0..15 phase order, phase dispatch and
- * phase-boundary reconciliation rules. This seam only carries the returned WorldState from
- * an accepted phase transition into the next `executePhase` call; it never mutates an input
- * WorldState in place.
+ * phase-boundary reconciliation rules. This seam carries accepted WorldState and TickContext
+ * transitions together without mutating either caller-owned opening value.
  */
 
 import type { WorldState } from "./worldState";
@@ -26,9 +25,20 @@ export type PhaseWorldTransition = (
 ) => WorldState;
 
 /**
- * Optional read-only diagnostic seam invoked only after an accepted phase transition.
- * It observes the exact authoritative before/after WorldState pair without changing
- * phase order, reconciliation, or the transition selected by the caller.
+ * Optional atomic phase-close extension for transitions that must publish BOTH
+ * physical stocks and their journal receipts, such as M5 shipment arrivals.
+ * Called after the ordinary phase transition, before the next phase or observer.
+ * Older M4 callers retain exactly their existing behavior when this is omitted.
+ */
+export type PhaseWorldAndContextCommit = (
+  phase: number,
+  transitionedWorld: WorldState,
+  context: TickContext,
+) => { readonly world: WorldState; readonly context: TickContext };
+
+/**
+ * Read-only diagnostic seam invoked only after an accepted phase transition.
+ * It observes the exact authoritative before/after WorldState pair.
  */
 export type PhaseWorldTransitionObserver = (
   phase: number,
@@ -50,10 +60,10 @@ export interface StatefulTickExecutionResult {
 }
 
 /**
- * Execute the canonical phase sequence while threading explicit immutable WorldState
- * transitions between phase boundaries. A failed reconciliation returns before the
- * transition for the failing phase is made visible, so the caller never observes a
- * partially accepted phase.
+ * Execute the canonical phase sequence while threading immutable WorldState transitions.
+ * The optional phase-close commit keeps its WorldState and journal together. Reconciliation
+ * runs both before and after that commit; a failed check cannot publish the candidate WorldState.
+ * A throwing commit is likewise never published to the caller.
  */
 export function executeStatefulTick(
   openingWorld: WorldState,
@@ -61,6 +71,7 @@ export function executeStatefulTick(
   handler: PhaseHandler,
   applyPhaseTransition: PhaseWorldTransition,
   observePhaseTransition?: PhaseWorldTransitionObserver,
+  commitPhase?: PhaseWorldAndContextCommit,
 ): StatefulTickExecutionResult {
   let world = openingWorld;
   let context = initializeTickContext(tickNumber, openingWorld.seed);
@@ -89,7 +100,25 @@ export function executeStatefulTick(
     }
 
     const beforeWorld = world;
-    world = applyPhaseTransition(phase, beforeWorld, context);
+    const transitionedWorld = applyPhaseTransition(phase, beforeWorld, context);
+    const committed = commitPhase === undefined
+      ? { world: transitionedWorld, context }
+      : commitPhase(phase, transitionedWorld, context);
+    if (committed.context.tick !== tickNumber || committed.context.phase !== phase) {
+      throw new Error("Phase close cannot change the canonical tick or phase");
+    }
+    const closeErrors = validateTickInvariants(committed.context, tolerance);
+    if (closeErrors !== null) {
+      return {
+        world: beforeWorld,
+        context,
+        phaseTrace,
+        phaseBoundaryError: { phase, errors: closeErrors },
+        reconciliationErrors: closeErrors,
+      };
+    }
+    world = committed.world;
+    context = committed.context;
     observePhaseTransition?.(phase, beforeWorld, world, context);
   }
 
