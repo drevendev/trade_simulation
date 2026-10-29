@@ -212,6 +212,44 @@ describe("M5 / #673 prepared actor lots -> real same-currency settlements", () =
     expect(f.world.shipments?.size).toBe(0);
   });
 
+  it("rejects same-region MAIN buyer actor substitution with an unchanged intent ID", () => {
+    const f = fixture();
+    const originalBuyerId = f.buyer.type === "COHORT" ? f.buyer.cohortId : null;
+    const alternate = [...f.world.cohorts.values()].find((c) =>
+      c.seed.regionKey === f.dest.seed.key && c.cohortId !== originalBuyerId);
+    if (!alternate) throw new Error("alternate destination cohort missing");
+    const forgedMainBuyer: MarketIntent = {
+      ...f.buyerIntent,
+      actor: { type: "COHORT", cohortId: alternate.cohortId },
+    };
+    expect(() => executePreparedSameCurrencyTradePlan(f.world, {
+      ...f.input,
+      phase8MainIntents: [f.sellerIntent, forgedMainBuyer],
+    })).toThrow(/stale Phase-8 MAIN intent actor\/owner/);
+    expect(f.world.shipments?.size).toBe(0);
+    expect(readActorWallet(f.world, f.buyer).get(f.dest.settlementCurrencyId)).toBe(100);
+    expect(f.input.remainingCargoWeightByLink.get(f.link.linkId)).toBe(50);
+  });
+
+  it("rejects same-region MAIN seller actor substitution with an unchanged intent ID", () => {
+    const f = fixture();
+    const originalSellerId = f.seller.type === "COHORT" ? f.seller.cohortId : null;
+    const alternate = [...f.world.cohorts.values()].find((c) =>
+      c.seed.regionKey === f.origin.seed.key && c.cohortId !== originalSellerId);
+    if (!alternate) throw new Error("alternate origin cohort missing");
+    const forgedMainSeller: MarketIntent = {
+      ...f.sellerIntent,
+      actor: { type: "COHORT", cohortId: alternate.cohortId },
+    };
+    expect(() => executePreparedSameCurrencyTradePlan(f.world, {
+      ...f.input,
+      phase8MainIntents: [forgedMainSeller, f.buyerIntent],
+    })).toThrow(/stale Phase-8 MAIN intent actor\/owner/);
+    expect(f.world.shipments?.size).toBe(0);
+    expect(readMarketActorInventory(f.world, f.seller, "GENERAL").get(GOOD)).toBe(10);
+    expect(f.input.priorTransactions).toEqual([]);
+  });
+
   it("does not return a partial world if Phase-8 receipt/intent authentication fails", () => {
     const f = fixture();
     expect(() => executePreparedSameCurrencyTradePlan(f.world, {
