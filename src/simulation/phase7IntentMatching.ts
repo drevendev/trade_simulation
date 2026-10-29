@@ -132,9 +132,14 @@ function bucket(intent: MarketIntent): Phase7ActorMatchLot["sellerInventoryBucke
   return intent.inventoryBucket ?? "GENERAL";
 }
 
-/** Canonical identity for the ONE physical inventory endpoint, not each SELL intent. */
+/**
+ * Canonical key of ONE physical goods store, independent of trade origin region.
+ * A State's publicInventory is State-owned (not region-owned), as are Cohort and
+ * ProductionUnit inventories. Keep regionId on each intent/candidate for actual
+ * origin/route/legality checks; never turn it into a second spendable stock.
+ */
 export function phase7SellerEndpointKey(intent: MarketIntent): string {
-  return JSON.stringify([actorRefKey(intent.actor), intent.regionId, intent.goodId, bucket(intent)]);
+  return JSON.stringify([actorRefKey(intent.actor), intent.goodId, bucket(intent)]);
 }
 export function phase7BuyerActorCashKey(actor: ActorRef, currency: CurrencyId): string {
   return JSON.stringify([actorRefKey(actor), currency]);
