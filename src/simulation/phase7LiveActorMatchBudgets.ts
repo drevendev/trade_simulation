@@ -65,6 +65,12 @@ export function buildPhase7LiveActorMatchBudgets(
     }
   }
 
+  // The same canonical absolute quantity tolerance used by the Phase-7 actor
+  // matcher. Reject missing/invalid config rather than inventing another rule.
+  const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon;
+  if (quantityEpsilon === undefined || !Number.isFinite(quantityEpsilon) || quantityEpsilon < 0) {
+    throw new Error("Phase-7 live seller requires resolved quantity epsilon");
+  }
   const sellerExportableByEndpoint = new Map<string, number>();
   for (const [key, intent] of [...sellerEvidence].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
     if (!protectedSellerQuantityByEndpoint.has(key)) {
@@ -80,8 +86,14 @@ export function buildPhase7LiveActorMatchBudgets(
       throw new Error("Phase-7 protected seller stock exceeds live inventory");
     }
     const exportable = physical - protectedQuantity;
+    // Binary64 round trips like 9 - 8.9 may differ from 0.1 by a few ulps.
+    // Allow only the canonical quantity epsilon of harmless rounding; still
+    // refuse unobservable or materially misrepresented debits (1e16 - 3 = 4).
+    const observableProtected = physical - exportable;
     if (!Number.isFinite(exportable) ||
-        (protectedQuantity > 0 && physical - exportable !== protectedQuantity)) {
+        (protectedQuantity > 0 &&
+          (exportable === physical ||
+           Math.abs(observableProtected - protectedQuantity) > quantityEpsilon))) {
       throw new Error("Phase-7 seller exportable quantity lost numeric precision");
     }
     sellerExportableByEndpoint.set(key, exportable);
