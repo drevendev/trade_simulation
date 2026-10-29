@@ -73,6 +73,18 @@ function finitePositive(value: number, label: string): void {
 }
 
 /**
+ * Error-free binary64 addition: sum + error is the exact sum of two finite
+ * operands (before any final representation rounding). Unlike plain Kahan,
+ * this also preserves a small lot added BEFORE a much larger one.
+ */
+function twoSum(a: number, b: number): { sum: number; error: number } {
+  const sum = a + b;
+  const highPartOfB = sum - a;
+  const error = (a - (sum - highPartOfB)) + (b - highPartOfB);
+  return { sum, error };
+}
+
+/**
  * Reserve shared capacity across independently scored candidate goods, without
  * mutation. Does NOT discover candidates or authorize their sale/trade.
  *
@@ -127,8 +139,9 @@ export function planTransportCapacityPreflight(
   const budgets = new Map<TransportLinkId, number>();
   const remaining = new Map<TransportLinkId, number>();
   // The accepted cargo lots own the spent-capacity accounting. Repeatedly
-  // subtracting fractional lots from a large budget loses their low bits;
-  // deriving usedByLink as budget - remaining would report a different sum.
+  // subtracting fractional lots from a large budget loses their low bits.
+  // Track the representable high sum AND its low residual; both insertion
+  // orders of a 1e16 lot plus a 3-unit lot must fail closed, not round to +4.
   const usedByLink = new Map<TransportLinkId, number>();
   const useCorrections = new Map<TransportLinkId, number>();
   const usability = new Map<TransportLinkId, boolean>();
@@ -172,19 +185,25 @@ export function planTransportCapacityPreflight(
         if (!Number.isFinite(use) || use <= 0 || use > available) {
           throw new Error("transport cargo reservation exceeds or underflows available capacity");
         }
-        // Kahan-sum each accepted lot, then derive the residual from its
-        // compensated cumulative usage. This avoids repeated cancellation
-        // against the original (possibly very large) link capacity.
+        // Add with an explicit low-part witness, then normalize again.
+        // Kahan's single correction can miss 3 + 1e16 (small-first); twoSum
+        // preserves the exact discarded unit regardless of lot order.
         const previousUse = usedByLink.get(request.linkId)!;
-        const correctedUse = use - useCorrections.get(request.linkId)!;
-        const nextUse = previousUse + correctedUse;
-        const nextCorrection = (nextUse - previousUse) - correctedUse;
+        const high = twoSum(previousUse, use);
+        const low = useCorrections.get(request.linkId)! + high.error;
+        const normalized = twoSum(high.sum, low);
+        const nextUse = normalized.sum;
+        const nextCorrection = normalized.error;
         const capacity = budgets.get(request.linkId)!;
         const after = capacity - nextUse;
-        // If the lot is invisible at the precision of this link's budget,
-        // refuse the entire pure preflight rather than claim a phantom debit.
-        if (!Number.isFinite(nextUse) || nextUse > capacity || after < 0 || after >= available) {
-          throw new Error("transport reservation is too small for link-budget precision or exceeds capacity");
+        // Returning the rounded high part when its exact low residual is
+        // greater than quantityEpsilon invents (or erases) cargo capacity.
+        // Reject the entire pure preview instead of silently booking +4 for
+        // a legitimate 3-unit lot against a 1e16-unit earlier reservation.
+        if (!Number.isFinite(nextUse) || !Number.isFinite(low) ||
+            !Number.isFinite(nextCorrection) || Math.abs(nextCorrection) > epsilon ||
+            nextUse > capacity || after < 0 || after >= available) {
+          throw new Error("transport reservation loses cargo-weight precision or exceeds capacity");
         }
         usedByLink.set(request.linkId, nextUse);
         useCorrections.set(request.linkId, nextCorrection);
@@ -203,5 +222,15 @@ export function planTransportCapacityPreflight(
     });
   }
 
+  // Intermediate residuals may round (e.g. 200 x 0.1 against 1e8),
+  // but the published final budget and the accepted cumulative use must
+  // reconcile within ONE absolute epsilon per link, not one per lot.
+  for (const [linkId, capacity] of budgets) {
+    const booked = usedByLink.get(linkId)!;
+    const observed = capacity - remaining.get(linkId)!;
+    if (!Number.isFinite(observed) || Math.abs(observed - booked) > epsilon) {
+      throw new Error("transport final cargo-capacity reconciliation loses precision");
+    }
+  }
   return { reservations, usedByLink, remainingByLink: remaining };
 }
