@@ -647,3 +647,210 @@ describe("M5 #673 committed prepared trade in the canonical 0..15 tick", () => {
     expect(f.input.priorTransactions).toEqual([]);
   });
 });
+
+
+/**
+ * #673 / M5 conservation golden: source goods -> IN_TRANSIT -> destination
+ * and all named cash holders, including the finite FX pool, form ONE
+ * physically conserved world across several canonical ticks. Dispatch-only
+ * journal checks cannot prove this invariant after deferred delivery.
+ */
+function m5WorldStockTotals(world: WorldState): {
+  money: Map<string, number>;
+  goods: Map<string, number>;
+} {
+  type Running = { sum: number; correction: number };
+  const money = new Map<string, Running>();
+  const goods = new Map<string, Running>();
+  const add = (totals: Map<string, Running>, key: string, value: number): void => {
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error("M5 golden encountered invalid live stock " + key);
+    }
+    const prev = totals.get(key) ?? { sum: 0, correction: 0 };
+    const sum = prev.sum + value;
+    const correction = prev.correction + (Math.abs(prev.sum) >= Math.abs(value)
+      ? (prev.sum - sum) + value
+      : (value - sum) + prev.sum);
+    totals.set(key, { sum, correction });
+  };
+  const wallet = (w: ReadonlyMap<string, number>) => {
+    for (const [currency, amount] of w) add(money, currency, amount);
+  };
+  const inventory = (i: ReadonlyMap<string, number>) => {
+    for (const [good, quantity] of i) add(goods, good, quantity);
+  };
+  for (const state of world.states.values()) {
+    wallet(state.treasury);
+    inventory(state.publicInventory);
+  }
+  for (const clan of world.clans.values()) wallet(clan.treasury);
+  for (const cohort of world.cohorts.values()) {
+    wallet(cohort.wallet);
+    inventory(cohort.householdInventory);
+  }
+  for (const unit of world.productionUnits.values()) {
+    wallet(unit.wallet);
+    inventory(unit.inputInventory);
+    inventory(unit.outputInventory);
+    inventory(unit.investmentInventory);
+  }
+  // FX pool reserves are independent physical owners, NOT authority wallets.
+  for (const authority of world.monetaryAuthorities.values()) {
+    for (const pool of authority.fxPools.values()) wallet(pool.cash);
+  }
+  for (const shipment of world.shipments?.values() ?? []) {
+    add(goods, shipment.goodId, shipment.quantity);
+  }
+  const canonical = (totals: Map<string, Running>) => new Map(
+    [...totals].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+      .map(([key, running]) => [key, running.sum + running.correction] as const),
+  );
+  return { money: canonical(money), goods: canonical(goods) };
+}
+
+function expectM5WorldConserved(
+  opening: ReturnType<typeof m5WorldStockTotals>,
+  current: WorldState,
+  destroyedGoods: number,
+): void {
+  const actual = m5WorldStockTotals(current);
+  const { moneyEpsilon, quantityEpsilon } = current.simulationConfig.numeric;
+  if (moneyEpsilon === undefined || quantityEpsilon === undefined) {
+    throw new Error("M5 conservation golden needs canonical numeric tolerances");
+  }
+  expect([...actual.money.keys()]).toEqual([...opening.money.keys()]);
+  expect([...actual.goods.keys()]).toEqual([...opening.goods.keys()]);
+  for (const [currency, initial] of opening.money) {
+    expect(Math.abs(actual.money.get(currency)! - initial),
+      "currency " + currency + " must conserve across FX/pool/fees")
+      .toBeLessThanOrEqual(moneyEpsilon);
+  }
+  for (const [good, initial] of opening.goods) {
+    const destroyed = good === GOOD ? destroyedGoods : 0;
+    expect(Math.abs(actual.goods.get(good)! - (initial - destroyed)),
+      "good " + good + " must count in-transit and explicitly destroyed stock")
+      .toBeLessThanOrEqual(quantityEpsilon);
+  }
+}
+
+describe("M5 #673 multicycle world-level trade conservation golden", () => {
+  const passPhase1: PhaseHandler = (world, context) =>
+    context.phase === 1
+      ? { ...context, effectiveJurisdictionByRegion: new Map(
+        [...world.regions].map(([id, region]) => [id, region.controllerStateId]),
+      ) }
+      : context;
+  const unchanged = (_phase: number, world: WorldState) => world;
+
+  it.each([0, 0.125])(
+    "conserves both currencies and goods at dispatch, in transit and arrival (loss rate %s)",
+    (routineLossRate) => {
+      const f = fixture();
+      const links = new Map(f.world.transportLinks);
+      for (const id of [f.fxRoute.link.linkId, f.domesticRoute.link.linkId]) {
+        const link = links.get(id)!;
+        links.set(id, { ...link, travelTicks: 2, seed: {
+          ...link.seed, routinePhysicalLossRate: routineLossRate,
+        } });
+      }
+      const opening: WorldState = { ...f.world, transportLinks: links };
+      const initial = m5WorldStockTotals(opening);
+      const build = (_world: WorldState, context: Parameters<PhaseHandler>[1]) => ({
+        ...f.input,
+        tick: context.tick,
+        priorTransactions: context.transactions,
+        effectiveJurisdictionByRegion: context.effectiveJurisdictionByRegion,
+      });
+      const dispatched = executeM5PreparedTradeTick(
+        opening, 7, passPhase1, unchanged, build,
+      );
+      const replay = executeM5PreparedTradeTick(
+        opening, 7, passPhase1, unchanged, build,
+      );
+      expect(dispatched.reconciliationErrors).toBeNull();
+      expect(dispatched.phaseBoundaryError).toBeUndefined();
+      expect(dispatched.context.transactions).toEqual(replay.context.transactions);
+      expect(dispatched.world.shipments).toEqual(replay.world.shipments);
+      expect(dispatched.world.shipments?.size).toBe(2);
+      expect(dispatched.context.transactions.filter(tx => tx.type === "FX_INPUT"))
+        .toHaveLength(1);
+      expect(dispatched.context.transactions.filter(tx => tx.type === "FX_OUTPUT"))
+        .toHaveLength(1);
+      expect(dispatched.context.transactions.filter(tx => tx.type === "TRADE_GOODS_SALE"))
+        .toHaveLength(2);
+      expect(dispatched.context.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH"))
+        .toHaveLength(2);
+
+      const losses = dispatched.context.transactions.filter(
+        tx => tx.type === "GOODS_TRANSPORT_LOSS",
+      );
+      expect(losses).toHaveLength(routineLossRate === 0 ? 0 : 2);
+      const destroyed = losses.reduce((sum, tx) => sum + (tx.quantity ?? 0), 0);
+      expect(destroyed).toBeCloseTo(4 * routineLossRate, 8);
+      expectM5WorldConserved(initial, dispatched.world, destroyed);
+
+      const inTransit = executeM5PreparedTradeTick(
+        dispatched.world, 8, passPhase1, unchanged, () => null,
+      );
+      expect(inTransit.context.transactions).toEqual([]);
+      expect(inTransit.world.shipments?.size).toBe(2);
+      expectM5WorldConserved(initial, inTransit.world, destroyed);
+
+      const arrived = executeM5PreparedTradeTick(
+        inTransit.world, 9, passPhase1, unchanged, () => null,
+      );
+      expect(arrived.world.shipments?.size).toBe(0);
+      expect(arrived.context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY"))
+        .toHaveLength(2);
+      expect(arrived.context.transactions.some(tx =>
+        tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT" ||
+        tx.type === "TRADE_GOODS_SALE" || tx.type === "TRANSPORT_FEE" ||
+        tx.type === "GOODS_TRANSPORT_LOSS")).toBe(false);
+      expectM5WorldConserved(initial, arrived.world, destroyed);
+
+      for (const buyer of [f.fx.buying.actor, f.dom.buying.actor]) {
+        const before = readMarketActorInventory(opening, buyer, "GENERAL").get(GOOD) ?? 0;
+        const after = readMarketActorInventory(arrived.world, buyer, "GENERAL").get(GOOD) ?? 0;
+        const delivered = [...dispatched.world.shipments!.values()]
+          .filter(shipment => actorRefKey(shipment.beneficialOwner) === actorRefKey(buyer))
+          .reduce((sum, shipment) => sum + shipment.quantity, 0);
+        expect(after - before).toBeCloseTo(delivered, 8);
+        expect([...readActorWallet(arrived.world, buyer)])
+          .toEqual([...readActorWallet(dispatched.world, buyer)]);
+      }
+      expect(opening.shipments?.size).toBe(0);
+    },
+  );
+
+  it("fails atomically if arrival would credit an unrepresentable quantity", () => {
+    const f = fixture();
+    const links = new Map(f.world.transportLinks);
+    for (const id of [f.fxRoute.link.linkId, f.domesticRoute.link.linkId]) {
+      const link = links.get(id)!;
+      links.set(id, { ...link, travelTicks: 2, seed: {
+        ...link.seed, routinePhysicalLossRate: 0.125,
+      } });
+    }
+    const opening: WorldState = { ...f.world, transportLinks: links };
+    const dispatched = executeM5PreparedTradeTick(
+      opening, 7, passPhase1, unchanged, (_world, context) => ({
+        ...f.input, tick: context.tick, priorTransactions: context.transactions,
+        effectiveJurisdictionByRegion: context.effectiveJurisdictionByRegion,
+      }),
+    );
+    const buyerId = f.fxRoute.buyer.cohortId;
+    const cohort = dispatched.world.cohorts.get(buyerId)!;
+    const unstable: WorldState = { ...dispatched.world, cohorts:
+      new Map(dispatched.world.cohorts).set(buyerId, {
+        ...cohort,
+        householdInventory: new Map(cohort.householdInventory).set(GOOD, 1e16),
+      }),
+    };
+    const snapshot = m5WorldStockTotals(unstable);
+    expect(() => executeM5PreparedTradeTick(
+      unstable, 9, passPhase1, unchanged, () => null,
+    )).toThrow(/destination goods credit loses quantity precision/);
+    expect(m5WorldStockTotals(unstable)).toEqual(snapshot);
+    expect(unstable.shipments?.size).toBe(2);
+  });
+});
