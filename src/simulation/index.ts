@@ -202,6 +202,10 @@ export {
 } from "./statefulTickOrchestrator";
 
 export { executeM5ShipmentDeliveryTick } from "./m5ShipmentDeliveryTick";
+export {
+  executeM5PreparedTradeTick,
+  type Phase7LiveTradeInputBuilder,
+} from "./m5PreparedTradeTick";
 
 export {
   executeM4ClosedEconomyTick,
