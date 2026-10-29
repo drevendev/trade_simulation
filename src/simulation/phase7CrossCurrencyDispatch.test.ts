@@ -14,6 +14,18 @@ import {
 } from "./phase7CrossCurrencyDispatch";
 import { buildInitialWorld, type WorldState } from "./worldState";
 
+import { createMarketIntentId, type MarketIntent } from "./marketIntent";
+import {
+  phase7FxOutputKey, phase7RegionCashKey, phase7RegionGoodKey,
+} from "./phase7AggregateReservation";
+import {
+  phase7BuyerActorCashKey, phase7SellerEndpointKey,
+} from "./phase7IntentMatching";
+import {
+  executePreparedCrossCurrencyTradePlan,
+  type Phase7PreparedFxExecutionInput,
+} from "./phase7PreparedFxExecution";
+
 const GOOD = "good:food" as GoodId;
 
 function fixture(reservedOutput = 30) {
@@ -345,5 +357,157 @@ describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
     expect(cash(result.world, f.receiver, f.destinationCurrency))
       .toBe(cash(f.world, f.receiver, f.destinationCurrency) + 1);
     expect(result.newTransactions.filter((tx) => tx.type === "FX_INPUT")).toHaveLength(1);
+  });
+});
+
+/** Prepared FX-only execution is a distinct opt-in bridge, not a second FX writer. */
+function preparedFxFixture() {
+  const f = fixture();
+  const origin = f.world.regions.get(f.request.originRegionId)!;
+  const destination = f.world.regions.get(f.request.destinationRegionId)!;
+  const unitFxInput = quoteFx(
+    f.world, f.request.fxPairId,
+    destination.settlementCurrencyId, origin.settlementCurrencyId, 3,
+  ).requiredInputAmountAtDesiredOutput;
+  const gross = unitFxInput + 1;
+  const planId = "plan:7:fx";
+  const sellerIntent: MarketIntent = {
+    id: createMarketIntentId("mi:7:fx:sell"),
+    actor: f.seller, regionId: origin.regionId, goodId: GOOD,
+    side: "SELL", purpose: "INVENTORY_REBALANCE",
+    desiredQuantity: 5, minimumReserveQuantity: 0,
+    sourcePlanId: "plan:7:fx:sell",
+  };
+  const buyerIntent: MarketIntent = {
+    id: createMarketIntentId("mi:7:fx:buy"),
+    actor: f.buyer, regionId: destination.regionId, goodId: GOOD,
+    side: "BUY", purpose: "CONSUMPTION",
+    desiredQuantity: 5, maxSpend: 50,
+    sourcePlanId: "plan:7:fx:buy",
+  };
+  const input: Phase7PreparedFxExecutionInput = {
+    tick: 7,
+    planInput: {
+      opportunities: [{
+        planId, linkId: f.request.transportLinkId,
+        originRegionId: origin.regionId, destinationRegionId: destination.regionId,
+        goodId: GOOD, authorizedAtPhase1: true,
+        exportableQuantity: 2, residualImportDemandQuantity: 2,
+        buyerRemainingBudgetDest: 50, cargoWeightPerUnit: 1,
+        destinationReferenceGrossUnitPrice: gross + 8,
+        landedGrossUnitCostDest: gross,
+        sourceSellerNetUnitPrice: 3,
+        destinationReferenceNetUnitPrice: gross + 8,
+        estimatedTransportUnitCostDest: 0.5, estimatedTariffRate: 0.1,
+        estimatedFxInputPerSourceCurrency: unitFxInput / 3,
+        shortageRateDestination: 0.2, fxFeasibleQuantity: 2,
+      }],
+      scorePolicy: {
+        tradeProfitWeight: 1, shortageWeight: 1,
+        minimumTradeScore: 0.05, maximumShortagePremiumShare: 0.25,
+      },
+      infrastructureFactors: new Map([[f.request.transportLinkId, 1]]),
+      eligibleDirectedLinkIdsAtPhase1: new Set<TransportLinkId>([f.request.transportLinkId]),
+      aggregateBudgets: {
+        exportableByOriginGood: new Map([
+          [phase7RegionGoodKey(origin.regionId, GOOD), 2],
+        ]),
+        importDemandByDestinationGood: new Map([
+          [phase7RegionGoodKey(destination.regionId, GOOD), 2],
+        ]),
+        buyerCashByDestinationCurrency: new Map([
+          [phase7RegionCashKey(destination.regionId, destination.settlementCurrencyId), 50],
+        ]),
+        fxOutputByPairCurrency: new Map([
+          [phase7FxOutputKey(f.request.fxPairId, origin.settlementCurrencyId), 30],
+        ]),
+      },
+      actorBudgets: {
+        sellerExportableByEndpoint: new Map([
+          [phase7SellerEndpointKey(sellerIntent), 2],
+        ]),
+        buyerCashByActorCurrency: new Map([
+          [phase7BuyerActorCashKey(f.buyer, destination.settlementCurrencyId), 100],
+        ]),
+      },
+      actorsByTradePlanId: new Map([[planId, {
+        sellers: [{ intent: sellerIntent, residualQuantity: 5 }],
+        buyers: [{ intent: buyerIntent, residualQuantity: 5, remainingBuyerSpend: 50 }],
+      }]]),
+      fxPairIdByTradePlanId: new Map([[planId, f.request.fxPairId]]),
+    },
+    termsByTradePlanId: new Map([[planId, {
+      sourceSellerNetUnitPrice: 3, transportFeePerUnitDest: 0.5,
+      tariffPerUnitDest: 0.25, consumptionTaxPerUnitDest: 0.25,
+    }]]),
+    fxReservationByLotOrdinal: new Map([[0, f.request.reservation]]),
+    effectiveJurisdictionByRegion: f.request.effectiveJurisdictionByRegion,
+    remainingCargoWeightByLink: f.request.remainingCargoWeightByLink,
+    priorTransactions: [],
+    phase8MainIntents: [sellerIntent, buyerIntent],
+  };
+  return { ...f, input, sellerIntent, buyerIntent, gross };
+}
+
+describe("M5 / #673 prepared FX lots -> atomic FX dispatch -> actual Phase-8 residuals", () => {
+  it("commits one owner-authenticated FX invoice, explicit charges and real residuals", () => {
+    const f = preparedFxFixture();
+    const first = executePreparedCrossCurrencyTradePlan(f.world, f.input);
+    const replay = executePreparedCrossCurrencyTradePlan(f.world, f.input);
+    expect(first.committedLots).toHaveLength(1);
+    expect(first.unfilledLotOrdinals).toEqual([]);
+    expect(first.committedLots[0]!.dispatchedQuantity).toBe(2);
+    expect(first.transactions.filter(tx => tx.type === "FX_INPUT")).toHaveLength(1);
+    expect(first.transactions.filter(tx => tx.type === "FX_OUTPUT")).toHaveLength(1);
+    expect(first.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH")).toHaveLength(1);
+    expect(first.world.shipments?.size).toBe(1);
+    expect(first.world.shipments).toEqual(replay.world.shipments);
+    expect(first.transactions).toEqual(replay.transactions);
+    expect(first.phase8MainIntents).toEqual(replay.phase8MainIntents);
+    expect(first.phase8MainIntents.find(i => i.id === f.sellerIntent.id)?.desiredQuantity)
+      .toBe(3);
+    expect(first.phase8MainIntents.find(i => i.id === f.buyerIntent.id)?.desiredQuantity)
+      .toBe(3);
+    expect(first.phase8MainIntents.find(i => i.id === f.buyerIntent.id)?.maxSpend)
+      .toBeCloseTo(50 - first.committedLots[0]!.buyerTotalDebitDest, 9);
+    expect(stock(first.world, f.request)).toBe(8);
+    expect(stock(f.world, f.request)).toBe(10);
+    expect(f.world.shipments?.size).toBe(0);
+    expect(f.input.priorTransactions).toEqual([]);
+    expect(f.input.remainingCargoWeightByLink.get(f.request.transportLinkId)).toBe(50);
+  });
+
+  it("rejects substituted seller identity and absent FX promise without a partial commit", () => {
+    const f = preparedFxFixture();
+    const forged: MarketIntent = { ...f.sellerIntent, actor: f.receiver };
+    expect(() => executePreparedCrossCurrencyTradePlan(f.world, {
+      ...f.input, phase8MainIntents: [forged, f.buyerIntent],
+    })).toThrow(/stale Phase-8 MAIN intent actor/);
+    expect(() => executePreparedCrossCurrencyTradePlan(f.world, {
+      ...f.input, fxReservationByLotOrdinal: new Map(),
+    })).toThrow(/lot-specific FX reservation/);
+    expect(f.world.shipments?.size).toBe(0);
+    expect(stock(f.world, f.request)).toBe(10);
+  });
+
+  it("does not consume MAIN intents when the reserved FX output is unavailable", () => {
+    const f = preparedFxFixture();
+    const exhausted = {
+      ...f.request.reservation,
+      quote: {
+        ...f.request.reservation.quote,
+        feasibleOutputAmount: 0, requiredInputForFeasibleOutput: 0,
+      },
+    };
+    const result = executePreparedCrossCurrencyTradePlan(f.world, {
+      ...f.input, fxReservationByLotOrdinal: new Map([[0, exhausted]]),
+    });
+    expect(result.committedLots).toEqual([]);
+    expect(result.unfilledLotOrdinals).toEqual([0]);
+    expect(result.transactions).toEqual([]);
+    expect(result.world).toBe(f.world);
+    expect(result.phase8MainIntents).toEqual(
+      [...f.input.phase8MainIntents].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
   });
 });

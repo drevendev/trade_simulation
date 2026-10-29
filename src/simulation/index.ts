@@ -227,3 +227,10 @@ export {
   type Phase7SameCurrencyExecutionResult,
   type Phase7SameCurrencyPriceTerms,
 } from "./phase7PreparedSameCurrencyExecution";
+
+export {
+  executePreparedCrossCurrencyTradePlan,
+  type Phase7PreparedFxExecutionInput,
+  type Phase7PreparedFxExecutionResult,
+  type Phase7FxPriceTerms,
+} from "./phase7PreparedFxExecution";
