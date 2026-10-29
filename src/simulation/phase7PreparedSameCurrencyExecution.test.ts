@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
-import type { GoodId, TransportLinkId } from "../domain/id";
+import type { GoodId, ShipmentId, TransportLinkId } from "../domain/id";
 import type { ActorRef } from "../domain/genesisLedger";
 import { createMarketIntentId, type MarketIntent } from "./marketIntent";
 import {
@@ -140,7 +140,7 @@ describe("M5 / #673 prepared actor lots -> real same-currency settlements", () =
   it("re-preflights live owners, commits one shipment and projects ONLY paid Phase-8 residuals", () => {
     const f = fixture();
     const result = executePreparedSameCurrencyTradePlan(f.world, f.input);
-    const shipment = result.world.shipments?.get(result.committedLots[0]!.shipmentId);
+    const shipment = result.world.shipments?.get(result.committedLots[0]!.shipmentId as ShipmentId);
     expect(result.prepared.actorMatches.lots).toHaveLength(1);
     expect(result.committedLots).toHaveLength(1);
     expect(result.committedLots[0]).toMatchObject({
