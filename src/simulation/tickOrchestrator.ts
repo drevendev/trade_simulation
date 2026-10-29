@@ -13,7 +13,7 @@ import type { ActorRef } from "../domain/genesisLedger";
 import type { WorldState, PendingTransitions } from "./worldState";
 import type { TickLedger } from "./ledger";
 import { createEmptyTickLedger, validateZeroFlowReconciliation } from "./ledger";
-import type { BudgetCommitmentLedger } from "./marketIntent";
+import type { BudgetCommitmentLedger, MarketIntent } from "./marketIntent";
 import { createEmptyBudgetCommitmentLedger } from "./marketIntent";
 import type { LocalMarketTelemetry } from "./marketTelemetry";
 import type { MarketAllocation } from "./marketClearing";
@@ -50,6 +50,8 @@ export interface TickContext {
   readonly marketAllocations: MarketAllocation[];
   readonly marketPrices: ReadonlyMap<string, number>;
   readonly marketClearingAggregates: ReadonlyMap<string, MarketClearingAggregate>;
+  /** Only realized Phase-7 dispatch reduces Phase-8 MAIN intentions; absent in M4 ticks. */
+  readonly phase7MainIntents?: readonly MarketIntent[];
 }
 
 /** Realized MAIN-pass aggregates for one market/good, authoritative regardless of telemetry. */
