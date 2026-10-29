@@ -230,7 +230,9 @@ export {
 
 export {
   executePreparedCrossCurrencyTradePlan,
+  executePreparedMixedCurrencyTradePlan,
   type Phase7PreparedFxExecutionInput,
+  type Phase7PreparedMixedExecutionInput,
   type Phase7PreparedFxExecutionResult,
   type Phase7FxPriceTerms,
 } from "./phase7PreparedFxExecution";
