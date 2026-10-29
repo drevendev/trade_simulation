@@ -254,7 +254,7 @@ describe("M5 / #673 prepared actor lots -> real same-currency settlements", () =
     const f = fixture();
     expect(() => executePreparedSameCurrencyTradePlan(f.world, {
       ...f.input, phase8MainIntents: [f.sellerIntent],
-    })).toThrow(/stale intent/);
+    })).toThrow(/stale Phase-8 MAIN intent/);
     expect(readMarketActorInventory(f.world, f.seller, "GENERAL").get(GOOD)).toBe(10);
     expect(f.world.shipments?.size).toBe(0);
   });
