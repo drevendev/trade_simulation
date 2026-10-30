@@ -7,7 +7,6 @@
  * not invent tariff/FX defaults or turn planned quantities into committed flows.
  * The canonical Phase-7 dispatcher remains the only writer.
  */
-import type { GoodId, RegionId } from "../domain/id";
 import { actorRefKey } from "../domain/genesisLedger";
 import { validateMarketIntent } from "./marketIntent";
 import {
@@ -241,7 +240,8 @@ export function buildPhase7LiveWorldPlanInput(
     infrastructureFactors: input.infrastructureFactors,
     eligibleDirectedLinkIdsAtPhase1: input.eligibleDirectedLinkIdsAtPhase1,
     aggregateBudgets, actorBudgets, actorsByTradePlanId,
-    fxPairIdByTradePlanId: input.fxPairIdByTradePlanId,
+    ...(input.fxPairIdByTradePlanId !== undefined
+      ? { fxPairIdByTradePlanId: input.fxPairIdByTradePlanId } : {}),
   };
 }
 
