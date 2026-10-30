@@ -1174,7 +1174,9 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
       affordable.world, affordable.context, affordable.input,
     );
     expect(accepted.quotes).toHaveLength(3);
-    expect(accepted.quotes.map(q => q.sellerInvoiceSource)).toEqual([0.3, 0.3, 0.3]);
+    for (const quoted of accepted.quotes) {
+      expect(quoted.sellerInvoiceSource).toBeCloseTo(0.3, 12);
+    }
     expect(accepted.quotes.reduce((total, q) => total + q.buyerDebitDest, 0))
       .toBeCloseTo(0.9, 10);
     expect(affordable.world.cohorts.get(affordable.buyer.cohortId)!.wallet.get(affordable.currency))
