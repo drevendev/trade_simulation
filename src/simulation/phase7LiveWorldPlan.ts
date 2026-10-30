@@ -57,7 +57,7 @@ export interface Phase7FrozenImportTariffSnapshot {
 export interface Phase7LivePricingContext extends Pick<
   TickContext, "tick" | "phase" | "marketPrices" | "effectiveJurisdictionByRegion"
 > {
-  readonly phase1ImportTariffs?: Phase7FrozenImportTariffSnapshot;
+  readonly phase1ImportTariffs?: Phase7FrozenImportTariffSnapshot | undefined;
 }
 
 export function phase7ImportTariffKey(stateId: StateId, goodId: GoodId): string {
