@@ -1010,4 +1010,125 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
     expect(f.world.shipments?.size).toBe(0);
   });
 
+
+  it("re-quotes actual cross-currency matched lots with finite FX, MID tariff and source-invoice tax", () => {
+    const f = fixture();
+    const pairIds = [...f.world.monetaryAuthorities.values()].flatMap(a => [...a.fxPools.keys()]);
+    const candidate = [...f.world.transportLinks.values()].flatMap(link => {
+      const origin = f.world.regions.get(link.fromRegionId);
+      const destination = f.world.regions.get(link.toRegionId);
+      if (!origin || !destination || !origin.controllerStateId || !destination.controllerStateId ||
+          origin.controllerStateId === destination.controllerStateId ||
+          origin.settlementCurrencyId === destination.settlementCurrencyId) return [];
+      const pairId = pairIds.find(pair => {
+        const pool = resolveCanonicalFxPool(f.world, pair).pool;
+        return (pool.baseCurrencyId === origin.settlementCurrencyId &&
+          pool.quoteCurrencyId === destination.settlementCurrencyId) ||
+          (pool.quoteCurrencyId === origin.settlementCurrencyId &&
+            pool.baseCurrencyId === destination.settlementCurrencyId);
+      });
+      return pairId ? [{ link, origin, destination, pairId }] : [];
+    })[0];
+    if (!candidate) throw new Error("baseline requires a controlled FX route");
+    const { link, origin, destination, pairId } = candidate;
+    const originStateId = origin.controllerStateId!;
+    const destinationStateId = destination.controllerStateId!;
+    const sellerState = f.world.states.get(originStateId)!;
+    const buyer = [...f.world.cohorts.values()].find(c => c.seed.regionKey === destination.seed.key)!;
+    const originMarket = [...f.world.markets.values()].find(m => m.seed.regionKey === origin.seed.key)!;
+    const destMarket = [...f.world.markets.values()].find(m => m.seed.regionKey === destination.seed.key)!;
+    if (!buyer || !originMarket || !destMarket) throw new Error("missing controlled FX actors/markets");
+    const world: WorldState = {
+      ...f.world,
+      states: new Map(f.world.states).set(originStateId, {
+        ...sellerState, publicInventory: new Map(sellerState.publicInventory).set(GOOD, 5),
+      }),
+      cohorts: new Map(f.world.cohorts).set(buyer.cohortId, {
+        ...buyer, wallet: new Map(buyer.wallet).set(destination.settlementCurrencyId, 1000),
+      }),
+      transportLinks: new Map(f.world.transportLinks).set(link.linkId, {
+        ...link, feeReceiver: { type: "STATE", stateId: destinationStateId },
+      }),
+    };
+    const seller = {
+      ...f.first, id: createMarketIntentId("mi:phase7:actual:cross:seller"),
+      actor: { type: "STATE" as const, stateId: originStateId },
+      regionId: origin.regionId, desiredQuantity: 2,
+    };
+    const purchase = {
+      ...f.b1, id: createMarketIntentId("mi:phase7:actual:cross:buyer"),
+      actor: { type: "COHORT" as const, cohortId: buyer.cohortId },
+      regionId: destination.regionId, desiredQuantity: 2, maxSpend: 1000,
+    };
+    const planId = "plan:phase7:actual:cross";
+    const opportunity = {
+      ...f.input.opportunityQuotes[0]!, planId, linkId: link.linkId,
+      originRegionId: origin.regionId, destinationRegionId: destination.regionId,
+      cargoWeightPerUnit: 1, shortageRateDestination: 1,
+    };
+    const pairKey = phase7FxOutputKey(pairId, origin.settlementCurrencyId);
+    const available = quoteFx(
+      world, pairId, destination.settlementCurrencyId, origin.settlementCurrencyId, 0,
+    ).maxOutputByPoolReserve;
+    expect(available).toBeGreaterThan(2);
+    const input: Phase7LiveWorldPlanInput = {
+      ...f.input,
+      residualIntents: [
+        { intent: seller, residualQuantity: 2 },
+        { intent: purchase, residualQuantity: 2, remainingBuyerSpend: 1000 },
+      ],
+      opportunityQuotes: [opportunity],
+      infrastructureFactors: new Map([[link.linkId, 1]]),
+      eligibleDirectedLinkIdsAtPhase1: new Set([link.linkId]),
+      fxPairIdByTradePlanId: new Map([[planId, pairId]]),
+      fxOutputByPairCurrency: new Map([[pairKey, available]]),
+    };
+    const context = {
+      ...f.context,
+      marketPrices: new Map([
+        [marketPriceKey(originMarket.marketId, GOOD), 1],
+        [marketPriceKey(destMarket.marketId, GOOD), 100],
+      ]),
+      phase1ImportTariffs: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([
+          [phase7ImportTariffKey(destinationStateId, GOOD), 0.2],
+        ]),
+      },
+      phase1ConsumptionTaxes: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([
+          [phase7ConsumptionTaxKey(destinationStateId, GOOD), 0.1],
+        ]),
+        collectionEfficiencyByState: new Map([[destinationStateId, 0.5]]),
+      },
+    };
+    const poolBefore = resolveCanonicalFxPool(world, pairId).pool.cash;
+    const actual = quotePhase7ActualMatchedLots(world, context, input);
+    expect(actual.quotes.length).toBeGreaterThan(0);
+    for (const q of actual.quotes) {
+      expect(q.fxPairId).toBe(pairId);
+      const fx = quoteFx(
+        world, pairId, destination.settlementCurrencyId,
+        origin.settlementCurrencyId, q.sellerInvoiceSource,
+      );
+      const pool = resolveCanonicalFxPool(world, pairId).pool;
+      const mid = pool.baseCurrencyId === origin.settlementCurrencyId
+        ? q.sellerInvoiceSource * pool.spotRateQuotePerBase
+        : q.sellerInvoiceSource / pool.spotRateQuotePerBase;
+      expect(q.goodsPaymentDest).toBeCloseTo(fx.requiredInputAmountAtDesiredOutput, 10);
+      expect(q.invoiceMidDest).toBeCloseTo(mid, 10);
+      expect(q.importTariffDest).toBeCloseTo((mid + q.transportFeeDest) * 0.1, 10);
+      expect(q.consumptionTaxDest).toBeCloseTo(mid * 0.05, 10);
+      expect(q.buyerDebitDest).toBeCloseTo(
+        q.goodsPaymentDest + q.transportFeeDest + q.importTariffDest +
+        q.consumptionTaxDest, 10,
+      );
+    }
+    expect(resolveCanonicalFxPool(world, pairId).pool.cash).toBe(poolBefore);
+    expect(world.states.get(originStateId)!.publicInventory.get(GOOD)).toBe(5);
+    expect(world.cohorts.get(buyer.cohortId)!.wallet.get(destination.settlementCurrencyId)).toBe(1000);
+    expect(world.shipments?.size).toBe(0);
+  });
+
 });
