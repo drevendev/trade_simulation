@@ -49,7 +49,6 @@ function fixture() {
   }
   const world: WorldState = {
     ...root, transportLinks: feeLinks,
-    ...root,
     states: new Map(root.states).set(state.stateId, {
       ...state, publicInventory: new Map(state.publicInventory).set(GOOD, 9),
     }),
