@@ -194,7 +194,7 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
     expect(f.world.shipments?.size).toBe(0);
   });
 
-  it("derives two routes' goods and wallet ceilings from real owners, never quoted quantities",
+  it("derives two routes' goods and wallet ceilings from real owners, never quoted quantities", () => {
     const f = fixture();
     const built = buildPhase7LiveWorldPlanInput(f.world, f.context, f.input);
     const origin0 = phase7RegionGoodKey(f.first.regionId, GOOD);
