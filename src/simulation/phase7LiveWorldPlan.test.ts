@@ -94,6 +94,9 @@ function fixture() {
   const market = [...world.markets.values()].find(m => m.seed.regionKey === destination.seed.key)!;
   const context = {
     phase: 7 as const, marketPrices: new Map([[marketPriceKey(market.marketId, GOOD), 10]]),
+    effectiveJurisdictionByRegion: new Map(
+      [...world.regions].map(([id, region]) => [id, region.controllerStateId] as const),
+    ),
   };
   return { world, context, input, first, second, b1, b2, links, destination, state, buyer };
 }
@@ -293,6 +296,92 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
     expect(() => buildPhase7LiveWorldPlanInput(bad, f.context, f.input))
       .toThrow("live buyer cash must be finite");
     expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(f.destination.settlementCurrencyId)).toBe(30);
+  });
+
+  it("rejects missing or stale Phase-1 jurisdiction before the quote reserves anything", () => {
+    const f = fixture();
+    const route = f.input.opportunityQuotes[0]!;
+    const region = f.world.regions.get(route.originRegionId)!;
+    const missing = new Map(f.context.effectiveJurisdictionByRegion);
+    missing.delete(route.originRegionId);
+    expect(() => preparePhase7LiveWorldTradePlan(f.world, {
+      ...f.context, effectiveJurisdictionByRegion: missing,
+    }, f.input)).toThrow("missing current Phase-1 jurisdiction");
+
+    const stale = new Map(f.context.effectiveJurisdictionByRegion);
+    stale.set(route.originRegionId, region.controllerStateId === null
+      ? f.destination.controllerStateId : null);
+    expect(() => preparePhase7LiveWorldTradePlan(f.world, {
+      ...f.context, effectiveJurisdictionByRegion: stale,
+    }, f.input)).toThrow("disagrees with activated Phase-1 jurisdiction");
+
+    expect(() => preparePhase7LiveWorldTradePlan(f.world, {
+      ...f.context, effectiveJurisdictionByRegion: undefined as unknown as typeof stale,
+    }, f.input)).toThrow("requires current Phase-1 jurisdiction evidence");
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("rejects invented same-State and uncontrolled-destination tariffs from live quotes", () => {
+    const f = fixture();
+    const route = f.input.opportunityQuotes[0]!;
+    const origin = f.world.regions.get(route.originRegionId)!;
+    const tariffInput: Phase7LiveWorldPlanInput = {
+      ...f.input,
+      opportunityQuotes: f.input.opportunityQuotes.map(q =>
+        q.planId === route.planId ? { ...q, estimatedTariffRate: 0.25 } : q),
+    };
+    const domesticWorld: WorldState = {
+      ...f.world,
+      regions: new Map(f.world.regions).set(origin.regionId, {
+        ...origin, controllerStateId: f.destination.controllerStateId,
+      }),
+    };
+    const domesticContext = {
+      ...f.context,
+      effectiveJurisdictionByRegion: new Map(f.context.effectiveJurisdictionByRegion)
+        .set(origin.regionId, f.destination.controllerStateId),
+    };
+    expect(() => preparePhase7LiveWorldTradePlan(
+      domesticWorld, domesticContext, tariffInput,
+    )).toThrow("cannot charge a tariff without a destination-State border");
+
+    const uncontrolledWorld: WorldState = {
+      ...f.world,
+      regions: new Map(f.world.regions).set(f.destination.regionId, {
+        ...f.destination, controllerStateId: null,
+      }),
+    };
+    const uncontrolledContext = {
+      ...f.context,
+      effectiveJurisdictionByRegion: new Map(f.context.effectiveJurisdictionByRegion)
+        .set(f.destination.regionId, null),
+    };
+    expect(() => preparePhase7LiveWorldTradePlan(
+      uncontrolledWorld, uncontrolledContext, tariffInput,
+    )).toThrow("cannot charge a tariff without a destination-State border");
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("does not treat a Phase-14 queued jurisdiction change as current-tick trade law", () => {
+    const f = fixture();
+    const future: WorldState = {
+      ...f.world,
+      pendingTransitions: {
+        ...f.world.pendingTransitions,
+        jurisdictionChanges: [...f.world.pendingTransitions.jurisdictionChanges, {
+          regionId: f.destination.regionId,
+          nextControllerStateId: null,
+          activateTick: 500,
+        }],
+      },
+    };
+    const expected = preparePhase7LiveWorldTradePlan(f.world, f.context, f.input);
+    const actual = preparePhase7LiveWorldTradePlan(future, f.context, f.input);
+    expect(actual).toEqual(expected);
+    expect(future.regions.get(f.destination.regionId)!.controllerStateId)
+      .toBe(f.destination.controllerStateId);
   });
 
   it("caps live FX output to canonical pool cash after reserve floors, not caller claims", () => {

@@ -89,6 +89,54 @@ function ordered(entries: readonly Phase7ActorResidualIntent[]): Phase7ActorResi
 }
 
 /**
+ * Validate the CURRENT Phase-1 jurisdiction snapshot before consuming any
+ * external legal/gross quote. Phase-1 activation persists controllerStateId
+ * into WorldState; a mismatched TickContext is stale (or forged), and cannot
+ * be used to classify a border or to authorize a tariff in Phase 7.
+ *
+ * The separate Phase-1 law owner still supplies positive cross-border tariff
+ * rates and per-good trade permission. No future PendingTransitions, rate
+ * default or synthetic legal permission is read or invented here.
+ */
+function assertCurrentPhase1LegalQuotes(
+  world: Pick<WorldState, "regions" | "states">,
+  context: Pick<TickContext, "phase" | "effectiveJurisdictionByRegion">,
+  quotes: readonly Phase7LiveQuoteWithoutDestinationNetPrice[],
+): void {
+  const jurisdiction = context.effectiveJurisdictionByRegion;
+  if (context.phase !== 7 || !(jurisdiction instanceof Map)) {
+    throw new Error("Phase-7 live legal quote requires current Phase-1 jurisdiction evidence");
+  }
+  for (const quote of [...quotes].sort((a, b) =>
+    cmp(a.linkId, b.linkId) || cmp(a.goodId, b.goodId) || cmp(a.planId, b.planId))) {
+    const origin = world.regions.get(quote.originRegionId);
+    const destination = world.regions.get(quote.destinationRegionId);
+    if (!origin || !destination) {
+      throw new Error("Phase-7 live legal quote references an unknown Region");
+    }
+    if (!jurisdiction.has(origin.regionId) || !jurisdiction.has(destination.regionId)) {
+      throw new Error("Phase-7 live legal quote missing current Phase-1 jurisdiction");
+    }
+    const originController = jurisdiction.get(origin.regionId)!;
+    const destinationController = jurisdiction.get(destination.regionId)!;
+    if (originController !== origin.controllerStateId ||
+        destinationController !== destination.controllerStateId) {
+      throw new Error("Phase-7 live legal quote disagrees with activated Phase-1 jurisdiction");
+    }
+    if ((originController !== null && !world.states.has(originController)) ||
+        (destinationController !== null && !world.states.has(destinationController))) {
+      throw new Error("Phase-7 live legal quote references an unknown controlling State");
+    }
+    // Import tariff is a destination-State border charge, never a same-State
+    // charge or money sink in an uncontrolled destination (Handoff/04 §23, §32).
+    if ((originController === destinationController || destinationController === null) &&
+        quote.estimatedTariffRate !== 0) {
+      throw new Error("Phase-7 live legal quote cannot charge a tariff without a destination-State border");
+    }
+  }
+}
+
+/**
  * Clamp each explicitly reserved Phase-7 FX output budget to the canonical
  * base-issuer-owned live pool, net of its operational reserve floor. The
  * supplied tick-local bound may be smaller because another component has
@@ -155,9 +203,11 @@ export function derivePhase7LiveFxOutputBudgets(
  */
 export function buildPhase7LiveWorldPlanInput(
   world: WorldState,
-  context: Pick<TickContext, "phase" | "marketPrices">,
+  context: Pick<TickContext, "phase" | "marketPrices" | "effectiveJurisdictionByRegion">,
   input: Phase7LiveWorldPlanInput,
 ): Phase7PreparedTradePlanInput {
+  // Validate frozen law/jurisdiction before quotes can influence ranking or budgets.
+  assertCurrentPhase1LegalQuotes(world, context, input.opportunityQuotes);
   // Hydrate before reservations: no caller-controlled market net price enters the plan.
   const pricedQuotes = derivePhase7DestinationNetPrices(world, context, input.opportunityQuotes);
   const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon;
@@ -314,7 +364,7 @@ export function buildPhase7LiveWorldPlanInput(
 /** Read-only Phase-7 preview using live goods and cash rather than caller stock claims. */
 export function preparePhase7LiveWorldTradePlan(
   world: WorldState,
-  context: Pick<TickContext, "phase" | "marketPrices">,
+  context: Pick<TickContext, "phase" | "marketPrices" | "effectiveJurisdictionByRegion">,
   input: Phase7LiveWorldPlanInput,
 ): Phase7PreparedTradePlan {
   return preparePhase7TradePlan(
