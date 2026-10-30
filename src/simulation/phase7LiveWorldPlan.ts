@@ -29,7 +29,7 @@ import {
 import { marketPriceKey } from "./phase6MarketPriceFormation";
 import type { TickContext } from "./tickOrchestrator";
 import type { Phase7CandidateEvidence } from "./tradeCandidateSelection";
-import type { WorldState } from "./worldState";
+import type { LocalMarketState, WorldState } from "./worldState";
 
 /** Only economic quotes/legal decisions come from outside WorldState's stock owner. */
 export type Phase7LiveOpportunityQuote = Omit<
@@ -280,8 +280,7 @@ export function derivePhase7DestinationNetPrices(
   if (context.phase !== 7 || !(context.marketPrices instanceof Map)) {
     throw new Error("Phase-7 net price evidence requires live Phase-7 market prices");
   }
-  const marketsByRegionKey = new Map<string, WorldState["markets"] extends ReadonlyMap<string, infer Market>
-    ? Market[] : never>();
+  const marketsByRegionKey = new Map<string, LocalMarketState[]>();
   for (const market of world.markets.values()) {
     const current = marketsByRegionKey.get(market.seed.regionKey) ?? [];
     current.push(market);
