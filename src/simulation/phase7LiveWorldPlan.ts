@@ -30,6 +30,7 @@ import {
 import { marketPriceKey } from "./phase6MarketPriceFormation";
 import { quoteFx } from "./fxWorldPoolAuthority";
 import type { TickContext } from "./tickOrchestrator";
+import type { GoodId, StateId } from "../domain/id";
 import type { Phase7CandidateEvidence } from "./tradeCandidateSelection";
 import type { LocalMarketState, WorldState } from "./worldState";
 
@@ -42,6 +43,26 @@ export type Phase7LiveOpportunityQuote = Omit<
 export type Phase7LiveQuoteWithoutDestinationNetPrice = Omit<
   Phase7LiveOpportunityQuote, "destinationReferenceNetUnitPrice"
 >;
+
+/**
+ * Frozen Phase-1 import-tariff fixture supplied by the legal-policy owner.
+ * M6 will replace this explicit fixture with effective FiscalPolicyState;
+ * the planner must never infer a border tariff or accept one from a quote.
+ */
+export interface Phase7FrozenImportTariffSnapshot {
+  readonly tick: number;
+  readonly ratesByDestinationStateGood: ReadonlyMap<string, number>;
+}
+
+export interface Phase7LivePricingContext extends Pick<
+  TickContext, "tick" | "phase" | "marketPrices" | "effectiveJurisdictionByRegion"
+> {
+  readonly phase1ImportTariffs?: Phase7FrozenImportTariffSnapshot | undefined;
+}
+
+export function phase7ImportTariffKey(stateId: StateId, goodId: GoodId): string {
+  return JSON.stringify([stateId, goodId]);
+}
 
 export interface Phase7LiveWorldPlanInput extends Pick<
   Phase7PreparedTradePlanInput,
@@ -137,6 +158,52 @@ function assertCurrentPhase1LegalQuotes(
 }
 
 /**
+ * Replace caller-supplied border rates with an explicit current-tick Phase-1
+ * legal-policy snapshot before ranking/booking any trade. A missing entry is
+ * NOT a zero rate; M6 policy machinery is not silently implemented here.
+ *
+ * Zero tariffs without a destination-State border follow from jurisdiction,
+ * not a caller-selected policy exemption. The rate here is statutory; later
+ * gross-cost settlement separately applies collection efficiency exactly once.
+ */
+export function derivePhase7Phase1ImportTariffs(
+  world: Pick<WorldState, "regions" | "states">,
+  context: Phase7LivePricingContext,
+  quotes: readonly Phase7LiveQuoteWithoutDestinationNetPrice[],
+): readonly Phase7LiveQuoteWithoutDestinationNetPrice[] {
+  assertCurrentPhase1LegalQuotes(world, context, quotes);
+  const snapshot = context.phase1ImportTariffs;
+  if (snapshot !== undefined &&
+      (!Number.isSafeInteger(context.tick) || context.tick < 0 ||
+       snapshot.tick !== context.tick ||
+       !(snapshot.ratesByDestinationStateGood instanceof Map))) {
+    throw new Error("Phase-7 import tariff requires a current-tick frozen Phase-1 policy snapshot");
+  }
+  return [...quotes].sort((a, b) =>
+    cmp(a.linkId, b.linkId) || cmp(a.goodId, b.goodId) || cmp(a.planId, b.planId))
+    .map((quote) => {
+      const origin = world.regions.get(quote.originRegionId)!;
+      const destination = world.regions.get(quote.destinationRegionId)!;
+      let rate = 0;
+      if (destination.controllerStateId !== null &&
+          destination.controllerStateId !== origin.controllerStateId) {
+        if (!snapshot) {
+          throw new Error("Phase-7 cross-border import tariff requires frozen Phase-1 policy evidence");
+        }
+        const key = phase7ImportTariffKey(destination.controllerStateId, quote.goodId);
+        if (!snapshot.ratesByDestinationStateGood.has(key)) {
+          throw new Error("Phase-7 cross-border import tariff missing destination State/good policy rate");
+        }
+        rate = snapshot.ratesByDestinationStateGood.get(key)!;
+        if (!Number.isFinite(rate) || rate < 0) {
+          throw new Error("Phase-7 cross-border import tariff policy rate must be finite and non-negative");
+        }
+      }
+      return { ...quote, estimatedTariffRate: rate };
+    });
+}
+
+/**
  * Clamp each explicitly reserved Phase-7 FX output budget to the canonical
  * base-issuer-owned live pool, net of its operational reserve floor. The
  * supplied tick-local bound may be smaller because another component has
@@ -203,13 +270,13 @@ export function derivePhase7LiveFxOutputBudgets(
  */
 export function buildPhase7LiveWorldPlanInput(
   world: WorldState,
-  context: Pick<TickContext, "phase" | "marketPrices" | "effectiveJurisdictionByRegion">,
+  context: Phase7LivePricingContext,
   input: Phase7LiveWorldPlanInput,
 ): Phase7PreparedTradePlanInput {
-  // Validate frozen law/jurisdiction before quotes can influence ranking or budgets.
-  assertCurrentPhase1LegalQuotes(world, context, input.opportunityQuotes);
+  // Freeze current Phase-1 jurisdiction and explicit destination tariff policy.
+  const lawfulQuotes = derivePhase7Phase1ImportTariffs(world, context, input.opportunityQuotes);
   // Hydrate before reservations: no caller-controlled market net price enters the plan.
-  const pricedQuotes = derivePhase7DestinationNetPrices(world, context, input.opportunityQuotes);
+  const pricedQuotes = derivePhase7DestinationNetPrices(world, context, lawfulQuotes);
   const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon;
   const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon;
   if (quantityEpsilon === undefined || moneyEpsilon === undefined ||
@@ -364,7 +431,7 @@ export function buildPhase7LiveWorldPlanInput(
 /** Read-only Phase-7 preview using live goods and cash rather than caller stock claims. */
 export function preparePhase7LiveWorldTradePlan(
   world: WorldState,
-  context: Pick<TickContext, "phase" | "marketPrices" | "effectiveJurisdictionByRegion">,
+  context: Phase7LivePricingContext,
   input: Phase7LiveWorldPlanInput,
 ): Phase7PreparedTradePlan {
   return preparePhase7TradePlan(
