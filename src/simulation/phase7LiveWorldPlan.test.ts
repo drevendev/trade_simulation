@@ -12,6 +12,7 @@ import { quoteFx, resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 import {
   buildPhase7LiveWorldPlanInput, preparePhase7LiveWorldTradePlan,
   derivePhase7DestinationNetPrices, derivePhase7LiveFxOutputBudgets,
+  derivePhase7Phase1ImportTariffs, phase7ImportTariffKey,
   type Phase7LiveWorldPlanInput,
 } from "./phase7LiveWorldPlan";
 import { buildInitialWorld, type WorldState } from "./worldState";
@@ -93,7 +94,7 @@ function fixture() {
   };
   const market = [...world.markets.values()].find(m => m.seed.regionKey === destination.seed.key)!;
   const context = {
-    phase: 7 as const, marketPrices: new Map([[marketPriceKey(market.marketId, GOOD), 10]]),
+    tick: 15, phase: 7 as const, marketPrices: new Map([[marketPriceKey(market.marketId, GOOD), 10]]),
     effectiveJurisdictionByRegion: new Map(
       [...world.regions].map(([id, region]) => [id, region.controllerStateId] as const),
     ),
@@ -384,6 +385,58 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
       .toBe(f.destination.controllerStateId);
   });
 
+  it("hydrates positive border tariff from current Phase-1 policy, ignoring a forged quote", () => {
+    const f = fixture();
+    const link = [...f.world.transportLinks.values()].find(candidate => {
+      const origin = f.world.regions.get(candidate.fromRegionId)!;
+      const destination = f.world.regions.get(candidate.toRegionId)!;
+      return destination.controllerStateId !== null &&
+        origin.controllerStateId !== destination.controllerStateId;
+    });
+    if (!link) throw new Error("baseline needs a controlled international directed link");
+    const destination = f.world.regions.get(link.toRegionId)!;
+    const quote = {
+      ...f.input.opportunityQuotes[0]!,
+      planId: "plan:world:tariff-policy",
+      linkId: link.linkId,
+      originRegionId: link.fromRegionId,
+      destinationRegionId: link.toRegionId,
+      estimatedTariffRate: 999,
+    };
+    const key = phase7ImportTariffKey(destination.controllerStateId!, GOOD);
+    const snapshot = { tick: f.context.tick, ratesByDestinationStateGood: new Map([[key, 0.18]]) };
+    const context = { ...f.context, phase1ImportTariffs: snapshot };
+    const originalRegionController = destination.controllerStateId;
+    const lawful = derivePhase7Phase1ImportTariffs(f.world, context, [quote]);
+    expect(lawful.map(x => x.estimatedTariffRate)).toEqual([0.18]);
+    expect(derivePhase7Phase1ImportTariffs(f.world, context, [...[quote]].reverse()))
+      .toEqual(lawful);
+    expect(quote.estimatedTariffRate).toBe(999);
+    expect(f.world.regions.get(destination.regionId)!.controllerStateId)
+      .toBe(originalRegionController);
+
+    // Missing is not a zero tariff. The snapshot belongs to the current tick,
+    // not a future Phase-14 decision or a caller-provided quote.
+    expect(() => derivePhase7Phase1ImportTariffs(f.world, f.context, [quote]))
+      .toThrow("requires frozen Phase-1 policy evidence");
+    expect(() => derivePhase7Phase1ImportTariffs(f.world, {
+      ...context, phase1ImportTariffs: { ...snapshot, tick: f.context.tick + 1 },
+    }, [quote])).toThrow("current-tick frozen Phase-1 policy snapshot");
+    expect(() => derivePhase7Phase1ImportTariffs(f.world, {
+      ...context, phase1ImportTariffs: { ...snapshot, ratesByDestinationStateGood: new Map() },
+    }, [quote])).toThrow("missing destination State/good policy rate");
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -0.01]) {
+      expect(() => derivePhase7Phase1ImportTariffs(f.world, {
+        ...context,
+        phase1ImportTariffs: {
+          ...snapshot,
+          ratesByDestinationStateGood: new Map([[key, bad]]),
+        },
+      }, [quote])).toThrow("policy rate must be finite and non-negative");
+    }
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
   it("caps live FX output to canonical pool cash after reserve floors, not caller claims", () => {
     const f = fixture();
     const pairIds = [...f.world.monetaryAuthorities.values()].flatMap(
@@ -407,6 +460,7 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
 
     const quote = {
       ...f.input.opportunityQuotes[0]!,
+      estimatedTariffRate: 999,
       planId: "plan:world:live-fx",
       linkId: cross.link.linkId,
       originRegionId: cross.origin.regionId,
@@ -424,8 +478,22 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
       ...f.input, opportunityQuotes: [quote],
       fxPairIdByTradePlanId: pairs, fxOutputByPairCurrency: declared,
     };
+    if (!cross.destination.controllerStateId ||
+        cross.origin.controllerStateId === cross.destination.controllerStateId) {
+      throw new Error("baseline FX route must cross a controlled State border");
+    }
+    const tariffContext = {
+      ...f.context,
+      phase1ImportTariffs: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([
+          [phase7ImportTariffKey(cross.destination.controllerStateId, GOOD), 0.12],
+        ]),
+      },
+    };
     const before = resolveCanonicalFxPool(f.world, cross.pair).pool.cash;
-    const built = buildPhase7LiveWorldPlanInput(f.world, f.context, input);
+    const built = buildPhase7LiveWorldPlanInput(f.world, tariffContext, input);
+    expect(built.opportunities[0]!.estimatedTariffRate).toBe(0.12);
     expect(built.aggregateBudgets.fxOutputByPairCurrency).toEqual(new Map([[key, available]]));
     expect(declared.get(key)).toBe(available + 1_000_000);
     expect(resolveCanonicalFxPool(f.world, cross.pair).pool.cash).toBe(before);
