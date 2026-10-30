@@ -40,9 +40,13 @@ export type Phase7LiveOpportunityQuote = Omit<
   Phase7CandidateEvidence,
   "exportableQuantity" | "residualImportDemandQuantity" | "buyerRemainingBudgetDest"
 >;
-/** Caller-owned legal, landed, source invoice and FX evidence: neither net nor gross reference price is trusted. */
+/** Caller-owned legal, landed and FX evidence: neither market net price is trusted. */
 export type Phase7LiveQuoteWithoutDestinationNetPrice = Omit<
   Phase7LiveOpportunityQuote, "destinationReferenceNetUnitPrice"
+>;
+/** Market prices come from Phase 6, not the caller's opportunity quote. */
+export type Phase7LiveQuoteWithoutMarketNetPrices = Omit<
+  Phase7LiveQuoteWithoutDestinationNetPrice, "sourceSellerNetUnitPrice"
 >;
 
 /**
@@ -83,7 +87,7 @@ export interface Phase7LiveWorldPlanInput extends Pick<
   "fxPairIdByTradePlanId"
 > {
   /** Frozen legal/landed/FX terms; supplied reference net/gross prices are overwritten. */
-  readonly opportunityQuotes: readonly Phase7LiveQuoteWithoutDestinationNetPrice[];
+  readonly opportunityQuotes: readonly Phase7LiveQuoteWithoutMarketNetPrices[];
   /** Unique intents after Phase-4 commitments; never original unspent maxSpend. */
   readonly residualIntents: readonly Phase7ActorResidualIntent[];
   /** Tick-local FX output cap after earlier reservations; clamped to LIVE pool funds. */
@@ -135,7 +139,7 @@ function ordered(entries: readonly Phase7ActorResidualIntent[]): Phase7ActorResi
 function assertCurrentPhase1LegalQuotes(
   world: Pick<WorldState, "regions" | "states">,
   context: Pick<TickContext, "phase" | "effectiveJurisdictionByRegion">,
-  quotes: readonly Phase7LiveQuoteWithoutDestinationNetPrice[],
+  quotes: readonly Phase7LiveQuoteWithoutMarketNetPrices[],
 ): void {
   const jurisdiction = context.effectiveJurisdictionByRegion;
   if (context.phase !== 7 || !(jurisdiction instanceof Map)) {
@@ -182,8 +186,8 @@ function assertCurrentPhase1LegalQuotes(
 export function derivePhase7Phase1ImportTariffs(
   world: Pick<WorldState, "regions" | "states">,
   context: Phase7LivePricingContext,
-  quotes: readonly Phase7LiveQuoteWithoutDestinationNetPrice[],
-): readonly Phase7LiveQuoteWithoutDestinationNetPrice[] {
+  quotes: readonly Phase7LiveQuoteWithoutMarketNetPrices[],
+): readonly Phase7LiveQuoteWithoutMarketNetPrices[] {
   assertCurrentPhase1LegalQuotes(world, context, quotes);
   const snapshot = context.phase1ImportTariffs;
   if (snapshot !== undefined &&
@@ -327,7 +331,7 @@ export function derivePhase7DestinationGrossReferencePrices(
  */
 export function derivePhase7LiveFxOutputBudgets(
   world: WorldState,
-  quotes: readonly Phase7LiveQuoteWithoutDestinationNetPrice[],
+  quotes: readonly Phase7LiveQuoteWithoutMarketNetPrices[],
   pairsByPlan: ReadonlyMap<string, string> | undefined,
   remainingOutput: ReadonlyMap<string, number>,
 ): ReadonlyMap<string, number> {
@@ -387,7 +391,8 @@ export function buildPhase7LiveWorldPlanInput(
   // Freeze current Phase-1 jurisdiction and explicit destination tariff policy.
   const lawfulQuotes = derivePhase7Phase1ImportTariffs(world, context, input.opportunityQuotes);
   // Hydrate before reservations: no caller-controlled market net price enters the plan.
-  const pricedQuotes = derivePhase7DestinationNetPrices(world, context, lawfulQuotes);
+  const sourcePricedQuotes = derivePhase7SourceSellerNetPrices(world, context, lawfulQuotes);
+  const pricedQuotes = derivePhase7DestinationNetPrices(world, context, sourcePricedQuotes);
   const grossPricedQuotes = derivePhase7DestinationGrossReferencePrices(
     world, context, pricedQuotes, input.residualIntents,
   );
@@ -554,11 +559,55 @@ export function preparePhase7LiveWorldTradePlan(
 }
 
 /**
+ * Hydrate the seller invoice price from the origin market at Phase 7.
+ * Phase-6 same-tick price takes precedence over the carried LocalMarket price.
+ * SELL intents have no independent limit-price field, so caller-provided
+ * source seller prices are not settlement authority. This is read-only.
+ */
+export function derivePhase7SourceSellerNetPrices(
+  world: Pick<WorldState, "regions" | "markets" | "transportLinks">,
+  context: Pick<TickContext, "phase" | "marketPrices">,
+  quotes: readonly Phase7LiveQuoteWithoutMarketNetPrices[],
+): readonly Phase7LiveQuoteWithoutDestinationNetPrice[] {
+  if (context.phase !== 7 || !(context.marketPrices instanceof Map)) {
+    throw new Error("Phase-7 source net price requires live Phase-7 market prices");
+  }
+  const marketsByRegionKey = new Map<string, LocalMarketState[]>();
+  for (const market of world.markets.values()) {
+    const current = marketsByRegionKey.get(market.seed.regionKey) ?? [];
+    current.push(market);
+    marketsByRegionKey.set(market.seed.regionKey, current);
+  }
+  return [...quotes].sort((a, b) =>
+    cmp(a.linkId, b.linkId) || cmp(a.goodId, b.goodId) || cmp(a.planId, b.planId))
+    .map((quote) => {
+      const origin = world.regions.get(quote.originRegionId);
+      const link = world.transportLinks.get(quote.linkId);
+      if (!origin || !link ||
+          link.fromRegionId !== quote.originRegionId ||
+          link.toRegionId !== quote.destinationRegionId) {
+        throw new Error("Phase-7 source net price quote references a mismatched directed link or Region");
+      }
+      const matching = marketsByRegionKey.get(origin.seed.key) ?? [];
+      if (matching.length !== 1) {
+        throw new Error("Phase-7 source net price quote requires exactly one origin LocalMarket");
+      }
+      const market = matching[0]!;
+      const key = marketPriceKey(market.marketId, quote.goodId);
+      const netPrice = context.marketPrices.get(key) ?? market.priceByGood.get(quote.goodId);
+      if (netPrice === undefined || !Number.isFinite(netPrice) || netPrice <= 0) {
+        throw new Error("Phase-7 source net price quote requires a finite positive canonical market price");
+      }
+      return { ...quote, sourceSellerNetUnitPrice: netPrice };
+    });
+}
+
+/**
  * Derive the destination market's net reference price from the SAME Phase-6
  * evidence that Phase-8 will clear against. This removes a caller-controlled
  * price from the live Phase-7 opportunity builder. The next hydration pass
  * computes the destination gross reference from frozen Phase-1 tax evidence;
- * source invoices, landed costs, FX and legal decisions retain their owners.
+ * landed costs, FX and legal decisions retain their owners.
  *
  * Only valid at the Phase-7 boundary. A Phase-6 price in TickContext takes
  * precedence over the live carried market price, matching Phase-8's rule.
