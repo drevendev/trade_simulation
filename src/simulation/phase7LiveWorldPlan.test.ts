@@ -109,8 +109,8 @@ function fixture() {
     return [marketPriceKey(originMarket.marketId, GOOD), 1] as const;
   });
   const context = {
-    tick: 15, phase: 7 as const, marketPrices: new Map([
-      [marketPriceKey(market.marketId, GOOD), 10] as const, ...originPrices,
+    tick: 15, phase: 7 as const, marketPrices: new Map<string, number>([
+      [marketPriceKey(market.marketId, GOOD), 10], ...originPrices,
     ]),
     effectiveJurisdictionByRegion: new Map(
       [...world.regions].map(([id, region]) => [id, region.controllerStateId] as const),
