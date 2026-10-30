@@ -142,6 +142,73 @@ function fixture() {
 }
 
 describe("M5 #673 Phase-7 live world opportunity planning", () => {
+  it("hydrates cargo mass from GoodDefinition, never caller-provided route weight", () => {
+    const f = fixture();
+    const forged: Phase7LiveWorldPlanInput = {
+      ...f.input,
+      opportunityQuotes: f.input.opportunityQuotes.map(q => ({
+        ...q, cargoWeightPerUnit: 0.00001,
+      })),
+    };
+    const canonical = buildPhase7LiveWorldPlanInput(f.world, f.context, f.input);
+    expect(buildPhase7LiveWorldPlanInput(f.world, f.context, forged)).toEqual(canonical);
+    expect(quotePhase7ActualMatchedLots(f.world, f.context, forged))
+      .toEqual(quotePhase7ActualMatchedLots(f.world, f.context, f.input));
+
+    const good = f.world.definitionRegistry.goods[GOOD]!;
+    const heavyWorld: WorldState = {
+      ...f.world,
+      definitionRegistry: {
+        ...f.world.definitionRegistry,
+        goods: {
+          ...f.world.definitionRegistry.goods,
+          [GOOD]: { ...good, cargoWeightPerUnit: 3 },
+        },
+      },
+    };
+    const heavy = buildPhase7LiveWorldPlanInput(heavyWorld, f.context, forged);
+    expect(heavy.opportunities.map(q => q.cargoWeightPerUnit)).toEqual([3, 3]);
+    expect(heavy.opportunities.map(q => q.estimatedTransportUnitCostDest)).toEqual(
+      heavy.opportunities.map(q => quoteTransportFee(
+        heavyWorld, heavyWorld.transportLinks.get(q.linkId)!,
+        1, 3, heavyWorld.simulationConfig, f.context.transportFeeCostPolicy,
+      ).amount),
+    );
+    expect(heavy.opportunities.every(q =>
+      q.estimatedTransportUnitCostDest > canonical.opportunities.find(
+        original => original.planId === q.planId,
+      )!.estimatedTransportUnitCostDest)).toBe(true);
+
+    for (const cargoWeightPerUnit of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const invalidWorld: WorldState = {
+        ...f.world,
+        definitionRegistry: {
+          ...f.world.definitionRegistry,
+          goods: {
+            ...f.world.definitionRegistry.goods,
+            [GOOD]: { ...good, cargoWeightPerUnit },
+          },
+        },
+      };
+      expect(() => buildPhase7LiveWorldPlanInput(invalidWorld, f.context, forged))
+        .toThrow("tradable GoodDefinition with positive cargo weight");
+    }
+    const nontradableWorld: WorldState = {
+      ...f.world,
+      definitionRegistry: {
+        ...f.world.definitionRegistry,
+        goods: {
+          ...f.world.definitionRegistry.goods,
+          [GOOD]: { ...good, tradable: false },
+        },
+      },
+    };
+    expect(() => buildPhase7LiveWorldPlanInput(nontradableWorld, f.context, forged))
+      .toThrow("tradable GoodDefinition with positive cargo weight");
+    expect(f.world.shipments?.size).toBe(0);
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+  });
+
   it("uses live destination-currency transport fees, never caller estimates", () => {
     const f = fixture();
     const canonical = buildPhase7LiveWorldPlanInput(f.world, f.context, f.input);

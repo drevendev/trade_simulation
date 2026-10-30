@@ -389,7 +389,7 @@ export function derivePhase7LiveFxOutputBudgets(
  * actual matched quantity.
  */
 export function derivePhase7LiveTransportFees(
-  world: Pick<WorldState, "regions" | "transportLinks" | "simulationConfig">,
+  world: Pick<WorldState, "regions" | "transportLinks" | "simulationConfig" | "definitionRegistry">,
   context: Pick<Phase7LivePricingContext, "phase" | "transportFeeCostPolicy">,
   quotes: readonly Phase7LiveQuoteWithoutMarketNetPrices[],
 ): readonly Phase7LiveQuoteWithoutMarketNetPrices[] {
@@ -405,10 +405,22 @@ export function derivePhase7LiveTransportFees(
           link.toRegionId !== quote.destinationRegionId) {
         throw new Error("Phase-7 transport fee quote references a mismatched directed link");
       }
+      // GoodDefinition owns physical cargo mass. An opportunity is merely a
+      // proposed route; trusting its weight would under-reserve capacity and
+      // underpay transport fees for every later matched shipment.
+      const good = world.definitionRegistry.goods[quote.goodId];
+      if (!good || !good.tradable ||
+          !Number.isFinite(good.cargoWeightPerUnit) || good.cargoWeightPerUnit <= 0) {
+        throw new Error("Phase-7 transport fee requires a tradable GoodDefinition with positive cargo weight");
+      }
       const fee = quoteTransportFee(
-        world, link, 1, quote.cargoWeightPerUnit, world.simulationConfig, policy,
+        world, link, 1, good.cargoWeightPerUnit, world.simulationConfig, policy,
       );
-      return { ...quote, estimatedTransportUnitCostDest: fee.amount };
+      return {
+        ...quote,
+        cargoWeightPerUnit: good.cargoWeightPerUnit,
+        estimatedTransportUnitCostDest: fee.amount,
+      };
     });
 }
 
