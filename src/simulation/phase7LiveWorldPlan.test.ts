@@ -93,11 +93,21 @@ function fixture() {
     fxOutputByPairCurrency: new Map(),
   };
   const market = [...world.markets.values()].find(m => m.seed.regionKey === destination.seed.key)!;
+  const phase1Rates = new Map<string, number>();
+  for (const link of links) {
+    const source = world.regions.get(link.fromRegionId)!;
+    const target = world.regions.get(link.toRegionId)!;
+    if (target.controllerStateId !== null &&
+        source.controllerStateId !== target.controllerStateId) {
+      phase1Rates.set(phase7ImportTariffKey(target.controllerStateId, GOOD), 0);
+    }
+  }
   const context = {
     tick: 15, phase: 7 as const, marketPrices: new Map([[marketPriceKey(market.marketId, GOOD), 10]]),
     effectiveJurisdictionByRegion: new Map(
       [...world.regions].map(([id, region]) => [id, region.controllerStateId] as const),
     ),
+    phase1ImportTariffs: { tick: 15, ratesByDestinationStateGood: phase1Rates },
   };
   return { world, context, input, first, second, b1, b2, links, destination, state, buyer };
 }
@@ -417,8 +427,9 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
 
     // Missing is not a zero tariff. The snapshot belongs to the current tick,
     // not a future Phase-14 decision or a caller-provided quote.
-    expect(() => derivePhase7Phase1ImportTariffs(f.world, f.context, [quote]))
-      .toThrow("requires frozen Phase-1 policy evidence");
+    expect(() => derivePhase7Phase1ImportTariffs(f.world, {
+      ...f.context, phase1ImportTariffs: undefined,
+    }, [quote])).toThrow("requires frozen Phase-1 policy evidence");
     expect(() => derivePhase7Phase1ImportTariffs(f.world, {
       ...context, phase1ImportTariffs: { ...snapshot, tick: f.context.tick + 1 },
     }, [quote])).toThrow("current-tick frozen Phase-1 policy snapshot");
