@@ -68,6 +68,35 @@ function consume(balance: number, debit: number, tolerance: number, label: strin
   return next;
 }
 
+/** Match accumulated quoted debits to ONE observable opening-to-closing balance difference. */
+function consumeCumulatively<K extends string>(
+  opening: ReadonlyMap<K, number>,
+  remaining: Map<K, number>,
+  quotedDebits: Map<K, number>,
+  key: K,
+  debit: number,
+  tolerance: number,
+  label: string,
+): void {
+  const start = opening.get(key);
+  const before = remaining.get(key);
+  if (start === undefined || before === undefined) {
+    throw new Error("Phase-7 actual lot missing " + label + " authority");
+  }
+  finiteNonnegative(start, label + " opening balance");
+  const after = consume(before, debit, tolerance, label);
+  const previous = quotedDebits.get(key) ?? 0;
+  const total = previous + debit;
+  if (!Number.isFinite(total) || (debit > 0 && total === previous) ||
+      Math.abs((total - previous) - debit) > tolerance ||
+      Math.abs((start - after) - total) > tolerance) {
+    throw new Error("Phase-7 actual lot cumulative observable " + label +
+      " debits cannot reconcile quoted lots");
+  }
+  remaining.set(key, after);
+  quotedDebits.set(key, total);
+}
+
 /**
  * Compute financially exact, whole-lot fee/tax/FX previews in accepted match
  * order. Prices are freshly rebuilt from live canonical owners; no external
@@ -94,6 +123,13 @@ export function quotePhase7ActualMatchedLots(
     .filter(entry => entry.intent.side === "BUY")
     .map(entry => [entry.intent.id, entry.intent] as const));
   const outputRemaining = new Map(built.aggregateBudgets.fxOutputByPairCurrency);
+  // Keep every opening amount and cumulative quoted debit per independent owner.
+  // Per-lot subtraction checks alone allow many sub-epsilon errors to accumulate.
+  const walletOpening = new Map(walletRemaining);
+  const spendOpening = new Map(spendRemaining);
+  const outputOpening = new Map(outputRemaining);
+  const walletDebits = new Map<string, number>();
+  const spendDebits = new Map([...spendRemaining.keys()].map(id => [id, 0] as const));
   const outputReserved = new Map<string, number>();
   const perPlan = new Map<string, { quantity: number; buyerDebit: number }>();
   const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon;
@@ -164,15 +200,10 @@ export function quotePhase7ActualMatchedLots(
         ? sellerInvoiceSource * pool.spotRateQuotePerBase
         : sellerInvoiceSource / pool.spotRateQuotePerBase;
       positive(invoiceMidDest, "MID invoice");
-      outputRemaining.set(
-        key, consume(remaining, sellerInvoiceSource, moneyEpsilon, "FX output"),
+      consumeCumulatively(
+        outputOpening, outputRemaining, outputReserved,
+        key, sellerInvoiceSource, moneyEpsilon, "FX output",
       );
-      const nextReserved = already + sellerInvoiceSource;
-      if (!Number.isFinite(nextReserved) || nextReserved === already ||
-          Math.abs((nextReserved - already) - sellerInvoiceSource) > moneyEpsilon) {
-        throw new Error("Phase-7 actual lot cumulative FX reservation lost precision");
-      }
-      outputReserved.set(key, nextReserved);
       fxPairId = pair;
     }
 
@@ -219,9 +250,13 @@ export function quotePhase7ActualMatchedLots(
     if (wallet === undefined || spend === undefined) {
       throw new Error("Phase-7 actual lot missing buyer money authority");
     }
-    walletRemaining.set(cashKey, consume(wallet, buyerDebitDest, moneyEpsilon, "buyer wallet"));
-    spendRemaining.set(
-      lot.buyerIntentId, consume(spend, buyerDebitDest, moneyEpsilon, "buyer intent spend"),
+    consumeCumulatively(
+      walletOpening, walletRemaining, walletDebits,
+      cashKey, buyerDebitDest, moneyEpsilon, "buyer wallet",
+    );
+    consumeCumulatively(
+      spendOpening, spendRemaining, spendDebits,
+      lot.buyerIntentId, buyerDebitDest, moneyEpsilon, "buyer intent spend",
     );
     const prior = perPlan.get(lot.tradePlanId) ?? { quantity: 0, buyerDebit: 0 };
     perPlan.set(lot.tradePlanId, {
