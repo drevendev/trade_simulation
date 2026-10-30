@@ -2,8 +2,8 @@
  * M5 / #673: derive Phase-7 opportunity quantities and actor evidence from
  * live post-Phase-4 residual MarketIntents and authoritative WorldState stocks.
  *
- * The calling Phase-1/6 policy and price owners STILL supply legally frozen,
- * fully priced route quotes and FX reservations. This module deliberately does
+ * Phase-1/6 owners supply frozen legal, gross landed and FX evidence; the
+ * destination NET price is hydrated only from canonical Phase-6/market state. This module deliberately does
  * not invent tariff/FX defaults or turn planned quantities into committed flows.
  * The canonical Phase-7 dispatcher remains the only writer.
  */
@@ -36,14 +36,18 @@ export type Phase7LiveOpportunityQuote = Omit<
   Phase7CandidateEvidence,
   "exportableQuantity" | "residualImportDemandQuantity" | "buyerRemainingBudgetDest"
 >;
+/** Caller-owned legal, gross landed, source invoice and FX evidence: never a net price. */
+export type Phase7LiveQuoteWithoutDestinationNetPrice = Omit<
+  Phase7LiveOpportunityQuote, "destinationReferenceNetUnitPrice"
+>;
 
 export interface Phase7LiveWorldPlanInput extends Pick<
   Phase7PreparedTradePlanInput,
   "scorePolicy" | "infrastructureFactors" | "eligibleDirectedLinkIdsAtPhase1" |
   "fxPairIdByTradePlanId"
 > {
-  /** One frozen Phase-1/6 quote per directed link+good, with NO caller stock claims. */
-  readonly opportunityQuotes: readonly Phase7LiveOpportunityQuote[];
+  /** Frozen legal/gross/FX quote per route; net market price comes only from Phase-6. */
+  readonly opportunityQuotes: readonly Phase7LiveQuoteWithoutDestinationNetPrice[];
   /** Unique intents after Phase-4 commitments; never original unspent maxSpend. */
   readonly residualIntents: readonly Phase7ActorResidualIntent[];
   /** FX output already net of operational floors / earlier commitments. */
@@ -92,8 +96,11 @@ function ordered(entries: readonly Phase7ActorResidualIntent[]): Phase7ActorResi
  */
 export function buildPhase7LiveWorldPlanInput(
   world: WorldState,
+  context: Pick<TickContext, "phase" | "marketPrices">,
   input: Phase7LiveWorldPlanInput,
 ): Phase7PreparedTradePlanInput {
+  // Hydrate before reservations: no caller-controlled market net price enters the plan.
+  const pricedQuotes = derivePhase7DestinationNetPrices(world, context, input.opportunityQuotes);
   const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon;
   const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon;
   if (quantityEpsilon === undefined || moneyEpsilon === undefined ||
@@ -165,7 +172,7 @@ export function buildPhase7LiveWorldPlanInput(
   const actorsByTradePlanId = new Map<string, Phase7TradePlanActors>();
   const seenPlans = new Set<string>();
   const seenLinkGoods = new Set<string>();
-  for (const quote of [...input.opportunityQuotes].sort((a, b) =>
+  for (const quote of [...pricedQuotes].sort((a, b) =>
     cmp(a.linkId, b.linkId) || cmp(a.goodId, b.goodId) || cmp(a.planId, b.planId))) {
     if (seenPlans.has(quote.planId) ||
         seenLinkGoods.has(JSON.stringify([quote.linkId, quote.goodId]))) {
@@ -223,7 +230,7 @@ export function buildPhase7LiveWorldPlanInput(
     buyerCashByDestinationCurrency, fxOutputByPairCurrency,
   };
 
-  const opportunities: Phase7CandidateEvidence[] = input.opportunityQuotes.map((quote) => {
+  const opportunities: Phase7CandidateEvidence[] = pricedQuotes.map((quote) => {
     const sourceKey = phase7RegionGoodKey(quote.originRegionId, quote.goodId);
     const destinationKey = phase7RegionGoodKey(quote.destinationRegionId, quote.goodId);
     const currency = world.regions.get(quote.destinationRegionId)?.settlementCurrencyId;
@@ -250,10 +257,11 @@ export function buildPhase7LiveWorldPlanInput(
 /** Read-only Phase-7 preview using live goods and cash rather than caller stock claims. */
 export function preparePhase7LiveWorldTradePlan(
   world: WorldState,
+  context: Pick<TickContext, "phase" | "marketPrices">,
   input: Phase7LiveWorldPlanInput,
 ): Phase7PreparedTradePlan {
   return preparePhase7TradePlan(
-    world, world.simulationConfig, buildPhase7LiveWorldPlanInput(world, input),
+    world, world.simulationConfig, buildPhase7LiveWorldPlanInput(world, context, input),
   );
 }
 
@@ -268,10 +276,6 @@ export function preparePhase7LiveWorldTradePlan(
  * Missing/ambiguous markets or malformed prices fail closed; there is no
  * invented default price and the supplied WorldState/context are untouched.
  */
-export type Phase7LiveQuoteWithoutDestinationNetPrice = Omit<
-  Phase7LiveOpportunityQuote, "destinationReferenceNetUnitPrice"
->;
-
 export function derivePhase7DestinationNetPrices(
   world: Pick<WorldState, "regions" | "markets" | "transportLinks">,
   context: Pick<TickContext, "phase" | "marketPrices">,
