@@ -8,12 +8,14 @@ import { phase7BuyerActorCashKey, phase7SellerEndpointKey } from "./phase7Intent
 import { phase7FxOutputKey, phase7RegionCashKey, phase7RegionGoodKey } from "./phase7AggregateReservation";
 import { marketPriceKey } from "./phase6MarketPriceFormation";
 import { quoteFx, resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
+import { quoteTransportFee } from "./transportFeeQuote";
 
 import {
   buildPhase7LiveWorldPlanInput, preparePhase7LiveWorldTradePlan,
   derivePhase7DestinationNetPrices, derivePhase7SourceSellerNetPrices, derivePhase7LiveFxOutputBudgets,
   derivePhase7Phase1ImportTariffs, phase7ImportTariffKey,
   derivePhase7DestinationGrossReferencePrices, phase7ConsumptionTaxKey,
+  derivePhase7LiveTransportFees,
   type Phase7LiveWorldPlanInput,
 } from "./phase7LiveWorldPlan";
 import { buildInitialWorld, type WorldState } from "./worldState";
@@ -37,8 +39,16 @@ function fixture() {
   const state = root.states.get(destination.controllerStateId)!;
   const buyer = [...root.cohorts.values()].find(c => c.seed.regionKey === destination.seed.key)!;
   if (!buyer) throw new Error("baseline needs one cohort at destination");
+  // Explicit test-only recipients: original baseline domestic links intentionally
+  // have none and must refuse a positive transport-fee quotation.
+  const feeLinks = new Map(root.transportLinks);
+  for (const link of links) {
+    feeLinks.set(link.linkId, {
+      ...link, feeReceiver: { type: "STATE", stateId: state.stateId },
+    });
+  }
   const world: WorldState = {
-    ...root,
+    ...root, transportLinks: feeLinks,
     states: new Map(root.states).set(state.stateId, {
       ...state, publicInventory: new Map(state.publicInventory).set(GOOD, 9),
     }),
@@ -116,6 +126,7 @@ function fixture() {
       [...world.regions].map(([id, region]) => [id, region.controllerStateId] as const),
     ),
     phase1ImportTariffs: { tick: 15, ratesByDestinationStateGood: phase1Rates },
+    transportFeeCostPolicy: { minimumConditionForCost: 0.1, maximumConditionCostMultiplier: 3 },
     phase1ConsumptionTaxes: {
       tick: 15,
       ratesByDestinationStateGood: new Map(
@@ -130,6 +141,70 @@ function fixture() {
 }
 
 describe("M5 #673 Phase-7 live world opportunity planning", () => {
+  it("uses live destination-currency transport fees, never caller estimates", () => {
+    const f = fixture();
+    const canonical = buildPhase7LiveWorldPlanInput(f.world, f.context, f.input);
+    const expected = f.input.opportunityQuotes.map(q =>
+      quoteTransportFee(
+        f.world, f.world.transportLinks.get(q.linkId)!, 1,
+        q.cargoWeightPerUnit, f.world.simulationConfig, f.context.transportFeeCostPolicy,
+      ).amount,
+    );
+    expect(canonical.opportunities.map(q => q.estimatedTransportUnitCostDest)).toEqual(expected);
+    expect(expected.every(fee => fee > 0 && fee !== 1)).toBe(true);
+
+    const forged = {
+      ...f.input,
+      opportunityQuotes: f.input.opportunityQuotes.map(q => ({
+        ...q, estimatedTransportUnitCostDest: 1e9,
+      })),
+    };
+    expect(buildPhase7LiveWorldPlanInput(f.world, f.context, forged)).toEqual(canonical);
+    expect(preparePhase7LiveWorldTradePlan(f.world, f.context, forged))
+      .toEqual(preparePhase7LiveWorldTradePlan(f.world, f.context, f.input));
+    expect(derivePhase7LiveTransportFees(
+      f.world, f.context, [...f.input.opportunityQuotes].reverse(),
+    )).toEqual(derivePhase7LiveTransportFees(f.world, f.context, f.input.opportunityQuotes));
+    expect(f.world.shipments?.size).toBe(0);
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+  });
+
+  it("fails closed on missing cost policy, stale phase, unpaid fee or invalid link", () => {
+    const f = fixture();
+    const first = f.input.opportunityQuotes[0]!;
+    expect(() => buildPhase7LiveWorldPlanInput(
+      f.world, { ...f.context, transportFeeCostPolicy: undefined }, f.input,
+    )).toThrow("requires live Phase-7 and explicit cost policy");
+    expect(() => buildPhase7LiveWorldPlanInput(
+      f.world, { ...f.context, phase: 6 }, f.input,
+    )).toThrow("requires live Phase-7 and explicit cost policy");
+    expect(() => buildPhase7LiveWorldPlanInput(
+      f.world, { ...f.context, transportFeeCostPolicy: {
+        minimumConditionForCost: 0, maximumConditionCostMultiplier: 3,
+      } }, f.input,
+    )).toThrow("minimumConditionForCost");
+
+    const link = f.world.transportLinks.get(first.linkId)!;
+    const noRecipient: WorldState = {
+      ...f.world,
+      transportLinks: new Map(f.world.transportLinks).set(link.linkId, {
+        ...link, feeReceiver: null,
+      }),
+    };
+    expect(() => buildPhase7LiveWorldPlanInput(
+      noRecipient, f.context, f.input,
+    )).toThrow("positive transport fee requires an explicit feeReceiver");
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, f.context, {
+      ...f.input,
+      opportunityQuotes: [
+        { ...first, originRegionId: first.destinationRegionId },
+        ...f.input.opportunityQuotes.slice(1),
+      ],
+    })).toThrow("mismatched directed link");
+    expect(f.world.shipments?.size).toBe(0);
+    expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(f.destination.settlementCurrencyId)).toBe(30);
+  });
+
   it("uses Phase-6 origin prices for source invoices and ignores forged seller prices", () => {
     const f = fixture();
     const baseline = buildPhase7LiveWorldPlanInput(f.world, f.context, f.input);

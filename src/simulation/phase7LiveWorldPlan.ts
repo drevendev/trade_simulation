@@ -3,9 +3,10 @@
  * live post-Phase-4 residual MarketIntents and authoritative WorldState stocks.
  *
  * Phase-1/6 owners supply frozen legal, tax, landed and FX evidence.
- * Both destination NET price (Phase-6 market) and tax-inclusive GROSS reference
- * (current Phase-1 policy) are hydrated before ranking. This module does
- * not invent tariff, tax or FX defaults or commit provisional quantities.
+ * Destination/source NET prices (Phase 6), gross tax reference (Phase 1),
+ * and transport fees (live directed link + explicit cost policy) are hydrated
+ * before ranking. This module does not invent tariff, tax or FX defaults,
+ * trust caller transport charges, or commit provisional quantities.
  * The canonical Phase-7 dispatcher remains the only writer.
  */
 import { actorRefKey } from "../domain/genesisLedger";
@@ -30,6 +31,7 @@ import {
 } from "./phase7TradePlan";
 import { marketPriceKey } from "./phase6MarketPriceFormation";
 import { quoteFx } from "./fxWorldPoolAuthority";
+import { quoteTransportFee, type TransportFeeCostPolicy } from "./transportFeeQuote";
 import type { TickContext } from "./tickOrchestrator";
 import type { GoodId, StateId } from "../domain/id";
 import type { Phase7CandidateEvidence } from "./tradeCandidateSelection";
@@ -75,6 +77,8 @@ export interface Phase7LivePricingContext extends Pick<
 > {
   readonly phase1ImportTariffs?: Phase7FrozenImportTariffSnapshot | undefined;
   readonly phase1ConsumptionTaxes?: Phase7FrozenConsumptionTaxSnapshot | undefined;
+  /** Cost multipliers belong to the explicit fee-policy owner, not an invented default. */
+  readonly transportFeeCostPolicy?: TransportFeeCostPolicy | undefined;
 }
 
 export function phase7ImportTariffKey(stateId: StateId, goodId: GoodId): string {
@@ -86,7 +90,7 @@ export interface Phase7LiveWorldPlanInput extends Pick<
   "scorePolicy" | "infrastructureFactors" | "eligibleDirectedLinkIdsAtPhase1" |
   "fxPairIdByTradePlanId"
 > {
-  /** Frozen legal/landed/FX terms; supplied reference net/gross prices are overwritten. */
+  /** Legal/landed/FX terms; caller market prices and transport-fee quote are overwritten. */
   readonly opportunityQuotes: readonly Phase7LiveQuoteWithoutMarketNetPrices[];
   /** Unique intents after Phase-4 commitments; never original unspent maxSpend. */
   readonly residualIntents: readonly Phase7ActorResidualIntent[];
@@ -376,6 +380,41 @@ export function derivePhase7LiveFxOutputBudgets(
 }
 
 /**
+ * Derive destination-currency transport cost for ONE good from the directed
+ * live TransportLink and the existing #669 transport fee quote primitive.
+ * Fee recipient, link condition, currency and cargo weight are checked by
+ * that primitive; a missing recipient for a positive fee fails closed.
+ *
+ * This is a pure preflight unit quote (quantity=1), not a payment or an
+ * authorization to ship. The separate execution path must re-quote for the
+ * actual matched quantity. The landed all-in buyer quote is still an external
+ * input until its own dedicated hydration is implemented.
+ */
+export function derivePhase7LiveTransportFees(
+  world: Pick<WorldState, "regions" | "transportLinks" | "simulationConfig">,
+  context: Pick<Phase7LivePricingContext, "phase" | "transportFeeCostPolicy">,
+  quotes: readonly Phase7LiveQuoteWithoutMarketNetPrices[],
+): readonly Phase7LiveQuoteWithoutMarketNetPrices[] {
+  const policy = context.transportFeeCostPolicy;
+  if (context.phase !== 7 || policy === undefined) {
+    throw new Error("Phase-7 transport fee requires live Phase-7 and explicit cost policy");
+  }
+  return [...quotes].sort((a, b) =>
+    cmp(a.linkId, b.linkId) || cmp(a.goodId, b.goodId) || cmp(a.planId, b.planId))
+    .map((quote) => {
+      const link = world.transportLinks.get(quote.linkId);
+      if (!link || link.fromRegionId !== quote.originRegionId ||
+          link.toRegionId !== quote.destinationRegionId) {
+        throw new Error("Phase-7 transport fee quote references a mismatched directed link");
+      }
+      const fee = quoteTransportFee(
+        world, link, 1, quote.cargoWeightPerUnit, world.simulationConfig, policy,
+      );
+      return { ...quote, estimatedTransportUnitCostDest: fee.amount };
+    });
+}
+
+/**
  * Build actual owner-constrained stocks, aggregated regional upper bounds and
  * per-route actors in one deterministic pass. Same physical State inventory
  * may appear as an upper bound at different origin Regions, but is represented
@@ -388,8 +427,10 @@ export function buildPhase7LiveWorldPlanInput(
   context: Phase7LivePricingContext,
   input: Phase7LiveWorldPlanInput,
 ): Phase7PreparedTradePlanInput {
+  // Hydrate actual destination-currency link fees before legal and price ranking.
+  const feeQuotes = derivePhase7LiveTransportFees(world, context, input.opportunityQuotes);
   // Freeze current Phase-1 jurisdiction and explicit destination tariff policy.
-  const lawfulQuotes = derivePhase7Phase1ImportTariffs(world, context, input.opportunityQuotes);
+  const lawfulQuotes = derivePhase7Phase1ImportTariffs(world, context, feeQuotes);
   // Hydrate before reservations: no caller-controlled market net price enters the plan.
   const sourcePricedQuotes = derivePhase7SourceSellerNetPrices(world, context, lawfulQuotes);
   const pricedQuotes = derivePhase7DestinationNetPrices(world, context, sourcePricedQuotes);
