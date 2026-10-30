@@ -18,6 +18,7 @@ import {
   derivePhase7LiveTransportFees,
   type Phase7LiveWorldPlanInput,
 } from "./phase7LiveWorldPlan";
+import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
 import { buildInitialWorld, type WorldState } from "./worldState";
 
 const GOOD = "good:wood" as GoodId;
@@ -941,6 +942,71 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
       ...input, fxOutputByPairCurrency: new Map(),
     })).toThrow("requires explicit tick-local output budget");
     expect(resolveCanonicalFxPool(f.world, cross.pair).pool.cash).toBe(pool.cash);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+
+  it("re-quotes matched route lots at actual cargo quantity without transferring funds or goods", () => {
+    const f = fixture();
+    const baseline = quotePhase7ActualMatchedLots(f.world, f.context, f.input);
+    expect(baseline.quotes.length).toBeGreaterThan(0);
+    expect(baseline.quotes.reduce((sum, q) => sum + q.lot.quantity, 0))
+      .toBeCloseTo(9, 10);
+    for (const q of baseline.quotes) {
+      const route = f.input.opportunityQuotes.find(r => r.planId === q.lot.tradePlanId)!;
+      const live = baseline.preparedPlan.rankedCandidates.find(
+        c => c.tradePlanId === q.lot.tradePlanId,
+      )!;
+      const fee = quoteTransportFee(
+        f.world, f.world.transportLinks.get(route.linkId)!, q.lot.quantity,
+        route.cargoWeightPerUnit, f.world.simulationConfig, f.context.transportFeeCostPolicy,
+      );
+      expect(q.transportFeeDest).toBe(fee.amount);
+      expect(q.transportFeeReceiver).toEqual(fee.receiver);
+      expect(q.sellerInvoiceSource).toBeCloseTo(q.lot.quantity, 10);
+      expect(q.importTariffDest).toBe(0);
+      expect(q.consumptionTaxDest).toBe(0);
+      expect(q.fxPairId).toBeNull();
+      expect(q.buyerDebitDest).toBeCloseTo(q.sellerInvoiceSource + fee.amount, 10);
+      expect(live.tradePlanId).toBe(q.lot.tradePlanId);
+    }
+    const forged: Phase7LiveWorldPlanInput = {
+      ...f.input,
+      residualIntents: [...f.input.residualIntents].reverse(),
+      opportunityQuotes: [...f.input.opportunityQuotes].reverse().map(q => ({
+        ...q, sourceSellerNetUnitPrice: 1e8,
+        estimatedTransportUnitCostDest: 1e8,
+        landedGrossUnitCostDest: 1e8, estimatedFxInputPerSourceCurrency: 1e8,
+      })),
+    };
+    expect(quotePhase7ActualMatchedLots(f.world, f.context, forged)).toEqual(baseline);
+    expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(f.destination.settlementCurrencyId)).toBe(30);
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("applies frozen tax to each actual lot's source invoice, never the destination reference", () => {
+    const f = fixture();
+    const policy = {
+      ...f.context,
+      phase1ConsumptionTaxes: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([
+          [phase7ConsumptionTaxKey(f.destination.controllerStateId!, GOOD), 0.2],
+        ]),
+        collectionEfficiencyByState: new Map([[f.destination.controllerStateId!, 0.5]]),
+      },
+    };
+    const quoted = quotePhase7ActualMatchedLots(f.world, policy, f.input);
+    expect(quoted.quotes.length).toBeGreaterThan(0);
+    for (const q of quoted.quotes) {
+      expect(q.consumptionTaxDest).toBeCloseTo(q.sellerInvoiceSource * 0.1, 10);
+      expect(q.importTariffDest).toBe(0);
+      expect(q.buyerDebitDest).toBeCloseTo(
+        q.goodsPaymentDest + q.transportFeeDest + q.consumptionTaxDest, 10,
+      );
+      expect(q.destinationTreasuryStateId).toBe(f.destination.controllerStateId);
+    }
     expect(f.world.shipments?.size).toBe(0);
   });
 
