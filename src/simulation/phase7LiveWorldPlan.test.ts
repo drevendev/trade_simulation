@@ -1131,4 +1131,64 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
     expect(world.shipments?.size).toBe(0);
   });
 
+  it("rejects cumulative observable lot debits from a large shared buyer balance", () => {
+    const make = (openingBalance: number) => {
+      const f = fixture();
+      const link = f.links[0]!;
+      const sellers = [0, 1, 2].map(index => ({
+        ...f.first,
+        id: createMarketIntentId("mi:phase7:actual:precision:seller:" + index),
+        sourcePlanId: "plan:phase7:actual:precision:seller:" + index,
+        desiredQuantity: 0.3,
+      }));
+      const buyerIntent = {
+        ...f.b1,
+        id: createMarketIntentId("mi:phase7:actual:precision:buyer"),
+        sourcePlanId: "plan:phase7:actual:precision:buyer",
+        desiredQuantity: 0.9, maxSpend: openingBalance,
+      };
+      const world: WorldState = {
+        ...f.world,
+        // Isolate the exact 0.3 source-currency invoice per lot.
+        transportLinks: new Map(f.world.transportLinks).set(link.linkId, {
+          ...link, seed: { ...link.seed, baseTransportCost: 0 },
+        }),
+        cohorts: new Map(f.world.cohorts).set(f.buyer.cohortId, {
+          ...f.buyer,
+          wallet: new Map(f.buyer.wallet).set(f.destination.settlementCurrencyId, openingBalance),
+        }),
+      };
+      const input: Phase7LiveWorldPlanInput = {
+        ...f.input,
+        residualIntents: [
+          ...sellers.map(intent => ({ intent, residualQuantity: 0.3 })),
+          { intent: buyerIntent, residualQuantity: 0.9, remainingBuyerSpend: openingBalance },
+        ],
+        opportunityQuotes: [f.input.opportunityQuotes[0]!],
+      };
+      return { world, input, context: f.context, buyer: f.buyer, currency: f.destination.settlementCurrencyId };
+    };
+
+    const affordable = make(1000);
+    const accepted = quotePhase7ActualMatchedLots(
+      affordable.world, affordable.context, affordable.input,
+    );
+    expect(accepted.quotes).toHaveLength(3);
+    expect(accepted.quotes.map(q => q.sellerInvoiceSource)).toEqual([0.3, 0.3, 0.3]);
+    expect(accepted.quotes.reduce((total, q) => total + q.buyerDebitDest, 0))
+      .toBeCloseTo(0.9, 10);
+    expect(affordable.world.cohorts.get(affordable.buyer.cohortId)!.wallet.get(affordable.currency))
+      .toBe(1000);
+
+    // Three individually acceptable ~7.45e-10 subtractive errors accumulate
+    // to ~2.24e-9, violating ONE fixed 1e-9 moneyEpsilon for the buyer owner.
+    const highBalance = make(10_000_000);
+    expect(() => quotePhase7ActualMatchedLots(
+      highBalance.world, highBalance.context, highBalance.input,
+    )).toThrow("cumulative observable buyer wallet");
+    expect(highBalance.world.cohorts.get(highBalance.buyer.cohortId)!.wallet.get(highBalance.currency))
+      .toBe(10_000_000);
+    expect(highBalance.world.shipments?.size).toBe(0);
+  });
+
 });
