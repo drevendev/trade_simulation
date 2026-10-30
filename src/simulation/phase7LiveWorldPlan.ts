@@ -26,6 +26,8 @@ import {
   type Phase7PreparedTradePlanInput,
   type Phase7TradePlanActors,
 } from "./phase7TradePlan";
+import { marketPriceKey } from "./phase6MarketPriceFormation";
+import type { TickContext } from "./tickOrchestrator";
 import type { Phase7CandidateEvidence } from "./tradeCandidateSelection";
 import type { WorldState } from "./worldState";
 
@@ -253,4 +255,58 @@ export function preparePhase7LiveWorldTradePlan(
   return preparePhase7TradePlan(
     world, world.simulationConfig, buildPhase7LiveWorldPlanInput(world, input),
   );
+}
+
+/**
+ * Derive the destination market's net reference price from the SAME Phase-6
+ * evidence that Phase-8 will clear against. This removes a caller-controlled
+ * price from the live Phase-7 opportunity builder while leaving tax-inclusive
+ * gross quotes, source invoices, FX and legal decisions with their own owners.
+ *
+ * Only valid at the Phase-7 boundary. A Phase-6 price in TickContext takes
+ * precedence over the live carried market price, matching Phase-8's rule.
+ * Missing/ambiguous markets or malformed prices fail closed; there is no
+ * invented default price and the supplied WorldState/context are untouched.
+ */
+export type Phase7LiveQuoteWithoutDestinationNetPrice = Omit<
+  Phase7LiveOpportunityQuote, "destinationReferenceNetUnitPrice"
+>;
+
+export function derivePhase7DestinationNetPrices(
+  world: Pick<WorldState, "regions" | "markets" | "transportLinks">,
+  context: Pick<TickContext, "phase" | "marketPrices">,
+  quotes: readonly Phase7LiveQuoteWithoutDestinationNetPrice[],
+): readonly Phase7LiveOpportunityQuote[] {
+  if (context.phase !== 7 || !(context.marketPrices instanceof Map)) {
+    throw new Error("Phase-7 net price evidence requires live Phase-7 market prices");
+  }
+  const marketsByRegionKey = new Map<string, WorldState["markets"] extends ReadonlyMap<string, infer Market>
+    ? Market[] : never>();
+  for (const market of world.markets.values()) {
+    const current = marketsByRegionKey.get(market.seed.regionKey) ?? [];
+    current.push(market);
+    marketsByRegionKey.set(market.seed.regionKey, current);
+  }
+  return [...quotes].sort((a, b) =>
+    cmp(a.linkId, b.linkId) || cmp(a.goodId, b.goodId) || cmp(a.planId, b.planId))
+    .map((quote) => {
+      const destination = world.regions.get(quote.destinationRegionId);
+      const link = world.transportLinks.get(quote.linkId);
+      if (!destination || !link ||
+          link.fromRegionId !== quote.originRegionId ||
+          link.toRegionId !== quote.destinationRegionId) {
+        throw new Error("Phase-7 net price quote references a mismatched directed link or Region");
+      }
+      const matching = marketsByRegionKey.get(destination.seed.key) ?? [];
+      if (matching.length !== 1) {
+        throw new Error("Phase-7 net price quote requires exactly one destination LocalMarket");
+      }
+      const market = matching[0]!;
+      const key = marketPriceKey(market.marketId, quote.goodId);
+      const netPrice = context.marketPrices.get(key) ?? market.priceByGood.get(quote.goodId);
+      if (netPrice === undefined || !Number.isFinite(netPrice) || netPrice <= 0) {
+        throw new Error("Phase-7 net price quote requires a finite positive canonical market price");
+      }
+      return { ...quote, destinationReferenceNetUnitPrice: netPrice };
+    });
 }
