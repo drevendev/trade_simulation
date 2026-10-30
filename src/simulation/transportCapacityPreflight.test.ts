@@ -141,6 +141,50 @@ describe("M5 shared directed-link cargo reservation (#852)", () => {
       .toThrow(/precision/);
   });
 
+  it("refuses phantom cargo debit from mixed-magnitude lots in BOTH score orders (#871)", () => {
+    const edge = linkWithCapacity(forward, 10_000_000_000_001_000, 1);
+    const huge = candidate("huge", edge, wood, 2, 10_000_000_000_000_000, 1);
+    const small = candidate("small", edge, iron, 1, 3, 1);
+    // BigInt witnesses the exact SUM OF INDIVIDUAL INTEGER LOTS. A Number
+    // reduce would round 1e16 + 3 to 1e16 + 4 and hide the regression.
+    const trueTotal = BigInt(huge.requestedQuantity) + BigInt(small.requestedQuantity);
+    expect(trueTotal).toBe(10_000_000_000_000_003n);
+    expect(BigInt(10_000_000_000_000_004)).not.toBe(trueTotal);
+
+    for (const lots of [
+      [huge, small], [small, huge], [{ ...small, score: 3 }, huge],
+    ]) {
+      expect(() => preflight(lots, [edge])).toThrow(/precision/);
+    }
+    // Even one 3-unit debit cannot round its residual to a 4-unit debit.
+    expect(() => preflight([small], [edge])).toThrow(/precision/);
+
+    function expectExactAcceptedIntegers(
+      lots: readonly TransportCapacityRequest[], link: TransportLinkState,
+    ): void {
+      const result = preflight(lots, [link]);
+      expect(result.reservations.every((r) => r.refusal === null)).toBe(true);
+      const exactAccepted = result.reservations.reduce(
+        (total, r) => total + BigInt(r.capacityUsed), 0n,
+      );
+      expect(BigInt(result.usedByLink.get(link.linkId)!)).toBe(exactAccepted);
+      expect(BigInt(result.remainingByLink.get(link.linkId)!))
+        .toBe(BigInt(link.seed.baseCapacity) - exactAccepted);
+    }
+
+    // Positive control: 1e16 + 4 IS binary64-representable at this scale.
+    const representable = { ...small, requestedQuantity: 4 };
+    expectExactAcceptedIntegers([huge, representable], edge);
+    expectExactAcceptedIntegers([{ ...representable, score: 3 }, huge], edge);
+
+    // Positive control: both 1e12 and the additional 3 fit precisely.
+    const smaller = linkWithCapacity(forward, 1_000_000_001_000, 1);
+    expectExactAcceptedIntegers([
+      candidate("large", smaller, wood, 2, 1_000_000_000_000, 1),
+      candidate("small", smaller, iron, 1, 3, 1),
+    ], smaller);
+  });
+
   it("reconciles fractional cargo lots against one high-capacity link without lost debits (#866)", () => {
     const link = linkWithCapacity(forward, 100_000_000, 1);
     const requests = Array.from({ length: 200 }, (_, i) =>

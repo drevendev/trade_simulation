@@ -1,0 +1,1272 @@
+import { describe, expect, it } from "vitest";
+import { baselineScenario } from "../config/fixtures/baselineScenario";
+import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
+import { createDefaultSimulationConfig } from "../config/simulationConfig";
+import type { GoodId, TransportLinkId } from "../domain/id";
+import { createMarketIntentId, type MarketIntent } from "./marketIntent";
+import { phase7BuyerActorCashKey, phase7SellerEndpointKey } from "./phase7IntentMatching";
+import { phase7FxOutputKey, phase7RegionCashKey, phase7RegionGoodKey } from "./phase7AggregateReservation";
+import { marketPriceKey } from "./phase6MarketPriceFormation";
+import { quoteFx, resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
+import { quoteTransportFee } from "./transportFeeQuote";
+
+import {
+  buildPhase7LiveWorldPlanInput, preparePhase7LiveWorldTradePlan,
+  derivePhase7DestinationNetPrices, derivePhase7SourceSellerNetPrices, derivePhase7LiveFxOutputBudgets,
+  derivePhase7Phase1ImportTariffs, phase7ImportTariffKey,
+  derivePhase7DestinationGrossReferencePrices, phase7ConsumptionTaxKey,
+  derivePhase7LiveTransportFees,
+  type Phase7LiveWorldPlanInput,
+} from "./phase7LiveWorldPlan";
+import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
+import { buildInitialWorld, type WorldState } from "./worldState";
+
+const GOOD = "good:wood" as GoodId;
+
+function fixture() {
+  const root = buildInitialWorld(
+    baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 97,
+  );
+  const destination = [...root.regions.values()].find(
+    r => r.seed.key === "region:a2-farm",
+  )!;
+  const links = [...root.transportLinks.values()]
+    .filter(l => l.toRegionId === destination.regionId && l.fromRegionId !== destination.regionId)
+    .sort((a, b) => a.linkId < b.linkId ? -1 : a.linkId > b.linkId ? 1 : 0)
+    .slice(0, 2);
+  if (links.length !== 2 || !destination.controllerStateId) {
+    throw new Error("baseline needs two directed links into an Alpha market");
+  }
+  const state = root.states.get(destination.controllerStateId)!;
+  const buyer = [...root.cohorts.values()].find(c => c.seed.regionKey === destination.seed.key)!;
+  if (!buyer) throw new Error("baseline needs one cohort at destination");
+  // Explicit test-only recipients: original baseline domestic links intentionally
+  // have none and must refuse a positive transport-fee quotation.
+  const feeLinks = new Map(root.transportLinks);
+  for (const link of links) {
+    feeLinks.set(link.linkId, {
+      ...link, feeReceiver: { type: "STATE", stateId: state.stateId },
+    });
+  }
+  const world: WorldState = {
+    ...root, transportLinks: feeLinks,
+    states: new Map(root.states).set(state.stateId, {
+      ...state, publicInventory: new Map(state.publicInventory).set(GOOD, 9),
+    }),
+    cohorts: new Map(root.cohorts).set(buyer.cohortId, {
+      ...buyer, wallet: new Map(buyer.wallet).set(destination.settlementCurrencyId, 30),
+    }),
+  };
+  const makeSeller = (index: number, quantity: number, reserve = 0): MarketIntent => ({
+    id: createMarketIntentId("mi:phase7:world:seller:" + index),
+    actor: { type: "STATE", stateId: state.stateId },
+    regionId: links[index]!.fromRegionId, goodId: GOOD,
+    side: "SELL", purpose: "INVENTORY_REBALANCE",
+    desiredQuantity: quantity, minimumReserveQuantity: reserve,
+    inventoryBucket: "GENERAL", sourcePlanId: "plan:world:seller:" + index,
+  });
+  const makeBuyer = (index: number, quantity: number): MarketIntent => ({
+    id: createMarketIntentId("mi:phase7:world:buyer:" + index),
+    actor: { type: "COHORT", cohortId: buyer.cohortId },
+    regionId: destination.regionId, goodId: GOOD,
+    side: "BUY", purpose: "CONSUMPTION",
+    desiredQuantity: quantity, maxSpend: 100,
+    sourcePlanId: "plan:world:buyer:" + index,
+  });
+  const first = makeSeller(0, 4);
+  const second = makeSeller(1, 5);
+  const b1 = makeBuyer(0, 4);
+  const b2 = makeBuyer(1, 5);
+  const input: Phase7LiveWorldPlanInput = {
+    residualIntents: [
+      { intent: first, residualQuantity: 4 },
+      { intent: b1, residualQuantity: 4, remainingBuyerSpend: 100 },
+      { intent: second, residualQuantity: 5 },
+      { intent: b2, residualQuantity: 5, remainingBuyerSpend: 100 },
+    ],
+    opportunityQuotes: links.map((link, i) => ({
+      planId: "plan:world:route:" + i,
+      linkId: link.linkId,
+      originRegionId: link.fromRegionId,
+      destinationRegionId: link.toRegionId,
+      goodId: GOOD, authorizedAtPhase1: true,
+      cargoWeightPerUnit: 1, destinationReferenceGrossUnitPrice: 10,
+      landedGrossUnitCostDest: 2,
+      estimatedTransportUnitCostDest: 1,
+      estimatedTariffRate: 0, estimatedFxInputPerSourceCurrency: 1,
+      shortageRateDestination: 0.25,
+    })),
+    scorePolicy: {
+      tradeProfitWeight: 1, shortageWeight: 0,
+      minimumTradeScore: 0.01, maximumShortagePremiumShare: 0,
+    },
+    infrastructureFactors: new Map<TransportLinkId, number>(links.map(l => [l.linkId, 1])),
+    eligibleDirectedLinkIdsAtPhase1: new Set<TransportLinkId>(links.map(l => l.linkId)),
+    fxOutputByPairCurrency: new Map(),
+  };
+  const market = [...world.markets.values()].find(m => m.seed.regionKey === destination.seed.key)!;
+  const phase1Rates = new Map<string, number>();
+  for (const link of links) {
+    const source = world.regions.get(link.fromRegionId)!;
+    const target = world.regions.get(link.toRegionId)!;
+    if (target.controllerStateId !== null &&
+        source.controllerStateId !== target.controllerStateId) {
+      phase1Rates.set(phase7ImportTariffKey(target.controllerStateId, GOOD), 0);
+    }
+  }
+  const originPrices = links.map(link => {
+    const region = world.regions.get(link.fromRegionId)!;
+    const originMarket = [...world.markets.values()].find(m => m.seed.regionKey === region.seed.key)!;
+    return [marketPriceKey(originMarket.marketId, GOOD), 1] as const;
+  });
+  const context = {
+    tick: 15, phase: 7 as const, marketPrices: new Map<string, number>([
+      [marketPriceKey(market.marketId, GOOD), 10], ...originPrices,
+    ]),
+    effectiveJurisdictionByRegion: new Map(
+      [...world.regions].map(([id, region]) => [id, region.controllerStateId] as const),
+    ),
+    phase1ImportTariffs: { tick: 15, ratesByDestinationStateGood: phase1Rates },
+    transportFeeCostPolicy: { minimumConditionForCost: 0.1, maximumConditionCostMultiplier: 3 },
+    phase1ConsumptionTaxes: {
+      tick: 15,
+      ratesByDestinationStateGood: new Map(
+        [...world.states.keys()].map(id => [phase7ConsumptionTaxKey(id, GOOD), 0]),
+      ),
+      collectionEfficiencyByState: new Map(
+        [...world.states.keys()].map(id => [id, 1]),
+      ),
+    },
+  };
+  return { world, context, input, first, second, b1, b2, links, destination, state, buyer };
+}
+
+describe("M5 #673 Phase-7 live world opportunity planning", () => {
+  it("hydrates cargo mass from GoodDefinition, never caller-provided route weight", () => {
+    const f = fixture();
+    const forged: Phase7LiveWorldPlanInput = {
+      ...f.input,
+      opportunityQuotes: f.input.opportunityQuotes.map(q => ({
+        ...q, cargoWeightPerUnit: 0.00001,
+      })),
+    };
+    const canonical = buildPhase7LiveWorldPlanInput(f.world, f.context, f.input);
+    expect(buildPhase7LiveWorldPlanInput(f.world, f.context, forged)).toEqual(canonical);
+    expect(quotePhase7ActualMatchedLots(f.world, f.context, forged))
+      .toEqual(quotePhase7ActualMatchedLots(f.world, f.context, f.input));
+
+    const good = f.world.definitionRegistry.goods[GOOD]!;
+    const heavyWorld: WorldState = {
+      ...f.world,
+      definitionRegistry: {
+        ...f.world.definitionRegistry,
+        goods: {
+          ...f.world.definitionRegistry.goods,
+          [GOOD]: { ...good, cargoWeightPerUnit: 3 },
+        },
+      },
+    };
+    const heavy = buildPhase7LiveWorldPlanInput(heavyWorld, f.context, forged);
+    expect(heavy.opportunities.map(q => q.cargoWeightPerUnit)).toEqual([3, 3]);
+    expect(heavy.opportunities.map(q => q.estimatedTransportUnitCostDest)).toEqual(
+      heavy.opportunities.map(q => quoteTransportFee(
+        heavyWorld, heavyWorld.transportLinks.get(q.linkId)!,
+        1, 3, heavyWorld.simulationConfig, f.context.transportFeeCostPolicy,
+      ).amount),
+    );
+    expect(heavy.opportunities.every(q =>
+      q.estimatedTransportUnitCostDest > canonical.opportunities.find(
+        original => original.planId === q.planId,
+      )!.estimatedTransportUnitCostDest)).toBe(true);
+
+    for (const cargoWeightPerUnit of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const invalidWorld: WorldState = {
+        ...f.world,
+        definitionRegistry: {
+          ...f.world.definitionRegistry,
+          goods: {
+            ...f.world.definitionRegistry.goods,
+            [GOOD]: { ...good, cargoWeightPerUnit },
+          },
+        },
+      };
+      expect(() => buildPhase7LiveWorldPlanInput(invalidWorld, f.context, forged))
+        .toThrow("tradable GoodDefinition with positive cargo weight");
+    }
+    const nontradableWorld: WorldState = {
+      ...f.world,
+      definitionRegistry: {
+        ...f.world.definitionRegistry,
+        goods: {
+          ...f.world.definitionRegistry.goods,
+          [GOOD]: { ...good, tradable: false },
+        },
+      },
+    };
+    expect(() => buildPhase7LiveWorldPlanInput(nontradableWorld, f.context, forged))
+      .toThrow("tradable GoodDefinition with positive cargo weight");
+    expect(f.world.shipments?.size).toBe(0);
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+  });
+
+  it("uses live destination-currency transport fees, never caller estimates", () => {
+    const f = fixture();
+    const canonical = buildPhase7LiveWorldPlanInput(f.world, f.context, f.input);
+    const expected = f.input.opportunityQuotes.map(q =>
+      quoteTransportFee(
+        f.world, f.world.transportLinks.get(q.linkId)!, 1,
+        q.cargoWeightPerUnit, f.world.simulationConfig, f.context.transportFeeCostPolicy,
+      ).amount,
+    );
+    expect(canonical.opportunities.map(q => q.estimatedTransportUnitCostDest)).toEqual(expected);
+    expect(expected.every(fee => fee > 0 && fee !== 1)).toBe(true);
+
+    const forged = {
+      ...f.input,
+      opportunityQuotes: f.input.opportunityQuotes.map(q => ({
+        ...q, estimatedTransportUnitCostDest: 1e9,
+      })),
+    };
+    expect(buildPhase7LiveWorldPlanInput(f.world, f.context, forged)).toEqual(canonical);
+    expect(preparePhase7LiveWorldTradePlan(f.world, f.context, forged))
+      .toEqual(preparePhase7LiveWorldTradePlan(f.world, f.context, f.input));
+    expect(derivePhase7LiveTransportFees(
+      f.world, f.context, [...f.input.opportunityQuotes].reverse(),
+    )).toEqual(derivePhase7LiveTransportFees(f.world, f.context, f.input.opportunityQuotes));
+    expect(f.world.shipments?.size).toBe(0);
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+  });
+
+  it("fails closed on missing cost policy, stale phase, unpaid fee or invalid link", () => {
+    const f = fixture();
+    const first = f.input.opportunityQuotes[0]!;
+    expect(() => buildPhase7LiveWorldPlanInput(
+      f.world, { ...f.context, transportFeeCostPolicy: undefined }, f.input,
+    )).toThrow("requires live Phase-7 and explicit cost policy");
+    expect(() => buildPhase7LiveWorldPlanInput(
+      f.world, { ...f.context, phase: 6 }, f.input,
+    )).toThrow("requires live Phase-7 and explicit cost policy");
+    expect(() => buildPhase7LiveWorldPlanInput(
+      f.world, { ...f.context, transportFeeCostPolicy: {
+        minimumConditionForCost: 0, maximumConditionCostMultiplier: 3,
+      } }, f.input,
+    )).toThrow("minimumConditionForCost");
+
+    const link = f.world.transportLinks.get(first.linkId)!;
+    const noRecipient: WorldState = {
+      ...f.world,
+      transportLinks: new Map(f.world.transportLinks).set(link.linkId, {
+        ...link, feeReceiver: null,
+      }),
+    };
+    expect(() => buildPhase7LiveWorldPlanInput(
+      noRecipient, f.context, f.input,
+    )).toThrow("positive transport fee requires an explicit feeReceiver");
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, f.context, {
+      ...f.input,
+      opportunityQuotes: [
+        { ...first, originRegionId: first.destinationRegionId },
+        ...f.input.opportunityQuotes.slice(1),
+      ],
+    })).toThrow("mismatched directed link");
+    expect(f.world.shipments?.size).toBe(0);
+    expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(f.destination.settlementCurrencyId)).toBe(30);
+  });
+
+  it("uses Phase-6 origin prices for source invoices and ignores forged seller prices", () => {
+    const f = fixture();
+    const baseline = buildPhase7LiveWorldPlanInput(f.world, f.context, f.input);
+    expect(baseline.opportunities.map(q => q.sourceSellerNetUnitPrice)).toEqual([1, 1]);
+    const forged = {
+      ...f.input,
+      opportunityQuotes: f.input.opportunityQuotes.map(q => ({
+        ...q, sourceSellerNetUnitPrice: 1e9,
+      })),
+    };
+    expect(buildPhase7LiveWorldPlanInput(f.world, f.context, forged)).toEqual(baseline);
+    expect(preparePhase7LiveWorldTradePlan(f.world, f.context, forged))
+      .toEqual(preparePhase7LiveWorldTradePlan(f.world, f.context, f.input));
+    const quote = f.input.opportunityQuotes[0]!;
+    const origin = f.world.regions.get(quote.originRegionId)!;
+    const originMarket = [...f.world.markets.values()].find(m => m.seed.regionKey === origin.seed.key)!;
+    const key = marketPriceKey(originMarket.marketId, GOOD);
+    const sameTick = { ...f.context, marketPrices: new Map(f.context.marketPrices).set(key, 1.5) };
+    expect(derivePhase7SourceSellerNetPrices(f.world, sameTick, [quote])[0]!
+      .sourceSellerNetUnitPrice).toBe(1.5);
+    expect(originMarket.priceByGood.get(GOOD)).not.toBe(1.5);
+    expect(derivePhase7SourceSellerNetPrices(
+      f.world, { ...f.context, marketPrices: new Map() }, [quote],
+    )[0]!.sourceSellerNetUnitPrice).toBe(originMarket.priceByGood.get(GOOD));
+    expect(f.world.shipments?.size).toBe(0);
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+  });
+
+  it("rejects stale, nonfinite, missing and ambiguous source market evidence without mutation", () => {
+    const f = fixture();
+    const quote = f.input.opportunityQuotes[0]!;
+    const origin = f.world.regions.get(quote.originRegionId)!;
+    const market = [...f.world.markets.values()].find(m => m.seed.regionKey === origin.seed.key)!;
+    const key = marketPriceKey(market.marketId, GOOD);
+    expect(() => derivePhase7SourceSellerNetPrices(
+      f.world, { ...f.context, phase: 6 }, [quote],
+    )).toThrow("requires live Phase-7");
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+      ...f.context, marketPrices: new Map(f.context.marketPrices).set(key, Number.NaN),
+    }, f.input)).toThrow("finite positive canonical market price");
+    const missing: WorldState = {
+      ...f.world, markets: new Map([...f.world.markets].filter(([id]) => id !== market.marketId)),
+    };
+    expect(() => buildPhase7LiveWorldPlanInput(missing, f.context, f.input))
+      .toThrow("exactly one origin LocalMarket");
+    const duplicate: WorldState = {
+      ...f.world, markets: new Map(f.world.markets).set("market:source:duplicate" as typeof market.marketId, {
+        ...market, marketId: "market:source:duplicate" as typeof market.marketId,
+      }),
+    };
+    expect(() => buildPhase7LiveWorldPlanInput(duplicate, f.context, f.input))
+      .toThrow("exactly one origin LocalMarket");
+    const pricesRemoved: WorldState = {
+      ...f.world, markets: new Map(f.world.markets).set(market.marketId, {
+        ...market, priceByGood: new Map([...market.priceByGood].filter(([id]) => id !== GOOD)),
+      }),
+    };
+    expect(() => buildPhase7LiveWorldPlanInput(pricesRemoved, {
+      ...f.context, marketPrices: new Map([...f.context.marketPrices].filter(([id]) => id !== key)),
+    }, f.input)).toThrow("finite positive canonical market price");
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("derives two routes' goods and wallet ceilings from real owners, never quoted quantities", () => {
+    const f = fixture();
+    const built = buildPhase7LiveWorldPlanInput(f.world, f.context, f.input);
+    const origin0 = phase7RegionGoodKey(f.first.regionId, GOOD);
+    const origin1 = phase7RegionGoodKey(f.second.regionId, GOOD);
+    const demandKey = phase7RegionGoodKey(f.destination.regionId, GOOD);
+    const cashKey = phase7RegionCashKey(f.destination.regionId, f.destination.settlementCurrencyId);
+    const sellerKey = phase7SellerEndpointKey(f.first);
+    const buyerKey = phase7BuyerActorCashKey(f.b1.actor, f.destination.settlementCurrencyId);
+    expect(phase7SellerEndpointKey(f.second)).toBe(sellerKey);
+    expect(built.aggregateBudgets.exportableByOriginGood.get(origin0)).toBe(4);
+    expect(built.aggregateBudgets.exportableByOriginGood.get(origin1)).toBe(5);
+    expect(built.aggregateBudgets.importDemandByDestinationGood.get(demandKey)).toBe(9);
+    expect(built.aggregateBudgets.buyerCashByDestinationCurrency.get(cashKey)).toBe(30);
+    expect(built.actorBudgets.sellerExportableByEndpoint.get(sellerKey)).toBe(9);
+    expect(built.actorBudgets.buyerCashByActorCurrency.get(buyerKey)).toBe(30);
+    expect(built.opportunities.map(q => q.exportableQuantity).sort()).toEqual([4, 5]);
+    const matched = preparePhase7LiveWorldTradePlan(f.world, f.context, f.input);
+    expect(matched.aggregate.reservations.reduce((sum, r) => sum + r.allocatedQuantity, 0)).toBe(9);
+    expect(matched.actorMatches.lots.reduce((sum, lot) => sum + lot.quantity, 0)).toBe(9);
+    expect(matched.actorMatches.remainingSellerByEndpoint.get(sellerKey)).toBe(0);
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(f.destination.settlementCurrencyId)).toBe(30);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("hydrates the actual prepared plan, even against a forged caller net price", () => {
+    const f = fixture();
+    const baseline = preparePhase7LiveWorldTradePlan(f.world, f.context, f.input);
+    const forged = {
+      ...f.input,
+      opportunityQuotes: f.input.opportunityQuotes.map(q => ({
+        ...q, destinationReferenceNetUnitPrice: 1e8,
+      })),
+    };
+    const actual = preparePhase7LiveWorldTradePlan(f.world, f.context, forged);
+    expect(actual).toEqual(baseline);
+    expect(actual.rankedCandidates.map(c => c.destinationReferenceNetUnitPrice)).toEqual([10, 10]);
+
+    const market = [...f.world.markets.values()].find(
+      m => m.seed.regionKey === f.destination.seed.key,
+    )!;
+    const badContext = {
+      ...f.context,
+      marketPrices: new Map([[marketPriceKey(market.marketId, GOOD), Number.NaN]]),
+    };
+    expect(() => preparePhase7LiveWorldTradePlan(f.world, badContext, forged))
+      .toThrow("finite positive canonical market price");
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(f.destination.settlementCurrencyId)).toBe(30);
+  });
+
+  it("remains byte-stable under all input and quote permutations", () => {
+    const f = fixture();
+    const reversed: Phase7LiveWorldPlanInput = {
+      ...f.input,
+      residualIntents: [...f.input.residualIntents].reverse(),
+      opportunityQuotes: [...f.input.opportunityQuotes].reverse(),
+      infrastructureFactors: new Map([...f.input.infrastructureFactors].reverse()),
+    };
+    const first = preparePhase7LiveWorldTradePlan(f.world, f.context, f.input);
+    const second = preparePhase7LiveWorldTradePlan(f.world, f.context, reversed);
+    expect(second.rankedCandidates).toEqual(first.rankedCandidates);
+    expect(second.aggregate.reservations).toEqual(first.aggregate.reservations);
+    expect(second.actorMatches.lots).toEqual(first.actorMatches.lots);
+  });
+
+  it("fails atomically when two legal origin regions overdraw one State inventory", () => {
+    const f = fixture();
+    const seller = f.world.states.get(f.state.stateId)!;
+    const world: WorldState = {
+      ...f.world, states: new Map(f.world.states).set(f.state.stateId, {
+        ...seller, publicInventory: new Map(seller.publicInventory).set(GOOD, 8),
+      }),
+    };
+    expect(() => preparePhase7LiveWorldTradePlan(world, f.context, f.input))
+      .toThrow("cannot cover aggregate reservation");
+    expect(world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(8);
+    expect(f.input.residualIntents[0]!.residualQuantity).toBe(4);
+  });
+
+  it("applies the maximum common physical reserve, not a separate floor for each route", () => {
+    const f = fixture();
+    const residualIntents = f.input.residualIntents.map(e => ({
+      ...e, intent: e.intent.side === "SELL" ? { ...e.intent, minimumReserveQuantity: 3 } : e.intent,
+    }));
+    const built = buildPhase7LiveWorldPlanInput(f.world, f.context, { ...f.input, residualIntents });
+    expect(built.actorBudgets.sellerExportableByEndpoint.get(phase7SellerEndpointKey(f.first))).toBe(6);
+    expect(() => preparePhase7LiveWorldTradePlan(f.world, f.context, { ...f.input, residualIntents }))
+      .toThrow("cannot cover aggregate reservation");
+  });
+
+  it("sources Phase-7 net price from the live Phase-6 context, not a supplied quote", () => {
+    const f = fixture();
+    const market = [...f.world.markets.values()].find(
+      m => m.seed.regionKey === f.destination.seed.key,
+    )!;
+    const carriedPrice = market.priceByGood.get(GOOD)!;
+    const sameTickPrice = carriedPrice + 2;
+    const unpriced = derivePhase7SourceSellerNetPrices(f.world, f.context, f.input.opportunityQuotes)[0]!;
+    expect("destinationReferenceNetUnitPrice" in unpriced).toBe(false);
+    const quotes = derivePhase7DestinationNetPrices(
+      f.world,
+      { phase: 7, marketPrices: new Map([
+        [marketPriceKey(market.marketId, GOOD), sameTickPrice],
+      ]) },
+      [unpriced],
+    );
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0]!.destinationReferenceNetUnitPrice).toBe(sameTickPrice);
+    expect(quotes[0]!.destinationReferenceGrossUnitPrice)
+      .toBe(unpriced.destinationReferenceGrossUnitPrice);
+    expect(market.priceByGood.get(GOOD)).toBe(carriedPrice);
+  });
+
+  it("uses Phase-8's carried-price fallback and stable route ordering", () => {
+    const f = fixture();
+    const market = [...f.world.markets.values()].find(
+      m => m.seed.regionKey === f.destination.seed.key,
+    )!;
+    const unpriced = derivePhase7SourceSellerNetPrices(f.world, f.context, f.input.opportunityQuotes);
+    const prices = { phase: 7, marketPrices: new Map<string, number>() };
+    const forward = derivePhase7DestinationNetPrices(f.world, prices, unpriced);
+    const reverse = derivePhase7DestinationNetPrices(f.world, prices, [...unpriced].reverse());
+    expect(reverse).toEqual(forward);
+    expect(forward.map(q => q.destinationReferenceNetUnitPrice)).toEqual([
+      market.priceByGood.get(GOOD), market.priceByGood.get(GOOD),
+    ]);
+  });
+
+  it("refuses stale phase, missing/ambiguous market and invalid Phase-6 prices", () => {
+    const f = fixture();
+    const market = [...f.world.markets.values()].find(
+      m => m.seed.regionKey === f.destination.seed.key,
+    )!;
+    const unpriced = derivePhase7SourceSellerNetPrices(f.world, f.context, f.input.opportunityQuotes)[0]!;
+    expect("destinationReferenceNetUnitPrice" in unpriced).toBe(false);
+    const noPrice = { phase: 7, marketPrices: new Map<string, number>() };
+    expect(() => derivePhase7DestinationNetPrices(
+      f.world, { ...noPrice, phase: 6 }, [unpriced],
+    )).toThrow("requires live Phase-7");
+    expect(() => derivePhase7DestinationNetPrices(
+      f.world, {
+        phase: 7, marketPrices: new Map([
+          [marketPriceKey(market.marketId, GOOD), Number.NaN],
+        ]),
+      }, [unpriced],
+    )).toThrow("finite positive canonical market price");
+    const emptyWorld: WorldState = {
+      ...f.world,
+      markets: new Map([...f.world.markets].filter(([id]) => id !== market.marketId)),
+    };
+    expect(() => derivePhase7DestinationNetPrices(
+      emptyWorld, noPrice, [unpriced],
+    )).toThrow("exactly one destination LocalMarket");
+    const duplicatedWorld: WorldState = {
+      ...f.world,
+      markets: new Map(f.world.markets).set("market:duplicate" as typeof market.marketId, {
+        ...market, marketId: "market:duplicate" as typeof market.marketId,
+      }),
+    };
+    expect(() => derivePhase7DestinationNetPrices(
+      duplicatedWorld, noPrice, [unpriced],
+    )).toThrow("exactly one destination LocalMarket");
+    expect(() => derivePhase7DestinationNetPrices(
+      f.world, noPrice, [{ ...unpriced, originRegionId: f.destination.regionId }],
+    )).toThrow("mismatched directed link");
+    expect(f.world.markets.get(market.marketId)!.priceByGood.get(GOOD))
+      .toBe(market.priceByGood.get(GOOD));
+  });
+
+  it("rejects stale residual quantities, duplicated IDs, and invalid live cash without mutation", () => {
+    const f = fixture();
+    const tooLarge = [{ ...f.input.residualIntents[0]!, residualQuantity: 999 },
+      ...f.input.residualIntents.slice(1)];
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, f.context, {
+      ...f.input, residualIntents: tooLarge,
+    })).toThrow("residual exceeds original intent");
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, f.context, {
+      ...f.input, residualIntents: [
+        ...f.input.residualIntents, f.input.residualIntents[0]!,
+      ],
+    })).toThrow("duplicate residual intent ID");
+    const cohort = f.world.cohorts.get(f.buyer.cohortId)!;
+    const bad: WorldState = {
+      ...f.world, cohorts: new Map(f.world.cohorts).set(f.buyer.cohortId, {
+        ...cohort, wallet: new Map(cohort.wallet).set(
+          f.destination.settlementCurrencyId, Number.POSITIVE_INFINITY,
+        ),
+      }),
+    };
+    expect(() => buildPhase7LiveWorldPlanInput(bad, f.context, f.input))
+      .toThrow("live buyer cash must be finite");
+    expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(f.destination.settlementCurrencyId)).toBe(30);
+  });
+
+  it("rejects missing or stale Phase-1 jurisdiction before the quote reserves anything", () => {
+    const f = fixture();
+    const route = f.input.opportunityQuotes[0]!;
+    const region = f.world.regions.get(route.originRegionId)!;
+    const missing = new Map(f.context.effectiveJurisdictionByRegion);
+    missing.delete(route.originRegionId);
+    expect(() => preparePhase7LiveWorldTradePlan(f.world, {
+      ...f.context, effectiveJurisdictionByRegion: missing,
+    }, f.input)).toThrow("missing current Phase-1 jurisdiction");
+
+    const stale = new Map(f.context.effectiveJurisdictionByRegion);
+    stale.set(route.originRegionId, region.controllerStateId === null
+      ? f.destination.controllerStateId : null);
+    expect(() => preparePhase7LiveWorldTradePlan(f.world, {
+      ...f.context, effectiveJurisdictionByRegion: stale,
+    }, f.input)).toThrow("disagrees with activated Phase-1 jurisdiction");
+
+    expect(() => preparePhase7LiveWorldTradePlan(f.world, {
+      ...f.context, effectiveJurisdictionByRegion: undefined as unknown as typeof stale,
+    }, f.input)).toThrow("requires current Phase-1 jurisdiction evidence");
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("rejects invented same-State and uncontrolled-destination tariffs from live quotes", () => {
+    const f = fixture();
+    const route = f.input.opportunityQuotes[0]!;
+    const origin = f.world.regions.get(route.originRegionId)!;
+    const tariffInput: Phase7LiveWorldPlanInput = {
+      ...f.input,
+      opportunityQuotes: f.input.opportunityQuotes.map(q =>
+        q.planId === route.planId ? { ...q, estimatedTariffRate: 0.25 } : q),
+    };
+    const domesticWorld: WorldState = {
+      ...f.world,
+      regions: new Map(f.world.regions).set(origin.regionId, {
+        ...origin, controllerStateId: f.destination.controllerStateId,
+      }),
+    };
+    const domesticContext = {
+      ...f.context,
+      effectiveJurisdictionByRegion: new Map(f.context.effectiveJurisdictionByRegion)
+        .set(origin.regionId, f.destination.controllerStateId),
+    };
+    expect(() => preparePhase7LiveWorldTradePlan(
+      domesticWorld, domesticContext, tariffInput,
+    )).toThrow("cannot charge a tariff without a destination-State border");
+
+    const uncontrolledWorld: WorldState = {
+      ...f.world,
+      regions: new Map(f.world.regions).set(f.destination.regionId, {
+        ...f.destination, controllerStateId: null,
+      }),
+    };
+    const uncontrolledContext = {
+      ...f.context,
+      effectiveJurisdictionByRegion: new Map(f.context.effectiveJurisdictionByRegion)
+        .set(f.destination.regionId, null),
+    };
+    expect(() => preparePhase7LiveWorldTradePlan(
+      uncontrolledWorld, uncontrolledContext, tariffInput,
+    )).toThrow("cannot charge a tariff without a destination-State border");
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("does not treat a Phase-14 queued jurisdiction change as current-tick trade law", () => {
+    const f = fixture();
+    const future: WorldState = {
+      ...f.world,
+      pendingTransitions: {
+        ...f.world.pendingTransitions,
+        jurisdictionChanges: [...f.world.pendingTransitions.jurisdictionChanges, {
+          regionId: f.destination.regionId,
+          nextControllerStateId: null,
+          activateTick: 500,
+        }],
+      },
+    };
+    const expected = preparePhase7LiveWorldTradePlan(f.world, f.context, f.input);
+    const actual = preparePhase7LiveWorldTradePlan(future, f.context, f.input);
+    expect(actual).toEqual(expected);
+    expect(future.regions.get(f.destination.regionId)!.controllerStateId)
+      .toBe(f.destination.controllerStateId);
+  });
+
+  it("hydrates positive border tariff from current Phase-1 policy, ignoring a forged quote", () => {
+    const f = fixture();
+    const link = [...f.world.transportLinks.values()].find(candidate => {
+      const origin = f.world.regions.get(candidate.fromRegionId)!;
+      const destination = f.world.regions.get(candidate.toRegionId)!;
+      return destination.controllerStateId !== null &&
+        origin.controllerStateId !== destination.controllerStateId;
+    });
+    if (!link) throw new Error("baseline needs a controlled international directed link");
+    const destination = f.world.regions.get(link.toRegionId)!;
+    const quote = {
+      ...f.input.opportunityQuotes[0]!,
+      planId: "plan:world:tariff-policy",
+      linkId: link.linkId,
+      originRegionId: link.fromRegionId,
+      destinationRegionId: link.toRegionId,
+      estimatedTariffRate: 999,
+    };
+    const key = phase7ImportTariffKey(destination.controllerStateId!, GOOD);
+    const snapshot = { tick: f.context.tick, ratesByDestinationStateGood: new Map([[key, 0.18]]) };
+    const context = { ...f.context, phase1ImportTariffs: snapshot };
+    const originalRegionController = destination.controllerStateId;
+    const lawful = derivePhase7Phase1ImportTariffs(f.world, context, [quote]);
+    expect(lawful.map(x => x.estimatedTariffRate)).toEqual([0.18]);
+    expect(derivePhase7Phase1ImportTariffs(f.world, context, [...[quote]].reverse()))
+      .toEqual(lawful);
+    expect(quote.estimatedTariffRate).toBe(999);
+    expect(f.world.regions.get(destination.regionId)!.controllerStateId)
+      .toBe(originalRegionController);
+
+    // Missing is not a zero tariff. The snapshot belongs to the current tick,
+    // not a future Phase-14 decision or a caller-provided quote.
+    expect(() => derivePhase7Phase1ImportTariffs(f.world, {
+      ...f.context, phase1ImportTariffs: undefined,
+    }, [quote])).toThrow("requires frozen Phase-1 policy evidence");
+    expect(() => derivePhase7Phase1ImportTariffs(f.world, {
+      ...context, phase1ImportTariffs: { ...snapshot, tick: f.context.tick + 1 },
+    }, [quote])).toThrow("current-tick frozen Phase-1 policy snapshot");
+    expect(() => derivePhase7Phase1ImportTariffs(f.world, {
+      ...context, phase1ImportTariffs: { ...snapshot, ratesByDestinationStateGood: new Map() },
+    }, [quote])).toThrow("missing destination State/good policy rate");
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -0.01]) {
+      expect(() => derivePhase7Phase1ImportTariffs(f.world, {
+        ...context,
+        phase1ImportTariffs: {
+          ...snapshot,
+          ratesByDestinationStateGood: new Map([[key, bad]]),
+        },
+      }, [quote])).toThrow("policy rate must be finite and non-negative");
+    }
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+
+  it("hydrates tax-inclusive gross reference from frozen Phase-1 policy, ignoring caller inflation", () => {
+    const f = fixture();
+    const stateId = f.destination.controllerStateId!;
+    const context = {
+      ...f.context,
+      phase1ConsumptionTaxes: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([[phase7ConsumptionTaxKey(stateId, GOOD), 0.2]]),
+        collectionEfficiencyByState: new Map([[stateId, 0.5]]),
+      },
+    };
+    const expected = buildPhase7LiveWorldPlanInput(f.world, context, f.input);
+    expect(expected.opportunities.map(q => q.destinationReferenceNetUnitPrice)).toEqual([10, 10]);
+    expect(expected.opportunities.map(q => q.destinationReferenceGrossUnitPrice)).toEqual([11, 11]);
+    const forged = {
+      ...f.input,
+      opportunityQuotes: f.input.opportunityQuotes.map(q => ({
+        ...q, destinationReferenceGrossUnitPrice: 1e9,
+      })),
+    };
+    expect(buildPhase7LiveWorldPlanInput(f.world, context, forged)).toEqual(expected);
+    expect(preparePhase7LiveWorldTradePlan(f.world, context, forged))
+      .toEqual(preparePhase7LiveWorldTradePlan(f.world, context, f.input));
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(
+      f.destination.settlementCurrencyId,
+    )).toBe(30);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("rejects absent, stale and invalid current-tick gross tax facts without state mutation", () => {
+    const f = fixture();
+    const stateId = f.destination.controllerStateId!;
+    const key = phase7ConsumptionTaxKey(stateId, GOOD);
+    const valid = {
+      tick: f.context.tick,
+      ratesByDestinationStateGood: new Map([[key, 0.1]]),
+      collectionEfficiencyByState: new Map([[stateId, 0.8]]),
+    };
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+      ...f.context, phase1ConsumptionTaxes: undefined,
+    }, f.input)).toThrow("requires frozen Phase-1 consumption-tax policy");
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+      ...f.context, phase1ConsumptionTaxes: { ...valid, tick: f.context.tick - 1 },
+    }, f.input)).toThrow("current-tick frozen tax-policy snapshot");
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+      ...f.context,
+      phase1ConsumptionTaxes: { ...valid, ratesByDestinationStateGood: new Map() },
+    }, f.input)).toThrow("missing destination State tax-policy evidence");
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+      ...f.context,
+      phase1ConsumptionTaxes: { ...valid, collectionEfficiencyByState: new Map() },
+    }, f.input)).toThrow("missing destination State tax-policy evidence");
+    for (const value of [-0.1, 1.1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+        ...f.context,
+        phase1ConsumptionTaxes: {
+          ...valid, ratesByDestinationStateGood: new Map([[key, value]]),
+        },
+      }, f.input)).toThrow("tax policy must be finite in [0, 1]");
+      expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+        ...f.context,
+        phase1ConsumptionTaxes: {
+          ...valid, collectionEfficiencyByState: new Map([[stateId, value]]),
+        },
+      }, f.input)).toThrow("tax policy must be finite in [0, 1]");
+    }
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("matches Phase-8 State self-procurement exemption and refuses mixed gross buyer classes", () => {
+    const f = fixture();
+    const stateId = f.destination.controllerStateId!;
+    const context = {
+      ...f.context,
+      phase1ConsumptionTaxes: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([[phase7ConsumptionTaxKey(stateId, GOOD), 0.25]]),
+        collectionEfficiencyByState: new Map([[stateId, 1]]),
+      },
+    };
+    const priced = derivePhase7DestinationNetPrices(
+      f.world, context, derivePhase7SourceSellerNetPrices(f.world, context, f.input.opportunityQuotes),
+    );
+    const exempt = f.input.residualIntents.map(entry => entry.intent.side === "BUY"
+      ? {
+          ...entry,
+          intent: {
+            ...entry.intent, actor: { type: "STATE" as const, stateId },
+            purpose: "PUBLIC_PROCUREMENT" as const,
+          },
+        } : entry);
+    expect(derivePhase7DestinationGrossReferencePrices(
+      f.world, context, priced, exempt,
+    ).map(q => q.destinationReferenceGrossUnitPrice)).toEqual([10, 10]);
+    const mixed = exempt.map((entry, index) =>
+      index === 1 ? f.input.residualIntents[index]! : entry);
+    expect(() => derivePhase7DestinationGrossReferencePrices(
+      f.world, context, priced, mixed,
+    )).toThrow("cannot mix taxable and exempt buyer classes");
+    const future: WorldState = {
+      ...f.world,
+      pendingTransitions: {
+        ...f.world.pendingTransitions,
+        jurisdictionChanges: [...f.world.pendingTransitions.jurisdictionChanges, {
+          regionId: f.destination.regionId,
+          nextControllerStateId: null,
+          activateTick: f.context.tick + 1,
+        }],
+      },
+    };
+    expect(derivePhase7DestinationGrossReferencePrices(
+      future, context, priced, f.input.residualIntents,
+    ).map(q => q.destinationReferenceGrossUnitPrice)).toEqual([12.5, 12.5]);
+  });
+
+  it("caps live FX output to canonical pool cash after reserve floors, not caller claims", () => {
+    const f = fixture();
+    const pairIds = [...f.world.monetaryAuthorities.values()].flatMap(
+      authority => [...authority.fxPools.keys()],
+    );
+    const cross = [...f.world.transportLinks.values()].flatMap(link => {
+      const origin = f.world.regions.get(link.fromRegionId);
+      const destination = f.world.regions.get(link.toRegionId);
+      if (!origin || !destination ||
+          origin.settlementCurrencyId === destination.settlementCurrencyId) return [];
+      const pair = pairIds.find(id => {
+        const pool = resolveCanonicalFxPool(f.world, id).pool;
+        return (pool.baseCurrencyId === origin.settlementCurrencyId &&
+          pool.quoteCurrencyId === destination.settlementCurrencyId) ||
+          (pool.quoteCurrencyId === origin.settlementCurrencyId &&
+            pool.baseCurrencyId === destination.settlementCurrencyId);
+      });
+      return pair ? [{ link, origin, destination, pair }] : [];
+    })[0];
+    if (!cross) throw new Error("baseline needs an FX-paired international directed link");
+
+    const quote = {
+      ...f.input.opportunityQuotes[0]!,
+      estimatedTariffRate: 999,
+      planId: "plan:world:live-fx",
+      linkId: cross.link.linkId,
+      originRegionId: cross.origin.regionId,
+      destinationRegionId: cross.destination.regionId,
+    };
+    const key = phase7FxOutputKey(cross.pair, cross.origin.settlementCurrencyId);
+    const available = quoteFx(
+      f.world, cross.pair, cross.destination.settlementCurrencyId,
+      cross.origin.settlementCurrencyId, 0,
+    ).maxOutputByPoolReserve;
+    expect(available).toBeGreaterThan(0);
+    const declared = new Map([[key, available + 1_000_000]]);
+    const pairs = new Map([[quote.planId, cross.pair]]);
+    const input = {
+      ...f.input, opportunityQuotes: [quote],
+      fxPairIdByTradePlanId: pairs, fxOutputByPairCurrency: declared,
+    };
+    if (!cross.destination.controllerStateId ||
+        cross.origin.controllerStateId === cross.destination.controllerStateId) {
+      throw new Error("baseline FX route must cross a controlled State border");
+    }
+    const tariffContext = {
+      ...f.context,
+      phase1ImportTariffs: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([
+          [phase7ImportTariffKey(cross.destination.controllerStateId, GOOD), 0.12],
+        ]),
+      },
+    };
+    const before = resolveCanonicalFxPool(f.world, cross.pair).pool.cash;
+    const built = buildPhase7LiveWorldPlanInput(f.world, tariffContext, input);
+    expect(built.opportunities[0]!.estimatedTariffRate).toBe(0.12);
+    expect(built.aggregateBudgets.fxOutputByPairCurrency).toEqual(new Map([[key, available]]));
+    expect(declared.get(key)).toBe(available + 1_000_000);
+    expect(resolveCanonicalFxPool(f.world, cross.pair).pool.cash).toBe(before);
+
+    // A smaller genuine earlier reservation is preserved rather than enlarged.
+    const priorReserved = new Map([[key, available / 2]]);
+    const limited = derivePhase7LiveFxOutputBudgets(
+      f.world, [quote], pairs, priorReserved,
+    );
+    expect(limited.get(key)).toBe(available / 2);
+    expect(() => derivePhase7LiveFxOutputBudgets(
+      f.world, [quote], pairs, new Map(),
+    )).toThrow("missing explicit tick-local output budget");
+    expect(() => derivePhase7LiveFxOutputBudgets(
+      f.world, [quote], pairs, new Map([[key, Number.POSITIVE_INFINITY]]),
+    )).toThrow("must be finite and non-negative");
+    expect(() => derivePhase7LiveFxOutputBudgets(
+      f.world, [quote], new Map([[quote.planId, "fxpool:unknown"]]), declared,
+    )).toThrow("missing explicit tick-local output budget");
+    expect(() => derivePhase7LiveFxOutputBudgets(
+      f.world, [quote], undefined, declared,
+    )).toThrow("requires an explicit FX pair");
+    expect(() => derivePhase7LiveFxOutputBudgets(
+      f.world, f.input.opportunityQuotes,
+      new Map([[f.input.opportunityQuotes[0]!.planId, cross.pair]]), new Map(),
+    )).toThrow("same-currency quote must not reserve FX");
+  });
+
+  it("quotes a real same-currency buyer debit instead of forged landed and FX values", () => {
+    const f = fixture();
+    const actual = buildPhase7LiveWorldPlanInput(f.world, f.context, f.input);
+    for (const quote of actual.opportunities) {
+      expect(quote.landedGrossUnitCostDest).toBeCloseTo(
+        quote.sourceSellerNetUnitPrice + quote.estimatedTransportUnitCostDest, 10,
+      );
+      expect(quote.estimatedFxInputPerSourceCurrency).toBe(1);
+      expect(quote.fxFeasibleQuantity).toBeUndefined();
+    }
+    const tampered: Phase7LiveWorldPlanInput = {
+      ...f.input, opportunityQuotes: f.input.opportunityQuotes.map(q => ({
+        ...q, landedGrossUnitCostDest: 1e12,
+        estimatedFxInputPerSourceCurrency: 1e12,
+        fxFeasibleQuantity: 0,
+      })),
+    };
+    expect(buildPhase7LiveWorldPlanInput(f.world, f.context, tampered)).toEqual(actual);
+    expect(preparePhase7LiveWorldTradePlan(f.world, f.context, tampered))
+      .toEqual(preparePhase7LiveWorldTradePlan(f.world, f.context, f.input));
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("applies consumption tax to seller invoice, not destination market reference", () => {
+    const f = fixture();
+    const controller = f.destination.controllerStateId!;
+    const context = {
+      ...f.context, phase1ConsumptionTaxes: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([
+          [phase7ConsumptionTaxKey(controller, GOOD), 0.2],
+        ]),
+        collectionEfficiencyByState: new Map([[controller, 0.5]]),
+      },
+    };
+    const built = buildPhase7LiveWorldPlanInput(f.world, context, f.input);
+    for (const q of built.opportunities) {
+      expect(q.destinationReferenceGrossUnitPrice).toBe(11); // destination net 10
+      expect(q.sourceSellerNetUnitPrice).toBe(1);
+      expect(q.landedGrossUnitCostDest).toBeCloseTo(
+        1 + q.estimatedTransportUnitCostDest + 0.1, 10,
+      );
+    }
+    expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(
+      f.destination.settlementCurrencyId,
+    )).toBe(30);
+  });
+
+  it("uses the canonical FX pool rate/spread and MID customs base without caller quotes", () => {
+    const f = fixture();
+    const availablePairs = [...f.world.monetaryAuthorities.values()].flatMap(
+      authority => [...authority.fxPools.keys()],
+    );
+    const cross = [...f.world.transportLinks.values()].flatMap(link => {
+      const origin = f.world.regions.get(link.fromRegionId);
+      const destination = f.world.regions.get(link.toRegionId);
+      if (!origin || !destination ||
+          origin.settlementCurrencyId === destination.settlementCurrencyId ||
+          destination.controllerStateId === null ||
+          origin.controllerStateId === destination.controllerStateId) return [];
+      const pair = availablePairs.find(id => {
+        const pool = resolveCanonicalFxPool(f.world, id).pool;
+        return (pool.baseCurrencyId === origin.settlementCurrencyId &&
+          pool.quoteCurrencyId === destination.settlementCurrencyId) ||
+          (pool.quoteCurrencyId === origin.settlementCurrencyId &&
+            pool.baseCurrencyId === destination.settlementCurrencyId);
+      });
+      return pair ? [{ link, origin, destination, pair }] : [];
+    })[0];
+    if (!cross) throw new Error("baseline needs a controlled FX route");
+    const planId = "plan:world:landed:cross";
+    const q = {
+      ...f.input.opportunityQuotes[0]!, planId, linkId: cross.link.linkId,
+      originRegionId: cross.origin.regionId, destinationRegionId: cross.destination.regionId,
+      landedGrossUnitCostDest: 1e9, estimatedFxInputPerSourceCurrency: 1e9,
+    };
+    const key = phase7FxOutputKey(cross.pair, cross.origin.settlementCurrencyId);
+    const physical = quoteFx(
+      f.world, cross.pair, cross.destination.settlementCurrencyId,
+      cross.origin.settlementCurrencyId, 0,
+    ).maxOutputByPoolReserve;
+    const policy = {
+      ...f.context,
+      phase1ImportTariffs: { tick: f.context.tick, ratesByDestinationStateGood: new Map([
+        [phase7ImportTariffKey(cross.destination.controllerStateId!, GOOD), 0.2],
+      ]) },
+      phase1ConsumptionTaxes: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([
+          [phase7ConsumptionTaxKey(cross.destination.controllerStateId!, GOOD), 0.1],
+        ]),
+        collectionEfficiencyByState: new Map([
+          [cross.destination.controllerStateId!, 0.5],
+        ]),
+      },
+    };
+    const input: Phase7LiveWorldPlanInput = {
+      ...f.input, opportunityQuotes: [q],
+      fxPairIdByTradePlanId: new Map([[planId, cross.pair]]),
+      fxOutputByPairCurrency: new Map([[key, physical / 2]]),
+    };
+    const built = buildPhase7LiveWorldPlanInput(f.world, policy, input);
+    const actual = built.opportunities[0]!;
+    const pool = resolveCanonicalFxPool(f.world, cross.pair).pool;
+    const src = actual.sourceSellerNetUnitPrice;
+    const fx = quoteFx(
+      f.world, cross.pair, cross.destination.settlementCurrencyId,
+      cross.origin.settlementCurrencyId, src,
+    );
+    const mid = pool.baseCurrencyId === cross.origin.settlementCurrencyId
+      ? src * pool.spotRateQuotePerBase : src / pool.spotRateQuotePerBase;
+    expect(actual.estimatedFxInputPerSourceCurrency)
+      .toBeCloseTo(fx.requiredInputAmountAtDesiredOutput / src, 10);
+    expect(actual.fxFeasibleQuantity).toBeCloseTo(physical / (2 * src), 10);
+    expect(actual.landedGrossUnitCostDest).toBeCloseTo(
+      fx.requiredInputAmountAtDesiredOutput + actual.estimatedTransportUnitCostDest +
+      (mid + actual.estimatedTransportUnitCostDest) * 0.2 * 0.5 +
+      mid * 0.1 * 0.5, 9,
+    );
+    const tampered = {
+      ...input, opportunityQuotes: [{
+        ...q, landedGrossUnitCostDest: 0.001, estimatedFxInputPerSourceCurrency: 0.00001,
+        fxFeasibleQuantity: 999999,
+      }],
+    };
+    expect(buildPhase7LiveWorldPlanInput(f.world, policy, tampered)).toEqual(built);
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, policy, {
+      ...input, fxPairIdByTradePlanId: new Map(),
+    })).toThrow("requires explicit FX pair");
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, policy, {
+      ...input, fxOutputByPairCurrency: new Map(),
+    })).toThrow("requires explicit tick-local output budget");
+    expect(resolveCanonicalFxPool(f.world, cross.pair).pool.cash).toBe(pool.cash);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+
+  it("re-quotes matched route lots at actual cargo quantity without transferring funds or goods", () => {
+    const f = fixture();
+    const baseline = quotePhase7ActualMatchedLots(f.world, f.context, f.input);
+    expect(baseline.quotes.length).toBeGreaterThan(0);
+    expect(baseline.quotes.reduce((sum, q) => sum + q.lot.quantity, 0))
+      .toBeCloseTo(9, 10);
+    for (const q of baseline.quotes) {
+      const route = f.input.opportunityQuotes.find(r => r.planId === q.lot.tradePlanId)!;
+      const live = baseline.preparedPlan.rankedCandidates.find(
+        c => c.tradePlanId === q.lot.tradePlanId,
+      )!;
+      const fee = quoteTransportFee(
+        f.world, f.world.transportLinks.get(route.linkId)!, q.lot.quantity,
+        route.cargoWeightPerUnit, f.world.simulationConfig, f.context.transportFeeCostPolicy,
+      );
+      expect(q.transportFeeDest).toBe(fee.amount);
+      expect(q.transportFeeReceiver).toEqual(fee.receiver);
+      expect(q.sellerInvoiceSource).toBeCloseTo(q.lot.quantity, 10);
+      expect(q.importTariffDest).toBe(0);
+      expect(q.consumptionTaxDest).toBe(0);
+      expect(q.fxPairId).toBeNull();
+      expect(q.buyerDebitDest).toBeCloseTo(q.sellerInvoiceSource + fee.amount, 10);
+      expect(live.tradePlanId).toBe(q.lot.tradePlanId);
+    }
+    const forged: Phase7LiveWorldPlanInput = {
+      ...f.input,
+      residualIntents: [...f.input.residualIntents].reverse(),
+      opportunityQuotes: [...f.input.opportunityQuotes].reverse().map(q => ({
+        ...q, sourceSellerNetUnitPrice: 1e8,
+        estimatedTransportUnitCostDest: 1e8,
+        landedGrossUnitCostDest: 1e8, estimatedFxInputPerSourceCurrency: 1e8,
+      })),
+    };
+    expect(quotePhase7ActualMatchedLots(f.world, f.context, forged)).toEqual(baseline);
+    expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(f.destination.settlementCurrencyId)).toBe(30);
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("applies frozen tax to each actual lot's source invoice, never the destination reference", () => {
+    const f = fixture();
+    const policy = {
+      ...f.context,
+      phase1ConsumptionTaxes: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([
+          [phase7ConsumptionTaxKey(f.destination.controllerStateId!, GOOD), 0.2],
+        ]),
+        collectionEfficiencyByState: new Map([[f.destination.controllerStateId!, 0.5]]),
+      },
+    };
+    const quoted = quotePhase7ActualMatchedLots(f.world, policy, f.input);
+    expect(quoted.quotes.length).toBeGreaterThan(0);
+    for (const q of quoted.quotes) {
+      expect(q.consumptionTaxDest).toBeCloseTo(q.sellerInvoiceSource * 0.1, 10);
+      expect(q.importTariffDest).toBe(0);
+      expect(q.buyerDebitDest).toBeCloseTo(
+        q.goodsPaymentDest + q.transportFeeDest + q.consumptionTaxDest, 10,
+      );
+      expect(q.destinationTreasuryStateId).toBe(f.destination.controllerStateId);
+    }
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+
+  it("re-quotes actual cross-currency matched lots with finite FX, MID tariff and source-invoice tax", () => {
+    const f = fixture();
+    const pairIds = [...f.world.monetaryAuthorities.values()].flatMap(a => [...a.fxPools.keys()]);
+    const candidate = [...f.world.transportLinks.values()].flatMap(link => {
+      const origin = f.world.regions.get(link.fromRegionId);
+      const destination = f.world.regions.get(link.toRegionId);
+      if (!origin || !destination || !origin.controllerStateId || !destination.controllerStateId ||
+          origin.controllerStateId === destination.controllerStateId ||
+          origin.settlementCurrencyId === destination.settlementCurrencyId) return [];
+      const pairId = pairIds.find(pair => {
+        const pool = resolveCanonicalFxPool(f.world, pair).pool;
+        return (pool.baseCurrencyId === origin.settlementCurrencyId &&
+          pool.quoteCurrencyId === destination.settlementCurrencyId) ||
+          (pool.quoteCurrencyId === origin.settlementCurrencyId &&
+            pool.baseCurrencyId === destination.settlementCurrencyId);
+      });
+      return pairId ? [{ link, origin, destination, pairId }] : [];
+    })[0];
+    if (!candidate) throw new Error("baseline requires a controlled FX route");
+    const { link, origin, destination, pairId } = candidate;
+    const originStateId = origin.controllerStateId!;
+    const destinationStateId = destination.controllerStateId!;
+    const sellerState = f.world.states.get(originStateId)!;
+    const buyer = [...f.world.cohorts.values()].find(c => c.seed.regionKey === destination.seed.key)!;
+    const originMarket = [...f.world.markets.values()].find(m => m.seed.regionKey === origin.seed.key)!;
+    const destMarket = [...f.world.markets.values()].find(m => m.seed.regionKey === destination.seed.key)!;
+    if (!buyer || !originMarket || !destMarket) throw new Error("missing controlled FX actors/markets");
+    const world: WorldState = {
+      ...f.world,
+      states: new Map(f.world.states).set(originStateId, {
+        ...sellerState, publicInventory: new Map(sellerState.publicInventory).set(GOOD, 5),
+      }),
+      cohorts: new Map(f.world.cohorts).set(buyer.cohortId, {
+        ...buyer, wallet: new Map(buyer.wallet).set(destination.settlementCurrencyId, 1000),
+      }),
+      transportLinks: new Map(f.world.transportLinks).set(link.linkId, {
+        ...link, feeReceiver: { type: "STATE", stateId: destinationStateId },
+      }),
+    };
+    const seller = {
+      ...f.first, id: createMarketIntentId("mi:phase7:actual:cross:seller"),
+      actor: { type: "STATE" as const, stateId: originStateId },
+      regionId: origin.regionId, desiredQuantity: 2,
+    };
+    const purchase = {
+      ...f.b1, id: createMarketIntentId("mi:phase7:actual:cross:buyer"),
+      actor: { type: "COHORT" as const, cohortId: buyer.cohortId },
+      regionId: destination.regionId, desiredQuantity: 2, maxSpend: 1000,
+    };
+    const planId = "plan:phase7:actual:cross";
+    const opportunity = {
+      ...f.input.opportunityQuotes[0]!, planId, linkId: link.linkId,
+      originRegionId: origin.regionId, destinationRegionId: destination.regionId,
+      cargoWeightPerUnit: 1, shortageRateDestination: 1,
+    };
+    const pairKey = phase7FxOutputKey(pairId, origin.settlementCurrencyId);
+    const available = quoteFx(
+      world, pairId, destination.settlementCurrencyId, origin.settlementCurrencyId, 0,
+    ).maxOutputByPoolReserve;
+    expect(available).toBeGreaterThan(2);
+    const input: Phase7LiveWorldPlanInput = {
+      ...f.input,
+      residualIntents: [
+        { intent: seller, residualQuantity: 2 },
+        { intent: purchase, residualQuantity: 2, remainingBuyerSpend: 1000 },
+      ],
+      opportunityQuotes: [opportunity],
+      infrastructureFactors: new Map([[link.linkId, 1]]),
+      eligibleDirectedLinkIdsAtPhase1: new Set([link.linkId]),
+      fxPairIdByTradePlanId: new Map([[planId, pairId]]),
+      fxOutputByPairCurrency: new Map([[pairKey, available]]),
+    };
+    const context = {
+      ...f.context,
+      marketPrices: new Map([
+        [marketPriceKey(originMarket.marketId, GOOD), 1],
+        [marketPriceKey(destMarket.marketId, GOOD), 100],
+      ]),
+      phase1ImportTariffs: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([
+          [phase7ImportTariffKey(destinationStateId, GOOD), 0.2],
+        ]),
+      },
+      phase1ConsumptionTaxes: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([
+          [phase7ConsumptionTaxKey(destinationStateId, GOOD), 0.1],
+        ]),
+        collectionEfficiencyByState: new Map([[destinationStateId, 0.5]]),
+      },
+    };
+    const poolBefore = resolveCanonicalFxPool(world, pairId).pool.cash;
+    const actual = quotePhase7ActualMatchedLots(world, context, input);
+    expect(actual.quotes.length).toBeGreaterThan(0);
+    for (const q of actual.quotes) {
+      expect(q.fxPairId).toBe(pairId);
+      const fx = quoteFx(
+        world, pairId, destination.settlementCurrencyId,
+        origin.settlementCurrencyId, q.sellerInvoiceSource,
+      );
+      const pool = resolveCanonicalFxPool(world, pairId).pool;
+      const mid = pool.baseCurrencyId === origin.settlementCurrencyId
+        ? q.sellerInvoiceSource * pool.spotRateQuotePerBase
+        : q.sellerInvoiceSource / pool.spotRateQuotePerBase;
+      expect(q.goodsPaymentDest).toBeCloseTo(fx.requiredInputAmountAtDesiredOutput, 10);
+      expect(q.invoiceMidDest).toBeCloseTo(mid, 10);
+      expect(q.importTariffDest).toBeCloseTo((mid + q.transportFeeDest) * 0.1, 10);
+      expect(q.consumptionTaxDest).toBeCloseTo(mid * 0.05, 10);
+      expect(q.buyerDebitDest).toBeCloseTo(
+        q.goodsPaymentDest + q.transportFeeDest + q.importTariffDest +
+        q.consumptionTaxDest, 10,
+      );
+    }
+    expect(resolveCanonicalFxPool(world, pairId).pool.cash).toBe(poolBefore);
+    expect(world.states.get(originStateId)!.publicInventory.get(GOOD)).toBe(5);
+    expect(world.cohorts.get(buyer.cohortId)!.wallet.get(destination.settlementCurrencyId)).toBe(1000);
+    expect(world.shipments?.size).toBe(0);
+  });
+
+  it("rejects cumulative observable lot debits from a large shared buyer balance", () => {
+    const make = (openingBalance: number, intentSpend = openingBalance) => {
+      const f = fixture();
+      const link = f.links[0]!;
+      const sellers = [0, 1, 2].map(index => ({
+        ...f.first,
+        id: createMarketIntentId("mi:phase7:actual:precision:seller:" + index),
+        sourcePlanId: "plan:phase7:actual:precision:seller:" + index,
+        desiredQuantity: 0.3,
+      }));
+      const buyerIntent = {
+        ...f.b1,
+        id: createMarketIntentId("mi:phase7:actual:precision:buyer"),
+        sourcePlanId: "plan:phase7:actual:precision:buyer",
+        desiredQuantity: 0.9, maxSpend: intentSpend,
+      };
+      const world: WorldState = {
+        ...f.world,
+        // Isolate the exact 0.3 source-currency invoice per lot.
+        transportLinks: new Map(f.world.transportLinks).set(link.linkId, {
+          ...link, seed: { ...link.seed, baseTransportCost: 0 },
+        }),
+        cohorts: new Map(f.world.cohorts).set(f.buyer.cohortId, {
+          ...f.buyer,
+          wallet: new Map(f.buyer.wallet).set(f.destination.settlementCurrencyId, openingBalance),
+        }),
+      };
+      const input: Phase7LiveWorldPlanInput = {
+        ...f.input,
+        residualIntents: [
+          ...sellers.map(intent => ({ intent, residualQuantity: 0.3 })),
+          { intent: buyerIntent, residualQuantity: 0.9, remainingBuyerSpend: intentSpend },
+        ],
+        opportunityQuotes: [f.input.opportunityQuotes[0]!],
+      };
+      return { world, input, context: f.context, buyer: f.buyer, currency: f.destination.settlementCurrencyId };
+    };
+
+    const affordable = make(1000);
+    const accepted = quotePhase7ActualMatchedLots(
+      affordable.world, affordable.context, affordable.input,
+    );
+    expect(accepted.quotes).toHaveLength(3);
+    for (const quoted of accepted.quotes) {
+      expect(quoted.sellerInvoiceSource).toBeCloseTo(0.3, 12);
+    }
+    expect(accepted.quotes.reduce((total, q) => total + q.buyerDebitDest, 0))
+      .toBeCloseTo(0.9, 10);
+    expect(affordable.world.cohorts.get(affordable.buyer.cohortId)!.wallet.get(affordable.currency))
+      .toBe(1000);
+
+    // Three individually acceptable ~7.45e-10 subtractive errors accumulate
+    // to ~2.24e-9, violating ONE fixed 1e-9 moneyEpsilon for the buyer owner.
+    const highBalance = make(10_000_000);
+    expect(() => quotePhase7ActualMatchedLots(
+      highBalance.world, highBalance.context, highBalance.input,
+    )).toThrow("cumulative observable buyer wallet");
+    expect(highBalance.world.cohorts.get(highBalance.buyer.cohortId)!.wallet.get(highBalance.currency))
+      .toBe(10_000_000);
+    expect(highBalance.world.shipments?.size).toBe(0);
+
+    // A normal-size wallet can pass while the SAME three debit quotes lose
+    // precision in the separate, much larger buyer-intent commitment.
+    const highIntent = make(1000, 10_000_000);
+    expect(() => quotePhase7ActualMatchedLots(
+      highIntent.world, highIntent.context, highIntent.input,
+    )).toThrow("cumulative observable buyer intent spend");
+    expect(highIntent.world.cohorts.get(highIntent.buyer.cohortId)!.wallet.get(highIntent.currency))
+      .toBe(1000);
+  });
+
+});
