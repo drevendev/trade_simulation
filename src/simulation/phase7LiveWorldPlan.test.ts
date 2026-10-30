@@ -1132,7 +1132,7 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
   });
 
   it("rejects cumulative observable lot debits from a large shared buyer balance", () => {
-    const make = (openingBalance: number) => {
+    const make = (openingBalance: number, intentSpend = openingBalance) => {
       const f = fixture();
       const link = f.links[0]!;
       const sellers = [0, 1, 2].map(index => ({
@@ -1145,7 +1145,7 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
         ...f.b1,
         id: createMarketIntentId("mi:phase7:actual:precision:buyer"),
         sourcePlanId: "plan:phase7:actual:precision:buyer",
-        desiredQuantity: 0.9, maxSpend: openingBalance,
+        desiredQuantity: 0.9, maxSpend: intentSpend,
       };
       const world: WorldState = {
         ...f.world,
@@ -1162,7 +1162,7 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
         ...f.input,
         residualIntents: [
           ...sellers.map(intent => ({ intent, residualQuantity: 0.3 })),
-          { intent: buyerIntent, residualQuantity: 0.9, remainingBuyerSpend: openingBalance },
+          { intent: buyerIntent, residualQuantity: 0.9, remainingBuyerSpend: intentSpend },
         ],
         opportunityQuotes: [f.input.opportunityQuotes[0]!],
       };
@@ -1191,6 +1191,15 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
     expect(highBalance.world.cohorts.get(highBalance.buyer.cohortId)!.wallet.get(highBalance.currency))
       .toBe(10_000_000);
     expect(highBalance.world.shipments?.size).toBe(0);
+
+    // A normal-size wallet can pass while the SAME three debit quotes lose
+    // precision in the separate, much larger buyer-intent commitment.
+    const highIntent = make(1000, 10_000_000);
+    expect(() => quotePhase7ActualMatchedLots(
+      highIntent.world, highIntent.context, highIntent.input,
+    )).toThrow("cumulative observable buyer intent spend");
+    expect(highIntent.world.cohorts.get(highIntent.buyer.cohortId)!.wallet.get(highIntent.currency))
+      .toBe(1000);
   });
 
 });
