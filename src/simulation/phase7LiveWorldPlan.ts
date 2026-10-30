@@ -2,9 +2,10 @@
  * M5 / #673: derive Phase-7 opportunity quantities and actor evidence from
  * live post-Phase-4 residual MarketIntents and authoritative WorldState stocks.
  *
- * Phase-1/6 owners supply frozen legal, gross landed and FX evidence; the
- * destination NET price is hydrated only from canonical Phase-6/market state. This module deliberately does
- * not invent tariff/FX defaults or turn planned quantities into committed flows.
+ * Phase-1/6 owners supply frozen legal, tax, landed and FX evidence.
+ * Both destination NET price (Phase-6 market) and tax-inclusive GROSS reference
+ * (current Phase-1 policy) are hydrated before ranking. This module does
+ * not invent tariff, tax or FX defaults or commit provisional quantities.
  * The canonical Phase-7 dispatcher remains the only writer.
  */
 import { actorRefKey } from "../domain/genesisLedger";
@@ -39,7 +40,7 @@ export type Phase7LiveOpportunityQuote = Omit<
   Phase7CandidateEvidence,
   "exportableQuantity" | "residualImportDemandQuantity" | "buyerRemainingBudgetDest"
 >;
-/** Caller-owned legal, gross landed, source invoice and FX evidence: never a net price. */
+/** Caller-owned legal, landed, source invoice and FX evidence: neither net nor gross reference price is trusted. */
 export type Phase7LiveQuoteWithoutDestinationNetPrice = Omit<
   Phase7LiveOpportunityQuote, "destinationReferenceNetUnitPrice"
 >;
@@ -54,10 +55,22 @@ export interface Phase7FrozenImportTariffSnapshot {
   readonly ratesByDestinationStateGood: ReadonlyMap<string, number>;
 }
 
+/** Same-tick tax facts from the M3 policy-provider boundary; M6 will own effective fiscal policy. */
+export interface Phase7FrozenConsumptionTaxSnapshot {
+  readonly tick: number;
+  readonly ratesByDestinationStateGood: ReadonlyMap<string, number>;
+  readonly collectionEfficiencyByState: ReadonlyMap<StateId, number>;
+}
+
+export function phase7ConsumptionTaxKey(stateId: StateId, goodId: GoodId): string {
+  return JSON.stringify([stateId, goodId]);
+}
+
 export interface Phase7LivePricingContext extends Pick<
   TickContext, "tick" | "phase" | "marketPrices" | "effectiveJurisdictionByRegion"
 > {
   readonly phase1ImportTariffs?: Phase7FrozenImportTariffSnapshot | undefined;
+  readonly phase1ConsumptionTaxes?: Phase7FrozenConsumptionTaxSnapshot | undefined;
 }
 
 export function phase7ImportTariffKey(stateId: StateId, goodId: GoodId): string {
@@ -69,7 +82,7 @@ export interface Phase7LiveWorldPlanInput extends Pick<
   "scorePolicy" | "infrastructureFactors" | "eligibleDirectedLinkIdsAtPhase1" |
   "fxPairIdByTradePlanId"
 > {
-  /** Frozen legal/gross/FX quote per route; net market price comes only from Phase-6. */
+  /** Frozen legal/landed/FX terms; supplied reference net/gross prices are overwritten. */
   readonly opportunityQuotes: readonly Phase7LiveQuoteWithoutDestinationNetPrice[];
   /** Unique intents after Phase-4 commitments; never original unspent maxSpend. */
   readonly residualIntents: readonly Phase7ActorResidualIntent[];
@@ -204,6 +217,104 @@ export function derivePhase7Phase1ImportTariffs(
 }
 
 /**
+ * Hydrate the gross destination reference from the SAME Phase-6 net price and
+ * Phase-1 tax terms that Phase-8 local clearing consumes (Handoff/04 section 2).
+ * A missing tax rate/collection efficiency is NOT a zero-rate default.
+ *
+ * The aggregate route can hold multiple buyer intents. Destination-State
+ * PUBLIC_PROCUREMENT is exempt in Phase-8; all other buyers are taxed.
+ * A single aggregate candidate cannot truthfully represent mixed gross buyer
+ * prices, so refuse that ambiguity instead of mis-ranking or under-reserving it.
+ * No money, goods, policy or WorldState stock changes in this preview.
+ */
+export function derivePhase7DestinationGrossReferencePrices(
+  world: Pick<WorldState, "regions" | "states">,
+  context: Phase7LivePricingContext,
+  pricedQuotes: readonly Phase7LiveOpportunityQuote[],
+  residualIntents: readonly Phase7ActorResidualIntent[],
+): readonly Phase7LiveOpportunityQuote[] {
+  if (context.phase !== 7 || !(context.effectiveJurisdictionByRegion instanceof Map)) {
+    throw new Error("Phase-7 gross reference requires current Phase-1 jurisdiction");
+  }
+  const snapshot = context.phase1ConsumptionTaxes;
+  if (snapshot !== undefined &&
+      (!Number.isSafeInteger(context.tick) || context.tick < 0 ||
+       snapshot.tick !== context.tick ||
+       !(snapshot.ratesByDestinationStateGood instanceof Map) ||
+       !(snapshot.collectionEfficiencyByState instanceof Map))) {
+    throw new Error("Phase-7 gross reference requires a current-tick frozen tax-policy snapshot");
+  }
+
+  const treatmentByRegionGood = new Map<string, Set<"TAXED" | "EXEMPT">>();
+  for (const { intent, residualQuantity } of ordered(residualIntents)) {
+    if (intent.side !== "BUY" || residualQuantity <= 0) continue;
+    const destination = world.regions.get(intent.regionId);
+    if (!destination || !context.effectiveJurisdictionByRegion.has(intent.regionId) ||
+        context.effectiveJurisdictionByRegion.get(intent.regionId) !== destination.controllerStateId) {
+      throw new Error("Phase-7 gross reference requires activated destination jurisdiction");
+    }
+    const controller = destination.controllerStateId;
+    const isSelfProcurement = controller !== null &&
+      intent.actor.type === "STATE" && intent.actor.stateId === controller &&
+      intent.purpose === "PUBLIC_PROCUREMENT";
+    const key = phase7RegionGoodKey(intent.regionId, intent.goodId);
+    const classes = treatmentByRegionGood.get(key) ?? new Set<"TAXED" | "EXEMPT">();
+    classes.add(isSelfProcurement ? "EXEMPT" : "TAXED");
+    treatmentByRegionGood.set(key, classes);
+  }
+
+  return [...pricedQuotes].sort((a, b) =>
+    cmp(a.linkId, b.linkId) || cmp(a.goodId, b.goodId) || cmp(a.planId, b.planId))
+    .map((quote) => {
+      const destination = world.regions.get(quote.destinationRegionId);
+      if (!destination || !context.effectiveJurisdictionByRegion.has(destination.regionId) ||
+          context.effectiveJurisdictionByRegion.get(destination.regionId) !== destination.controllerStateId) {
+        throw new Error("Phase-7 gross reference requires activated destination jurisdiction");
+      }
+      const net = quote.destinationReferenceNetUnitPrice;
+      if (!Number.isFinite(net) || net <= 0) {
+        throw new Error("Phase-7 gross reference requires a positive finite Phase-6 net price");
+      }
+      const controller = destination.controllerStateId;
+      if (controller === null) {
+        return { ...quote, destinationReferenceGrossUnitPrice: net };
+      }
+      if (!world.states.has(controller)) {
+        throw new Error("Phase-7 gross reference references an unknown destination State");
+      }
+      const classes = treatmentByRegionGood.get(
+        phase7RegionGoodKey(quote.destinationRegionId, quote.goodId),
+      );
+      if (classes?.size === 2) {
+        throw new Error("Phase-7 gross reference cannot mix taxable and exempt buyer classes");
+      }
+      if (!snapshot) {
+        throw new Error("Phase-7 gross reference requires frozen Phase-1 consumption-tax policy");
+      }
+      const key = phase7ConsumptionTaxKey(controller, quote.goodId);
+      if (!snapshot.ratesByDestinationStateGood.has(key) ||
+          !snapshot.collectionEfficiencyByState.has(controller)) {
+        throw new Error("Phase-7 gross reference missing destination State tax-policy evidence");
+      }
+      const rate = snapshot.ratesByDestinationStateGood.get(key)!;
+      const efficiency = snapshot.collectionEfficiencyByState.get(controller)!;
+      if (!Number.isFinite(rate) || rate < 0 || rate > 1 ||
+          !Number.isFinite(efficiency) || efficiency < 0 || efficiency > 1) {
+        throw new Error("Phase-7 gross reference tax policy must be finite in [0, 1]");
+      }
+      // No buyer intents yet: use the canonical household-facing reference,
+      // as Phase-8 does, rather than a caller-selected taxable class.
+      const collectedPerUnit = classes?.has("EXEMPT") ? 0 : net * rate * efficiency;
+      const gross = net + collectedPerUnit;
+      if (!Number.isFinite(gross) || gross < net ||
+          (collectedPerUnit > 0 && gross === net)) {
+        throw new Error("Phase-7 gross reference tax-inclusive price lost money precision");
+      }
+      return { ...quote, destinationReferenceGrossUnitPrice: gross };
+    });
+}
+
+/**
  * Clamp each explicitly reserved Phase-7 FX output budget to the canonical
  * base-issuer-owned live pool, net of its operational reserve floor. The
  * supplied tick-local bound may be smaller because another component has
@@ -277,6 +388,9 @@ export function buildPhase7LiveWorldPlanInput(
   const lawfulQuotes = derivePhase7Phase1ImportTariffs(world, context, input.opportunityQuotes);
   // Hydrate before reservations: no caller-controlled market net price enters the plan.
   const pricedQuotes = derivePhase7DestinationNetPrices(world, context, lawfulQuotes);
+  const grossPricedQuotes = derivePhase7DestinationGrossReferencePrices(
+    world, context, pricedQuotes, input.residualIntents,
+  );
   const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon;
   const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon;
   if (quantityEpsilon === undefined || moneyEpsilon === undefined ||
@@ -348,7 +462,7 @@ export function buildPhase7LiveWorldPlanInput(
   const actorsByTradePlanId = new Map<string, Phase7TradePlanActors>();
   const seenPlans = new Set<string>();
   const seenLinkGoods = new Set<string>();
-  for (const quote of [...pricedQuotes].sort((a, b) =>
+  for (const quote of [...grossPricedQuotes].sort((a, b) =>
     cmp(a.linkId, b.linkId) || cmp(a.goodId, b.goodId) || cmp(a.planId, b.planId))) {
     if (seenPlans.has(quote.planId) ||
         seenLinkGoods.has(JSON.stringify([quote.linkId, quote.goodId]))) {
@@ -397,14 +511,14 @@ export function buildPhase7LiveWorldPlanInput(
   }
 
   const fxOutputByPairCurrency = derivePhase7LiveFxOutputBudgets(
-    world, pricedQuotes, input.fxPairIdByTradePlanId, input.fxOutputByPairCurrency,
+    world, grossPricedQuotes, input.fxPairIdByTradePlanId, input.fxOutputByPairCurrency,
   );
   const aggregateBudgets: Phase7AggregateBudgets = {
     exportableByOriginGood, importDemandByDestinationGood: demand,
     buyerCashByDestinationCurrency, fxOutputByPairCurrency,
   };
 
-  const opportunities: Phase7CandidateEvidence[] = pricedQuotes.map((quote) => {
+  const opportunities: Phase7CandidateEvidence[] = grossPricedQuotes.map((quote) => {
     const sourceKey = phase7RegionGoodKey(quote.originRegionId, quote.goodId);
     const destinationKey = phase7RegionGoodKey(quote.destinationRegionId, quote.goodId);
     const currency = world.regions.get(quote.destinationRegionId)?.settlementCurrencyId;
@@ -442,8 +556,9 @@ export function preparePhase7LiveWorldTradePlan(
 /**
  * Derive the destination market's net reference price from the SAME Phase-6
  * evidence that Phase-8 will clear against. This removes a caller-controlled
- * price from the live Phase-7 opportunity builder while leaving tax-inclusive
- * gross quotes, source invoices, FX and legal decisions with their own owners.
+ * price from the live Phase-7 opportunity builder. The next hydration pass
+ * computes the destination gross reference from frozen Phase-1 tax evidence;
+ * source invoices, landed costs, FX and legal decisions retain their owners.
  *
  * Only valid at the Phase-7 boundary. A Phase-6 price in TickContext takes
  * precedence over the live carried market price, matching Phase-8's rule.
