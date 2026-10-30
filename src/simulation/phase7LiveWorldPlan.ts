@@ -2,11 +2,10 @@
  * M5 / #673: derive Phase-7 opportunity quantities and actor evidence from
  * live post-Phase-4 residual MarketIntents and authoritative WorldState stocks.
  *
- * Phase-1/6 owners supply frozen legal, tax, landed and FX evidence.
- * Destination/source NET prices (Phase 6), gross tax reference (Phase 1),
- * and transport fees (live directed link + explicit cost policy) are hydrated
- * before ranking. This module does not invent tariff, tax or FX defaults,
- * trust caller transport charges, or commit provisional quantities.
+ * Phase-1/6 owners supply frozen legal and tax evidence. Destination/source
+ * NET prices, gross reference, transport, tariff, landed and FX quotes are
+ * hydrated from their canonical live owners before route ranking. No policy
+ * default is invented; preview never commits provisional quantities.
  * The canonical Phase-7 dispatcher remains the only writer.
  */
 import { actorRefKey } from "../domain/genesisLedger";
@@ -30,7 +29,7 @@ import {
   type Phase7TradePlanActors,
 } from "./phase7TradePlan";
 import { marketPriceKey } from "./phase6MarketPriceFormation";
-import { quoteFx } from "./fxWorldPoolAuthority";
+import { quoteFx, resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 import { quoteTransportFee, type TransportFeeCostPolicy } from "./transportFeeQuote";
 import type { TickContext } from "./tickOrchestrator";
 import type { GoodId, StateId } from "../domain/id";
@@ -42,7 +41,7 @@ export type Phase7LiveOpportunityQuote = Omit<
   Phase7CandidateEvidence,
   "exportableQuantity" | "residualImportDemandQuantity" | "buyerRemainingBudgetDest"
 >;
-/** Caller-owned legal, landed and FX evidence: neither market net price is trusted. */
+/** Caller supplies legal intent and stable route IDs; all economic prices are overwritten. */
 export type Phase7LiveQuoteWithoutDestinationNetPrice = Omit<
   Phase7LiveOpportunityQuote, "destinationReferenceNetUnitPrice"
 >;
@@ -90,7 +89,7 @@ export interface Phase7LiveWorldPlanInput extends Pick<
   "scorePolicy" | "infrastructureFactors" | "eligibleDirectedLinkIdsAtPhase1" |
   "fxPairIdByTradePlanId"
 > {
-  /** Legal/landed/FX terms; caller market prices and transport-fee quote are overwritten. */
+  /** Stable routes and legal decisions; caller prices/fees/landed/FX are all overwritten. */
   readonly opportunityQuotes: readonly Phase7LiveQuoteWithoutMarketNetPrices[];
   /** Unique intents after Phase-4 commitments; never original unspent maxSpend. */
   readonly residualIntents: readonly Phase7ActorResidualIntent[];
@@ -387,8 +386,7 @@ export function derivePhase7LiveFxOutputBudgets(
  *
  * This is a pure preflight unit quote (quantity=1), not a payment or an
  * authorization to ship. The separate execution path must re-quote for the
- * actual matched quantity. The landed all-in buyer quote is still an external
- * input until its own dedicated hydration is implemented.
+ * actual matched quantity.
  */
 export function derivePhase7LiveTransportFees(
   world: Pick<WorldState, "regions" | "transportLinks" | "simulationConfig">,
@@ -415,6 +413,154 @@ export function derivePhase7LiveTransportFees(
 }
 
 /**
+ * Handoff/04 section 23: quote ONE unit's all-in buyer debit from canonical
+ * invoice price, explicit same-tick tariff/tax policy, physical link fee and
+ * the live base-issuer-owned FX pool. Caller-provided landed/FX estimates never
+ * enter candidate ranking. A per-unit quote is only an allocation ceiling:
+ * actual shipment lots must re-quote on their final quantity at settlement.
+ */
+export function derivePhase7AuthoritativeLandedQuotes(
+  world: WorldState,
+  context: Phase7LivePricingContext,
+  quotes: readonly Phase7LiveOpportunityQuote[],
+  residualIntents: readonly Phase7ActorResidualIntent[],
+  pairByPlan: ReadonlyMap<string, string> | undefined,
+  remainingFxOutput: ReadonlyMap<string, number>,
+): readonly Phase7LiveOpportunityQuote[] {
+  if (context.phase !== 7 || !(context.effectiveJurisdictionByRegion instanceof Map) ||
+      !(remainingFxOutput instanceof Map) ||
+      (pairByPlan !== undefined && !(pairByPlan instanceof Map))) {
+    throw new Error("Phase-7 landed quote requires current Phase-1/7 and FX budget evidence");
+  }
+  const taxes = context.phase1ConsumptionTaxes;
+  const buyerClasses = new Map<string, Set<"TAXED" | "EXEMPT">>();
+  for (const { intent, residualQuantity } of ordered(residualIntents)) {
+    if (intent.side !== "BUY" || residualQuantity <= 0) continue;
+    const destination = world.regions.get(intent.regionId);
+    if (!destination || context.effectiveJurisdictionByRegion.get(intent.regionId) !==
+        destination.controllerStateId ||
+        !context.effectiveJurisdictionByRegion.has(intent.regionId)) {
+      throw new Error("Phase-7 landed quote requires activated destination jurisdiction");
+    }
+    const controller = destination.controllerStateId;
+    const exempt = controller !== null && intent.actor.type === "STATE" &&
+      intent.actor.stateId === controller && intent.purpose === "PUBLIC_PROCUREMENT";
+    const key = phase7RegionGoodKey(intent.regionId, intent.goodId);
+    const classes = buyerClasses.get(key) ?? new Set<"TAXED" | "EXEMPT">();
+    classes.add(exempt ? "EXEMPT" : "TAXED");
+    buyerClasses.set(key, classes);
+  }
+  return [...quotes].sort((a, b) =>
+    cmp(a.linkId, b.linkId) || cmp(a.goodId, b.goodId) || cmp(a.planId, b.planId))
+    .map(quote => {
+      const origin = world.regions.get(quote.originRegionId);
+      const destination = world.regions.get(quote.destinationRegionId);
+      if (!origin || !destination ||
+          !context.effectiveJurisdictionByRegion.has(origin.regionId) ||
+          !context.effectiveJurisdictionByRegion.has(destination.regionId) ||
+          context.effectiveJurisdictionByRegion.get(origin.regionId) !== origin.controllerStateId ||
+          context.effectiveJurisdictionByRegion.get(destination.regionId) !== destination.controllerStateId) {
+        throw new Error("Phase-7 landed quote requires current activated jurisdiction");
+      }
+      const sourceNet = quote.sourceSellerNetUnitPrice;
+      const fee = quote.estimatedTransportUnitCostDest;
+      const tariffRate = quote.estimatedTariffRate;
+      if (!Number.isFinite(sourceNet) || sourceNet <= 0 ||
+          !Number.isFinite(fee) || fee < 0 ||
+          !Number.isFinite(tariffRate) || tariffRate < 0 || tariffRate > 1) {
+        throw new Error("Phase-7 landed quote requires valid source invoice, fee and tariff");
+      }
+
+      const sourceCurrency = origin.settlementCurrencyId;
+      const destinationCurrency = destination.settlementCurrencyId;
+      let goodsPaymentDest = sourceNet;
+      let invoiceMidDest = sourceNet;
+      let fxInputPerSource = 1;
+      let fxFeasibleQuantity: number | undefined;
+      const pairId = pairByPlan?.get(quote.planId);
+      if (sourceCurrency === destinationCurrency) {
+        if (pairId !== undefined) {
+          throw new Error("Phase-7 landed same-currency quote must not consume FX");
+        }
+      } else {
+        if (!pairId || !pairId.trim()) {
+          throw new Error("Phase-7 landed cross-currency quote requires explicit FX pair");
+        }
+        const key = phase7FxOutputKey(pairId, sourceCurrency);
+        if (!remainingFxOutput.has(key)) {
+          throw new Error("Phase-7 landed FX quote requires explicit tick-local output budget");
+        }
+        const promised = remainingFxOutput.get(key)!;
+        requireNonnegative(promised, "landed FX output budget");
+        const fx = quoteFx(world, pairId, destinationCurrency, sourceCurrency, sourceNet);
+        const pool = resolveCanonicalFxPool(world, pairId).pool;
+        if (pool.baseCurrencyId === sourceCurrency &&
+            pool.quoteCurrencyId === destinationCurrency) {
+          invoiceMidDest = sourceNet * pool.spotRateQuotePerBase;
+        } else if (pool.quoteCurrencyId === sourceCurrency &&
+                   pool.baseCurrencyId === destinationCurrency) {
+          invoiceMidDest = sourceNet / pool.spotRateQuotePerBase;
+        } else {
+          throw new Error("Phase-7 landed FX pair does not match route currencies");
+        }
+        goodsPaymentDest = fx.requiredInputAmountAtDesiredOutput;
+        fxInputPerSource = goodsPaymentDest / sourceNet;
+        fxFeasibleQuantity = Math.min(promised, fx.maxOutputByPoolReserve) / sourceNet;
+        if (!Number.isFinite(fxFeasibleQuantity) || fxFeasibleQuantity < 0) {
+          throw new Error("Phase-7 landed FX quantity bound is invalid");
+        }
+      }
+
+      let tariff = 0;
+      let consumptionTax = 0;
+      const controller = destination.controllerStateId;
+      if (controller !== null) {
+        if (!world.states.has(controller) || !taxes ||
+            taxes.tick !== context.tick ||
+            !(taxes.ratesByDestinationStateGood instanceof Map) ||
+            !(taxes.collectionEfficiencyByState instanceof Map)) {
+          throw new Error("Phase-7 landed quote requires frozen destination tax policy");
+        }
+        const key = phase7ConsumptionTaxKey(controller, quote.goodId);
+        if (!taxes.ratesByDestinationStateGood.has(key) ||
+            !taxes.collectionEfficiencyByState.has(controller)) {
+          throw new Error("Phase-7 landed quote missing destination tax-policy evidence");
+        }
+        const rate = taxes.ratesByDestinationStateGood.get(key)!;
+        const efficiency = taxes.collectionEfficiencyByState.get(controller)!;
+        if (!Number.isFinite(rate) || rate < 0 || rate > 1 ||
+            !Number.isFinite(efficiency) || efficiency < 0 || efficiency > 1) {
+          throw new Error("Phase-7 landed quote tax rates must be finite in [0, 1]");
+        }
+        const classes = buyerClasses.get(phase7RegionGoodKey(destination.regionId, quote.goodId));
+        if (classes?.size === 2) {
+          throw new Error("Phase-7 landed quote cannot mix taxable and exempt buyers");
+        }
+        // Tariff base is MID converted invoice plus physical transport fee.
+        tariff = (invoiceMidDest + fee) * tariffRate * efficiency;
+        consumptionTax = classes?.has("EXEMPT") ? 0 : invoiceMidDest * rate * efficiency;
+      } else if (tariffRate !== 0) {
+        throw new Error("Phase-7 landed quote cannot charge tariff without State treasury");
+      }
+      const extras = fee + tariff + consumptionTax;
+      const landed = goodsPaymentDest + extras;
+      if (![goodsPaymentDest, invoiceMidDest, fxInputPerSource, extras, landed].every(Number.isFinite) ||
+          goodsPaymentDest <= 0 || invoiceMidDest <= 0 || fxInputPerSource <= 0 ||
+          extras < 0 || landed < goodsPaymentDest ||
+          (extras > 0 && landed === goodsPaymentDest)) {
+        throw new Error("Phase-7 landed quote lost money precision");
+      }
+      // Exclude even a malicious optional caller FX cap on same-currency paths.
+      const { fxFeasibleQuantity: _ignored, ...safeQuote } = quote;
+      return {
+        ...safeQuote, landedGrossUnitCostDest: landed,
+        estimatedFxInputPerSourceCurrency: fxInputPerSource,
+        ...(fxFeasibleQuantity !== undefined ? { fxFeasibleQuantity } : {}),
+      };
+    });
+}
+
+/**
  * Build actual owner-constrained stocks, aggregated regional upper bounds and
  * per-route actors in one deterministic pass. Same physical State inventory
  * may appear as an upper bound at different origin Regions, but is represented
@@ -436,6 +582,10 @@ export function buildPhase7LiveWorldPlanInput(
   const pricedQuotes = derivePhase7DestinationNetPrices(world, context, sourcePricedQuotes);
   const grossPricedQuotes = derivePhase7DestinationGrossReferencePrices(
     world, context, pricedQuotes, input.residualIntents,
+  );
+  const landedQuotes = derivePhase7AuthoritativeLandedQuotes(
+    world, context, grossPricedQuotes, input.residualIntents,
+    input.fxPairIdByTradePlanId, input.fxOutputByPairCurrency,
   );
   const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon;
   const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon;
@@ -508,7 +658,7 @@ export function buildPhase7LiveWorldPlanInput(
   const actorsByTradePlanId = new Map<string, Phase7TradePlanActors>();
   const seenPlans = new Set<string>();
   const seenLinkGoods = new Set<string>();
-  for (const quote of [...grossPricedQuotes].sort((a, b) =>
+  for (const quote of [...landedQuotes].sort((a, b) =>
     cmp(a.linkId, b.linkId) || cmp(a.goodId, b.goodId) || cmp(a.planId, b.planId))) {
     if (seenPlans.has(quote.planId) ||
         seenLinkGoods.has(JSON.stringify([quote.linkId, quote.goodId]))) {
@@ -557,14 +707,14 @@ export function buildPhase7LiveWorldPlanInput(
   }
 
   const fxOutputByPairCurrency = derivePhase7LiveFxOutputBudgets(
-    world, grossPricedQuotes, input.fxPairIdByTradePlanId, input.fxOutputByPairCurrency,
+    world, landedQuotes, input.fxPairIdByTradePlanId, input.fxOutputByPairCurrency,
   );
   const aggregateBudgets: Phase7AggregateBudgets = {
     exportableByOriginGood, importDemandByDestinationGood: demand,
     buyerCashByDestinationCurrency, fxOutputByPairCurrency,
   };
 
-  const opportunities: Phase7CandidateEvidence[] = grossPricedQuotes.map((quote) => {
+  const opportunities: Phase7CandidateEvidence[] = landedQuotes.map((quote) => {
     const sourceKey = phase7RegionGoodKey(quote.originRegionId, quote.goodId);
     const destinationKey = phase7RegionGoodKey(quote.destinationRegionId, quote.goodId);
     const currency = world.regions.get(quote.destinationRegionId)?.settlementCurrencyId;
