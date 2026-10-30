@@ -15,6 +15,7 @@ import {
   type Phase7ActorResidualIntent,
 } from "./phase7IntentMatching";
 import {
+  phase7FxOutputKey,
   phase7RegionCashKey,
   phase7RegionGoodKey,
   type Phase7AggregateBudgets,
@@ -27,6 +28,7 @@ import {
   type Phase7TradePlanActors,
 } from "./phase7TradePlan";
 import { marketPriceKey } from "./phase6MarketPriceFormation";
+import { quoteFx } from "./fxWorldPoolAuthority";
 import type { TickContext } from "./tickOrchestrator";
 import type { Phase7CandidateEvidence } from "./tradeCandidateSelection";
 import type { LocalMarketState, WorldState } from "./worldState";
@@ -50,7 +52,7 @@ export interface Phase7LiveWorldPlanInput extends Pick<
   readonly opportunityQuotes: readonly Phase7LiveQuoteWithoutDestinationNetPrice[];
   /** Unique intents after Phase-4 commitments; never original unspent maxSpend. */
   readonly residualIntents: readonly Phase7ActorResidualIntent[];
-  /** FX output already net of operational floors / earlier commitments. */
+  /** Tick-local FX output cap after earlier reservations; clamped to LIVE pool funds. */
   readonly fxOutputByPairCurrency: ReadonlyMap<string, number>;
 }
 
@@ -84,6 +86,63 @@ function ordered(entries: readonly Phase7ActorResidualIntent[]): Phase7ActorResi
   return [...entries].sort((a, b) =>
     cmp(actorRefKey(a.intent.actor), actorRefKey(b.intent.actor)) ||
     cmp(a.intent.id, b.intent.id));
+}
+
+/**
+ * Clamp each explicitly reserved Phase-7 FX output budget to the canonical
+ * base-issuer-owned live pool, net of its operational reserve floor. The
+ * supplied tick-local bound may be smaller because another component has
+ * already promised liquidity; it must never manufacture money above the
+ * current live pool's spendable output. Pair/direction are explicit; no
+ * exchange rate, pool, or uncommitted reservation is inferred.
+ *
+ * This is a pure planner bound, NOT an FX reservation or permission to settle.
+ * Actual cross-currency dispatch re-quotes against live WorldState again.
+ */
+export function derivePhase7LiveFxOutputBudgets(
+  world: WorldState,
+  quotes: readonly Phase7LiveQuoteWithoutDestinationNetPrice[],
+  pairsByPlan: ReadonlyMap<string, string> | undefined,
+  remainingOutput: ReadonlyMap<string, number>,
+): ReadonlyMap<string, number> {
+  if (!(remainingOutput instanceof Map) ||
+      (pairsByPlan !== undefined && !(pairsByPlan instanceof Map))) {
+    throw new Error("Phase-7 live FX requires explicit tick-local budgets and pair IDs");
+  }
+  const bounded = new Map<string, number>();
+  for (const quote of [...quotes].sort((a, b) =>
+    cmp(a.planId, b.planId) || cmp(a.linkId, b.linkId))) {
+    const origin = world.regions.get(quote.originRegionId);
+    const destination = world.regions.get(quote.destinationRegionId);
+    if (!origin || !destination) {
+      throw new Error("Phase-7 live FX quote references unknown Regions");
+    }
+    const pairId = pairsByPlan?.get(quote.planId);
+    if (origin.settlementCurrencyId === destination.settlementCurrencyId) {
+      if (pairId !== undefined) {
+        throw new Error("Phase-7 live same-currency quote must not reserve FX");
+      }
+      continue;
+    }
+    if (!pairId || !pairId.trim()) {
+      throw new Error("Phase-7 live cross-currency quote requires an explicit FX pair");
+    }
+    const key = phase7FxOutputKey(pairId, origin.settlementCurrencyId);
+    if (!remainingOutput.has(key)) {
+      throw new Error("Phase-7 live FX quote missing explicit tick-local output budget");
+    }
+    const promisedAvailable = remainingOutput.get(key)!;
+    requireNonnegative(promisedAvailable, "FX available output");
+    // quoteFx validates canonical pool owner, currencies, rate, spread,
+    // reserve floors and live balances. A zero output quote returns its
+    // reserve-limited ceiling without reserving or consuming any liquidity.
+    const physicalAvailable = quoteFx(
+      world, pairId, destination.settlementCurrencyId,
+      origin.settlementCurrencyId, 0,
+    ).maxOutputByPoolReserve;
+    bounded.set(key, Math.min(promisedAvailable, physicalAvailable));
+  }
+  return bounded;
 }
 
 /**
@@ -220,11 +279,9 @@ export function buildPhase7LiveWorldPlanInput(
     buyerCashByDestinationCurrency.set(regionCurrency, cash);
   }
 
-  const fxOutputByPairCurrency = new Map<string, number>();
-  for (const [key, balance] of input.fxOutputByPairCurrency) {
-    requireNonnegative(balance, "FX available output");
-    fxOutputByPairCurrency.set(key, balance);
-  }
+  const fxOutputByPairCurrency = derivePhase7LiveFxOutputBudgets(
+    world, pricedQuotes, input.fxPairIdByTradePlanId, input.fxOutputByPairCurrency,
+  );
   const aggregateBudgets: Phase7AggregateBudgets = {
     exportableByOriginGood, importDemandByDestinationGood: demand,
     buyerCashByDestinationCurrency, fxOutputByPairCurrency,
