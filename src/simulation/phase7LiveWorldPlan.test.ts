@@ -78,7 +78,7 @@ function fixture() {
       goodId: GOOD, authorizedAtPhase1: true,
       cargoWeightPerUnit: 1, destinationReferenceGrossUnitPrice: 10,
       landedGrossUnitCostDest: 2, sourceSellerNetUnitPrice: 1,
-      destinationReferenceNetUnitPrice: 10, estimatedTransportUnitCostDest: 1,
+      estimatedTransportUnitCostDest: 1,
       estimatedTariffRate: 0, estimatedFxInputPerSourceCurrency: 1,
       shortageRateDestination: 0.25,
     })),
@@ -90,13 +90,17 @@ function fixture() {
     eligibleDirectedLinkIdsAtPhase1: new Set<TransportLinkId>(links.map(l => l.linkId)),
     fxOutputByPairCurrency: new Map(),
   };
-  return { world, input, first, second, b1, b2, links, destination, state, buyer };
+  const market = [...world.markets.values()].find(m => m.seed.regionKey === destination.seed.key)!;
+  const context = {
+    phase: 7 as const, marketPrices: new Map([[marketPriceKey(market.marketId, GOOD), 10]]),
+  };
+  return { world, context, input, first, second, b1, b2, links, destination, state, buyer };
 }
 
 describe("M5 #673 Phase-7 live world opportunity planning", () => {
   it("derives two routes' goods and wallet ceilings from real owners, never quoted quantities", () => {
     const f = fixture();
-    const built = buildPhase7LiveWorldPlanInput(f.world, f.input);
+    const built = buildPhase7LiveWorldPlanInput(f.world, f.context, f.input);
     const origin0 = phase7RegionGoodKey(f.first.regionId, GOOD);
     const origin1 = phase7RegionGoodKey(f.second.regionId, GOOD);
     const demandKey = phase7RegionGoodKey(f.destination.regionId, GOOD);
@@ -111,13 +115,39 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
     expect(built.actorBudgets.sellerExportableByEndpoint.get(sellerKey)).toBe(9);
     expect(built.actorBudgets.buyerCashByActorCurrency.get(buyerKey)).toBe(30);
     expect(built.opportunities.map(q => q.exportableQuantity).sort()).toEqual([4, 5]);
-    const matched = preparePhase7LiveWorldTradePlan(f.world, f.input);
+    const matched = preparePhase7LiveWorldTradePlan(f.world, f.context, f.input);
     expect(matched.aggregate.reservations.reduce((sum, r) => sum + r.allocatedQuantity, 0)).toBe(9);
     expect(matched.actorMatches.lots.reduce((sum, lot) => sum + lot.quantity, 0)).toBe(9);
     expect(matched.actorMatches.remainingSellerByEndpoint.get(sellerKey)).toBe(0);
     expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
     expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(f.destination.settlementCurrencyId)).toBe(30);
     expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("hydrates the actual prepared plan, even against a forged caller net price", () => {
+    const f = fixture();
+    const baseline = preparePhase7LiveWorldTradePlan(f.world, f.context, f.input);
+    const forged = {
+      ...f.input,
+      opportunityQuotes: f.input.opportunityQuotes.map(q => ({
+        ...q, destinationReferenceNetUnitPrice: 1e8,
+      })),
+    };
+    const actual = preparePhase7LiveWorldTradePlan(f.world, f.context, forged);
+    expect(actual).toEqual(baseline);
+    expect(actual.rankedCandidates.map(c => c.destinationReferenceNetUnitPrice)).toEqual([10, 10]);
+
+    const market = [...f.world.markets.values()].find(
+      m => m.seed.regionKey === f.destination.seed.key,
+    )!;
+    const badContext = {
+      ...f.context,
+      marketPrices: new Map([[marketPriceKey(market.marketId, GOOD), Number.NaN]]),
+    };
+    expect(() => preparePhase7LiveWorldTradePlan(f.world, badContext, forged))
+      .toThrow("finite positive canonical market price");
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(f.destination.settlementCurrencyId)).toBe(30);
   });
 
   it("remains byte-stable under all input and quote permutations", () => {
@@ -128,8 +158,8 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
       opportunityQuotes: [...f.input.opportunityQuotes].reverse(),
       infrastructureFactors: new Map([...f.input.infrastructureFactors].reverse()),
     };
-    const first = preparePhase7LiveWorldTradePlan(f.world, f.input);
-    const second = preparePhase7LiveWorldTradePlan(f.world, reversed);
+    const first = preparePhase7LiveWorldTradePlan(f.world, f.context, f.input);
+    const second = preparePhase7LiveWorldTradePlan(f.world, f.context, reversed);
     expect(second.rankedCandidates).toEqual(first.rankedCandidates);
     expect(second.aggregate.reservations).toEqual(first.aggregate.reservations);
     expect(second.actorMatches.lots).toEqual(first.actorMatches.lots);
@@ -143,7 +173,7 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
         ...seller, publicInventory: new Map(seller.publicInventory).set(GOOD, 8),
       }),
     };
-    expect(() => preparePhase7LiveWorldTradePlan(world, f.input))
+    expect(() => preparePhase7LiveWorldTradePlan(world, f.context, f.input))
       .toThrow("cannot cover aggregate reservation");
     expect(world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(8);
     expect(f.input.residualIntents[0]!.residualQuantity).toBe(4);
@@ -154,9 +184,9 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
     const residualIntents = f.input.residualIntents.map(e => ({
       ...e, intent: e.intent.side === "SELL" ? { ...e.intent, minimumReserveQuantity: 3 } : e.intent,
     }));
-    const built = buildPhase7LiveWorldPlanInput(f.world, { ...f.input, residualIntents });
+    const built = buildPhase7LiveWorldPlanInput(f.world, f.context, { ...f.input, residualIntents });
     expect(built.actorBudgets.sellerExportableByEndpoint.get(phase7SellerEndpointKey(f.first))).toBe(6);
-    expect(() => preparePhase7LiveWorldTradePlan(f.world, { ...f.input, residualIntents }))
+    expect(() => preparePhase7LiveWorldTradePlan(f.world, f.context, { ...f.input, residualIntents }))
       .toThrow("cannot cover aggregate reservation");
   });
 
@@ -167,9 +197,8 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
     )!;
     const carriedPrice = market.priceByGood.get(GOOD)!;
     const sameTickPrice = carriedPrice + 2;
-    const { destinationReferenceNetUnitPrice: callerValue, ...unpriced } =
-      f.input.opportunityQuotes[0]!;
-    expect(callerValue).toBe(10);
+    const unpriced = f.input.opportunityQuotes[0]!;
+    expect("destinationReferenceNetUnitPrice" in unpriced).toBe(false);
     const quotes = derivePhase7DestinationNetPrices(
       f.world,
       { phase: 7, marketPrices: new Map([
@@ -189,11 +218,7 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
     const market = [...f.world.markets.values()].find(
       m => m.seed.regionKey === f.destination.seed.key,
     )!;
-    const unpriced = f.input.opportunityQuotes.map((q) => {
-      const { destinationReferenceNetUnitPrice, ...rest } = q;
-      expect(destinationReferenceNetUnitPrice).toBeGreaterThan(0);
-      return rest;
-    });
+    const unpriced = f.input.opportunityQuotes;
     const prices = { phase: 7, marketPrices: new Map<string, number>() };
     const forward = derivePhase7DestinationNetPrices(f.world, prices, unpriced);
     const reverse = derivePhase7DestinationNetPrices(f.world, prices, [...unpriced].reverse());
@@ -208,9 +233,8 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
     const market = [...f.world.markets.values()].find(
       m => m.seed.regionKey === f.destination.seed.key,
     )!;
-    const { destinationReferenceNetUnitPrice: callerValue, ...unpriced } =
-      f.input.opportunityQuotes[0]!;
-    expect(callerValue).toBeGreaterThan(0);
+    const unpriced = f.input.opportunityQuotes[0]!;
+    expect("destinationReferenceNetUnitPrice" in unpriced).toBe(false);
     const noPrice = { phase: 7, marketPrices: new Map<string, number>() };
     expect(() => derivePhase7DestinationNetPrices(
       f.world, { ...noPrice, phase: 6 }, [unpriced],
@@ -249,10 +273,10 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
     const f = fixture();
     const tooLarge = [{ ...f.input.residualIntents[0]!, residualQuantity: 999 },
       ...f.input.residualIntents.slice(1)];
-    expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, f.context, {
       ...f.input, residualIntents: tooLarge,
     })).toThrow("residual exceeds original intent");
-    expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, f.context, {
       ...f.input, residualIntents: [
         ...f.input.residualIntents, f.input.residualIntents[0]!,
       ],
@@ -265,7 +289,7 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
         ),
       }),
     };
-    expect(() => buildPhase7LiveWorldPlanInput(bad, f.input))
+    expect(() => buildPhase7LiveWorldPlanInput(bad, f.context, f.input))
       .toThrow("live buyer cash must be finite");
     expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(f.destination.settlementCurrencyId)).toBe(30);
   });
