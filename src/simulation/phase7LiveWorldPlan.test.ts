@@ -13,6 +13,7 @@ import {
   buildPhase7LiveWorldPlanInput, preparePhase7LiveWorldTradePlan,
   derivePhase7DestinationNetPrices, derivePhase7LiveFxOutputBudgets,
   derivePhase7Phase1ImportTariffs, phase7ImportTariffKey,
+  derivePhase7DestinationGrossReferencePrices, phase7ConsumptionTaxKey,
   type Phase7LiveWorldPlanInput,
 } from "./phase7LiveWorldPlan";
 import { buildInitialWorld, type WorldState } from "./worldState";
@@ -108,6 +109,15 @@ function fixture() {
       [...world.regions].map(([id, region]) => [id, region.controllerStateId] as const),
     ),
     phase1ImportTariffs: { tick: 15, ratesByDestinationStateGood: phase1Rates },
+    phase1ConsumptionTaxes: {
+      tick: 15,
+      ratesByDestinationStateGood: new Map(
+        [...world.states.keys()].map(id => [phase7ConsumptionTaxKey(id, GOOD), 0]),
+      ),
+      collectionEfficiencyByState: new Map(
+        [...world.states.keys()].map(id => [id, 1]),
+      ),
+    },
   };
   return { world, context, input, first, second, b1, b2, links, destination, state, buyer };
 }
@@ -446,6 +456,122 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
       }, [quote])).toThrow("policy rate must be finite and non-negative");
     }
     expect(f.world.shipments?.size).toBe(0);
+  });
+
+
+  it("hydrates tax-inclusive gross reference from frozen Phase-1 policy, ignoring caller inflation", () => {
+    const f = fixture();
+    const stateId = f.destination.controllerStateId!;
+    const context = {
+      ...f.context,
+      phase1ConsumptionTaxes: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([[phase7ConsumptionTaxKey(stateId, GOOD), 0.2]]),
+        collectionEfficiencyByState: new Map([[stateId, 0.5]]),
+      },
+    };
+    const expected = buildPhase7LiveWorldPlanInput(f.world, context, f.input);
+    expect(expected.opportunities.map(q => q.destinationReferenceNetUnitPrice)).toEqual([10, 10]);
+    expect(expected.opportunities.map(q => q.destinationReferenceGrossUnitPrice)).toEqual([11, 11]);
+    const forged = {
+      ...f.input,
+      opportunityQuotes: f.input.opportunityQuotes.map(q => ({
+        ...q, destinationReferenceGrossUnitPrice: 1e9,
+      })),
+    };
+    expect(buildPhase7LiveWorldPlanInput(f.world, context, forged)).toEqual(expected);
+    expect(preparePhase7LiveWorldTradePlan(f.world, context, forged))
+      .toEqual(preparePhase7LiveWorldTradePlan(f.world, context, f.input));
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(
+      f.destination.settlementCurrencyId,
+    )).toBe(30);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("rejects absent, stale and invalid current-tick gross tax facts without state mutation", () => {
+    const f = fixture();
+    const stateId = f.destination.controllerStateId!;
+    const key = phase7ConsumptionTaxKey(stateId, GOOD);
+    const valid = {
+      tick: f.context.tick,
+      ratesByDestinationStateGood: new Map([[key, 0.1]]),
+      collectionEfficiencyByState: new Map([[stateId, 0.8]]),
+    };
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+      ...f.context, phase1ConsumptionTaxes: undefined,
+    }, f.input)).toThrow("requires frozen Phase-1 consumption-tax policy");
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+      ...f.context, phase1ConsumptionTaxes: { ...valid, tick: f.context.tick - 1 },
+    }, f.input)).toThrow("current-tick frozen tax-policy snapshot");
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+      ...f.context,
+      phase1ConsumptionTaxes: { ...valid, ratesByDestinationStateGood: new Map() },
+    }, f.input)).toThrow("missing destination State tax-policy evidence");
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+      ...f.context,
+      phase1ConsumptionTaxes: { ...valid, collectionEfficiencyByState: new Map() },
+    }, f.input)).toThrow("missing destination State tax-policy evidence");
+    for (const value of [-0.1, 1.1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+        ...f.context,
+        phase1ConsumptionTaxes: {
+          ...valid, ratesByDestinationStateGood: new Map([[key, value]]),
+        },
+      }, f.input)).toThrow("tax policy must be finite in [0, 1]");
+      expect(() => buildPhase7LiveWorldPlanInput(f.world, {
+        ...f.context,
+        phase1ConsumptionTaxes: {
+          ...valid, collectionEfficiencyByState: new Map([[stateId, value]]),
+        },
+      }, f.input)).toThrow("tax policy must be finite in [0, 1]");
+    }
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("matches Phase-8 State self-procurement exemption and refuses mixed gross buyer classes", () => {
+    const f = fixture();
+    const stateId = f.destination.controllerStateId!;
+    const context = {
+      ...f.context,
+      phase1ConsumptionTaxes: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([[phase7ConsumptionTaxKey(stateId, GOOD), 0.25]]),
+        collectionEfficiencyByState: new Map([[stateId, 1]]),
+      },
+    };
+    const priced = derivePhase7DestinationNetPrices(f.world, context, f.input.opportunityQuotes);
+    const exempt = f.input.residualIntents.map(entry => entry.intent.side === "BUY"
+      ? {
+          ...entry,
+          intent: {
+            ...entry.intent, actor: { type: "STATE" as const, stateId },
+            purpose: "PUBLIC_PROCUREMENT" as const,
+          },
+        } : entry);
+    expect(derivePhase7DestinationGrossReferencePrices(
+      f.world, context, priced, exempt,
+    ).map(q => q.destinationReferenceGrossUnitPrice)).toEqual([10, 10]);
+    const mixed = exempt.map((entry, index) =>
+      index === 1 ? f.input.residualIntents[index]! : entry);
+    expect(() => derivePhase7DestinationGrossReferencePrices(
+      f.world, context, priced, mixed,
+    )).toThrow("cannot mix taxable and exempt buyer classes");
+    const future: WorldState = {
+      ...f.world,
+      pendingTransitions: {
+        ...f.world.pendingTransitions,
+        jurisdictionChanges: [...f.world.pendingTransitions.jurisdictionChanges, {
+          regionId: f.destination.regionId,
+          nextControllerStateId: null,
+          activateTick: f.context.tick + 1,
+        }],
+      },
+    };
+    expect(derivePhase7DestinationGrossReferencePrices(
+      future, context, priced, f.input.residualIntents,
+    ).map(q => q.destinationReferenceGrossUnitPrice)).toEqual([12.5, 12.5]);
   });
 
   it("caps live FX output to canonical pool cash after reserve floors, not caller claims", () => {
