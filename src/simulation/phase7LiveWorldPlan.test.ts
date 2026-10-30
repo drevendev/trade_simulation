@@ -6,8 +6,11 @@ import type { GoodId, TransportLinkId } from "../domain/id";
 import { createMarketIntentId, type MarketIntent } from "./marketIntent";
 import { phase7BuyerActorCashKey, phase7SellerEndpointKey } from "./phase7IntentMatching";
 import { phase7RegionCashKey, phase7RegionGoodKey } from "./phase7AggregateReservation";
+import { marketPriceKey } from "./phase6MarketPriceFormation";
+
 import {
   buildPhase7LiveWorldPlanInput, preparePhase7LiveWorldTradePlan,
+  derivePhase7DestinationNetPrices,
   type Phase7LiveWorldPlanInput,
 } from "./phase7LiveWorldPlan";
 import { buildInitialWorld, type WorldState } from "./worldState";
@@ -155,6 +158,91 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
     expect(built.actorBudgets.sellerExportableByEndpoint.get(phase7SellerEndpointKey(f.first))).toBe(6);
     expect(() => preparePhase7LiveWorldTradePlan(f.world, { ...f.input, residualIntents }))
       .toThrow("cannot cover aggregate reservation");
+  });
+
+  it("sources Phase-7 net price from the live Phase-6 context, not a supplied quote", () => {
+    const f = fixture();
+    const market = [...f.world.markets.values()].find(
+      m => m.seed.regionKey === f.destination.seed.key,
+    )!;
+    const carriedPrice = market.priceByGood.get(GOOD)!;
+    const sameTickPrice = carriedPrice + 2;
+    const { destinationReferenceNetUnitPrice: callerValue, ...unpriced } =
+      f.input.opportunityQuotes[0]!;
+    expect(callerValue).toBe(10);
+    const quotes = derivePhase7DestinationNetPrices(
+      f.world,
+      { phase: 7, marketPrices: new Map([
+        [marketPriceKey(market.marketId, GOOD), sameTickPrice],
+      ]) },
+      [unpriced],
+    );
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0]!.destinationReferenceNetUnitPrice).toBe(sameTickPrice);
+    expect(quotes[0]!.destinationReferenceGrossUnitPrice)
+      .toBe(unpriced.destinationReferenceGrossUnitPrice);
+    expect(market.priceByGood.get(GOOD)).toBe(carriedPrice);
+  });
+
+  it("uses Phase-8's carried-price fallback and stable route ordering", () => {
+    const f = fixture();
+    const market = [...f.world.markets.values()].find(
+      m => m.seed.regionKey === f.destination.seed.key,
+    )!;
+    const unpriced = f.input.opportunityQuotes.map((q) => {
+      const { destinationReferenceNetUnitPrice, ...rest } = q;
+      expect(destinationReferenceNetUnitPrice).toBeGreaterThan(0);
+      return rest;
+    });
+    const prices = { phase: 7, marketPrices: new Map<string, number>() };
+    const forward = derivePhase7DestinationNetPrices(f.world, prices, unpriced);
+    const reverse = derivePhase7DestinationNetPrices(f.world, prices, [...unpriced].reverse());
+    expect(reverse).toEqual(forward);
+    expect(forward.map(q => q.destinationReferenceNetUnitPrice)).toEqual([
+      market.priceByGood.get(GOOD), market.priceByGood.get(GOOD),
+    ]);
+  });
+
+  it("refuses stale phase, missing/ambiguous market and invalid Phase-6 prices", () => {
+    const f = fixture();
+    const market = [...f.world.markets.values()].find(
+      m => m.seed.regionKey === f.destination.seed.key,
+    )!;
+    const { destinationReferenceNetUnitPrice: callerValue, ...unpriced } =
+      f.input.opportunityQuotes[0]!;
+    expect(callerValue).toBeGreaterThan(0);
+    const noPrice = { phase: 7, marketPrices: new Map<string, number>() };
+    expect(() => derivePhase7DestinationNetPrices(
+      f.world, { ...noPrice, phase: 6 }, [unpriced],
+    )).toThrow("requires live Phase-7");
+    expect(() => derivePhase7DestinationNetPrices(
+      f.world, {
+        phase: 7, marketPrices: new Map([
+          [marketPriceKey(market.marketId, GOOD), Number.NaN],
+        ]),
+      }, [unpriced],
+    )).toThrow("finite positive canonical market price");
+    const emptyWorld: WorldState = {
+      ...f.world,
+      markets: new Map([...f.world.markets].filter(([id]) => id !== market.marketId)),
+    };
+    expect(() => derivePhase7DestinationNetPrices(
+      emptyWorld, noPrice, [unpriced],
+    )).toThrow("exactly one destination LocalMarket");
+    const duplicatedWorld: WorldState = {
+      ...f.world,
+      markets: new Map(f.world.markets).set("market:duplicate" as typeof market.marketId, {
+        ...market, marketId: "market:duplicate" as typeof market.marketId,
+      }),
+    };
+    expect(() => derivePhase7DestinationNetPrices(
+      duplicatedWorld, noPrice, [unpriced],
+    )).toThrow("exactly one destination LocalMarket");
+    expect(() => derivePhase7DestinationNetPrices(
+      f.world, noPrice, [{ ...unpriced, originRegionId: f.destination.regionId }],
+    )).toThrow("mismatched directed link");
+    expect(f.world.markets.get(market.marketId)!.priceByGood.get(GOOD))
+      .toBe(market.priceByGood.get(GOOD));
   });
 
   it("rejects stale residual quantities, duplicated IDs, and invalid live cash without mutation", () => {
