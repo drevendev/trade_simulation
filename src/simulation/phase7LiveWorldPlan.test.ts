@@ -806,4 +806,142 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
       new Map([[f.input.opportunityQuotes[0]!.planId, cross.pair]]), new Map(),
     )).toThrow("same-currency quote must not reserve FX");
   });
+
+  it("quotes a real same-currency buyer debit instead of forged landed and FX values", () => {
+    const f = fixture();
+    const actual = buildPhase7LiveWorldPlanInput(f.world, f.context, f.input);
+    for (const quote of actual.opportunities) {
+      expect(quote.landedGrossUnitCostDest).toBeCloseTo(
+        quote.sourceSellerNetUnitPrice + quote.estimatedTransportUnitCostDest, 10,
+      );
+      expect(quote.estimatedFxInputPerSourceCurrency).toBe(1);
+      expect(quote.fxFeasibleQuantity).toBeUndefined();
+    }
+    const tampered: Phase7LiveWorldPlanInput = {
+      ...f.input, opportunityQuotes: f.input.opportunityQuotes.map(q => ({
+        ...q, landedGrossUnitCostDest: 1e12,
+        estimatedFxInputPerSourceCurrency: 1e12,
+        fxFeasibleQuantity: 0,
+      })),
+    };
+    expect(buildPhase7LiveWorldPlanInput(f.world, f.context, tampered)).toEqual(actual);
+    expect(preparePhase7LiveWorldTradePlan(f.world, f.context, tampered))
+      .toEqual(preparePhase7LiveWorldTradePlan(f.world, f.context, f.input));
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("applies consumption tax to seller invoice, not destination market reference", () => {
+    const f = fixture();
+    const controller = f.destination.controllerStateId!;
+    const context = {
+      ...f.context, phase1ConsumptionTaxes: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([
+          [phase7ConsumptionTaxKey(controller, GOOD), 0.2],
+        ]),
+        collectionEfficiencyByState: new Map([[controller, 0.5]]),
+      },
+    };
+    const built = buildPhase7LiveWorldPlanInput(f.world, context, f.input);
+    for (const q of built.opportunities) {
+      expect(q.destinationReferenceGrossUnitPrice).toBe(11); // destination net 10
+      expect(q.sourceSellerNetUnitPrice).toBe(1);
+      expect(q.landedGrossUnitCostDest).toBeCloseTo(
+        1 + q.estimatedTransportUnitCostDest + 0.1, 10,
+      );
+    }
+    expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(
+      f.destination.settlementCurrencyId,
+    )).toBe(30);
+  });
+
+  it("uses the canonical FX pool rate/spread and MID customs base without caller quotes", () => {
+    const f = fixture();
+    const availablePairs = [...f.world.monetaryAuthorities.values()].flatMap(
+      authority => [...authority.fxPools.keys()],
+    );
+    const cross = [...f.world.transportLinks.values()].flatMap(link => {
+      const origin = f.world.regions.get(link.fromRegionId);
+      const destination = f.world.regions.get(link.toRegionId);
+      if (!origin || !destination ||
+          origin.settlementCurrencyId === destination.settlementCurrencyId ||
+          destination.controllerStateId === null ||
+          origin.controllerStateId === destination.controllerStateId) return [];
+      const pair = availablePairs.find(id => {
+        const pool = resolveCanonicalFxPool(f.world, id).pool;
+        return (pool.baseCurrencyId === origin.settlementCurrencyId &&
+          pool.quoteCurrencyId === destination.settlementCurrencyId) ||
+          (pool.quoteCurrencyId === origin.settlementCurrencyId &&
+            pool.baseCurrencyId === destination.settlementCurrencyId);
+      });
+      return pair ? [{ link, origin, destination, pair }] : [];
+    })[0];
+    if (!cross) throw new Error("baseline needs a controlled FX route");
+    const planId = "plan:world:landed:cross";
+    const q = {
+      ...f.input.opportunityQuotes[0]!, planId, linkId: cross.link.linkId,
+      originRegionId: cross.origin.regionId, destinationRegionId: cross.destination.regionId,
+      landedGrossUnitCostDest: 1e9, estimatedFxInputPerSourceCurrency: 1e9,
+    };
+    const key = phase7FxOutputKey(cross.pair, cross.origin.settlementCurrencyId);
+    const physical = quoteFx(
+      f.world, cross.pair, cross.destination.settlementCurrencyId,
+      cross.origin.settlementCurrencyId, 0,
+    ).maxOutputByPoolReserve;
+    const policy = {
+      ...f.context,
+      phase1ImportTariffs: { tick: f.context.tick, ratesByDestinationStateGood: new Map([
+        [phase7ImportTariffKey(cross.destination.controllerStateId!, GOOD), 0.2],
+      ]) },
+      phase1ConsumptionTaxes: {
+        tick: f.context.tick,
+        ratesByDestinationStateGood: new Map([
+          [phase7ConsumptionTaxKey(cross.destination.controllerStateId!, GOOD), 0.1],
+        ]),
+        collectionEfficiencyByState: new Map([
+          [cross.destination.controllerStateId!, 0.5],
+        ]),
+      },
+    };
+    const input: Phase7LiveWorldPlanInput = {
+      ...f.input, opportunityQuotes: [q],
+      fxPairIdByTradePlanId: new Map([[planId, cross.pair]]),
+      fxOutputByPairCurrency: new Map([[key, physical / 2]]),
+    };
+    const built = buildPhase7LiveWorldPlanInput(f.world, policy, input);
+    const actual = built.opportunities[0]!;
+    const pool = resolveCanonicalFxPool(f.world, cross.pair).pool;
+    const src = actual.sourceSellerNetUnitPrice;
+    const fx = quoteFx(
+      f.world, cross.pair, cross.destination.settlementCurrencyId,
+      cross.origin.settlementCurrencyId, src,
+    );
+    const mid = pool.baseCurrencyId === cross.origin.settlementCurrencyId
+      ? src * pool.spotRateQuotePerBase : src / pool.spotRateQuotePerBase;
+    expect(actual.estimatedFxInputPerSourceCurrency)
+      .toBeCloseTo(fx.requiredInputAmountAtDesiredOutput / src, 10);
+    expect(actual.fxFeasibleQuantity).toBeCloseTo(physical / (2 * src), 10);
+    expect(actual.landedGrossUnitCostDest).toBeCloseTo(
+      fx.requiredInputAmountAtDesiredOutput + actual.estimatedTransportUnitCostDest +
+      (mid + actual.estimatedTransportUnitCostDest) * 0.2 * 0.5 +
+      mid * 0.1 * 0.5, 9,
+    );
+    const tampered = {
+      ...input, opportunityQuotes: [{
+        ...q, landedGrossUnitCostDest: 0.001, estimatedFxInputPerSourceCurrency: 0.00001,
+        fxFeasibleQuantity: 999999,
+      }],
+    };
+    expect(buildPhase7LiveWorldPlanInput(f.world, policy, tampered)).toEqual(built);
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, policy, {
+      ...input, fxPairIdByTradePlanId: new Map(),
+    })).toThrow("requires explicit FX pair");
+    expect(() => buildPhase7LiveWorldPlanInput(f.world, policy, {
+      ...input, fxOutputByPairCurrency: new Map(),
+    })).toThrow("requires explicit tick-local output budget");
+    expect(resolveCanonicalFxPool(f.world, cross.pair).pool.cash).toBe(pool.cash);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
 });
