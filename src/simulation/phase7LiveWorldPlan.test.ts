@@ -5,12 +5,13 @@ import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { GoodId, TransportLinkId } from "../domain/id";
 import { createMarketIntentId, type MarketIntent } from "./marketIntent";
 import { phase7BuyerActorCashKey, phase7SellerEndpointKey } from "./phase7IntentMatching";
-import { phase7RegionCashKey, phase7RegionGoodKey } from "./phase7AggregateReservation";
+import { phase7FxOutputKey, phase7RegionCashKey, phase7RegionGoodKey } from "./phase7AggregateReservation";
 import { marketPriceKey } from "./phase6MarketPriceFormation";
+import { quoteFx, resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 
 import {
   buildPhase7LiveWorldPlanInput, preparePhase7LiveWorldTradePlan,
-  derivePhase7DestinationNetPrices,
+  derivePhase7DestinationNetPrices, derivePhase7LiveFxOutputBudgets,
   type Phase7LiveWorldPlanInput,
 } from "./phase7LiveWorldPlan";
 import { buildInitialWorld, type WorldState } from "./worldState";
@@ -292,5 +293,75 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
     expect(() => buildPhase7LiveWorldPlanInput(bad, f.context, f.input))
       .toThrow("live buyer cash must be finite");
     expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet.get(f.destination.settlementCurrencyId)).toBe(30);
+  });
+
+  it("caps live FX output to canonical pool cash after reserve floors, not caller claims", () => {
+    const f = fixture();
+    const pairIds = [...f.world.monetaryAuthorities.values()].flatMap(
+      authority => [...authority.fxPools.keys()],
+    );
+    const cross = [...f.world.transportLinks.values()].flatMap(link => {
+      const origin = f.world.regions.get(link.fromRegionId);
+      const destination = f.world.regions.get(link.toRegionId);
+      if (!origin || !destination ||
+          origin.settlementCurrencyId === destination.settlementCurrencyId) return [];
+      const pair = pairIds.find(id => {
+        const pool = resolveCanonicalFxPool(f.world, id).pool;
+        return (pool.baseCurrencyId === origin.settlementCurrencyId &&
+          pool.quoteCurrencyId === destination.settlementCurrencyId) ||
+          (pool.quoteCurrencyId === origin.settlementCurrencyId &&
+            pool.baseCurrencyId === destination.settlementCurrencyId);
+      });
+      return pair ? [{ link, origin, destination, pair }] : [];
+    })[0];
+    if (!cross) throw new Error("baseline needs an FX-paired international directed link");
+
+    const quote = {
+      ...f.input.opportunityQuotes[0]!,
+      planId: "plan:world:live-fx",
+      linkId: cross.link.linkId,
+      originRegionId: cross.origin.regionId,
+      destinationRegionId: cross.destination.regionId,
+    };
+    const key = phase7FxOutputKey(cross.pair, cross.origin.settlementCurrencyId);
+    const available = quoteFx(
+      f.world, cross.pair, cross.destination.settlementCurrencyId,
+      cross.origin.settlementCurrencyId, 0,
+    ).maxOutputByPoolReserve;
+    expect(available).toBeGreaterThan(0);
+    const declared = new Map([[key, available + 1_000_000]]);
+    const pairs = new Map([[quote.planId, cross.pair]]);
+    const input = {
+      ...f.input, opportunityQuotes: [quote],
+      fxPairIdByTradePlanId: pairs, fxOutputByPairCurrency: declared,
+    };
+    const before = resolveCanonicalFxPool(f.world, cross.pair).pool.cash;
+    const built = buildPhase7LiveWorldPlanInput(f.world, f.context, input);
+    expect(built.aggregateBudgets.fxOutputByPairCurrency).toEqual(new Map([[key, available]]));
+    expect(declared.get(key)).toBe(available + 1_000_000);
+    expect(resolveCanonicalFxPool(f.world, cross.pair).pool.cash).toBe(before);
+
+    // A smaller genuine earlier reservation is preserved rather than enlarged.
+    const priorReserved = new Map([[key, available / 2]]);
+    const limited = derivePhase7LiveFxOutputBudgets(
+      f.world, [quote], pairs, priorReserved,
+    );
+    expect(limited.get(key)).toBe(available / 2);
+    expect(() => derivePhase7LiveFxOutputBudgets(
+      f.world, [quote], pairs, new Map(),
+    )).toThrow("missing explicit tick-local output budget");
+    expect(() => derivePhase7LiveFxOutputBudgets(
+      f.world, [quote], pairs, new Map([[key, Number.POSITIVE_INFINITY]]),
+    )).toThrow("must be finite and non-negative");
+    expect(() => derivePhase7LiveFxOutputBudgets(
+      f.world, [quote], new Map([[quote.planId, "fxpool:unknown"]]), declared,
+    )).toThrow("missing explicit tick-local output budget");
+    expect(() => derivePhase7LiveFxOutputBudgets(
+      f.world, [quote], undefined, declared,
+    )).toThrow("requires an explicit FX pair");
+    expect(() => derivePhase7LiveFxOutputBudgets(
+      f.world, f.input.opportunityQuotes,
+      new Map([[f.input.opportunityQuotes[0]!.planId, cross.pair]]), new Map(),
+    )).toThrow("same-currency quote must not reserve FX");
   });
 });
