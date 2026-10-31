@@ -25,6 +25,8 @@ export interface Phase7ActualLotQuote {
   readonly destinationTreasuryStateId: StateId | null;
   readonly transportFeeReceiver: ActorRef | null;
   readonly fxPairId: string | null;
+  /** Canonical source NET unit price used to re-quote actual reduced quantity. */
+  readonly sourceSellerNetUnitPrice: number;
   /** Source-currency seller receipt, and FX output for cross-currency lots. */
   readonly sellerInvoiceSource: number;
   /** Destination-currency input to FX (or direct seller payment if same currency). */
@@ -265,7 +267,8 @@ export function quotePhase7ActualMatchedLots(
     });
     quotes.push({
       lot, originCurrencyId, destinationCurrencyId, destinationTreasuryStateId,
-      transportFeeReceiver: fee.receiver, fxPairId, sellerInvoiceSource,
+      transportFeeReceiver: fee.receiver, fxPairId,
+      sourceSellerNetUnitPrice: quote.sourceSellerNetUnitPrice, sellerInvoiceSource,
       goodsPaymentDest, invoiceMidDest, transportFeeDest,
       importTariffDest, consumptionTaxDest, buyerDebitDest,
     });
