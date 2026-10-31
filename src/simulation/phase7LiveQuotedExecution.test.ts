@@ -14,6 +14,7 @@ import {
 import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
 import { executePhase7LiveQuotedMixedTradePlan } from "./phase7LiveQuotedExecution";
 import { executePreparedMixedCurrencyTradePlan } from "./phase7PreparedFxExecution";
+import { preparePhase7TradePlan } from "./phase7TradePlan";
 import { readActorWallet, readMarketActorInventory } from "./marketSettlementTransition";
 import { quoteFx, resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 import { buildInitialWorld, type WorldState } from "./worldState";
@@ -295,6 +296,75 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
       quotedFxTermsByLotOrdinal: unreserved,
     })).toThrow("lot-specific buyer debits disagree with accepted aggregate reservation");
     expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("rejects offsetting per-lot taxes that exceed an individual matched BUY spend", () => {
+    const f = fxFixture(true);
+    const [first, second] = f.quoted.quotes;
+    const q0 = first!;
+    const q1 = second!;
+    expect(f.quoted.quotes).toHaveLength(2);
+    expect(q0.lot.buyerIntentId).not.toBe(q1.lot.buyerIntentId);
+    const delta = Math.min(q0.consumptionTaxDest, q1.consumptionTaxDest) / 4;
+    expect(delta).toBeGreaterThan(0);
+    const canonicalPlan = buildPhase7LiveWorldPlanInput(f.world, f.context, f.input);
+    const unitGross = canonicalPlan.opportunities.find(q =>
+      q.planId === q0.lot.tradePlanId)!.landedGrossUnitCostDest;
+    const originalAuthorization = q0.lot.quantity * unitGross;
+    // Matcher may spend the agreed per-unit reservation, but may NOT spend
+    // this intent's newly inflated individual quote even if the other intent
+    // offsets it and the shared wallet can afford both.
+    const remainingBuyerSpend =
+      Math.max(originalAuthorization, q0.buyerDebitDest) + delta / 2;
+    expect(remainingBuyerSpend).toBeLessThan(q0.buyerDebitDest + delta);
+    const narrowedInput = {
+      ...f.input,
+      residualIntents: f.input.residualIntents.map(entry =>
+        entry.intent.id === q0.lot.buyerIntentId
+          ? { ...entry, remainingBuyerSpend }
+          : entry),
+    };
+    const planInput = buildPhase7LiveWorldPlanInput(
+      f.world, f.context, narrowedInput,
+    );
+    const prepared = preparePhase7TradePlan(
+      f.world, f.world.simulationConfig, planInput,
+    );
+    expect(prepared.actorMatches.lots.map(lot => lot.buyerIntentId))
+      .toEqual(f.quoted.quotes.map(q => q.lot.buyerIntentId));
+    const quotedTerms = (q: typeof q0, offset: number) => ({
+      terms: {
+        sourceSellerNetUnitPrice: q.sellerInvoiceSource / q.lot.quantity,
+        transportFeePerUnitDest: q.transportFeeDest / q.lot.quantity,
+        tariffPerUnitDest: q.importTariffDest / q.lot.quantity,
+        consumptionTaxPerUnitDest: (q.consumptionTaxDest + offset) / q.lot.quantity,
+      },
+      buyerDebitDest: q.buyerDebitDest + offset,
+    });
+    const lots = new Map([
+      [0, quotedTerms(q0, delta)],
+      [1, quotedTerms(q1, -delta)],
+    ]);
+    const buyerCash = readActorWallet(f.world, f.buyerActor).get(f.destCurrency);
+    const sellerStock = readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD);
+    const beforeIntents = [...f.state.phase8MainIntents];
+    const beforeTransactions = [...f.state.priorTransactions];
+    const beforePool = resolveCanonicalFxPool(f.world, f.pairId).pool.cash;
+    expect(() => executePreparedMixedCurrencyTradePlan(f.world, {
+      ...f.state,
+      tick: f.context.tick,
+      planInput,
+      termsByTradePlanId: new Map([[q0.lot.tradePlanId, lots.get(0)!.terms]]),
+      sameCurrencyTermsByTradePlanId: new Map(),
+      quotedFxTermsByLotOrdinal: lots,
+    })).toThrow("lot-specific buyer debit exceeds matched BUY intent remaining spend");
+    expect(f.world.shipments?.size).toBe(0);
+    expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency)).toBe(buyerCash);
+    expect(readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD))
+      .toBe(sellerStock);
+    expect(resolveCanonicalFxPool(f.world, f.pairId).pool.cash).toEqual(beforePool);
+    expect(f.state.priorTransactions).toEqual(beforeTransactions);
+    expect(f.state.phase8MainIntents).toEqual(beforeIntents);
   });
 
   it("refuses missing, wrong-owner and reused reservations with no published changes", () => {
