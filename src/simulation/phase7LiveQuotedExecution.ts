@@ -8,9 +8,9 @@
  * current committed journal, directed-link residual capacity and separately
  * owned per-lot FX reservations, which the physical dispatcher revalidates.
  *
- * A legacy per-plan execution API cannot represent different effective unit
- * charges for two lots on the same route. In that case refuse before any
- * dispatch, rather than round one lot's charge into another's payment.
+ * Concrete matched lots may have different effective fee/tax amounts on the
+ * same route. Preserve actual quote terms by MATCHED LOT ORDINAL, without
+ * averaging the charges into a per-plan price or changing FX ownership.
  */
 import type {
   Phase7LivePricingContext, Phase7LiveWorldPlanInput,
@@ -21,7 +21,7 @@ import {
   executePreparedMixedCurrencyTradePlan,
   type Phase7PreparedFxExecutionResult,
   type Phase7PreparedMixedExecutionInput,
-  type Phase7FxPriceTerms,
+  type Phase7FxPriceTerms, type Phase7QuotedLotTerms,
 } from "./phase7PreparedFxExecution";
 import type { Phase7SameCurrencyPriceTerms } from "./phase7PreparedSameCurrencyExecution";
 import type { WorldState } from "./worldState";
@@ -37,31 +37,6 @@ function requireEqualRate(a: number, b: number, epsilon: number): boolean {
     Math.abs(a - b) <= Math.min(
       epsilon, 8 * Number.EPSILON * Math.max(1, Math.abs(a), Math.abs(b)),
     );
-}
-
-function checkSameTerms(
-  previous: Phase7SameCurrencyPriceTerms,
-  next: Phase7SameCurrencyPriceTerms,
-  epsilon: number,
-): void {
-  if (!requireEqualRate(previous.sellerNetUnitPrice, next.sellerNetUnitPrice, epsilon) ||
-      !requireEqualRate(previous.transportFeePerUnitDest, next.transportFeePerUnitDest, epsilon) ||
-      !requireEqualRate(previous.tariffPerUnitDest, next.tariffPerUnitDest, epsilon) ||
-      !requireEqualRate(previous.consumptionTaxPerUnitDest, next.consumptionTaxPerUnitDest, epsilon)) {
-    throw new Error("Phase-7 live actual-lot domestic route has inconsistent per-lot price terms");
-  }
-}
-
-function checkFxTerms(
-  previous: Phase7FxPriceTerms,
-  next: Phase7FxPriceTerms,
-  epsilon: number,
-): void {
-  checkSameTerms(
-    { sellerNetUnitPrice: previous.sourceSellerNetUnitPrice, ...previous },
-    { sellerNetUnitPrice: next.sourceSellerNetUnitPrice, ...next },
-    epsilon,
-  );
 }
 
 /**
@@ -107,7 +82,9 @@ export function executePhase7LiveQuotedMixedTradePlan(
   }
   const domestic = new Map<string, Phase7SameCurrencyPriceTerms>();
   const foreign = new Map<string, Phase7FxPriceTerms>();
-  for (const quote of quoted.quotes) {
+  const domesticLots = new Map<number, Phase7QuotedLotTerms<Phase7SameCurrencyPriceTerms>>();
+  const foreignLots = new Map<number, Phase7QuotedLotTerms<Phase7FxPriceTerms>>();
+  for (const [ordinal, quote] of quoted.quotes.entries()) {
     const candidate = candidates.get(quote.lot.tradePlanId);
     const quantity = quote.lot.quantity;
     if (!candidate || !Number.isFinite(quantity) || quantity <= 0 ||
@@ -130,9 +107,8 @@ export function executePhase7LiveQuotedMixedTradePlan(
       const terms = {
         sellerNetUnitPrice: candidate.sourceSellerNetUnitPrice, ...charges,
       };
-      const previous = domestic.get(quote.lot.tradePlanId);
-      if (previous) checkSameTerms(previous, terms, moneyEpsilon);
       domestic.set(quote.lot.tradePlanId, terms);
+      domesticLots.set(ordinal, { terms, buyerDebitDest: quote.buyerDebitDest });
     } else {
       if (quote.originCurrencyId === quote.destinationCurrencyId) {
         throw new Error("Phase-7 live actual-lot same-currency route cannot use FX");
@@ -140,9 +116,8 @@ export function executePhase7LiveQuotedMixedTradePlan(
       const terms = {
         sourceSellerNetUnitPrice: candidate.sourceSellerNetUnitPrice, ...charges,
       };
-      const previous = foreign.get(quote.lot.tradePlanId);
-      if (previous) checkFxTerms(previous, terms, moneyEpsilon);
       foreign.set(quote.lot.tradePlanId, terms);
+      foreignLots.set(ordinal, { terms, buyerDebitDest: quote.buyerDebitDest });
     }
   }
   return executePreparedMixedCurrencyTradePlan(world, {
@@ -151,5 +126,7 @@ export function executePhase7LiveQuotedMixedTradePlan(
     planInput: trustedPlanInput,
     termsByTradePlanId: foreign,
     sameCurrencyTermsByTradePlanId: domestic,
+    quotedFxTermsByLotOrdinal: foreignLots,
+    quotedSameCurrencyTermsByLotOrdinal: domesticLots,
   });
 }
