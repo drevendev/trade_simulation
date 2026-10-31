@@ -96,6 +96,10 @@ export function reservePhase7QuotedFxLots(
   }
 
   const spentByPayerCurrency = new Map<string, number>();
+  // The same payer can reserve input in different FX pools. A rounded aggregate
+  // must reconcile with the sum of the individual pool promises, not just fit
+  // the opening wallet. Track rounding drift across ALL pools for each payer.
+  const inputDriftByPayerCurrency = new Map<string, { sum: number; correction: number }>();
   const resulting = new Map<number, FxReservation>();
   for (const pairId of [...byPool.keys()].sort()) {
     const lots = byPool.get(pairId)!;
@@ -131,11 +135,33 @@ export function reservePhase7QuotedFxLots(
       const prior = spentByPayerCurrency.get(key) ?? 0;
       const total = prior + amount;
       const opening = cashByPayerCurrency.get(key);
+      // Error-free TwoSum: subtraction of the rounded total cannot reveal
+      // lost low bits (1 + 1e16 rounds to 1e16). Match the fixed absolute
+      // moneyEpsilon used by reserveFxForPool; never use a relative tolerance.
+      const highAmount = total - prior;
+      const reconstructedPrior = total - highAmount;
+      const lostLowPart = (prior - reconstructedPrior) + (amount - highAmount);
+      const roundingDrift = -lostLowPart;
+      const previousDrift = inputDriftByPayerCurrency.get(key) ??
+        { sum: 0, correction: 0 };
+      // Neumaier compensation prevents individually sub-epsilon differences
+      // accumulating into an unreconciled multi-pool money promise.
+      const driftSum = previousDrift.sum + roundingDrift;
+      const driftCorrection = previousDrift.correction +
+        (Math.abs(previousDrift.sum) >= Math.abs(roundingDrift)
+          ? (previousDrift.sum - driftSum) + roundingDrift
+          : (roundingDrift - driftSum) + previousDrift.sum);
       if (opening === undefined || !Number.isFinite(total) || total > opening ||
           (amount > 0 && total === prior) ||
-          Math.abs((total - prior) - amount) > moneyEpsilon) {
+          !Number.isFinite(roundingDrift) ||
+          Math.abs(roundingDrift) > moneyEpsilon ||
+          !Number.isFinite(driftSum) || !Number.isFinite(driftCorrection) ||
+          Math.abs(driftSum + driftCorrection) > moneyEpsilon) {
         return fail("cumulative FX payer reservation cannot reconcile across pools");
       }
+      inputDriftByPayerCurrency.set(key, {
+        sum: driftSum, correction: driftCorrection,
+      });
       spentByPayerCurrency.set(key, total);
     }
   }
