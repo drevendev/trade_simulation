@@ -215,6 +215,11 @@ function executePreparedCurrencyTradePlan(
     // Per-lot policy variation does not grant more cash than the accepted
     // original aggregate route reservation. Fail before ANY physical dispatch.
     const actualGrossByPlan = new Map<string, number>();
+    // The matcher separately authorizes each BUY intent's post-Phase-4
+    // remaining spend. Repricing two lots may preserve the route total while
+    // shifting an illegal debit to one intent. Also accumulate across lots
+    // and plans sharing the SAME BUY intent before any physical dispatch.
+    const actualGrossByBuyerIntent = new Map<string, number>();
     for (const [ordinal, lot] of prepared.actorMatches.lots.entries()) {
       const isFx = fxLotOrdinals.has(ordinal);
       const lotQuote = isFx ? quotedFxLots?.get(ordinal) :
@@ -229,6 +234,26 @@ function executePreparedCurrencyTradePlan(
         refuse("lot-specific aggregate buyer debit loses money precision");
       }
       actualGrossByPlan.set(lot.tradePlanId, total);
+      const authorizedBuyer = input.planInput.actorsByTradePlanId
+        .get(lot.tradePlanId)?.buyers.find(entry =>
+          entry.intent.id === lot.buyerIntentId);
+      const remainingSpend = authorizedBuyer?.remainingBuyerSpend;
+      if (remainingSpend === undefined || !Number.isFinite(remainingSpend) ||
+          remainingSpend < 0) {
+        refuse("lot-specific BUY intent lacks verified remaining spend");
+      }
+      const previousBuyer = actualGrossByBuyerIntent.get(lot.buyerIntentId) ?? 0;
+      const buyerTotal = previousBuyer + gross;
+      if (!Number.isFinite(buyerTotal) ||
+          (gross > 0 && buyerTotal === previousBuyer) ||
+          Math.abs((buyerTotal - previousBuyer) - gross) > moneyEpsilon) {
+        refuse("lot-specific cumulative BUY intent debit loses money precision");
+      }
+      if (buyerTotal > remainingSpend &&
+          !nearly(buyerTotal, remainingSpend, moneyEpsilon)) {
+        refuse("lot-specific buyer debit exceeds matched BUY intent remaining spend");
+      }
+      actualGrossByBuyerIntent.set(lot.buyerIntentId, buyerTotal);
     }
     for (const reservation of prepared.aggregate.reservations) {
       const total = actualGrossByPlan.get(reservation.tradePlanId) ?? 0;
