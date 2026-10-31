@@ -276,6 +276,25 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
       quotedFxTermsByLotOrdinal: bad,
     })).toThrow("lot-specific FX quotes must cover every FX match");
     expect(f.world.shipments?.size).toBe(0);
+
+    const unreserved = new Map(frozen);
+    const secondWithUnreservedTax = frozen.get(1)!;
+    unreserved.set(1, {
+      terms: {
+        ...secondWithUnreservedTax.terms,
+        consumptionTaxPerUnitDest: secondWithUnreservedTax.terms.consumptionTaxPerUnitDest + 1,
+      },
+      buyerDebitDest: secondWithUnreservedTax.buyerDebitDest + 1,
+    });
+    expect(() => executePreparedMixedCurrencyTradePlan(f.world, {
+      ...f.state,
+      tick: f.context.tick,
+      planInput: buildPhase7LiveWorldPlanInput(f.world, f.context, f.input),
+      termsByTradePlanId: new Map([[planId, frozen.get(0)!.terms]]),
+      sameCurrencyTermsByTradePlanId: new Map(),
+      quotedFxTermsByLotOrdinal: unreserved,
+    })).toThrow("lot-specific buyer debits disagree with accepted aggregate reservation");
+    expect(f.world.shipments?.size).toBe(0);
   });
 
   it("refuses missing, wrong-owner and reused reservations with no published changes", () => {
