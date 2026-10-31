@@ -160,10 +160,10 @@ describe("M5 #673 authoritative Phase-2/4/5 residual intake", () => {
       },
     };
     const largeBuyer: MarketIntent = {
-      ...f.buyer, desiredQuantity: 10_000_000, maxSpend: 10_000_000,
+      ...f.buyer, desiredQuantity: 10_000_000_000_000_000, maxSpend: 10_000_000_000_000_000,
     };
     const largeSeller: MarketIntent = {
-      ...f.seller, desiredQuantity: 10_000_000,
+      ...f.seller, desiredQuantity: 10_000_000_000_000_000,
     };
     const contexts: TickContext = {
       ...f.context,
@@ -174,7 +174,7 @@ describe("M5 #673 authoritative Phase-2/4/5 residual intake", () => {
     };
     expect(() => derivePhase7PostProcurementIntents(precisionWorld, contexts))
       .toThrow(/precision/);
-    expect(largeBuyer.desiredQuantity).toBe(10_000_000);
+    expect(largeBuyer.desiredQuantity).toBe(10_000_000_000_000_000);
   });
 
   it("does not invent an intent or sale when Phase-4 had no fills", () => {
