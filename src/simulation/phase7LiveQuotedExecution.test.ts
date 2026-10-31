@@ -15,7 +15,6 @@ import {
 } from "./phase7LiveWorldPlan";
 import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
 import { assessPhase7QuotedFxScarcity, reservePhase7QuotedFxLots } from "./phase7AutoFxReservations";
-import { reducePhase7LiveFxBudgetCaps } from "./phase7FxScarcityReplan";
 import { executePhase7LiveQuotedMixedTradePlan } from "./phase7LiveQuotedExecution";
 import { executePreparedMixedCurrencyTradePlan } from "./phase7PreparedFxExecution";
 import { preparePhase7TradePlan } from "./phase7TradePlan";
@@ -741,45 +740,7 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     expect(constrained.shipments?.size).toBe(0);
   });
 
-  it("narrows only authorized FX budgets and refuses a no-progress scarcity retry", () => {
-    const f = fxFixture(true);
-    const located = resolveCanonicalFxPool(f.world, f.pairId);
-    const pool = located.pool;
-    const floor = f.sourceCurrency === pool.baseCurrencyId
-      ? pool.minOperationalReserveBase : pool.minOperationalReserveQuote;
-    const remaining = f.quoted.quotes[0]!.sellerInvoiceSource / 2;
-    const authority = f.world.monetaryAuthorities.get(located.owningAuthorityId)!;
-    const constrained: WorldState = {
-      ...f.world,
-      monetaryAuthorities: new Map(f.world.monetaryAuthorities).set(
-        located.owningAuthorityId, {
-          ...authority,
-          fxPools: new Map(authority.fxPools).set(f.pairId, {
-            ...pool, cash: new Map(pool.cash).set(f.sourceCurrency, floor + remaining),
-          }),
-        },
-      ),
-    };
-    const scarcity = assessPhase7QuotedFxScarcity(
-      constrained, f.context.tick, f.quoted.quotes,
-    );
-    const originalCap = f.input.fxOutputByPairCurrency;
-    const reduced = reducePhase7LiveFxBudgetCaps(f.input, scarcity);
-    const key = phase7FxOutputKey(f.pairId, f.sourceCurrency);
-    expect(reduced.fxOutputByPairCurrency.get(key))
-      .toBe(scarcity.reducedOutputByPairCurrency.get(key));
-    expect(reduced.fxOutputByPairCurrency.get(key))
-      .toBeLessThan(originalCap.get(key)!);
-    expect(f.input.fxOutputByPairCurrency).toBe(originalCap);
-    expect(f.input.fxOutputByPairCurrency.get(key)).toBeGreaterThan(remaining);
-    expect(() => reducePhase7LiveFxBudgetCaps(reduced, scarcity))
-      .toThrow(/cannot reduce authorized output/);
-    expect(() => reducePhase7LiveFxBudgetCaps(f.input, {
-      ...scarcity, reducedOutputByPairCurrency: new Map([["unknown-pair", 0]]),
-    })).toThrow(/cannot reduce authorized output/);
-  });
-
-  it("settles a smaller live Phase-7 FX trade under finite pool scarcity without changing opening owners", () => {
+  it("caps FX at the live pool before the first quote, without an unreachable retry", () => {
     const f = fxFixture(true);
     const located = resolveCanonicalFxPool(f.world, f.pairId);
     const pool = located.pool;
@@ -798,6 +759,24 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
         },
       ),
     };
+    // SLP-907-01: the canonical first pass already reads the live FX pool,
+    // constrains the quantity and reserves a fully funded invoice. A smaller
+    // shipment alone is NOT evidence that a late scarcity retry ran.
+    const firstPass = quotePhase7ActualMatchedLots(constrained, f.context, f.input);
+    const firstPassQuantity = firstPass.quotes.reduce(
+      (sum, quote) => sum + quote.lot.quantity, 0,
+    );
+    expect(firstPassQuantity).toBeGreaterThan(0);
+    expect(firstPassQuantity).toBeLessThan(2);
+    const scarcity = assessPhase7QuotedFxScarcity(
+      constrained, f.context.tick, firstPass.quotes,
+    );
+    expect(scarcity.requiresShrink).toBe(false);
+    expect(scarcity.reducedOutputByPairCurrency.size).toBe(0);
+    const strict = reservePhase7QuotedFxLots(
+      constrained, f.context.tick, firstPass.quotes,
+    );
+    expect(strict.size).toBe(firstPass.quotes.filter(q => q.fxPairId !== null).length);
     const phaseHandler: PhaseHandler = (_world, context) => {
       if (context.phase === 1) {
         return { ...context, effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion };
@@ -833,6 +812,7 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
       .reduce((sum, shipment) => sum + shipment.quantity, 0);
     expect(dispatched).toBeGreaterThan(0);
     expect(dispatched).toBeLessThan(2);
+    expect(dispatched).toBeCloseTo(firstPassQuantity, 9);
     expect(constrained.shipments?.size).toBe(0);
     expect(readActorWallet(constrained, f.buyerActor).get(f.destCurrency)).toBe(100);
     expect(readMarketActorInventory(constrained, f.sellerActor, "GENERAL").get(GOOD)).toBe(10);
