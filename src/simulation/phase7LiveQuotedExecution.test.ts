@@ -15,6 +15,7 @@ import {
 } from "./phase7LiveWorldPlan";
 import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
 import { assessPhase7QuotedFxScarcity, reservePhase7QuotedFxLots } from "./phase7AutoFxReservations";
+import { reducePhase7LiveFxBudgetCaps } from "./phase7FxScarcityReplan";
 import { executePhase7LiveQuotedMixedTradePlan } from "./phase7LiveQuotedExecution";
 import { executePreparedMixedCurrencyTradePlan } from "./phase7PreparedFxExecution";
 import { preparePhase7TradePlan } from "./phase7TradePlan";
@@ -738,6 +739,108 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
       .toBe(beforeStock);
     expect(resolveCanonicalFxPool(constrained, f.pairId).pool.cash).toEqual(beforePool);
     expect(constrained.shipments?.size).toBe(0);
+  });
+
+  it("narrows only authorized FX budgets and refuses a no-progress scarcity retry", () => {
+    const f = fxFixture(true);
+    const located = resolveCanonicalFxPool(f.world, f.pairId);
+    const pool = located.pool;
+    const floor = f.sourceCurrency === pool.baseCurrencyId
+      ? pool.minOperationalReserveBase : pool.minOperationalReserveQuote;
+    const remaining = f.quoted.quotes[0]!.sellerInvoiceSource / 2;
+    const authority = f.world.monetaryAuthorities.get(located.owningAuthorityId)!;
+    const constrained: WorldState = {
+      ...f.world,
+      monetaryAuthorities: new Map(f.world.monetaryAuthorities).set(
+        located.owningAuthorityId, {
+          ...authority,
+          fxPools: new Map(authority.fxPools).set(f.pairId, {
+            ...pool, cash: new Map(pool.cash).set(f.sourceCurrency, floor + remaining),
+          }),
+        },
+      ),
+    };
+    const scarcity = assessPhase7QuotedFxScarcity(
+      constrained, f.context.tick, f.quoted.quotes,
+    );
+    const originalCap = f.input.fxOutputByPairCurrency;
+    const reduced = reducePhase7LiveFxBudgetCaps(f.input, scarcity);
+    const key = phase7FxOutputKey(f.pairId, f.sourceCurrency);
+    expect(reduced.fxOutputByPairCurrency.get(key))
+      .toBe(scarcity.reducedOutputByPairCurrency.get(key));
+    expect(reduced.fxOutputByPairCurrency.get(key))
+      .toBeLessThan(originalCap.get(key)!);
+    expect(f.input.fxOutputByPairCurrency).toBe(originalCap);
+    expect(f.input.fxOutputByPairCurrency.get(key)).toBeGreaterThan(remaining);
+    expect(() => reducePhase7LiveFxBudgetCaps(reduced, scarcity))
+      .toThrow(/cannot reduce authorized output/);
+    expect(() => reducePhase7LiveFxBudgetCaps(f.input, {
+      ...scarcity, reducedOutputByPairCurrency: new Map([["unknown-pair", 0]]),
+    })).toThrow(/cannot reduce authorized output/);
+  });
+
+  it("settles a smaller live Phase-7 FX trade under finite pool scarcity without changing opening owners", () => {
+    const f = fxFixture(true);
+    const located = resolveCanonicalFxPool(f.world, f.pairId);
+    const pool = located.pool;
+    const floor = f.sourceCurrency === pool.baseCurrencyId
+      ? pool.minOperationalReserveBase : pool.minOperationalReserveQuote;
+    const available = f.quoted.quotes[0]!.sellerInvoiceSource / 2;
+    const authority = f.world.monetaryAuthorities.get(located.owningAuthorityId)!;
+    const constrained: WorldState = {
+      ...f.world,
+      monetaryAuthorities: new Map(f.world.monetaryAuthorities).set(
+        located.owningAuthorityId, {
+          ...authority,
+          fxPools: new Map(authority.fxPools).set(f.pairId, {
+            ...pool, cash: new Map(pool.cash).set(f.sourceCurrency, floor + available),
+          }),
+        },
+      ),
+    };
+    const phaseHandler: PhaseHandler = (_world, context) => {
+      if (context.phase === 1) {
+        return { ...context, effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion };
+      }
+      if (context.phase === 6) {
+        return { ...context, marketPrices: f.context.marketPrices };
+      }
+      return context;
+    };
+    const run = () => executeM5LiveQuotedTradeTick(
+      constrained, f.context.tick, phaseHandler, (_phase, world) => world,
+      () => ({
+        policy: {
+          phase1ImportTariffs: f.context.phase1ImportTariffs,
+          phase1ConsumptionTaxes: f.context.phase1ConsumptionTaxes,
+          transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+        },
+        plan: f.input,
+        dispatch: {
+          remainingCargoWeightByLink: f.state.remainingCargoWeightByLink,
+          phase8MainIntents: f.state.phase8MainIntents,
+          autoReserveFx: true as const,
+        },
+      }),
+    );
+    const committed = run();
+    const replay = run();
+    expect(committed.reconciliationErrors).toBeNull();
+    expect(committed.context.transactions).toEqual(replay.context.transactions);
+    expect(committed.world.shipments).toEqual(replay.world.shipments);
+    expect(committed.context.transactions.some(tx => tx.type === "FX_OUTPUT")).toBe(true);
+    const dispatched = [...committed.world.shipments!.values()]
+      .reduce((sum, shipment) => sum + shipment.quantity, 0);
+    expect(dispatched).toBeGreaterThan(0);
+    expect(dispatched).toBeLessThan(2);
+    expect(constrained.shipments?.size).toBe(0);
+    expect(readActorWallet(constrained, f.buyerActor).get(f.destCurrency)).toBe(100);
+    expect(readMarketActorInventory(constrained, f.sellerActor, "GENERAL").get(GOOD)).toBe(10);
+    expect(resolveCanonicalFxPool(constrained, f.pairId).pool.cash)
+      .toEqual(new Map(pool.cash).set(f.sourceCurrency, floor + available));
+    expect(f.input.fxOutputByPairCurrency.get(
+      phase7FxOutputKey(f.pairId, f.sourceCurrency),
+    )).toBeGreaterThan(available);
   });
 
   it("shrinks against the canonical source price before a real re-quote and strict FX reserve", () => {
