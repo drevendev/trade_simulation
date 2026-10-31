@@ -114,7 +114,9 @@ describe("M5 #673 authoritative Phase-2/4/5 residual intake", () => {
     const bad = (context: TickContext) =>
       expect(() => derivePhase7PostProcurementIntents(f.world, context)).toThrow();
     bad({ ...f.context, phase: 6 });
-    bad({ ...f.context, phase4MarketAllocations: undefined });
+    const missingPhase4 = { ...f.context };
+    delete missingPhase4.phase4MarketAllocations;
+    bad(missingPhase4);
     bad({
       ...f.context,
       productionMarketIntents: [...f.context.productionMarketIntents!, f.buyer],
