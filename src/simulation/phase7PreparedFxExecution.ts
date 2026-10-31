@@ -211,6 +211,32 @@ function executePreparedCurrencyTradePlan(
       refuse("lot-specific quoted buyer debit must be positive and finite");
     }
   }
+  if (quotedFxLots || quotedDomesticLots) {
+    // Per-lot policy variation does not grant more cash than the accepted
+    // original aggregate route reservation. Fail before ANY physical dispatch.
+    const actualGrossByPlan = new Map<string, number>();
+    for (const [ordinal, lot] of prepared.actorMatches.lots.entries()) {
+      const isFx = fxLotOrdinals.has(ordinal);
+      const lotQuote = isFx ? quotedFxLots?.get(ordinal) :
+        quotedDomesticLots?.get(ordinal);
+      const opportunity = quotes.get(lot.tradePlanId);
+      if (!opportunity) refuse("lot-specific quote lacks prepared opportunity");
+      const gross = lotQuote?.buyerDebitDest ??
+        lot.quantity * opportunity.landedGrossUnitCostDest;
+      const previous = actualGrossByPlan.get(lot.tradePlanId) ?? 0;
+      const total = previous + gross;
+      if (!Number.isFinite(total) || (gross > 0 && total === previous)) {
+        refuse("lot-specific aggregate buyer debit loses money precision");
+      }
+      actualGrossByPlan.set(lot.tradePlanId, total);
+    }
+    for (const reservation of prepared.aggregate.reservations) {
+      const total = actualGrossByPlan.get(reservation.tradePlanId) ?? 0;
+      if (!nearly(total, reservation.buyerCashReservedDest, moneyEpsilon)) {
+        refuse("lot-specific buyer debits disagree with accepted aggregate reservation");
+      }
+    }
+  }
 
   let world = openingWorld;
   let transactions: readonly EconomicTransaction[] = input.priorTransactions;
