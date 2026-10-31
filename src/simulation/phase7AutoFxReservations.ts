@@ -14,6 +14,7 @@ import {
 } from "./fxQuoteReservation";
 import { resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 import { readActorWallet } from "./marketSettlementTransition";
+import { phase7FxOutputKey } from "./phase7AggregateReservation";
 import type { Phase7ActualLotQuote } from "./phase7ActualLotQuote";
 import type { WorldState } from "./worldState";
 
@@ -32,13 +33,15 @@ function fail(message: string): never {
  * ordinal order. Input cash is shared ACROSS pools for the same payer and
  * currency, rather than reset independently for each pool.
  *
- * Only full, financially representable promises are accepted. A partial
- * feasible FX output must be shrunk before matched-lot quoting and settlement.
+ * Only full, financially representable promises are accepted in the public
+ * reservation API. The private partial-quote path is for READ-ONLY upstream
+ * scarcity assessment; it must never be passed to atomic settlement.
  */
-export function reservePhase7QuotedFxLots(
+function planPhase7QuotedFxLots(
   world: WorldState,
   tick: number,
   quotes: readonly Phase7ActualLotQuote[],
+  allowPartialForPlanning: boolean,
 ): ReadonlyMap<number, FxReservation> {
   if (!Number.isSafeInteger(tick) || tick < 0 || !Array.isArray(quotes)) {
     return fail("invalid tick or matched quotes");
@@ -124,9 +127,10 @@ export function reservePhase7QuotedFxLots(
     for (const reservation of plan.reservations) {
       const lot = ordinalById.get(reservation.requestId);
       if (!lot) return fail("reservation has no matched lot");
-      if (reservation.quote.feasibleOutputAmount !== lot.quote.sellerInvoiceSource ||
-          Math.abs(reservation.quote.requiredInputForFeasibleOutput -
-            lot.quote.goodsPaymentDest) > moneyEpsilon) {
+      if (!allowPartialForPlanning &&
+          (reservation.quote.feasibleOutputAmount !== lot.quote.sellerInvoiceSource ||
+           Math.abs(reservation.quote.requiredInputForFeasibleOutput -
+             lot.quote.goodsPaymentDest) > moneyEpsilon)) {
         return fail("FX liquidity requires quantity shrink and re-quote before dispatch");
       }
       resulting.set(lot.ordinal, reservation);
@@ -166,4 +170,119 @@ export function reservePhase7QuotedFxLots(
     }
   }
   return new Map([...resulting].sort(([a], [b]) => a - b));
+}
+
+/** Strict dispatch promises. Partially funded quotes are NEVER settlement inputs. */
+export function reservePhase7QuotedFxLots(
+  world: WorldState,
+  tick: number,
+  quotes: readonly Phase7ActualLotQuote[],
+): ReadonlyMap<number, FxReservation> {
+  return planPhase7QuotedFxLots(world, tick, quotes, false);
+}
+
+export interface Phase7FxScarcityCaps {
+  /** True only when an actual FX lot could not be completely funded. */
+  readonly requiresShrink: boolean;
+  /** READ-ONLY aggregate output ceilings; replace only these FX keys upstream,
+   * re-match and re-quote quantities BEFORE requesting strict reservations. */
+  readonly reducedOutputByPairCurrency: ReadonlyMap<string, number>;
+  /** Maximum feasible goods quantities per original matched FX lot. These are
+   * indicative ceilings only, not approved dispatch lots or frozen prices. */
+  readonly feasibleQuantityByLotOrdinal: ReadonlyMap<number, number>;
+}
+
+/**
+ * Read-only M5 scarcity probe: use the SAME finite pool/payer allocation as the
+ * strict reservation path, but expose reduced output ceilings rather than
+ * pretending a partially funded original lot was accepted. The next planner
+ * must rerun actor matching, tariff/fee/FX quotation, and strict reservations.
+ *
+ * This unit supplies the deterministic scarcity budgets; it deliberately does
+ * NOT mutate the caller's plan or post any stock, money or shipment transition.
+ */
+export function assessPhase7QuotedFxScarcity(
+  world: WorldState,
+  tick: number,
+  quotes: readonly Phase7ActualLotQuote[],
+): Phase7FxScarcityCaps {
+  const partial = planPhase7QuotedFxLots(world, tick, quotes, true);
+  const epsilon = world.simulationConfig.numeric.moneyEpsilon!;
+  const totals = new Map<string, { desired: number; feasible: number; partial: boolean }>();
+  const feasibleQuantityByLotOrdinal = new Map<number, number>();
+
+  const addExact = (previous: number, amount: number): number => {
+    const next = previous + amount;
+    const highAmount = next - previous;
+    const reconstructedPrevious = next - highAmount;
+    const lost = (previous - reconstructedPrevious) + (amount - highAmount);
+    if (!Number.isFinite(next) || (amount > 0 && next === previous) ||
+        !Number.isFinite(lost) || Math.abs(lost) > epsilon) {
+      return fail("scarcity aggregate output cannot reconcile at money precision");
+    }
+    return next;
+  };
+
+  for (const [ordinal, quote] of quotes.entries()) {
+    if (quote.fxPairId === null) continue;
+    const promise = partial.get(ordinal);
+    if (!promise) return fail("scarcity probe lacks a matched FX lot");
+    const available = promise.quote.feasibleOutputAmount;
+    const invoice = quote.sellerInvoiceSource;
+    if (!Number.isFinite(available) || available < 0 || available > invoice) {
+      return fail("scarcity probe has an invalid feasible output");
+    }
+    if (available === invoice &&
+        Math.abs(promise.quote.requiredInputForFeasibleOutput -
+          quote.goodsPaymentDest) > epsilon) {
+      return fail("FX input quote mismatch cannot be fixed by shrinking quantity");
+    }
+    const originalQuantity = quote.lot.quantity;
+    const sourceUnitPrice = invoice / originalQuantity;
+    if (!Number.isFinite(originalQuantity) || originalQuantity <= 0 ||
+        !Number.isFinite(sourceUnitPrice) || sourceUnitPrice <= 0) {
+      return fail("scarcity probe requires a representable source unit price");
+    }
+    let quantity = originalQuantity;
+    if (available < invoice) {
+      quantity = Math.min(originalQuantity, available / sourceUnitPrice);
+      if (!Number.isFinite(quantity) || quantity < 0) {
+        return fail("scarcity probe cannot represent reduced goods quantity");
+      }
+      // Floating division may round the proposed quantity UP beyond the pool
+      // promise. Move exactly one representable float lower when necessary.
+      if (quantity > 0 && quantity * sourceUnitPrice > available) {
+        const bits = new DataView(new ArrayBuffer(8));
+        bits.setFloat64(0, quantity, false);
+        bits.setBigUint64(0, bits.getBigUint64(0, false) - 1n, false);
+        quantity = bits.getFloat64(0, false);
+      }
+      if (quantity > 0 && quantity * sourceUnitPrice > available) {
+        return fail("scarcity probe cannot round quantity down to FX output");
+      }
+    }
+    feasibleQuantityByLotOrdinal.set(ordinal, quantity);
+    const key = phase7FxOutputKey(quote.fxPairId, quote.originCurrencyId);
+    const prior = totals.get(key) ?? { desired: 0, feasible: 0, partial: false };
+    totals.set(key, {
+      desired: addExact(prior.desired, invoice),
+      feasible: addExact(prior.feasible, available),
+      partial: prior.partial || available < invoice,
+    });
+  }
+  const reduced = new Map<string, number>();
+  for (const [key, value] of [...totals].sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0)) {
+    if (value.partial) {
+      if (!(value.feasible < value.desired)) {
+        return fail("scarcity output reduction was lost in aggregate rounding");
+      }
+      reduced.set(key, value.feasible);
+    }
+  }
+  return {
+    requiresShrink: reduced.size > 0,
+    reducedOutputByPairCurrency: reduced,
+    feasibleQuantityByLotOrdinal,
+  };
 }
