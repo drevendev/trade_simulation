@@ -179,6 +179,60 @@ describe("M5 #673 authoritative Phase-2/4/5 residual intake", () => {
     expect(largeBuyer.desiredQuantity).toBe(10_000_000_000_000_000);
   });
 
+  it("retains mixed-magnitude two-fill debits on BUY quantity/spend and SELL quantity", () => {
+    const f = fixture();
+    const large = 10_000_000_000_000_000;
+    const available = large + 2; // 1e16 + 1 is NOT itself representable in binary64.
+    const allocation = (id: string, quantity: number): MarketAllocation => ({
+      ...f.allocation(id, quantity),
+      sellerNetUnitPrice: 1, buyerGrossUnitPrice: 1,
+    });
+    const makeContext = (
+      buyerQuantity: number, sellerQuantity: number, maxSpend: number,
+    ): TickContext => ({
+      ...f.context,
+      productionMarketIntents: [
+        { ...f.buyer, desiredQuantity: buyerQuantity, maxSpend },
+        { ...f.seller, desiredQuantity: sellerQuantity },
+        f.output,
+      ],
+      phase4MarketAllocations: [
+        allocation("large", large), allocation("small", 1),
+      ],
+    });
+
+    const valid = makeContext(available, available, available);
+    const result = derivePhase7PostProcurementIntents(f.world, valid);
+    const residuals = new Map(result.residualIntents.map(row => [row.intent.id, row]));
+    expect(residuals.get(f.buyer.id)?.residualQuantity).toBe(1);
+    expect(residuals.get(f.buyer.id)?.remainingBuyerSpend).toBe(1);
+    expect(residuals.get(f.seller.id)?.residualQuantity).toBe(1);
+    expect(result.phase8MainIntents.find(row => row.id === f.buyer.id)?.maxSpend).toBe(1);
+    expect(result.phase8MainIntents.find(row => row.id === f.seller.id)?.desiredQuantity).toBe(1);
+    expect(derivePhase7PostProcurementIntents(f.world, {
+      ...valid, phase4MarketAllocations: [...valid.phase4MarketAllocations!].reverse(),
+    })).toEqual(result);
+
+    // Each fill is individually representable; their exact cumulative debit is
+    // larger than each of these original envelopes by one. No silent exhaustion.
+    expect(() => derivePhase7PostProcurementIntents(
+      f.world, makeContext(large, available, available),
+    )).toThrow(/exceeds committed envelope/);
+    expect(() => derivePhase7PostProcurementIntents(
+      f.world, makeContext(available, large, available),
+    )).toThrow(/exceeds committed envelope/);
+    expect(() => derivePhase7PostProcurementIntents(
+      f.world, makeContext(available, available, large),
+    )).toThrow(/exceeds committed envelope/);
+
+    // No caller-owned input or economic balance was mutated by projection or rejection.
+    expect(f.buyer.desiredQuantity).toBe(8);
+    expect(f.buyer.maxSpend).toBe(30);
+    expect(f.seller.desiredQuantity).toBe(10);
+    expect(f.context.phase4MarketAllocations?.length).toBe(2);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
   it("does not invent an intent or sale when Phase-4 had no fills", () => {
     const f = fixture();
     const result = derivePhase7PostProcurementIntents(f.world, {
