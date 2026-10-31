@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { executeM5LiveQuotedTradeTick } from "./m5LiveQuotedTradeTick";
+import { createTransactionId, noOpPhaseHandler, type PhaseHandler } from "./tickOrchestrator";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
@@ -397,4 +399,125 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     )).toThrow("missing or duplicated lot-specific FX reservation");
     expect(split.world.shipments?.size).toBe(0);
   });
+  it("executes canonical live quotes at the Phase-7 tick-close boundary", () => {
+    const f = fxFixture();
+    const marker = {
+      tick: 7, phase: 5, type: "TEST_PRIOR_PHASE_RECEIPT",
+      transactionId: createTransactionId("tx:phase7:live-tick:prior"),
+      amount: 1,
+    };
+    const handler: PhaseHandler = (world, context) => {
+      if (context.phase === 1) {
+        return { ...context, effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion };
+      }
+      if (context.phase === 5) {
+        return { ...context, transactions: [...context.transactions, marker] };
+      }
+      if (context.phase === 6) {
+        return { ...context, marketPrices: f.context.marketPrices };
+      }
+      if (context.phase === 8) {
+        expect(world).not.toBe(f.world);
+        expect(context.transactions[0]).toBe(marker);
+        expect(context.transactions.filter(t => t.type === "FX_OUTPUT")).toHaveLength(1);
+        expect(context.phase7MainIntents).toBeDefined();
+      }
+      return context;
+    };
+    const observations: number[] = [];
+    const build = (_world: WorldState, context: Parameters<PhaseHandler>[1]) => {
+      expect(context.phase).toBe(7);
+      expect(context.tick).toBe(f.context.tick);
+      expect(context.transactions[0]).toBe(marker);
+      // Malicious extra runtime properties on policy/dispatch MUST NOT override
+      // live Phase-1 jurisdiction, Phase-6 prices or the committed journal.
+      const policy = {
+        phase1ImportTariffs: f.context.phase1ImportTariffs,
+        phase1ConsumptionTaxes: f.context.phase1ConsumptionTaxes,
+        transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+        tick: -99,
+        phase: 0,
+        marketPrices: new Map(),
+        effectiveJurisdictionByRegion: new Map(),
+      };
+      return {
+        policy,
+        plan: f.input,
+        dispatch: {
+          ...f.state,
+          priorTransactions: [],
+          effectiveJurisdictionByRegion: new Map(),
+        },
+      };
+    };
+    const run = () => executeM5LiveQuotedTradeTick(
+      f.world, 7, handler, (_phase, world) => world,
+      build, phase => { observations.push(phase); },
+    );
+    const actual = run();
+    const replay = run();
+    expect(actual.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(actual.reconciliationErrors).toBeNull();
+    expect(actual.phaseBoundaryError).toBeUndefined();
+    expect(actual.context.transactions[0]).toBe(marker);
+    expect(actual.context.transactions.filter(t => t.type === "SHIPMENT_DISPATCH")).toHaveLength(1);
+    expect(actual.context.transactions.filter(t => t.type === "FX_INPUT")).toHaveLength(1);
+    expect(actual.context.transactions.filter(t => t.type === "FX_OUTPUT")).toHaveLength(1);
+    expect(actual.context.transactions).toEqual(replay.context.transactions);
+    expect(actual.world.shipments).toEqual(replay.world.shipments);
+    expect(observations).toContain(7);
+    expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency)).toBe(100);
+    expect(readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD)).toBe(10);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("fails closed on missing Phase-6 price or stale Phase-1 policy, and allows a no-trade tick", () => {
+    const f = fxFixture();
+    const root = f.world;
+    const transition = (_phase: number, world: WorldState) => world;
+    const phase1Only: PhaseHandler = (_world, context) => context.phase === 1
+      ? { ...context, effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion }
+      : context;
+    const live: PhaseHandler = (world, context) => context.phase === 6
+      ? { ...context, marketPrices: f.context.marketPrices }
+      : phase1Only(world, context, world.pendingTransitions);
+    const request = {
+      policy: {
+        phase1ImportTariffs: f.context.phase1ImportTariffs,
+        phase1ConsumptionTaxes: f.context.phase1ConsumptionTaxes,
+        transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+      },
+      plan: f.input,
+      dispatch: f.state,
+    };
+    const observed: number[] = [];
+    expect(() => executeM5LiveQuotedTradeTick(
+      root, 7, phase1Only, transition, () => request,
+      phase => { observed.push(phase); },
+    )).toThrow(/Phase-6|price/i);
+    expect(observed).not.toContain(7);
+    expect(root.shipments?.size).toBe(0);
+    expect(readActorWallet(root, f.buyerActor).get(f.destCurrency)).toBe(100);
+    expect(readMarketActorInventory(root, f.sellerActor, "GENERAL").get(GOOD)).toBe(10);
+
+    expect(() => executeM5LiveQuotedTradeTick(
+      root, 7, live, transition,
+      () => ({
+        ...request,
+        policy: {
+          ...request.policy,
+          phase1ImportTariffs: { ...f.context.phase1ImportTariffs!, tick: 6 },
+        },
+      }),
+    )).toThrow(/current-tick|tariff|policy/i);
+    expect(root.shipments?.size).toBe(0);
+
+    const noTrade = executeM5LiveQuotedTradeTick(
+      root, 7, noOpPhaseHandler, transition, () => null,
+    );
+    expect(noTrade.world).toBe(root);
+    expect(noTrade.context.transactions).toEqual([]);
+    expect(noTrade.phaseTrace).toEqual([...Array(16).keys()]);
+  });
+
 });
