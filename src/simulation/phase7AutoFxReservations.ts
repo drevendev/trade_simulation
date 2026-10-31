@@ -238,10 +238,14 @@ export function assessPhase7QuotedFxScarcity(
       return fail("FX input quote mismatch cannot be fixed by shrinking quantity");
     }
     const originalQuantity = quote.lot.quantity;
-    const sourceUnitPrice = invoice / originalQuantity;
+    // Invoice / quantity is NOT the canonical source price: binary64 division
+    // can round it DOWN. Shrinking against that reconstructed price may promise
+    // more FX output than a real Phase-7 re-quote at the live source NET price.
+    const sourceUnitPrice = quote.sourceSellerNetUnitPrice;
     if (!Number.isFinite(originalQuantity) || originalQuantity <= 0 ||
-        !Number.isFinite(sourceUnitPrice) || sourceUnitPrice <= 0) {
-      return fail("scarcity probe requires a representable source unit price");
+        !Number.isFinite(sourceUnitPrice) || sourceUnitPrice <= 0 ||
+        originalQuantity * sourceUnitPrice !== invoice) {
+      return fail("scarcity probe requires the canonical source unit price");
     }
     let quantity = originalQuantity;
     if (available < invoice) {
@@ -249,8 +253,9 @@ export function assessPhase7QuotedFxScarcity(
       if (!Number.isFinite(quantity) || quantity < 0) {
         return fail("scarcity probe cannot represent reduced goods quantity");
       }
-      // Floating division may round the proposed quantity UP beyond the pool
-      // promise. Move exactly one representable float lower when necessary.
+      // Divide by the SAME canonical price used by actual re-quotation.
+      // Floating division may still round the proposed quantity UP beyond the
+      // pool promise. Move one representable float lower when necessary.
       if (quantity > 0 && quantity * sourceUnitPrice > available) {
         const bits = new DataView(new ArrayBuffer(8));
         bits.setFloat64(0, quantity, false);
