@@ -8,11 +8,12 @@ import { createMarketIntentId, type MarketIntent } from "./marketIntent";
 import { marketPriceKey } from "./phase6MarketPriceFormation";
 import { phase7FxOutputKey } from "./phase7AggregateReservation";
 import {
-  phase7ConsumptionTaxKey, phase7ImportTariffKey,
+  phase7ConsumptionTaxKey, phase7ImportTariffKey, buildPhase7LiveWorldPlanInput,
   type Phase7LiveWorldPlanInput,
 } from "./phase7LiveWorldPlan";
 import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
 import { executePhase7LiveQuotedMixedTradePlan } from "./phase7LiveQuotedExecution";
+import { executePreparedMixedCurrencyTradePlan } from "./phase7PreparedFxExecution";
 import { readActorWallet, readMarketActorInventory } from "./marketSettlementTransition";
 import { quoteFx, resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 import { buildInitialWorld, type WorldState } from "./worldState";
@@ -222,6 +223,59 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency)).toBe(buyerStart);
     expect(readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD))
       .toBe(stockStart);
+  });
+
+
+  it("settles two different lot-specific tax rates on one FX route without averaging", () => {
+    const f = fxFixture(true);
+    expect(f.quoted.quotes).toHaveLength(2);
+    const [first, second] = f.quoted.quotes;
+    const q0 = first!;
+    const q1 = second!;
+    const delta = Math.min(q0.consumptionTaxDest, q1.consumptionTaxDest) / 4;
+    expect(delta).toBeGreaterThan(0);
+    const planId = q0.lot.tradePlanId;
+    expect(q1.lot.tradePlanId).toBe(planId);
+    const terms = (q: typeof q0, offset: number) => ({
+      terms: {
+        sourceSellerNetUnitPrice: q.sellerInvoiceSource / q.lot.quantity,
+        transportFeePerUnitDest: q.transportFeeDest / q.lot.quantity,
+        tariffPerUnitDest: q.importTariffDest / q.lot.quantity,
+        consumptionTaxPerUnitDest: (q.consumptionTaxDest + offset) / q.lot.quantity,
+      },
+      buyerDebitDest: q.buyerDebitDest + offset,
+    });
+    const frozen = new Map([[0, terms(q0, delta)], [1, terms(q1, -delta)]]);
+    const result = executePreparedMixedCurrencyTradePlan(f.world, {
+      ...f.state,
+      tick: f.context.tick,
+      planInput: buildPhase7LiveWorldPlanInput(f.world, f.context, f.input),
+      termsByTradePlanId: new Map([[planId, frozen.get(0)!.terms]]),
+      sameCurrencyTermsByTradePlanId: new Map(),
+      quotedFxTermsByLotOrdinal: frozen,
+    });
+    const taxes = result.transactions.filter(tx => tx.type === "CONSUMPTION_TAX");
+    expect(result.committedLots).toHaveLength(2);
+    expect(result.unfilledLotOrdinals).toEqual([]);
+    expect(taxes).toHaveLength(2);
+    expect(taxes[0]!.moneyAmount).toBeCloseTo(q0.consumptionTaxDest + delta, 9);
+    expect(taxes[1]!.moneyAmount).toBeCloseTo(q1.consumptionTaxDest - delta, 9);
+    expect(result.committedLots.reduce((sum, lot) => sum + lot.buyerTotalDebitDest, 0))
+      .toBeCloseTo(q0.buyerDebitDest + q1.buyerDebitDest, 9);
+    expect(result.world.shipments?.size).toBe(2);
+    expect(f.world.shipments?.size).toBe(0);
+
+    // A missing or unrelated quote is rejected BEFORE any cash or stock mutation.
+    const bad = new Map([[0, frozen.get(0)!], [3, frozen.get(1)!]]);
+    expect(() => executePreparedMixedCurrencyTradePlan(f.world, {
+      ...f.state,
+      tick: f.context.tick,
+      planInput: buildPhase7LiveWorldPlanInput(f.world, f.context, f.input),
+      termsByTradePlanId: new Map([[planId, frozen.get(0)!.terms]]),
+      sameCurrencyTermsByTradePlanId: new Map(),
+      quotedFxTermsByLotOrdinal: bad,
+    })).toThrow("lot-specific FX quotes must cover every FX match");
+    expect(f.world.shipments?.size).toBe(0);
   });
 
   it("refuses missing, wrong-owner and reused reservations with no published changes", () => {
