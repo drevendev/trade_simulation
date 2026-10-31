@@ -799,6 +799,12 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     };
     const makeWorld = (outputCash: number): WorldState => ({
       ...f.world,
+      // A deliberately high-money fixture needs a representable budget delta;
+      // strict FX-output feasibility is still compared EXACTLY, not by epsilon.
+      simulationConfig: {
+        ...f.world.simulationConfig,
+        numeric: { ...f.world.simulationConfig.numeric, moneyEpsilon: 1e-6 },
+      },
       cohorts: walletsAndStock,
       monetaryAuthorities: new Map(f.world.monetaryAuthorities).set(
         located.owningAuthorityId, {
