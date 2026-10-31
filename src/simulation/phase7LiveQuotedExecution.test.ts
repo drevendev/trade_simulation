@@ -14,6 +14,7 @@ import {
   type Phase7LiveWorldPlanInput,
 } from "./phase7LiveWorldPlan";
 import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
+import { reservePhase7QuotedFxLots } from "./phase7AutoFxReservations";
 import { executePhase7LiveQuotedMixedTradePlan } from "./phase7LiveQuotedExecution";
 import { executePreparedMixedCurrencyTradePlan } from "./phase7PreparedFxExecution";
 import { preparePhase7TradePlan } from "./phase7TradePlan";
@@ -468,6 +469,106 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     expect(observations).toContain(7);
     expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency)).toBe(100);
     expect(readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD)).toBe(10);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("automatically reserves two live FX lots against one canonical payer and pool", () => {
+    const f = fxFixture(true);
+    expect(f.quoted.quotes).toHaveLength(2);
+    const openingPool = resolveCanonicalFxPool(f.world, f.pairId).pool.cash;
+    const openingBuyerCash = readActorWallet(f.world, f.buyerActor).get(f.destCurrency);
+    const reservations = reservePhase7QuotedFxLots(
+      f.world, f.context.tick, f.quoted.quotes,
+    );
+    const replayReservations = reservePhase7QuotedFxLots(
+      f.world, f.context.tick, f.quoted.quotes,
+    );
+    expect(reservations).toEqual(replayReservations);
+    expect([...reservations.keys()]).toEqual([0, 1]);
+    for (const [ordinal, quote] of f.quoted.quotes.entries()) {
+      const reservation = reservations.get(ordinal)!;
+      expect(reservation.tick).toBe(f.context.tick);
+      expect(reservation.payerKey).toBe(actorRefKey(f.buyerActor));
+      expect(reservation.quote.feasibleOutputAmount).toBe(quote.sellerInvoiceSource);
+      expect(reservation.quote.requiredInputForFeasibleOutput)
+        .toBeCloseTo(quote.goodsPaymentDest, 9);
+    }
+    const settled = executePhase7LiveQuotedMixedTradePlan(
+      f.world, f.context, f.input,
+      { ...f.state, fxReservationByLotOrdinal: reservations },
+    );
+    expect(settled.committedLots).toHaveLength(2);
+    expect(settled.transactions.filter(tx => tx.type === "FX_OUTPUT")).toHaveLength(2);
+    expect(settled.world.shipments?.size).toBe(2);
+    expect(resolveCanonicalFxPool(f.world, f.pairId).pool.cash).toEqual(openingPool);
+    expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency))
+      .toBe(openingBuyerCash);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("uses explicit auto-reservation mode at Phase-7 close without an outside FX promise", () => {
+    const f = fxFixture();
+    const phaseHandler: PhaseHandler = (_world, context) => {
+      if (context.phase === 1) {
+        return { ...context, effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion };
+      }
+      if (context.phase === 6) {
+        return { ...context, marketPrices: f.context.marketPrices };
+      }
+      return context;
+    };
+    const run = () => executeM5LiveQuotedTradeTick(
+      f.world, 7, phaseHandler, (_phase, world) => world,
+      () => ({
+        policy: {
+          phase1ImportTariffs: f.context.phase1ImportTariffs,
+          phase1ConsumptionTaxes: f.context.phase1ConsumptionTaxes,
+          transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+        },
+        plan: f.input,
+        dispatch: {
+          remainingCargoWeightByLink: f.state.remainingCargoWeightByLink,
+          phase8MainIntents: f.state.phase8MainIntents,
+          autoReserveFx: true as const,
+        },
+      }),
+    );
+    const committed = run();
+    const replay = run();
+    expect(committed.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(committed.reconciliationErrors).toBeNull();
+    expect(committed.context.transactions.filter(tx => tx.type === "FX_OUTPUT"))
+      .toHaveLength(1);
+    expect(committed.context.transactions).toEqual(replay.context.transactions);
+    expect(committed.world.shipments).toEqual(replay.world.shipments);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("refuses FX scarcity before dispatch without changing any world balances", () => {
+    const f = fxFixture(true);
+    const located = resolveCanonicalFxPool(f.world, f.pairId);
+    const pool = located.pool;
+    const floor = f.sourceCurrency === pool.baseCurrencyId
+      ? pool.minOperationalReserveBase : pool.minOperationalReserveQuote;
+    const reducedCash = new Map(pool.cash);
+    reducedCash.set(f.sourceCurrency, floor + f.quoted.quotes[0]!.sellerInvoiceSource / 2);
+    const authority = f.world.monetaryAuthorities.get(located.owningAuthorityId)!;
+    const constrained: WorldState = {
+      ...f.world,
+      monetaryAuthorities: new Map(f.world.monetaryAuthorities).set(
+        located.owningAuthorityId, {
+          ...authority,
+          fxPools: new Map(authority.fxPools).set(f.pairId, { ...pool, cash: reducedCash }),
+        },
+      ),
+    };
+    const openingBuyerCash = readActorWallet(f.world, f.buyerActor).get(f.destCurrency);
+    expect(() => reservePhase7QuotedFxLots(
+      constrained, f.context.tick, f.quoted.quotes,
+    )).toThrow(/quantity shrink/i);
+    expect(resolveCanonicalFxPool(f.world, f.pairId).pool.cash).toEqual(pool.cash);
+    expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency))
+      .toBe(openingBuyerCash);
     expect(f.world.shipments?.size).toBe(0);
   });
 
