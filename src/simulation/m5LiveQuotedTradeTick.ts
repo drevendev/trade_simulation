@@ -103,6 +103,10 @@ export function executeM5LiveQuotedTradeTick(
             if ("fxReservationByLotOrdinal" in request.dispatch) {
               throw new Error("Phase-7 auto FX mode cannot accept external reservations");
             }
+            // The live planning path already caps FX output by canonical pool
+            // liquidity BEFORE matching. Re-quote those reduced lots once and
+            // reserve them strictly. A second scarcity retry after this point
+            // would be dead code without a demonstrated independent shortage.
             const actual = quotePhase7ActualMatchedLots(world, pricing, request.plan);
             fxReservationByLotOrdinal = reservePhase7QuotedFxLots(
               world, context.tick, actual.quotes,

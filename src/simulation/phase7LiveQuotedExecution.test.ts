@@ -740,6 +740,89 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     expect(constrained.shipments?.size).toBe(0);
   });
 
+  it("caps FX at the live pool before the first quote, without an unreachable retry", () => {
+    const f = fxFixture(true);
+    const located = resolveCanonicalFxPool(f.world, f.pairId);
+    const pool = located.pool;
+    const floor = f.sourceCurrency === pool.baseCurrencyId
+      ? pool.minOperationalReserveBase : pool.minOperationalReserveQuote;
+    const available = f.quoted.quotes[0]!.sellerInvoiceSource / 2;
+    const authority = f.world.monetaryAuthorities.get(located.owningAuthorityId)!;
+    const constrained: WorldState = {
+      ...f.world,
+      monetaryAuthorities: new Map(f.world.monetaryAuthorities).set(
+        located.owningAuthorityId, {
+          ...authority,
+          fxPools: new Map(authority.fxPools).set(f.pairId, {
+            ...pool, cash: new Map(pool.cash).set(f.sourceCurrency, floor + available),
+          }),
+        },
+      ),
+    };
+    // SLP-907-01: the canonical first pass already reads the live FX pool,
+    // constrains the quantity and reserves a fully funded invoice. A smaller
+    // shipment alone is NOT evidence that a late scarcity retry ran.
+    const firstPass = quotePhase7ActualMatchedLots(constrained, f.context, f.input);
+    const firstPassQuantity = firstPass.quotes.reduce(
+      (sum, quote) => sum + quote.lot.quantity, 0,
+    );
+    expect(firstPassQuantity).toBeGreaterThan(0);
+    expect(firstPassQuantity).toBeLessThan(2);
+    const scarcity = assessPhase7QuotedFxScarcity(
+      constrained, f.context.tick, firstPass.quotes,
+    );
+    expect(scarcity.requiresShrink).toBe(false);
+    expect(scarcity.reducedOutputByPairCurrency.size).toBe(0);
+    const strict = reservePhase7QuotedFxLots(
+      constrained, f.context.tick, firstPass.quotes,
+    );
+    expect(strict.size).toBe(firstPass.quotes.filter(q => q.fxPairId !== null).length);
+    const phaseHandler: PhaseHandler = (_world, context) => {
+      if (context.phase === 1) {
+        return { ...context, effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion };
+      }
+      if (context.phase === 6) {
+        return { ...context, marketPrices: f.context.marketPrices };
+      }
+      return context;
+    };
+    const run = () => executeM5LiveQuotedTradeTick(
+      constrained, f.context.tick, phaseHandler, (_phase, world) => world,
+      () => ({
+        policy: {
+          phase1ImportTariffs: f.context.phase1ImportTariffs,
+          phase1ConsumptionTaxes: f.context.phase1ConsumptionTaxes,
+          transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+        },
+        plan: f.input,
+        dispatch: {
+          remainingCargoWeightByLink: f.state.remainingCargoWeightByLink,
+          phase8MainIntents: f.state.phase8MainIntents,
+          autoReserveFx: true as const,
+        },
+      }),
+    );
+    const committed = run();
+    const replay = run();
+    expect(committed.reconciliationErrors).toBeNull();
+    expect(committed.context.transactions).toEqual(replay.context.transactions);
+    expect(committed.world.shipments).toEqual(replay.world.shipments);
+    expect(committed.context.transactions.some(tx => tx.type === "FX_OUTPUT")).toBe(true);
+    const dispatched = [...committed.world.shipments!.values()]
+      .reduce((sum, shipment) => sum + shipment.quantity, 0);
+    expect(dispatched).toBeGreaterThan(0);
+    expect(dispatched).toBeLessThan(2);
+    expect(dispatched).toBeCloseTo(firstPassQuantity, 9);
+    expect(constrained.shipments?.size).toBe(0);
+    expect(readActorWallet(constrained, f.buyerActor).get(f.destCurrency)).toBe(100);
+    expect(readMarketActorInventory(constrained, f.sellerActor, "GENERAL").get(GOOD)).toBe(10);
+    expect(resolveCanonicalFxPool(constrained, f.pairId).pool.cash)
+      .toEqual(new Map(pool.cash).set(f.sourceCurrency, floor + available));
+    expect(f.input.fxOutputByPairCurrency.get(
+      phase7FxOutputKey(f.pairId, f.sourceCurrency),
+    )).toBeGreaterThan(available);
+  });
+
   it("shrinks against the canonical source price before a real re-quote and strict FX reserve", () => {
     // SLP-906-01: reconstructing a unit price from the rounded invoice
     // falsely accepts 10.2 units whose canonical re-quote exceeds finite FX.
