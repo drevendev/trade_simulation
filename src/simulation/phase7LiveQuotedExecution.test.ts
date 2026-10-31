@@ -1,0 +1,257 @@
+import { describe, expect, it } from "vitest";
+import { baselineScenario } from "../config/fixtures/baselineScenario";
+import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
+import { createDefaultSimulationConfig } from "../config/simulationConfig";
+import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
+import type { GoodId, TransportLinkId } from "../domain/id";
+import { createMarketIntentId, type MarketIntent } from "./marketIntent";
+import { marketPriceKey } from "./phase6MarketPriceFormation";
+import { phase7FxOutputKey } from "./phase7AggregateReservation";
+import {
+  phase7ConsumptionTaxKey, phase7ImportTariffKey,
+  type Phase7LiveWorldPlanInput,
+} from "./phase7LiveWorldPlan";
+import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
+import { executePhase7LiveQuotedMixedTradePlan } from "./phase7LiveQuotedExecution";
+import { readActorWallet, readMarketActorInventory } from "./marketSettlementTransition";
+import { quoteFx, resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
+import { buildInitialWorld, type WorldState } from "./worldState";
+
+const GOOD = "good:food" as GoodId;
+
+function fxFixture(twoBuyerIntents = false) {
+  const root = buildInitialWorld(
+    baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 47,
+  );
+  const poolIds = [...root.monetaryAuthorities.values()].flatMap(a => [...a.fxPools.keys()]);
+  const route = [...root.transportLinks.values()].flatMap(link => {
+    const origin = root.regions.get(link.fromRegionId);
+    const destination = root.regions.get(link.toRegionId);
+    if (!origin || !destination || !origin.controllerStateId ||
+        !destination.controllerStateId ||
+        origin.controllerStateId === destination.controllerStateId ||
+        origin.settlementCurrencyId === destination.settlementCurrencyId) return [];
+    const pairId = poolIds.find(id => {
+      const pool = resolveCanonicalFxPool(root, id).pool;
+      return [pool.baseCurrencyId, pool.quoteCurrencyId].includes(origin.settlementCurrencyId) &&
+        [pool.baseCurrencyId, pool.quoteCurrencyId].includes(destination.settlementCurrencyId);
+    });
+    const seller = [...root.cohorts.values()].find(c => c.seed.regionKey === origin.seed.key);
+    const buyer = [...root.cohorts.values()].find(c => c.seed.regionKey === destination.seed.key);
+    const receiver = [...root.cohorts.values()].find(c =>
+      c.seed.regionKey === origin.seed.key && c.cohortId !== seller?.cohortId);
+    return pairId && seller && buyer && receiver
+      ? [{ link, origin, destination, pairId, seller, buyer, receiver }] : [];
+  })[0];
+  if (!route) throw new Error("baseline must offer a controlled distinct-currency route");
+  const { link, origin, destination, pairId } = route;
+  const sellerActor: ActorRef = { type: "COHORT", cohortId: route.seller.cohortId };
+  const buyerActor: ActorRef = { type: "COHORT", cohortId: route.buyer.cohortId };
+  const feeReceiver: ActorRef = { type: "COHORT", cohortId: route.receiver.cohortId };
+  const sourceCurrency = origin.settlementCurrencyId;
+  const destCurrency = destination.settlementCurrencyId;
+  const cohorts = new Map(root.cohorts);
+  cohorts.set(route.seller.cohortId, {
+    ...route.seller,
+    householdInventory: new Map(route.seller.householdInventory).set(GOOD, 10),
+    wallet: new Map(route.seller.wallet).set(sourceCurrency, 5),
+  });
+  cohorts.set(route.buyer.cohortId, {
+    ...route.buyer,
+    wallet: new Map(route.buyer.wallet).set(destCurrency, 100),
+  });
+  cohorts.set(route.receiver.cohortId, {
+    ...route.receiver,
+    wallet: new Map(route.receiver.wallet).set(destCurrency, 1),
+  });
+  const world: WorldState = {
+    ...root, cohorts,
+    transportLinks: new Map(root.transportLinks).set(link.linkId, {
+      ...link, feeReceiver,
+    }),
+  };
+  const sellerIntent: MarketIntent = {
+    id: createMarketIntentId("mi:phase7:quote-exec:fx-seller"),
+    actor: sellerActor, regionId: origin.regionId, goodId: GOOD,
+    side: "SELL", purpose: "INVENTORY_REBALANCE",
+    desiredQuantity: 2, minimumReserveQuantity: 0,
+    sourcePlanId: "plan:phase7:quote-exec:fx-seller",
+  };
+  const buyers: MarketIntent[] = [0, ...(twoBuyerIntents ? [1] : [])].map(i => ({
+    id: createMarketIntentId("mi:phase7:quote-exec:fx-buyer:" + i),
+    actor: buyerActor, regionId: destination.regionId, goodId: GOOD,
+    side: "BUY" as const, purpose: "CONSUMPTION" as const,
+    desiredQuantity: twoBuyerIntents ? 1 : 2, maxSpend: 100,
+    sourcePlanId: "plan:phase7:quote-exec:fx-buyer:" + i,
+  }));
+  const sourceMarket = [...world.markets.values()].find(m => m.seed.regionKey === origin.seed.key)!;
+  const destMarket = [...world.markets.values()].find(m => m.seed.regionKey === destination.seed.key)!;
+  const context = {
+    tick: 7, phase: 7 as const,
+    marketPrices: new Map([
+      [marketPriceKey(sourceMarket.marketId, GOOD), 3],
+      [marketPriceKey(destMarket.marketId, GOOD), 100],
+    ]),
+    effectiveJurisdictionByRegion: new Map(
+      [...world.regions].map(([id, region]) => [id, region.controllerStateId] as const),
+    ),
+    phase1ImportTariffs: {
+      tick: 7, ratesByDestinationStateGood: new Map([
+        [phase7ImportTariffKey(destination.controllerStateId!, GOOD), 0.1],
+      ]),
+    },
+    phase1ConsumptionTaxes: {
+      tick: 7, ratesByDestinationStateGood: new Map([
+        [phase7ConsumptionTaxKey(destination.controllerStateId!, GOOD), 0.1],
+      ]),
+      collectionEfficiencyByState: new Map([
+        [destination.controllerStateId!, 1],
+      ]),
+    },
+    transportFeeCostPolicy: {
+      minimumConditionForCost: 0.1, maximumConditionCostMultiplier: 3,
+    },
+  };
+  const planId = "plan:phase7:quote-exec:fx";
+  const availableOutput = quoteFx(
+    world, pairId, destCurrency, sourceCurrency, 0,
+  ).maxOutputByPoolReserve;
+  const input: Phase7LiveWorldPlanInput = {
+    opportunityQuotes: [{
+      planId, linkId: link.linkId, originRegionId: origin.regionId,
+      destinationRegionId: destination.regionId, goodId: GOOD,
+      authorizedAtPhase1: true, cargoWeightPerUnit: 1,
+      destinationReferenceGrossUnitPrice: 200,
+      landedGrossUnitCostDest: 0.001, estimatedTransportUnitCostDest: 0,
+      estimatedTariffRate: 0, estimatedFxInputPerSourceCurrency: 0.001,
+      shortageRateDestination: 1,
+    }],
+    residualIntents: [
+      { intent: sellerIntent, residualQuantity: 2 },
+      ...buyers.map(intent => ({
+        intent, residualQuantity: intent.desiredQuantity, remainingBuyerSpend: 100,
+      })),
+    ],
+    scorePolicy: {
+      tradeProfitWeight: 1, shortageWeight: 1,
+      minimumTradeScore: 0.05, maximumShortagePremiumShare: 0.25,
+    },
+    infrastructureFactors: new Map([[link.linkId, 1]]),
+    eligibleDirectedLinkIdsAtPhase1: new Set<TransportLinkId>([link.linkId]),
+    fxPairIdByTradePlanId: new Map([[planId, pairId]]),
+    fxOutputByPairCurrency: new Map([
+      [phase7FxOutputKey(pairId, sourceCurrency), availableOutput],
+    ]),
+  };
+  const quoted = quotePhase7ActualMatchedLots(world, context, input);
+  const fxReservations = new Map(quoted.quotes.map((q, ordinal) => [
+    ordinal,
+    {
+      tick: 7,
+      requestId: "fx:req:live-quoted:" + ordinal,
+      payerKey: actorRefKey(buyerActor),
+      quote: quoteFx(world, pairId, destCurrency, sourceCurrency,
+        q.sellerInvoiceSource, { maxInputAmount: 100 }),
+    },
+  ] as const));
+  const state = {
+    fxReservationByLotOrdinal: fxReservations,
+    effectiveJurisdictionByRegion: context.effectiveJurisdictionByRegion,
+    remainingCargoWeightByLink: new Map([[link.linkId, 50]]),
+    priorTransactions: [],
+    phase8MainIntents: [sellerIntent, ...buyers],
+  };
+  return {
+    world, context, input, state, quoted, link, pairId, sellerActor, buyerActor,
+    feeReceiver, origin, destination, sourceCurrency, destCurrency,
+  };
+}
+
+describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
+  it("settles one live FX invoice with explicit charges, conserved goods and two currencies", () => {
+    const f = fxFixture();
+    expect(f.quoted.quotes).toHaveLength(1);
+    const invoice = f.quoted.quotes[0]!;
+    expect(invoice.fxPairId).toBe(f.pairId);
+    const sellerStart = readActorWallet(f.world, f.sellerActor).get(f.sourceCurrency)!;
+    const buyerStart = readActorWallet(f.world, f.buyerActor).get(f.destCurrency)!;
+    const receiverStart = readActorWallet(f.world, f.feeReceiver).get(f.destCurrency)!;
+    const treasuryStart = f.world.states.get(f.destination.controllerStateId!)!
+      .treasuryWallet.get(f.destCurrency)!;
+    const stockStart = readMarketActorInventory(f.world, f.sellerActor, "GENERAL")
+      .get(GOOD)!;
+    const poolStart = resolveCanonicalFxPool(f.world, f.pairId).pool;
+    const result = executePhase7LiveQuotedMixedTradePlan(
+      f.world, f.context, f.input, f.state,
+    );
+    const replay = executePhase7LiveQuotedMixedTradePlan(
+      f.world, f.context, f.input, f.state,
+    );
+    expect(result.committedLots).toHaveLength(1);
+    expect(result.unfilledLotOrdinals).toEqual([]);
+    expect(result.world.shipments?.size).toBe(1);
+    expect(result.transactions.filter(t => t.type === "FX_INPUT")).toHaveLength(1);
+    expect(result.transactions.filter(t => t.type === "FX_OUTPUT")).toHaveLength(1);
+    expect(result.transactions.filter(t => t.type === "TRADE_GOODS_SALE")).toHaveLength(1);
+    expect(result.transactions.filter(t => t.type === "SHIPMENT_DISPATCH")).toHaveLength(1);
+    expect(result.transactions.filter(t => t.type === "IMPORT_TARIFF")).toHaveLength(1);
+    expect(result.transactions.filter(t => t.type === "CONSUMPTION_TAX")).toHaveLength(1);
+    expect(result.transactions.filter(t => t.type === "TRANSPORT_FEE")).toHaveLength(1);
+    expect(readActorWallet(result.world, f.sellerActor).get(f.sourceCurrency)! - sellerStart)
+      .toBeCloseTo(invoice.sellerInvoiceSource, 9);
+    expect(buyerStart - readActorWallet(result.world, f.buyerActor).get(f.destCurrency)!)
+      .toBeCloseTo(invoice.buyerDebitDest, 9);
+    expect(readActorWallet(result.world, f.feeReceiver).get(f.destCurrency)! - receiverStart)
+      .toBeCloseTo(invoice.transportFeeDest, 9);
+    const treasuryEnd = result.world.states.get(f.destination.controllerStateId!)!
+      .treasuryWallet.get(f.destCurrency)!;
+    expect(treasuryEnd - treasuryStart)
+      .toBeCloseTo(invoice.importTariffDest + invoice.consumptionTaxDest, 9);
+    expect(stockStart - readMarketActorInventory(result.world, f.sellerActor, "GENERAL")
+      .get(GOOD)!).toBeCloseTo(invoice.lot.quantity, 9);
+    expect(result.world.shipments!.values().next().value?.quantity)
+      .toBeCloseTo(invoice.lot.quantity, 9);
+    const poolEnd = resolveCanonicalFxPool(result.world, f.pairId).pool;
+    expect(poolStart.cash.get(f.sourceCurrency)! - poolEnd.cash.get(f.sourceCurrency)!)
+      .toBeCloseTo(invoice.sellerInvoiceSource, 9);
+    expect(poolEnd.cash.get(f.destCurrency)! - poolStart.cash.get(f.destCurrency)!)
+      .toBeCloseTo(invoice.goodsPaymentDest, 9);
+    expect(result.transactions).toEqual(replay.transactions);
+    expect(result.world.shipments).toEqual(replay.world.shipments);
+    expect(f.world.shipments?.size).toBe(0);
+    expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency)).toBe(buyerStart);
+    expect(readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD))
+      .toBe(stockStart);
+  });
+
+  it("refuses missing, wrong-owner and reused reservations with no published changes", () => {
+    const f = fxFixture();
+    const quote = f.state.fxReservationByLotOrdinal.get(0)!;
+    const stock = readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD);
+    const cash = readActorWallet(f.world, f.buyerActor).get(f.destCurrency);
+    expect(() => executePhase7LiveQuotedMixedTradePlan(f.world, f.context, f.input, {
+      ...f.state, fxReservationByLotOrdinal: new Map(),
+    })).toThrow("missing or duplicated lot-specific FX reservation");
+    expect(() => executePhase7LiveQuotedMixedTradePlan(f.world, f.context, f.input, {
+      ...f.state, fxReservationByLotOrdinal: new Map([
+        [0, { ...quote, payerKey: "not-the-buyer" }],
+      ]),
+    })).toThrow(/reservation|payer/i);
+    expect(f.world.shipments?.size).toBe(0);
+    expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency)).toBe(cash);
+    expect(readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD)).toBe(stock);
+
+    const split = fxFixture(true);
+    expect(split.quoted.quotes).toHaveLength(2);
+    const first = split.state.fxReservationByLotOrdinal.get(0)!;
+    const second = split.state.fxReservationByLotOrdinal.get(1)!;
+    expect(() => executePhase7LiveQuotedMixedTradePlan(
+      split.world, split.context, split.input, {
+        ...split.state, fxReservationByLotOrdinal: new Map([
+          [0, first], [1, { ...second, requestId: first.requestId }],
+        ]),
+      },
+    )).toThrow("missing or duplicated lot-specific FX reservation");
+    expect(split.world.shipments?.size).toBe(0);
+  });
+});
