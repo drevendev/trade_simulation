@@ -177,7 +177,7 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     const buyerStart = readActorWallet(f.world, f.buyerActor).get(f.destCurrency)!;
     const receiverStart = readActorWallet(f.world, f.feeReceiver).get(f.destCurrency)!;
     const treasuryStart = f.world.states.get(f.destination.controllerStateId!)!
-      .treasuryWallet.get(f.destCurrency)!;
+      .treasury.get(f.destCurrency)!;
     const stockStart = readMarketActorInventory(f.world, f.sellerActor, "GENERAL")
       .get(GOOD)!;
     const poolStart = resolveCanonicalFxPool(f.world, f.pairId).pool;
@@ -204,7 +204,7 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     expect(readActorWallet(result.world, f.feeReceiver).get(f.destCurrency)! - receiverStart)
       .toBeCloseTo(invoice.transportFeeDest, 9);
     const treasuryEnd = result.world.states.get(f.destination.controllerStateId!)!
-      .treasuryWallet.get(f.destCurrency)!;
+      .treasury.get(f.destCurrency)!;
     expect(treasuryEnd - treasuryStart)
       .toBeCloseTo(invoice.importTariffDest + invoice.consumptionTaxDest, 9);
     expect(stockStart - readMarketActorInventory(result.world, f.sellerActor, "GENERAL")
