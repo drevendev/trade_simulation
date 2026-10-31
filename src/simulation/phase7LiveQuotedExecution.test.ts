@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { executeM5LiveQuotedTradeTick } from "./m5LiveQuotedTradeTick";
+import {
+  executeM5CanonicalIntakeTradeTick, executeM5LiveQuotedTradeTick,
+} from "./m5LiveQuotedTradeTick";
 import { createTransactionId, noOpPhaseHandler, type PhaseHandler } from "./tickOrchestrator";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
@@ -470,6 +472,102 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency)).toBe(100);
     expect(readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD)).toBe(10);
     expect(f.world.shipments?.size).toBe(0);
+  });
+
+
+  it("uses current Phase-2/4/5 projected intents for live FX dispatch and Phase-8 fallback", () => {
+    const f = fxFixture();
+    const seller = f.input.residualIntents.find(e => e.intent.side === "SELL")!.intent;
+    const buyer = f.input.residualIntents.find(e => e.intent.side === "BUY")!.intent;
+    const handler: PhaseHandler = (_world, context) => {
+      if (context.phase === 1) {
+        return { ...context, effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion };
+      }
+      if (context.phase === 2) {
+        return {
+          ...context, productionMarketIntents: [seller],
+          householdMarketIntents: [buyer],
+        };
+      }
+      if (context.phase === 4) {
+        // Realized Phase-4 allocations are explicitly empty this tick:
+        // no phantom earlier cash/quantity debit is authorized.
+        return { ...context, phase4MarketAllocations: [] };
+      }
+      if (context.phase === 6) {
+        return { ...context, marketPrices: f.context.marketPrices };
+      }
+      return context;
+    };
+    const policy = {
+      phase1ImportTariffs: f.context.phase1ImportTariffs,
+      phase1ConsumptionTaxes: f.context.phase1ConsumptionTaxes,
+      transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+    };
+    // Extra fields simulate untyped external JS callers trying to reset both
+    // residual demand and the Phase-8 continuation to an empty, forged set.
+    // The opt-in canonical intake entry point MUST overwrite both.
+    const forgedPlan = { ...f.input, residualIntents: [] };
+    const forgedDispatch = {
+      remainingCargoWeightByLink: f.state.remainingCargoWeightByLink,
+      autoReserveFx: true as const,
+      phase8MainIntents: [],
+    };
+    const run = () => executeM5CanonicalIntakeTradeTick(
+      f.world, 7, handler, (_phase, world) => world,
+      () => ({ policy, plan: forgedPlan, dispatch: forgedDispatch }),
+    );
+    const actual = run();
+    const replay = run();
+    expect(actual.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(actual.phaseBoundaryError).toBeUndefined();
+    expect(actual.reconciliationErrors).toBeNull();
+    expect(actual.context.transactions.filter(t => t.type === "SHIPMENT_DISPATCH"))
+      .toHaveLength(1);
+    expect(actual.context.transactions.filter(t => t.type === "FX_OUTPUT"))
+      .toHaveLength(1);
+    expect(actual.context.phase7MainIntents).toBeDefined();
+    expect(actual.context.phase7MainIntents!.every(i => [seller.id, buyer.id].includes(i.id)))
+      .toBe(true);
+    expect(actual.context.transactions).toEqual(replay.context.transactions);
+    expect(actual.world.shipments).toEqual(replay.world.shipments);
+    expect(f.world.shipments?.size).toBe(0);
+    expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency)).toBe(100);
+    expect(readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD)).toBe(10);
+  });
+
+  it("refuses canonical Phase-7 execution without authentic earlier intake evidence", () => {
+    const f = fxFixture();
+    // Phase-1 and Phase-6 are present, but Phase-2/4/5 never supplied
+    // realized intake evidence. The canonical wrapper must not infer
+    // no procurement, reconstruct original maxSpend, or dispatch anyway.
+    const handler: PhaseHandler = (_world, context) => {
+      if (context.phase === 1) {
+        return { ...context, effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion };
+      }
+      if (context.phase === 6) {
+        return { ...context, marketPrices: f.context.marketPrices };
+      }
+      return context;
+    };
+    expect(() => executeM5CanonicalIntakeTradeTick(
+      f.world, 7, handler, (_phase, world) => world,
+      () => ({
+        policy: {
+          phase1ImportTariffs: f.context.phase1ImportTariffs,
+          phase1ConsumptionTaxes: f.context.phase1ConsumptionTaxes,
+          transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+        },
+        plan: f.input,
+        dispatch: {
+          remainingCargoWeightByLink: f.state.remainingCargoWeightByLink,
+          autoReserveFx: true as const,
+        },
+      }),
+    )).toThrow(/Phase-7 intake requires complete same-tick/i);
+    expect(f.world.shipments?.size).toBe(0);
+    expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency)).toBe(100);
+    expect(readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD)).toBe(10);
   });
 
   it("automatically reserves two live FX lots against one canonical payer and pool", () => {
