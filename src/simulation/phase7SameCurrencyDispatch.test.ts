@@ -338,3 +338,42 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
       () => settleSameCurrencyTradeDispatch(f.world, enormousCapacity));
   });
 });
+
+describe("M5 #673 canonical cargo mass at same-currency settlement", () => {
+  it("refuses spoofed mass or invalid GoodDefinition before any cash, goods or journal mutation", () => {
+    const f = fixture();
+    const spoofed: SameCurrencyDispatchRequest = {
+      ...f.request, cargoWeightPerUnit: 0.01,
+    };
+    unchanged(f.world, spoofed, () =>
+      settleSameCurrencyTradeDispatch(f.world, spoofed));
+
+    const original = f.world.definitionRegistry.goods[GOOD]!;
+    const withDefinition = (definition: typeof original): WorldState => ({
+      ...f.world,
+      definitionRegistry: {
+        ...f.world.definitionRegistry,
+        goods: { ...f.world.definitionRegistry.goods, [GOOD]: definition },
+      },
+    });
+    for (const definition of [
+      { ...original, cargoWeightPerUnit: 3 },
+      { ...original, cargoWeightPerUnit: Number.NaN },
+      { ...original, tradable: false },
+    ]) {
+      const altered = withDefinition(definition);
+      unchanged(altered, f.request, () =>
+        settleSameCurrencyTradeDispatch(altered, f.request));
+    }
+
+    // A legitimate heavier definition must debit the full canonical mass.
+    const heavy = withDefinition({ ...original, cargoWeightPerUnit: 3 });
+    const aligned: SameCurrencyDispatchRequest = {
+      ...f.request, cargoWeightPerUnit: 3,
+    };
+    const settled = settleSameCurrencyTradeDispatch(heavy, aligned);
+    expect(settled.remainingCargoWeightByLink.get(aligned.shipment.transportLinkId)).toBe(44);
+    expect(stock(settled.world, aligned)).toBe(8);
+    expect(settled.newTransactions.filter(tx => tx.type === "SHIPMENT_DISPATCH")).toHaveLength(1);
+  });
+});
