@@ -27,8 +27,7 @@ import type {
 } from "./phase7LiveWorldPlan";
 import { deliverDueTradeShipments } from "./tradeShipmentDelivery";
 import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
-import { reservePhase7QuotedFxLots, assessPhase7QuotedFxScarcity } from "./phase7AutoFxReservations";
-import { reducePhase7LiveFxBudgetCaps } from "./phase7FxScarcityReplan";
+import { reservePhase7QuotedFxLots } from "./phase7AutoFxReservations";
 import type { FxReservation } from "./fxQuoteReservation";
 
 /** Explicit frozen policy-owner facts; the live tick supplies all other context. */
@@ -99,41 +98,24 @@ export function executeM5LiveQuotedTradeTick(
             phase1ConsumptionTaxes: request.policy.phase1ConsumptionTaxes,
             transportFeeCostPolicy: request.policy.transportFeeCostPolicy,
           };
-          let effectivePlan = request.plan;
-          let fxReservationByLotOrdinal: ReadonlyMap<number, FxReservation> | undefined;
+          let fxReservationByLotOrdinal: ReadonlyMap<number, FxReservation>;
           if (request.dispatch.autoReserveFx === true) {
             if ("fxReservationByLotOrdinal" in request.dispatch) {
               throw new Error("Phase-7 auto FX mode cannot accept external reservations");
             }
-            // Pure preflight only: shrink the tick-local FX output ceilings,
-            // re-match actor intents and re-quote every fee/tax/FX leg from the
-            // same Phase-1/6 authorities. A partial promise is NEVER dispatched.
-            // The bounded retry fails before any stock or cash is committed.
-            const MAX_SCARCITY_PASSES = 4;
-            for (let pass = 0; pass < MAX_SCARCITY_PASSES; pass++) {
-              const actual = quotePhase7ActualMatchedLots(world, pricing, effectivePlan);
-              const scarcity = assessPhase7QuotedFxScarcity(
-                world, context.tick, actual.quotes,
-              );
-              if (!scarcity.requiresShrink) {
-                fxReservationByLotOrdinal = reservePhase7QuotedFxLots(
-                  world, context.tick, actual.quotes,
-                );
-                break;
-              }
-              if (pass === MAX_SCARCITY_PASSES - 1) {
-                throw new Error("Phase-7 FX scarcity replan exhausted bounded attempts");
-              }
-              effectivePlan = reducePhase7LiveFxBudgetCaps(effectivePlan, scarcity);
-            }
+            // The live planning path already caps FX output by canonical pool
+            // liquidity BEFORE matching. Re-quote those reduced lots once and
+            // reserve them strictly. A second scarcity retry after this point
+            // would be dead code without a demonstrated independent shortage.
+            const actual = quotePhase7ActualMatchedLots(world, pricing, request.plan);
+            fxReservationByLotOrdinal = reservePhase7QuotedFxLots(
+              world, context.tick, actual.quotes,
+            );
           } else {
             if (!(request.dispatch.fxReservationByLotOrdinal instanceof Map)) {
               throw new Error("Phase-7 dispatch requires explicit FX reservations or auto mode");
             }
             fxReservationByLotOrdinal = request.dispatch.fxReservationByLotOrdinal;
-          }
-          if (fxReservationByLotOrdinal === undefined) {
-            throw new Error("Phase-7 FX scarcity replan has no strict reservations");
           }
           const state: Phase7LiveQuotedExecutionState = {
             fxReservationByLotOrdinal,
@@ -143,7 +125,7 @@ export function executeM5LiveQuotedTradeTick(
             priorTransactions: context.transactions,
           };
           const committed = executePhase7LiveQuotedMixedTradePlan(
-            world, pricing, effectivePlan, state,
+            world, pricing, request.plan, state,
           );
           world = committed.world;
           nextContext = {
