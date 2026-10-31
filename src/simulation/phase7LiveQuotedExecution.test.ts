@@ -14,6 +14,7 @@ import {
   type Phase7LiveWorldPlanInput,
 } from "./phase7LiveWorldPlan";
 import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
+import { reservePhase7QuotedFxLots } from "./phase7AutoFxReservations";
 import { executePhase7LiveQuotedMixedTradePlan } from "./phase7LiveQuotedExecution";
 import { executePreparedMixedCurrencyTradePlan } from "./phase7PreparedFxExecution";
 import { preparePhase7TradePlan } from "./phase7TradePlan";
@@ -468,6 +469,205 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     expect(observations).toContain(7);
     expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency)).toBe(100);
     expect(readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD)).toBe(10);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("automatically reserves two live FX lots against one canonical payer and pool", () => {
+    const f = fxFixture(true);
+    expect(f.quoted.quotes).toHaveLength(2);
+    const openingPool = resolveCanonicalFxPool(f.world, f.pairId).pool.cash;
+    const openingBuyerCash = readActorWallet(f.world, f.buyerActor).get(f.destCurrency);
+    const reservations = reservePhase7QuotedFxLots(
+      f.world, f.context.tick, f.quoted.quotes,
+    );
+    const replayReservations = reservePhase7QuotedFxLots(
+      f.world, f.context.tick, f.quoted.quotes,
+    );
+    expect(reservations).toEqual(replayReservations);
+    expect([...reservations.keys()]).toEqual([0, 1]);
+    for (const [ordinal, quote] of f.quoted.quotes.entries()) {
+      const reservation = reservations.get(ordinal)!;
+      expect(reservation.tick).toBe(f.context.tick);
+      expect(reservation.payerKey).toBe(actorRefKey(f.buyerActor));
+      expect(reservation.quote.feasibleOutputAmount).toBe(quote.sellerInvoiceSource);
+      expect(reservation.quote.requiredInputForFeasibleOutput)
+        .toBeCloseTo(quote.goodsPaymentDest, 9);
+    }
+    const settled = executePhase7LiveQuotedMixedTradePlan(
+      f.world, f.context, f.input,
+      { ...f.state, fxReservationByLotOrdinal: reservations },
+    );
+    expect(settled.committedLots).toHaveLength(2);
+    expect(settled.transactions.filter(tx => tx.type === "FX_OUTPUT")).toHaveLength(2);
+    expect(settled.world.shipments?.size).toBe(2);
+    expect(resolveCanonicalFxPool(f.world, f.pairId).pool.cash).toEqual(openingPool);
+    expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency))
+      .toBe(openingBuyerCash);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("rejects rounded-away FX inputs across two canonical pools for the same payer", () => {
+    const f = fxFixture(true);
+    expect(f.quoted.quotes).toHaveLength(2);
+    if (f.buyerActor.type !== "COHORT") throw new Error("fixture buyer must be a cohort");
+
+    // Select two independently issuer-owned canonical pairs with the same
+    // destination/input currency but DIFFERENT source/output currencies.
+    const candidates = [...f.world.monetaryAuthorities.values()].flatMap(authority =>
+      [...authority.fxPools.values()].map(pool => ({
+        authorityId: authority.authorityId,
+        pool,
+        outputCurrencyId: pool.baseCurrencyId === f.destCurrency
+          ? pool.quoteCurrencyId : pool.baseCurrencyId,
+      })),
+    ).filter(entry =>
+      entry.pool.baseCurrencyId === f.destCurrency ||
+      entry.pool.quoteCurrencyId === f.destCurrency,
+    ).sort((a, b) => a.pool.pairId < b.pool.pairId ? -1 :
+      a.pool.pairId > b.pool.pairId ? 1 : 0);
+    const first = candidates[0]!;
+    const second = candidates.find(entry =>
+      entry.outputCurrencyId !== first.outputCurrencyId)!;
+    const selected = [first, second].sort((a, b) =>
+      a.pool.pairId < b.pool.pairId ? -1 : 1);
+    expect(selected[0]!.outputCurrencyId).not.toBe(selected[1]!.outputCurrencyId);
+
+    // Give both authoritative pools enough liquidity for a full quote; this
+    // must fail because of aggregation precision, NOT pool scarcity.
+    const authorities = new Map(f.world.monetaryAuthorities);
+    for (const { authorityId, pool } of selected) {
+      const authority = authorities.get(authorityId)!;
+      authorities.set(authorityId, {
+        ...authority,
+        fxPools: new Map(authority.fxPools).set(pool.pairId, {
+          ...pool,
+          cash: new Map([
+            [pool.baseCurrencyId, 2e16],
+            [pool.quoteCurrencyId, 2e16],
+          ]),
+          spotRateQuotePerBase: 1,
+          transactionSpread: 0,
+          minOperationalReserveBase: 0,
+          minOperationalReserveQuote: 0,
+        }),
+      });
+    }
+    const buyer = f.world.cohorts.get(f.buyerActor.cohortId)!;
+    const openingCash = 1e16 + 10;
+    const world: WorldState = {
+      ...f.world,
+      monetaryAuthorities: authorities,
+      cohorts: new Map(f.world.cohorts).set(buyer.cohortId, {
+        ...buyer, wallet: new Map(buyer.wallet).set(f.destCurrency, openingCash),
+      }),
+    };
+    // The first gross buyer debit is 2 = FX input 1 + transport fee 1.
+    // The second debit is 1e16. Both gross debits fit opening cash and can
+    // reconcile, but the separate FX input promises (1 + 1e16) cannot.
+    const quotes = selected.map(({ pool, outputCurrencyId }, index) => {
+      const amount = index === 0 ? 1 : 1e16;
+      return {
+        ...f.quoted.quotes[index]!,
+        fxPairId: pool.pairId,
+        originCurrencyId: outputCurrencyId,
+        destinationCurrencyId: f.destCurrency,
+        sellerInvoiceSource: amount,
+        goodsPaymentDest: amount,
+        invoiceMidDest: amount,
+        transportFeeDest: index === 0 ? 1 : 0,
+        importTariffDest: 0,
+        consumptionTaxDest: 0,
+        buyerDebitDest: index === 0 ? 2 : amount,
+      };
+    });
+    expect(openingCash - 1).toBeLessThan(openingCash);
+    expect(1 + 1e16).toBe(1e16); // binary64 witness: old subtraction check misses 1
+    const beforeCash = readActorWallet(world, f.buyerActor).get(f.destCurrency);
+    const beforePools = selected.map(({ pool }) =>
+      new Map(resolveCanonicalFxPool(world, pool.pairId).pool.cash));
+    expect(() => reservePhase7QuotedFxLots(world, f.context.tick, quotes))
+      .toThrow("cumulative FX payer reservation cannot reconcile across pools");
+    expect(readActorWallet(world, f.buyerActor).get(f.destCurrency)).toBe(beforeCash);
+    expect(selected.map(({ pool }) =>
+      resolveCanonicalFxPool(world, pool.pairId).pool.cash)).toEqual(beforePools);
+    expect(world.shipments?.size).toBe(0);
+
+    // A representable two-pool reservation remains supported and deterministic.
+    const smallQuotes = quotes.map((quote, index) => index === 0 ? quote : {
+      ...quote, sellerInvoiceSource: 16, goodsPaymentDest: 16,
+      invoiceMidDest: 16, buyerDebitDest: 16,
+    });
+    const accepted = reservePhase7QuotedFxLots(world, f.context.tick, smallQuotes);
+    expect([...accepted.keys()]).toEqual([0, 1]);
+    expect(accepted.get(0)!.quote.requiredInputForFeasibleOutput).toBe(1);
+    expect(accepted.get(1)!.quote.requiredInputForFeasibleOutput).toBe(16);
+    expect(reservePhase7QuotedFxLots(world, f.context.tick, smallQuotes))
+      .toEqual(accepted);
+  });
+
+  it("uses explicit auto-reservation mode at Phase-7 close without an outside FX promise", () => {
+    const f = fxFixture();
+    const phaseHandler: PhaseHandler = (_world, context) => {
+      if (context.phase === 1) {
+        return { ...context, effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion };
+      }
+      if (context.phase === 6) {
+        return { ...context, marketPrices: f.context.marketPrices };
+      }
+      return context;
+    };
+    const run = () => executeM5LiveQuotedTradeTick(
+      f.world, 7, phaseHandler, (_phase, world) => world,
+      () => ({
+        policy: {
+          phase1ImportTariffs: f.context.phase1ImportTariffs,
+          phase1ConsumptionTaxes: f.context.phase1ConsumptionTaxes,
+          transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+        },
+        plan: f.input,
+        dispatch: {
+          remainingCargoWeightByLink: f.state.remainingCargoWeightByLink,
+          phase8MainIntents: f.state.phase8MainIntents,
+          autoReserveFx: true as const,
+        },
+      }),
+    );
+    const committed = run();
+    const replay = run();
+    expect(committed.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(committed.reconciliationErrors).toBeNull();
+    expect(committed.context.transactions.filter(tx => tx.type === "FX_OUTPUT"))
+      .toHaveLength(1);
+    expect(committed.context.transactions).toEqual(replay.context.transactions);
+    expect(committed.world.shipments).toEqual(replay.world.shipments);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("refuses FX scarcity before dispatch without changing any world balances", () => {
+    const f = fxFixture(true);
+    const located = resolveCanonicalFxPool(f.world, f.pairId);
+    const pool = located.pool;
+    const floor = f.sourceCurrency === pool.baseCurrencyId
+      ? pool.minOperationalReserveBase : pool.minOperationalReserveQuote;
+    const reducedCash = new Map(pool.cash);
+    reducedCash.set(f.sourceCurrency, floor + f.quoted.quotes[0]!.sellerInvoiceSource / 2);
+    const authority = f.world.monetaryAuthorities.get(located.owningAuthorityId)!;
+    const constrained: WorldState = {
+      ...f.world,
+      monetaryAuthorities: new Map(f.world.monetaryAuthorities).set(
+        located.owningAuthorityId, {
+          ...authority,
+          fxPools: new Map(authority.fxPools).set(f.pairId, { ...pool, cash: reducedCash }),
+        },
+      ),
+    };
+    const openingBuyerCash = readActorWallet(f.world, f.buyerActor).get(f.destCurrency);
+    expect(() => reservePhase7QuotedFxLots(
+      constrained, f.context.tick, f.quoted.quotes,
+    )).toThrow(/quantity shrink/i);
+    expect(resolveCanonicalFxPool(f.world, f.pairId).pool.cash).toEqual(pool.cash);
+    expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency))
+      .toBe(openingBuyerCash);
     expect(f.world.shipments?.size).toBe(0);
   });
 

@@ -2,12 +2,13 @@
  * M5 / #673: opt-in live-quoted Phase-7 settlement inside the canonical tick.
  *
  * The caller owns Phase-1 policy snapshots, eligible routes, residual intents,
- * tick-local FX reservations and remaining transport capacity. It does NOT own
+ * explicit FX reservations (or opts into canonical auto-reservation) and capacity. It does NOT own
  * the tick, market prices, jurisdiction, transaction journal or settlement
  * prices: all of those are rebound from the live post-Phase-6 TickContext.
  *
  * This is a phase-close integration seam, not an autonomous Phase-2/4 market
- * planner or a creator of FX reservations.
+ * planner. Opt-in auto-reservation requires full FX funding; scarcity shrink
+ * still belongs upstream before any stock or cash mutation.
  */
 import type { WorldState } from "./worldState";
 import type { PhaseHandler, TickContext } from "./tickOrchestrator";
@@ -25,6 +26,9 @@ import type {
   Phase7LivePricingContext, Phase7LiveWorldPlanInput,
 } from "./phase7LiveWorldPlan";
 import { deliverDueTradeShipments } from "./tradeShipmentDelivery";
+import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
+import { reservePhase7QuotedFxLots } from "./phase7AutoFxReservations";
+import type { FxReservation } from "./fxQuoteReservation";
 
 /** Explicit frozen policy-owner facts; the live tick supplies all other context. */
 export type Phase7LiveTickPolicy = Pick<
@@ -32,11 +36,16 @@ export type Phase7LiveTickPolicy = Pick<
   "phase1ImportTariffs" | "phase1ConsumptionTaxes" | "transportFeeCostPolicy"
 >;
 
-/** Only reservations and Phase-8 intents cross this external commit boundary. */
+/** A caller may supply its OWN tick-local FX promises, or explicitly opt in
+ * to read-only canonical reservation generation for fully fundable matched lots.
+ * Missing promises do NOT silently select automatic mode. */
 export type Phase7LiveTickDispatch = Pick<
-  Phase7LiveQuotedExecutionState,
-  "fxReservationByLotOrdinal" | "remainingCargoWeightByLink" | "phase8MainIntents"
->;
+  Phase7LiveQuotedExecutionState, "remainingCargoWeightByLink" | "phase8MainIntents"
+> & (
+  | { readonly fxReservationByLotOrdinal: ReadonlyMap<number, FxReservation>;
+      readonly autoReserveFx?: never }
+  | { readonly autoReserveFx: true; readonly fxReservationByLotOrdinal?: never }
+);
 
 export interface Phase7LiveTickRequest {
   readonly policy: Phase7LiveTickPolicy;
@@ -89,8 +98,23 @@ export function executeM5LiveQuotedTradeTick(
             phase1ConsumptionTaxes: request.policy.phase1ConsumptionTaxes,
             transportFeeCostPolicy: request.policy.transportFeeCostPolicy,
           };
+          let fxReservationByLotOrdinal: ReadonlyMap<number, FxReservation>;
+          if (request.dispatch.autoReserveFx === true) {
+            if ("fxReservationByLotOrdinal" in request.dispatch) {
+              throw new Error("Phase-7 auto FX mode cannot accept external reservations");
+            }
+            const actual = quotePhase7ActualMatchedLots(world, pricing, request.plan);
+            fxReservationByLotOrdinal = reservePhase7QuotedFxLots(
+              world, context.tick, actual.quotes,
+            );
+          } else {
+            if (!(request.dispatch.fxReservationByLotOrdinal instanceof Map)) {
+              throw new Error("Phase-7 dispatch requires explicit FX reservations or auto mode");
+            }
+            fxReservationByLotOrdinal = request.dispatch.fxReservationByLotOrdinal;
+          }
           const state: Phase7LiveQuotedExecutionState = {
-            fxReservationByLotOrdinal: request.dispatch.fxReservationByLotOrdinal,
+            fxReservationByLotOrdinal,
             remainingCargoWeightByLink: request.dispatch.remainingCargoWeightByLink,
             phase8MainIntents: request.dispatch.phase8MainIntents,
             effectiveJurisdictionByRegion: context.effectiveJurisdictionByRegion,
