@@ -19,6 +19,7 @@ import {
   type Phase7LiveWorldPlanInput,
 } from "./phase7LiveWorldPlan";
 import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
+import { executePhase7LiveQuotedMixedTradePlan } from "./phase7LiveQuotedExecution";
 import { buildInitialWorld, type WorldState } from "./worldState";
 
 const GOOD = "good:wood" as GoodId;
@@ -1269,4 +1270,85 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
       .toBe(1000);
   });
 
+});
+
+describe("M5 #673 actual-lot quote-bound mixed execution", () => {
+  const executionState = (f: ReturnType<typeof fixture>) => ({
+    fxReservationByLotOrdinal: new Map(),
+    effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion,
+    remainingCargoWeightByLink: new Map(
+      f.links.map(link => [link.linkId, 100] as const),
+    ),
+    priorTransactions: [],
+    phase8MainIntents: f.input.residualIntents.map(entry => entry.intent),
+  });
+
+  it("commits live source invoices, actual transport fees and physical shipments without caller price terms", () => {
+    const f = fixture();
+    const expected = quotePhase7ActualMatchedLots(f.world, f.context, f.input);
+    expect(expected.quotes.length).toBeGreaterThan(0);
+    expect(expected.quotes.every(q => q.fxPairId === null)).toBe(true);
+    const openingCash = f.world.cohorts.get(f.buyer.cohortId)!.wallet
+      .get(f.destination.settlementCurrencyId)!;
+    const openingGoods = f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)!;
+    const first = executePhase7LiveQuotedMixedTradePlan(
+      f.world, f.context, f.input, executionState(f),
+    );
+    const replay = executePhase7LiveQuotedMixedTradePlan(
+      f.world, f.context, f.input, executionState(f),
+    );
+    const quotedDebit = expected.quotes.reduce((total, q) => total + q.buyerDebitDest, 0);
+    const quotedQuantity = expected.quotes.reduce((total, q) => total + q.lot.quantity, 0);
+    expect(first.committedLots).toHaveLength(expected.quotes.length);
+    expect(first.unfilledLotOrdinals).toEqual([]);
+    expect(first.world.shipments?.size).toBe(expected.quotes.length);
+    expect(first.transactions.filter(tx => tx.type === "TRADE_GOODS_SALE"))
+      .toHaveLength(expected.quotes.length);
+    expect(first.transactions.some(tx => tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT"))
+      .toBe(false);
+    expect(openingCash - first.world.cohorts.get(f.buyer.cohortId)!.wallet
+      .get(f.destination.settlementCurrencyId)!).toBeCloseTo(quotedDebit, 9);
+    expect(openingGoods - first.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)!)
+      .toBeCloseTo(quotedQuantity, 9);
+    expect(first.transactions).toEqual(replay.transactions);
+    expect(first.world.shipments).toEqual(replay.world.shipments);
+    expect(f.world.shipments?.size).toBe(0);
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(openingGoods);
+    expect(f.world.cohorts.get(f.buyer.cohortId)!.wallet
+      .get(f.destination.settlementCurrencyId)).toBe(openingCash);
+  });
+
+  it("ignores forged opportunity prices and refuses stale Phase-1 jurisdiction without effects", () => {
+    const f = fixture();
+    const state = executionState(f);
+    const canonical = executePhase7LiveQuotedMixedTradePlan(
+      f.world, f.context, f.input, state,
+    );
+    const tampered: Phase7LiveWorldPlanInput = {
+      ...f.input,
+      opportunityQuotes: f.input.opportunityQuotes.map(q => ({
+        ...q, sourceSellerNetUnitPrice: 123456,
+        estimatedTariffRate: 0, estimatedTransportUnitCostDest: 0,
+        landedGrossUnitCostDest: 0.001, estimatedFxInputPerSourceCurrency: 0.0001,
+      })),
+    };
+    const actual = executePhase7LiveQuotedMixedTradePlan(
+      f.world, f.context, tampered, state,
+    );
+    expect(actual.transactions).toEqual(canonical.transactions);
+    expect(actual.world.shipments).toEqual(canonical.world.shipments);
+    expect(() => executePhase7LiveQuotedMixedTradePlan(f.world, f.context, {
+      ...tampered, opportunityQuotes: tampered.opportunityQuotes.map(q => ({
+        ...q, estimatedTariffRate: 1,
+      })),
+    }, state)).toThrow("cannot charge a tariff without a destination-State border");
+
+    const stale = new Map(f.context.effectiveJurisdictionByRegion);
+    stale.set(f.destination.regionId, null);
+    expect(() => executePhase7LiveQuotedMixedTradePlan(f.world, f.context, f.input, {
+      ...state, effectiveJurisdictionByRegion: stale,
+    })).toThrow("cannot replace current Phase-1 jurisdiction");
+    expect(f.world.shipments?.size).toBe(0);
+    expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD)).toBe(9);
+  });
 });
