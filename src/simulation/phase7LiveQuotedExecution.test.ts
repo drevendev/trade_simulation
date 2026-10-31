@@ -471,7 +471,7 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     expect(f.world.shipments?.size).toBe(0);
   });
 
-  it("fails closed on missing Phase-6 price or stale Phase-1 policy, and allows a no-trade tick", () => {
+  it("fails closed without canonical net prices or with stale Phase-1 policy; permits no-trade ticks", () => {
     const f = fxFixture();
     const root = f.world;
     const transition = (_phase: number, world: WorldState) => world;
@@ -490,11 +490,24 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
       plan: f.input,
       dispatch: f.state,
     };
+    // A missing same-tick Phase-6 override is legal when a carried LocalMarket
+    // price exists: Phase 8 uses exactly that fallback. Remove BOTH forms of
+    // canonical price authority to make this a real fail-closed negative test.
+    const missingMarkets = new Map(root.markets);
+    for (const [id, market] of missingMarkets) {
+      if (market.seed.regionKey === f.origin.seed.key ||
+          market.seed.regionKey === f.destination.seed.key) {
+        const prices = new Map(market.priceByGood);
+        prices.delete(GOOD);
+        missingMarkets.set(id, { ...market, priceByGood: prices });
+      }
+    }
+    const noPriceWorld: WorldState = { ...root, markets: missingMarkets };
     const observed: number[] = [];
     expect(() => executeM5LiveQuotedTradeTick(
-      root, 7, phase1Only, transition, () => request,
+      noPriceWorld, 7, phase1Only, transition, () => request,
       phase => { observed.push(phase); },
-    )).toThrow(/Phase-6|price/i);
+    )).toThrow(/price/i);
     expect(observed).not.toContain(7);
     expect(root.shipments?.size).toBe(0);
     expect(readActorWallet(root, f.buyerActor).get(f.destCurrency)).toBe(100);
