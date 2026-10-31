@@ -140,7 +140,8 @@ export function derivePhase7PostProcurementIntents(
   }
   const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon;
   const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon;
-  if (!Number.isFinite(quantityEpsilon) || quantityEpsilon < 0 ||
+  if (quantityEpsilon === undefined || moneyEpsilon === undefined ||
+      !Number.isFinite(quantityEpsilon) || quantityEpsilon < 0 ||
       !Number.isFinite(moneyEpsilon) || moneyEpsilon < 0) {
     throw new Error("Phase-7 intake requires finite nonnegative numeric tolerances");
   }
