@@ -61,15 +61,24 @@ function exactResidual(
   label: string,
 ): number {
   if (debit === undefined) return initial;
-  const used = debit.sum + debit.correction;
-  if (!Number.isFinite(used) || used < 0 || used > initial) {
+  // A Neumaier debit is TWO numbers. Combining them before subtraction
+  // silently discards a small fill after a huge one (1e16 + 1 -> 1e16):
+  // an exhausted intent can then conceal a real overdraw.
+  // Subtract each component independently, while the cancellation of the
+  // large principal still leaves the low-order correction observable.
+  const afterPrincipal = initial - debit.sum;
+  const remaining = afterPrincipal - debit.correction;
+  if (!Number.isFinite(afterPrincipal) || !Number.isFinite(remaining) ||
+      remaining < 0 || remaining > initial) {
     throw new Error("Phase-7 intake " + label + " exceeds committed envelope");
   }
-  if (used === 0) return initial;
-  const remaining = initial - used;
-  if (!Number.isFinite(remaining) || remaining < 0 ||
-      remaining === initial ||
-      Math.abs((initial - remaining) - used) > epsilon) {
+  if (debit.sum === 0 && debit.correction === 0) return initial;
+  if (remaining === initial ||
+      (debit.sum !== 0 && afterPrincipal === initial) ||
+      (debit.correction !== 0 && remaining === afterPrincipal &&
+       Math.abs(debit.correction) > epsilon) ||
+      Math.abs((initial - afterPrincipal) - debit.sum) > epsilon ||
+      Math.abs((afterPrincipal - remaining) - debit.correction) > epsilon) {
     throw new Error("Phase-7 intake " + label + " lost observable debit precision");
   }
   return remaining;
