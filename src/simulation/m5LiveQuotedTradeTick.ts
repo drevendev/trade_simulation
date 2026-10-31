@@ -29,6 +29,7 @@ import { deliverDueTradeShipments } from "./tradeShipmentDelivery";
 import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
 import { reservePhase7QuotedFxLots } from "./phase7AutoFxReservations";
 import type { FxReservation } from "./fxQuoteReservation";
+import { derivePhase7PostProcurementIntents } from "./phase7PostProcurementIntents";
 
 /** Explicit frozen policy-owner facts; the live tick supplies all other context. */
 export type Phase7LiveTickPolicy = Pick<
@@ -146,5 +147,70 @@ export function executeM5LiveQuotedTradeTick(
       }
       return { world, context: nextContext };
     },
+  );
+}
+
+/**
+ * M5/#673: Phase-7/8 integration of the SAME authoritative post-procurement
+ * intent projection. Route eligibility, price policy, FX promises and capacity
+ * remain owned by their separate, explicit Phase-1/6/7 sources.
+ *
+ * Neither Phase-7 residuals nor Phase-8 MAIN budgets are caller-controlled:
+ * even JavaScript callers passing extra forged fields cannot replace the
+ * Phase-2/4/5 realized evidence from the current post-transition tick.
+ */
+export type Phase7CanonicalIntakeTickDispatch = Pick<
+  Phase7LiveTickDispatch, "remainingCargoWeightByLink"
+> & (
+  | { readonly fxReservationByLotOrdinal: ReadonlyMap<number, FxReservation>;
+      readonly autoReserveFx?: never }
+  | { readonly autoReserveFx: true; readonly fxReservationByLotOrdinal?: never }
+);
+
+export interface Phase7CanonicalIntakeTickRequest {
+  readonly policy: Phase7LiveTickPolicy;
+  readonly plan: Omit<Phase7LiveWorldPlanInput, "residualIntents">;
+  readonly dispatch: Phase7CanonicalIntakeTickDispatch;
+}
+
+export type Phase7CanonicalIntakeTickRequestBuilder = (
+  world: WorldState,
+  context: TickContext,
+) => Phase7CanonicalIntakeTickRequest | null;
+
+/**
+ * Bind authentic Phase-2/4/5 intent and realized Phase-4 allocation evidence
+ * immediately before planning and dispatch. The resulting intent set serves
+ * BOTH interregional matching and subsequent local Phase-8 clearing.
+ *
+ * Opt-in until the Phase-1 directed route/goods legality builder is wired:
+ * callers must still supply legal opportunity quotes, policy, FX/capacity and
+ * explicit no-trade decisions. Missing canonical intake data fails closed;
+ * a null route request means no Phase-7 dispatch and leaves the normal
+ * Phase-8 handler responsible for its own no-trade local intents.
+ */
+export function executeM5CanonicalIntakeTradeTick(
+  openingWorld: WorldState,
+  tickNumber: number,
+  handler: PhaseHandler,
+  applyPhaseTransition: PhaseWorldTransition,
+  buildPhase7RouteRequest: Phase7CanonicalIntakeTickRequestBuilder,
+  observePhaseTransition?: PhaseWorldTransitionObserver,
+): StatefulTickExecutionResult {
+  return executeM5LiveQuotedTradeTick(
+    openingWorld, tickNumber, handler, applyPhaseTransition,
+    (world, context) => {
+      const request = buildPhase7RouteRequest(world, context);
+      if (request === null) return null;
+      const intake = derivePhase7PostProcurementIntents(world, context);
+      return {
+        policy: request.policy,
+        plan: { ...request.plan, residualIntents: intake.residualIntents },
+        dispatch: {
+          ...request.dispatch, phase8MainIntents: intake.phase8MainIntents,
+        },
+      };
+    },
+    observePhaseTransition,
   );
 }
