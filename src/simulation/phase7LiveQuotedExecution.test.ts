@@ -506,6 +506,105 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     expect(f.world.shipments?.size).toBe(0);
   });
 
+  it("rejects rounded-away FX inputs across two canonical pools for the same payer", () => {
+    const f = fxFixture(true);
+    expect(f.quoted.quotes).toHaveLength(2);
+    if (f.buyerActor.type !== "COHORT") throw new Error("fixture buyer must be a cohort");
+
+    // Select two independently issuer-owned canonical pairs with the same
+    // destination/input currency but DIFFERENT source/output currencies.
+    const candidates = [...f.world.monetaryAuthorities.values()].flatMap(authority =>
+      [...authority.fxPools.values()].map(pool => ({
+        authorityId: authority.authorityId,
+        pool,
+        outputCurrencyId: pool.baseCurrencyId === f.destCurrency
+          ? pool.quoteCurrencyId : pool.baseCurrencyId,
+      })),
+    ).filter(entry =>
+      entry.pool.baseCurrencyId === f.destCurrency ||
+      entry.pool.quoteCurrencyId === f.destCurrency,
+    ).sort((a, b) => a.pool.pairId < b.pool.pairId ? -1 :
+      a.pool.pairId > b.pool.pairId ? 1 : 0);
+    const first = candidates[0]!;
+    const second = candidates.find(entry =>
+      entry.outputCurrencyId !== first.outputCurrencyId)!;
+    const selected = [first, second].sort((a, b) =>
+      a.pool.pairId < b.pool.pairId ? -1 : 1);
+    expect(selected[0]!.outputCurrencyId).not.toBe(selected[1]!.outputCurrencyId);
+
+    // Give both authoritative pools enough liquidity for a full quote; this
+    // must fail because of aggregation precision, NOT pool scarcity.
+    const authorities = new Map(f.world.monetaryAuthorities);
+    for (const { authorityId, pool } of selected) {
+      const authority = authorities.get(authorityId)!;
+      authorities.set(authorityId, {
+        ...authority,
+        fxPools: new Map(authority.fxPools).set(pool.pairId, {
+          ...pool,
+          cash: new Map([
+            [pool.baseCurrencyId, 2e16],
+            [pool.quoteCurrencyId, 2e16],
+          ]),
+          spotRateQuotePerBase: 1,
+          transactionSpread: 0,
+          minOperationalReserveBase: 0,
+          minOperationalReserveQuote: 0,
+        }),
+      });
+    }
+    const buyer = f.world.cohorts.get(f.buyerActor.cohortId)!;
+    const openingCash = 1e16 + 10;
+    const world: WorldState = {
+      ...f.world,
+      monetaryAuthorities: authorities,
+      cohorts: new Map(f.world.cohorts).set(buyer.cohortId, {
+        ...buyer, wallet: new Map(buyer.wallet).set(f.destCurrency, openingCash),
+      }),
+    };
+    // The first gross buyer debit is 2 = FX input 1 + transport fee 1.
+    // The second debit is 1e16. Both gross debits fit opening cash and can
+    // reconcile, but the separate FX input promises (1 + 1e16) cannot.
+    const quotes = selected.map(({ pool, outputCurrencyId }, index) => {
+      const amount = index === 0 ? 1 : 1e16;
+      return {
+        ...f.quoted.quotes[index]!,
+        fxPairId: pool.pairId,
+        originCurrencyId: outputCurrencyId,
+        destinationCurrencyId: f.destCurrency,
+        sellerInvoiceSource: amount,
+        goodsPaymentDest: amount,
+        invoiceMidDest: amount,
+        transportFeeDest: index === 0 ? 1 : 0,
+        importTariffDest: 0,
+        consumptionTaxDest: 0,
+        buyerDebitDest: index === 0 ? 2 : amount,
+      };
+    });
+    expect(openingCash - 1).toBeLessThan(openingCash);
+    expect(1 + 1e16).toBe(1e16); // binary64 witness: old subtraction check misses 1
+    const beforeCash = readActorWallet(world, f.buyerActor).get(f.destCurrency);
+    const beforePools = selected.map(({ pool }) =>
+      new Map(resolveCanonicalFxPool(world, pool.pairId).pool.cash));
+    expect(() => reservePhase7QuotedFxLots(world, f.context.tick, quotes))
+      .toThrow("cumulative FX payer reservation cannot reconcile across pools");
+    expect(readActorWallet(world, f.buyerActor).get(f.destCurrency)).toBe(beforeCash);
+    expect(selected.map(({ pool }) =>
+      resolveCanonicalFxPool(world, pool.pairId).pool.cash)).toEqual(beforePools);
+    expect(world.shipments?.size).toBe(0);
+
+    // A representable two-pool reservation remains supported and deterministic.
+    const smallQuotes = quotes.map((quote, index) => index === 0 ? quote : {
+      ...quote, sellerInvoiceSource: 16, goodsPaymentDest: 16,
+      invoiceMidDest: 16, buyerDebitDest: 16,
+    });
+    const accepted = reservePhase7QuotedFxLots(world, f.context.tick, smallQuotes);
+    expect([...accepted.keys()]).toEqual([0, 1]);
+    expect(accepted.get(0)!.quote.requiredInputForFeasibleOutput).toBe(1);
+    expect(accepted.get(1)!.quote.requiredInputForFeasibleOutput).toBe(16);
+    expect(reservePhase7QuotedFxLots(world, f.context.tick, smallQuotes))
+      .toEqual(accepted);
+  });
+
   it("uses explicit auto-reservation mode at Phase-7 close without an outside FX promise", () => {
     const f = fxFixture();
     const phaseHandler: PhaseHandler = (_world, context) => {
