@@ -1328,7 +1328,7 @@ describe("M5 #673 actual-lot quote-bound mixed execution", () => {
       ...f.input,
       opportunityQuotes: f.input.opportunityQuotes.map(q => ({
         ...q, sourceSellerNetUnitPrice: 123456,
-        estimatedTariffRate: 1, estimatedTransportUnitCostDest: 0,
+        estimatedTariffRate: 0, estimatedTransportUnitCostDest: 0,
         landedGrossUnitCostDest: 0.001, estimatedFxInputPerSourceCurrency: 0.0001,
       })),
     };
@@ -1337,6 +1337,11 @@ describe("M5 #673 actual-lot quote-bound mixed execution", () => {
     );
     expect(actual.transactions).toEqual(canonical.transactions);
     expect(actual.world.shipments).toEqual(canonical.world.shipments);
+    expect(() => executePhase7LiveQuotedMixedTradePlan(f.world, f.context, {
+      ...tampered, opportunityQuotes: tampered.opportunityQuotes.map(q => ({
+        ...q, estimatedTariffRate: 1,
+      })),
+    }, state)).toThrow("cannot charge a tariff without a destination-State border");
 
     const stale = new Map(f.context.effectiveJurisdictionByRegion);
     stale.set(f.destination.regionId, null);
