@@ -112,6 +112,12 @@ export function deliverDueTradeShipments(
   validateTradeShipmentRegistry(world);
   const due: TradeShipmentState[] = [];
   for (const shipment of registry.values()) {
+    // Phase 1 sees only shipments dispatched on prior ticks. New same-tick
+    // cargo cannot exist until Phase-7 dispatch has actually committed.
+    if (shipment.departureTick > request.tick ||
+        (request.phase === 1 && shipment.departureTick === request.tick)) {
+      return fail("shipment exists before its dispatch phase");
+    }
     if (shipment.arrivalTick < request.tick) return fail("overdue shipment was not delivered");
     if (shipment.arrivalTick !== request.tick) continue;
     if (request.phase === 1 && shipment.departureTick >= request.tick) {
