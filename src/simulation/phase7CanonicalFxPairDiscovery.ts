@@ -12,6 +12,7 @@
  */
 import type { CurrencyId, RegionId } from "../domain/id";
 import { quoteFx, resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
+import { phase7FxOutputKey } from "./phase7AggregateReservation";
 import type { WorldState } from "./worldState";
 
 export interface Phase7FxPairRoute {
@@ -90,4 +91,70 @@ export function derivePhase7UnambiguousCanonicalFxPairs(
     result.set(route.planId, pairId);
   }
   return result;
+}
+
+/**
+ * Optional Phase-7 auto-reservation mode: read the CURRENT live pool's
+ * available source-currency output instead of accepting a caller-authored FX
+ * budget. Every quoted route has already passed frozen Phase-1 eligibility.
+ *
+ * This is a shared ceiling per pool/direction, not a separate budget per
+ * opportunity: the downstream aggregate allocator and strict actual-lot FX
+ * reservations must still enforce the finite shared liquidity exactly once.
+ * Prior realized settlements are already reflected in WorldState pool cash.
+ * This read-only function creates no FX promise, exchange rate, or money.
+ */
+export function derivePhase7CanonicalFxOutputBudgets(
+  world: WorldState,
+  routes: readonly Phase7FxPairRoute[],
+  pairsByPlan: ReadonlyMap<string, string>,
+): ReadonlyMap<string, number> {
+  if (!Array.isArray(routes) || !(pairsByPlan instanceof Map)) {
+    throw new Error("Phase-7 canonical FX output requires discovered routes and pair identities");
+  }
+  const budgets = new Map<string, number>();
+  const seen = new Set<string>();
+  let crossCurrencyCount = 0;
+  for (const route of [...routes].sort((a, b) => cmp(a.planId, b.planId))) {
+    if (!route || typeof route.planId !== "string" || !route.planId ||
+        seen.has(route.planId)) {
+      throw new Error("Phase-7 canonical FX output duplicate or missing plan ID");
+    }
+    seen.add(route.planId);
+    const origin = world.regions.get(route.originRegionId);
+    const destination = world.regions.get(route.destinationRegionId);
+    if (!origin || !destination) {
+      throw new Error("Phase-7 canonical FX output references an unknown Region");
+    }
+    const sourceCurrency = origin.settlementCurrencyId;
+    const destinationCurrency = destination.settlementCurrencyId;
+    const pairId = pairsByPlan.get(route.planId);
+    if (sourceCurrency === destinationCurrency) {
+      if (pairId !== undefined) {
+        throw new Error("Phase-7 canonical same-currency route must not reserve FX");
+      }
+      continue;
+    }
+    crossCurrencyCount++;
+    if (typeof pairId !== "string" || !pairId.trim()) {
+      throw new Error("Phase-7 canonical FX output requires a resolved live pool");
+    }
+    // quoteFx validates issuer ownership, direction, spot/spread, reserve
+    // floors and current balances; no synthetic money or default is used.
+    const available = quoteFx(
+      world, pairId, destinationCurrency, sourceCurrency, 0,
+    ).maxOutputByPoolReserve;
+    if (!Number.isFinite(available) || available < 0) {
+      throw new Error("Phase-7 canonical FX output pool ceiling is invalid");
+    }
+    const key = phase7FxOutputKey(pairId, sourceCurrency);
+    if (budgets.has(key) && budgets.get(key) !== available) {
+      throw new Error("Phase-7 canonical FX output inconsistent shared pool ceiling");
+    }
+    budgets.set(key, available);
+  }
+  if (pairsByPlan.size !== crossCurrencyCount) {
+    throw new Error("Phase-7 canonical FX output contains surplus pair identities");
+  }
+  return budgets;
 }
