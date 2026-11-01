@@ -34,7 +34,10 @@ import {
   bindPhase7DiscoveredCargoCapacity, bindPhase7DiscoveredRouteQuotes,
 } from "./phase7CanonicalRouteBridge";
 import type { Phase7FrozenDirectedTradePermissions } from "./phase7AuthorizedRouteDiscovery";
-import { derivePhase7UnambiguousCanonicalFxPairs } from "./phase7CanonicalFxPairDiscovery";
+import {
+  derivePhase7CanonicalFxOutputBudgets,
+  derivePhase7UnambiguousCanonicalFxPairs,
+} from "./phase7CanonicalFxPairDiscovery";
 
 /** Explicit frozen policy-owner facts; the live tick supplies all other context. */
 export type Phase7LiveTickPolicy = Pick<
@@ -175,11 +178,13 @@ export type Phase7CanonicalIntakeTickDispatch = Pick<
 export interface Phase7CanonicalIntakeTickRequest {
   readonly policy: Phase7LiveTickPolicy;
   readonly plan: Omit<
-    Phase7LiveWorldPlanInput, "residualIntents" | "fxPairIdByTradePlanId"
+    Phase7LiveWorldPlanInput,
+    "residualIntents" | "fxPairIdByTradePlanId" | "fxOutputByPairCurrency"
   > & {
-    /** Optional ONLY in the canonical auto-resolution path; the live tick
-     * still requires a concrete validated map before quote/reservation. */
+    /** Optional only in the canonical auto-resolution path. */
     readonly fxPairIdByTradePlanId?: Phase7LiveWorldPlanInput["fxPairIdByTradePlanId"];
+    /** Optional only when autoDeriveCanonicalFxOutputBudgets is selected. */
+    readonly fxOutputByPairCurrency?: Phase7LiveWorldPlanInput["fxOutputByPairCurrency"];
   };
   readonly dispatch: Phase7CanonicalIntakeTickDispatch;
   /** Opt-in: derive eligible route/good set and legal/physical caps from
@@ -192,6 +197,10 @@ export interface Phase7CanonicalIntakeTickRequest {
      * multiple reverse-oriented pools fail closed: do not guess a preference.
      * The separate Phase-7 FX output budget remains externally owned. */
     readonly autoResolveCanonicalFxPairs?: true;
+    /** Use only persisted pool liquidity, not a caller-provided FX budget.
+     * Requires canonical pair discovery plus strict automatic reservations;
+     * no other tick-local uncommitted FX promises may be supplied. */
+    readonly autoDeriveCanonicalFxOutputBudgets?: true;
   };
 }
 
@@ -233,8 +242,18 @@ export function executeM5CanonicalIntakeTradeTick(
           request.plan.infrastructureFactors, request.plan.opportunityQuotes,
         );
       const discoverFx = request.authorizedRouteDiscovery?.autoResolveCanonicalFxPairs === true;
+      const discoverFxBudgets =
+        request.authorizedRouteDiscovery?.autoDeriveCanonicalFxOutputBudgets === true;
       if (discoverFx && request.plan.fxPairIdByTradePlanId !== undefined) {
         throw new Error("Phase-7 canonical FX discovery cannot accept a caller FX pair map");
+      }
+      if (discoverFxBudgets) {
+        if (!discoverFx || request.dispatch.autoReserveFx !== true) {
+          throw new Error("Phase-7 canonical FX output discovery requires canonical pairs and auto reservations");
+        }
+        if (request.plan.fxOutputByPairCurrency !== undefined) {
+          throw new Error("Phase-7 canonical FX output discovery cannot accept a caller FX budget");
+        }
       }
       const discoveredFxPairs = discoverFx
         ? derivePhase7UnambiguousCanonicalFxPairs(world, discovered!.opportunityQuotes)
@@ -242,6 +261,14 @@ export function executeM5CanonicalIntakeTradeTick(
       const fxPairIdByTradePlanId = discoveredFxPairs ?? request.plan.fxPairIdByTradePlanId;
       if (fxPairIdByTradePlanId === undefined) {
         throw new Error("Phase-7 canonical intake requires explicit or discovered FX pair identity");
+      }
+      const fxOutputByPairCurrency = discoverFxBudgets
+        ? derivePhase7CanonicalFxOutputBudgets(
+          world, discovered!.opportunityQuotes, fxPairIdByTradePlanId,
+        )
+        : request.plan.fxOutputByPairCurrency;
+      if (!(fxOutputByPairCurrency instanceof Map)) {
+        throw new Error("Phase-7 canonical intake requires explicit or discovered FX output budgets");
       }
       const remainingCargoWeightByLink = discovered === undefined
         ? request.dispatch.remainingCargoWeightByLink
@@ -256,6 +283,7 @@ export function executeM5CanonicalIntakeTradeTick(
           ...request.plan,
           ...(discovered === undefined ? {} : discovered),
           fxPairIdByTradePlanId,
+          fxOutputByPairCurrency,
           residualIntents: intake.residualIntents,
         },
         dispatch: {
