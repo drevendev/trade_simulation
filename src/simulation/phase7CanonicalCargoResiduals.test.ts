@@ -82,7 +82,8 @@ describe("M5 #673 canonical cargo residual provenance", () => {
 
   it("rejects missing authority and malformed evidence rather than inventing capacity", () => {
     const f = fixture();
-    expect(() => f.derive({ ...f.world, shipments: undefined }))
+    const { shipments: _omitted, ...withoutShipmentRegistry } = f.world;
+    expect(() => f.derive(withoutShipmentRegistry))
       .toThrow("persistent shipment registry");
     expect(() => f.derive(f.world, { ...f.context, phase: 6 }))
       .toThrow("live current-tick");
