@@ -34,6 +34,7 @@ import {
   bindPhase7DiscoveredCargoCapacity, bindPhase7DiscoveredRouteQuotes,
 } from "./phase7CanonicalRouteBridge";
 import type { Phase7FrozenDirectedTradePermissions } from "./phase7AuthorizedRouteDiscovery";
+import { derivePhase7UnambiguousCanonicalFxPairs } from "./phase7CanonicalFxPairDiscovery";
 
 /** Explicit frozen policy-owner facts; the live tick supplies all other context. */
 export type Phase7LiveTickPolicy = Pick<
@@ -173,13 +174,24 @@ export type Phase7CanonicalIntakeTickDispatch = Pick<
 
 export interface Phase7CanonicalIntakeTickRequest {
   readonly policy: Phase7LiveTickPolicy;
-  readonly plan: Omit<Phase7LiveWorldPlanInput, "residualIntents">;
+  readonly plan: Omit<
+    Phase7LiveWorldPlanInput, "residualIntents" | "fxPairIdByTradePlanId"
+  > & {
+    /** Optional ONLY in the canonical auto-resolution path; the live tick
+     * still requires a concrete validated map before quote/reservation. */
+    readonly fxPairIdByTradePlanId?: Phase7LiveWorldPlanInput["fxPairIdByTradePlanId"];
+  };
   readonly dispatch: Phase7CanonicalIntakeTickDispatch;
   /** Opt-in: derive eligible route/good set and legal/physical caps from
    * frozen Phase-1 permissions and the SAME post-Phase-4 canonical residuals.
    * Without this, the legacy explicit-route request stays backward-compatible. */
   readonly authorizedRouteDiscovery?: {
     readonly permissions: Phase7FrozenDirectedTradePermissions;
+    /** Resolve FX pair identities from live issuer-owned pools only when a
+     * unique pool exists for each cross-currency opportunity. Missing or
+     * multiple reverse-oriented pools fail closed: do not guess a preference.
+     * The separate Phase-7 FX output budget remains externally owned. */
+    readonly autoResolveCanonicalFxPairs?: true;
   };
 }
 
@@ -220,6 +232,17 @@ export function executeM5CanonicalIntakeTradeTick(
           request.authorizedRouteDiscovery.permissions,
           request.plan.infrastructureFactors, request.plan.opportunityQuotes,
         );
+      const discoverFx = request.authorizedRouteDiscovery?.autoResolveCanonicalFxPairs === true;
+      if (discoverFx && request.plan.fxPairIdByTradePlanId !== undefined) {
+        throw new Error("Phase-7 canonical FX discovery cannot accept a caller FX pair map");
+      }
+      const discoveredFxPairs = discoverFx
+        ? derivePhase7UnambiguousCanonicalFxPairs(world, discovered!.opportunityQuotes)
+        : undefined;
+      const fxPairIdByTradePlanId = discoveredFxPairs ?? request.plan.fxPairIdByTradePlanId;
+      if (fxPairIdByTradePlanId === undefined) {
+        throw new Error("Phase-7 canonical intake requires explicit or discovered FX pair identity");
+      }
       const remainingCargoWeightByLink = discovered === undefined
         ? request.dispatch.remainingCargoWeightByLink
         : bindPhase7DiscoveredCargoCapacity(
@@ -232,6 +255,7 @@ export function executeM5CanonicalIntakeTradeTick(
         plan: {
           ...request.plan,
           ...(discovered === undefined ? {} : discovered),
+          fxPairIdByTradePlanId,
           residualIntents: intake.residualIntents,
         },
         dispatch: {
