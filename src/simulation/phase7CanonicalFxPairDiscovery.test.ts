@@ -4,9 +4,12 @@ import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPac
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import { buildInitialWorld, type WorldState } from "./worldState";
 import {
+  derivePhase7CanonicalFxOutputBudgets,
   derivePhase7UnambiguousCanonicalFxPairs,
   type Phase7FxPairRoute,
 } from "./phase7CanonicalFxPairDiscovery";
+import { phase7FxOutputKey } from "./phase7AggregateReservation";
+import { quoteFx } from "./fxWorldPoolAuthority";
 
 function fixture() {
   const world = buildInitialWorld(
@@ -73,6 +76,70 @@ describe("M5 #673: current WorldState owns opt-in Phase-7 FX pair identity", () 
     expect([...second]).toEqual([...first]);
     expect(f.uniqueWorld.shipments).toBe(originalShipments);
     expect(f.uniqueWorld.monetaryAuthorities).toBe(originalAuthorities);
+  });
+
+  it("derives one shared live FX output ceiling per pool and direction, invariant under route order", () => {
+    const f = fixture();
+    const other: Phase7FxPairRoute = { ...f.route, planId: "m5:another" };
+    const pairs = new Map([
+      [f.route.planId, f.solePool.pairId],
+      [other.planId, f.solePool.pairId],
+    ]);
+    const expected = quoteFx(
+      f.uniqueWorld, f.solePool.pairId, f.target, f.source, 0,
+    ).maxOutputByPoolReserve;
+    expect(expected).toBeGreaterThan(0);
+    const first = derivePhase7CanonicalFxOutputBudgets(
+      f.uniqueWorld, [other, f.sameCurrency, f.route], pairs,
+    );
+    const reversed = derivePhase7CanonicalFxOutputBudgets(
+      f.uniqueWorld, [f.route, other, f.sameCurrency], new Map([...pairs].reverse()),
+    );
+    expect([...first]).toEqual([[phase7FxOutputKey(f.solePool.pairId, f.source), expected]]);
+    expect([...reversed]).toEqual([...first]);
+    expect([...f.uniqueWorld.shipments ?? []]).toHaveLength(0);
+  });
+
+  it("respects the source-currency pool reserve floor, with no invented liquidity or stock mutation", () => {
+    const f = fixture();
+    const floor = f.solePool.baseCurrencyId === f.source
+      ? f.solePool.minOperationalReserveBase
+      : f.solePool.minOperationalReserveQuote;
+    const constrained: WorldState = {
+      ...f.uniqueWorld,
+      monetaryAuthorities: new Map([...f.uniqueWorld.monetaryAuthorities].map(([id, authority]) => [
+        id, {
+          ...authority,
+          fxPools: new Map([...authority.fxPools].map(([pairId, pool]) => [
+            pairId, pairId === f.solePool.pairId
+              ? { ...pool, cash: new Map(pool.cash).set(f.source, floor) }
+              : pool,
+          ])),
+        },
+      ])),
+    };
+    const pairs = new Map([[f.route.planId, f.solePool.pairId]]);
+    const output = derivePhase7CanonicalFxOutputBudgets(constrained, [f.route], pairs);
+    expect(output.get(phase7FxOutputKey(f.solePool.pairId, f.source))).toBe(0);
+    expect(f.uniqueWorld.monetaryAuthorities).not.toBe(constrained.monetaryAuthorities);
+    expect([...constrained.shipments ?? []]).toHaveLength(0);
+  });
+
+  it("rejects forged, missing or surplus pool identities and same-currency FX claims", () => {
+    const f = fixture();
+    const correct = new Map([[f.route.planId, f.solePool.pairId]]);
+    const run = (routes: readonly Phase7FxPairRoute[], pairs: Map<string, string>) =>
+      derivePhase7CanonicalFxOutputBudgets(f.uniqueWorld, routes, pairs);
+    expect(() => run([f.route], new Map())).toThrow("resolved live pool");
+    expect(() => run([f.route], new Map([[f.route.planId, "fake-pool"]])))
+      .toThrow("Unknown canonical FX pair");
+    expect(() => run([f.route, f.route], correct)).toThrow("duplicate");
+    expect(() => run([f.route], new Map([...correct, ["surplus", f.solePool.pairId]])))
+      .toThrow("surplus");
+    expect(() => run([f.sameCurrency], new Map([[f.sameCurrency.planId, f.solePool.pairId]])))
+      .toThrow("same-currency");
+    expect([...run([f.sameCurrency], new Map())]).toEqual([]);
+    expect(f.uniqueWorld.shipments?.size).toBe(0);
   });
 
   it("fails closed on two configured reverse-oriented pools rather than inventing a preference", () => {
