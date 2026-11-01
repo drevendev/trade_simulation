@@ -34,6 +34,7 @@ import {
   bindPhase7DiscoveredCargoCapacity, bindPhase7DiscoveredRouteQuotes,
 } from "./phase7CanonicalRouteBridge";
 import type { Phase7FrozenDirectedTradePermissions } from "./phase7AuthorizedRouteDiscovery";
+import { derivePhase7CanonicalCargoResiduals } from "./phase7CanonicalCargoResiduals";
 import {
   derivePhase7CanonicalFxOutputBudgets,
   derivePhase7UnambiguousCanonicalFxPairs,
@@ -167,9 +168,10 @@ export function executeM5LiveQuotedTradeTick(
  * even JavaScript callers passing extra forged fields cannot replace the
  * Phase-2/4/5 realized evidence from the current post-transition tick.
  */
-export type Phase7CanonicalIntakeTickDispatch = Pick<
-  Phase7LiveTickDispatch, "remainingCargoWeightByLink"
-> & (
+export type Phase7CanonicalIntakeTickDispatch = {
+  /** Optional only with explicit canonical fresh-tick capacity derivation. */
+  readonly remainingCargoWeightByLink?: Phase7LiveTickDispatch["remainingCargoWeightByLink"];
+} & (
   | { readonly fxReservationByLotOrdinal: ReadonlyMap<number, FxReservation>;
       readonly autoReserveFx?: never }
   | { readonly autoReserveFx: true; readonly fxReservationByLotOrdinal?: never }
@@ -201,6 +203,11 @@ export interface Phase7CanonicalIntakeTickRequest {
      * Requires canonical pair discovery plus strict automatic reservations;
      * no other tick-local uncommitted FX promises may be supplied. */
     readonly autoDeriveCanonicalFxOutputBudgets?: true;
+    /** Derive full fresh-tick physical cargo capacity from the live directed
+     * links, never from externally asserted residuals. Reject any earlier
+     * same-tick dispatch, whose booked cargo cannot safely be reconstructed
+     * from surviving in-transit goods or a zero-travel delivery. */
+    readonly autoDeriveCanonicalCargoCapacity?: true;
   };
 }
 
@@ -270,13 +277,25 @@ export function executeM5CanonicalIntakeTradeTick(
       if (!(fxOutputByPairCurrency instanceof Map)) {
         throw new Error("Phase-7 canonical intake requires explicit or discovered FX output budgets");
       }
-      const remainingCargoWeightByLink = discovered === undefined
-        ? request.dispatch.remainingCargoWeightByLink
-        : bindPhase7DiscoveredCargoCapacity(
-          world, request.plan.infrastructureFactors,
-          discovered.eligibleDirectedLinkIdsAtPhase1,
-          request.dispatch.remainingCargoWeightByLink,
-        );
+      const autoCargo = request.authorizedRouteDiscovery?.autoDeriveCanonicalCargoCapacity === true;
+      if (autoCargo && request.dispatch.remainingCargoWeightByLink !== undefined) {
+        throw new Error("Phase-7 canonical cargo discovery cannot accept caller cargo residuals");
+      }
+      if (!autoCargo && !(request.dispatch.remainingCargoWeightByLink instanceof Map)) {
+        throw new Error("Phase-7 canonical intake requires explicit cargo residuals or canonical cargo discovery");
+      }
+      const remainingCargoWeightByLink = autoCargo
+        ? derivePhase7CanonicalCargoResiduals(
+          world, context, request.plan.infrastructureFactors,
+          discovered!.eligibleDirectedLinkIdsAtPhase1,
+        )
+        : discovered === undefined
+          ? request.dispatch.remainingCargoWeightByLink!
+          : bindPhase7DiscoveredCargoCapacity(
+            world, request.plan.infrastructureFactors,
+            discovered.eligibleDirectedLinkIdsAtPhase1,
+            request.dispatch.remainingCargoWeightByLink!,
+          );
       return {
         policy: request.policy,
         plan: {
