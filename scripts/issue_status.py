@@ -83,6 +83,7 @@ class LabelEvent(NamedTuple):
     at: str  # `created_at`, ISO 8601 UTC as the API writes it, so it sorts as text
     id: int  # the event's id, which orders two applications within one second
     actor: str
+    kind: str = LABELED  # removal events remain visible for application-freshness checks
 
 
 class Decision(NamedTuple):
@@ -103,6 +104,8 @@ def last_applications(history) -> dict:
     """The latest application of each label name in a history. Pure."""
     latest = {}
     for event in history:
+        if event.kind != LABELED:
+            continue
         known = latest.get(event.name)
         if known is None or (event.at, event.id) > (known.at, known.id):
             latest[event.name] = event
@@ -110,27 +113,30 @@ def last_applications(history) -> dict:
 
 
 def applied_last(present, history, applied=None) -> Optional[str]:
-    """Which of `present` was applied most recently, or None if nothing can say. Pure.
+    """Return the most recently applied status only when history is complete.
 
-    The Issue's history decides. A label the history does not show yet, but which the
-    event that started this run just applied, ranks above everything the history does
-    show: a history that has not caught up with this event holds nothing later than it.
-    A label with no application in the history and no event behind it ranks below
-    everything, and when that is all there is, None comes back and nothing is removed.
+    Event triggers may execute out of order while the Issues API reflects a
+    newer label than its paginated event history. An unseen present status is
+    unknown, not older; refrain from deleting anything when that occurs.
+    The applied parameter is retained for compatibility, not used to guess
+    chronology. An explicit repair pass can retry once history catches up.
     """
-    latest = last_applications(history)
-
-    def rank(name):
-        if name in latest:
-            return (1, latest[name].at, latest[name].id)
-        if applied is not None and name == applied:
-            return (2, "", 0)
-        return (0, "", 0)
-
-    best = max(present, key=rank, default=None)
-    if best is None or rank(best)[0] == 0:
+    if not present:
         return None
-    return best
+    latest = last_applications(history)
+    # A present name can have an old labeled event followed by a visible removal;
+    # that old application must never be mistaken for its present incarnation.
+    last_seen = {}
+    for event in history:
+        if event.name not in present:
+            continue
+        previous = last_seen.get(event.name)
+        if previous is None or (event.at, event.id) > (previous.at, previous.id):
+            last_seen[event.name] = event
+    if any(name not in latest or name not in last_seen
+           or last_seen[name].kind != LABELED for name in present):
+        return None
+    return max(present, key=lambda name: (latest[name].at, latest[name].id))
 
 
 def decide(action, state, labels, applied=None, history=(), is_pull_request=False) -> Decision:
@@ -250,7 +256,7 @@ def read_issue(repo, number, gh=None) -> dict:
 
 
 def read_history(repo, number, gh=None) -> list:
-    """Every application of a label to the Issue, as `LabelEvent`s, oldest first."""
+    """Applications AND removals, so visible removal detects lagged reapplication."""
     events = _pages(
         _read(
             gh or _gh,
@@ -261,11 +267,12 @@ def read_history(repo, number, gh=None) -> list:
     history = []
     for event in events:
         name = (event.get("label") or {}).get("name")
-        if event.get("event") != LABELED or not name:
+        kind = event.get("event")
+        if kind not in (LABELED, "unlabeled") or not name:
             continue
         history.append(
             LabelEvent(name, event.get("created_at") or "", int(event.get("id") or 0),
-                       (event.get("actor") or {}).get("login") or "")
+                       (event.get("actor") or {}).get("login") or "", kind)
         )
     return history
 
@@ -295,6 +302,28 @@ def list_closed_issues(repo, gh=None) -> list:
             "list the closed Issues",
         )
     )
+
+
+def list_open_issues(repo, gh=None) -> list:
+    """List open Issues for manual repair, never for an ordinary event run."""
+    return _pages(
+        _read(
+            gh or _gh,
+            ["api", "--paginate", "--slurp", "repos/%s/issues?state=open&per_page=100" % repo],
+            "list the open Issues",
+        )
+    )
+
+
+def carrying_ambiguous_open_status(items) -> list:
+    found = []
+    for item in items:
+        if "pull_request" in item or item.get("state") != "open":
+            continue
+        current = status_labels(label.get("name") for label in item.get("labels") or [])
+        if len(current) > 1:
+            found.append((int(item["number"]), current))
+    return sorted(found)
 
 
 # ------------------------------------------------------------------------------ runs
@@ -374,6 +403,54 @@ def repair(repo, *, apply=False, gh=None, pause=None):
                 failed.append((name, str(error)))
         results.append(Repaired(number, listed, removed, gone, failed,
                                 "" if decision.remove else decision.reason))
+    return found, results
+
+
+def repair_open(repo, *, apply=False, gh=None, pause=None):
+    """Reconcile open Issues via the existing manual repair dispatch.
+
+    If event history lags, keep all statuses rather than deleting a possibly
+    newer one. A later explicit repair run can resolve it without depending
+    on an unrelated label event or a new scheduler.
+    """
+    gh = gh or _gh
+    pause = pause or time.sleep
+    found = carrying_ambiguous_open_status(list_open_issues(repo, gh))
+    if not apply:
+        return found, []
+
+    results = []
+    mutated = False
+    for number, listed in found:
+        try:
+            issue = read_issue(repo, number, gh)
+            present = status_labels(issue["labels"])
+            if issue["state"] != "open" or issue["is_pull_request"] or len(present) <= 1:
+                results.append(Repaired(number, listed, [], [], [], "no longer ambiguous"))
+                continue
+            history = read_history(repo, number, gh)
+            keep = applied_last(present, history)
+            if keep is None:
+                results.append(Repaired(number, listed, [], [], [],
+                                        "history incomplete; retry explicit repair after catch-up"))
+                continue
+        except ForgeError as error:
+            results.append(Repaired(number, listed, [], [], [(None, str(error))], ""))
+            continue
+
+        removed, gone, failed = [], [], []
+        for name in present:
+            if name == keep:
+                continue
+            if mutated:
+                pause(PAUSE_SECONDS)
+            mutated = True
+            try:
+                (removed if remove_label(repo, number, name, gh) else gone).append(name)
+            except ForgeError as error:
+                failed.append((name, str(error)))
+        results.append(Repaired(number, listed, removed, gone, failed,
+                                "kept latest evidenced application: %s" % _code(keep)))
     return found, results
 
 
@@ -468,6 +545,27 @@ def repair_summary(repo, found, results, apply) -> str:
     return "\n".join(lines) + "\n"
 
 
+def open_repair_summary(repo, found, results, apply) -> str:
+    lines = [
+        "### Open Issue status reconciliation: %s" % (APPLY if apply else DRY_RUN),
+        "",
+        "%d open Issue(s) with competing status labels (pull requests excluded)." % len(found),
+        "",
+    ]
+    if not found:
+        return "\n".join(lines) + "\n"
+    by_number = {item.number: item for item in results}
+    lines += ["| Issue | Current statuses | Result |", "| --- | --- | --- |"]
+    for number, names in found:
+        note = _describe(by_number.get(number)) if apply else "would re-read history; no changes"
+        lines.append("| #%d | %s | %s |" % (number, _codes(names), note))
+    if apply:
+        removed = sum(len(item.removed) for item in results)
+        deferred = sum("history incomplete" in item.note for item in results)
+        lines += ["", "Removed %d stale label(s); deferred %d uncertain Issue(s)." % (removed, deferred)]
+    return "\n".join(lines) + "\n"
+
+
 def _describe(result) -> str:
     if result is None:
         return "not reached"
@@ -514,7 +612,7 @@ def _parser():
     event.add_argument("--sender", default="", help="who acted, for the summary only")
     event.add_argument("--dry-run", action="store_true", help="decide and report; remove nothing")
 
-    fix = commands.add_parser("repair", help="every closed Issue that still carries a status label")
+    fix = commands.add_parser("repair", help="closed status cleanup and open Issue reconciliation")
     fix.add_argument("--repo", required=True, help="owner/name")
     fix.add_argument("--mode", choices=(DRY_RUN, APPLY), default=DRY_RUN,
                      help="dry-run lists and removes nothing (the default); apply removes")
@@ -538,11 +636,13 @@ def main(argv=None) -> int:
 
     try:
         found, results = repair(args.repo, apply=args.mode == APPLY)
+        open_found, open_results = repair_open(args.repo, apply=args.mode == APPLY)
     except ForgeError as error:
         print("::error::issue-status: %s" % _escape(error))
         return 1
-    publish(repair_summary(args.repo, found, results, args.mode == APPLY))
-    return 1 if any(result.failed for result in results) else 0
+    publish(repair_summary(args.repo, found, results, args.mode == APPLY)
+            + "\n" + open_repair_summary(args.repo, open_found, open_results, args.mode == APPLY))
+    return 1 if any(result.failed for result in (*results, *open_results)) else 0
 
 
 if __name__ == "__main__":
