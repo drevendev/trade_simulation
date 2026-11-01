@@ -30,7 +30,9 @@ import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
 import { reservePhase7QuotedFxLots } from "./phase7AutoFxReservations";
 import type { FxReservation } from "./fxQuoteReservation";
 import { derivePhase7PostProcurementIntents } from "./phase7PostProcurementIntents";
-import { bindPhase7DiscoveredRouteQuotes } from "./phase7CanonicalRouteBridge";
+import {
+  bindPhase7DiscoveredCargoCapacity, bindPhase7DiscoveredRouteQuotes,
+} from "./phase7CanonicalRouteBridge";
 import type { Phase7FrozenDirectedTradePermissions } from "./phase7AuthorizedRouteDiscovery";
 
 /** Explicit frozen policy-owner facts; the live tick supplies all other context. */
@@ -218,6 +220,13 @@ export function executeM5CanonicalIntakeTradeTick(
           request.authorizedRouteDiscovery.permissions,
           request.plan.infrastructureFactors, request.plan.opportunityQuotes,
         );
+      const remainingCargoWeightByLink = discovered === undefined
+        ? request.dispatch.remainingCargoWeightByLink
+        : bindPhase7DiscoveredCargoCapacity(
+          world, request.plan.infrastructureFactors,
+          discovered.eligibleDirectedLinkIdsAtPhase1,
+          request.dispatch.remainingCargoWeightByLink,
+        );
       return {
         policy: request.policy,
         plan: {
@@ -226,7 +235,8 @@ export function executeM5CanonicalIntakeTradeTick(
           residualIntents: intake.residualIntents,
         },
         dispatch: {
-          ...request.dispatch, phase8MainIntents: intake.phase8MainIntents,
+          ...request.dispatch, remainingCargoWeightByLink,
+          phase8MainIntents: intake.phase8MainIntents,
         },
       };
     },
