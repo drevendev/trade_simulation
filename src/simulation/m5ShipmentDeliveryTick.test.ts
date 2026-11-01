@@ -10,6 +10,7 @@ import {
 } from "./tickOrchestrator";
 import { executeStatefulTick } from "./statefulTickOrchestrator";
 import { executeM5ShipmentDeliveryTick } from "./m5ShipmentDeliveryTick";
+import { deliverDueTradeShipments } from "./tradeShipmentDelivery";
 import { validateTradeShipmentRegistry, type TradeShipmentState } from "./tradeShipmentState";
 import { buildInitialWorld, type WorldState } from "./worldState";
 
@@ -188,6 +189,37 @@ describe("M5 #674 canonical Phase-1 / Phase-7 shipment-delivery tick wiring", ()
     ]);
     expect(buyerGoods(a.world, buyer)).toBe(buyerGoods(b.world, buyer));
     expect(goodsIncludingTransit(a.world, buyer)).toBe(goodsIncludingTransit(forward, buyer));
+  });
+
+  it("rejects shipments committed before dispatch, including future non-due cargo", () => {
+    for (const departureTick of [8, 9]) {
+      const { base, shipment, buyer } = fixture(2, departureTick);
+      const opening = withShipments(base, shipment);
+      const before = buyerGoods(opening, buyer);
+      const observed: number[] = [];
+
+      expect(() => executeM5ShipmentDeliveryTick(
+        opening, 8, noOpPhaseHandler, noOpTransition,
+        phase => { observed.push(phase); },
+      )).toThrow(/before its dispatch phase/);
+      expect(observed).not.toContain(1);
+      expect(opening.shipments?.get(shipment.id)).toBe(shipment);
+      expect(buyerGoods(opening, buyer)).toBe(before);
+    }
+
+    const future = fixture(2, 9);
+    expect(() => deliverDueTradeShipments(withShipments(future.base, future.shipment), {
+      tick: 8, phase: 7, priorTransactions: [],
+    })).toThrow(/before its dispatch phase/);
+
+    // A genuinely dispatched same-tick shipment may remain in transit at
+    // Phase-7 close when its travel time is positive.
+    const valid = fixture(2, 8);
+    const afterDispatch = deliverDueTradeShipments(withShipments(valid.base, valid.shipment), {
+      tick: 8, phase: 7, priorTransactions: [],
+    });
+    expect(afterDispatch.deliveredShipmentIds).toEqual([]);
+    expect(afterDispatch.world.shipments?.get(valid.shipment.id)).toBe(valid.shipment);
   });
 
   it("fails closed on overdue or preexisting same-tick shipments, without publishing stock", () => {
