@@ -143,6 +143,13 @@ describe("M5 #673 canonical Phase-1 route discovery binds live Phase-7 intake", 
     expect(bound(physical / 3).get(f.link.linkId)).toBe(physical / 3);
     expect(bound(0).get(f.link.linkId)).toBe(0);
     expect([...bound(physical * 100).keys()]).toEqual([f.link.linkId]);
+    const unrelated = [...f.world.transportLinks.keys()].find(id => id !== f.link.linkId);
+    if (!unrelated) throw new Error("fixture needs another link for route isolation");
+    const capped = bindPhase7DiscoveredCargoCapacity(
+      f.world, f.factors, eligible,
+      new Map([[f.link.linkId, physical * 100], [unrelated, 1e9]]),
+    );
+    expect([...capped.keys()]).toEqual([f.link.linkId]);
 
     expect(() => bindPhase7DiscoveredCargoCapacity(
       f.world, f.factors, eligible, new Map(),
