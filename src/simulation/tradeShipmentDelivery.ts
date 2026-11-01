@@ -116,7 +116,7 @@ export function deliverDueTradeShipments(
     // cargo cannot exist until Phase-7 dispatch has actually committed.
     if (shipment.departureTick > request.tick ||
         (request.phase === 1 && shipment.departureTick === request.tick)) {
-      return fail("shipment exists before its dispatch phase");
+      return fail("shipment exists before its dispatch phase (Phase-7 close)");
     }
     if (shipment.arrivalTick < request.tick) return fail("overdue shipment was not delivered");
     if (shipment.arrivalTick !== request.tick) continue;
