@@ -34,6 +34,7 @@ import {
   bindPhase7DiscoveredCargoCapacity, bindPhase7DiscoveredRouteQuotes,
 } from "./phase7CanonicalRouteBridge";
 import type { Phase7FrozenDirectedTradePermissions } from "./phase7AuthorizedRouteDiscovery";
+import { derivePhase7UnambiguousCanonicalFxPairs } from "./phase7CanonicalFxPairDiscovery";
 
 /** Explicit frozen policy-owner facts; the live tick supplies all other context. */
 export type Phase7LiveTickPolicy = Pick<
@@ -180,6 +181,11 @@ export interface Phase7CanonicalIntakeTickRequest {
    * Without this, the legacy explicit-route request stays backward-compatible. */
   readonly authorizedRouteDiscovery?: {
     readonly permissions: Phase7FrozenDirectedTradePermissions;
+    /** Resolve FX pair identities from live issuer-owned pools only when a
+     * unique pool exists for each cross-currency opportunity. Missing or
+     * multiple reverse-oriented pools fail closed: do not guess a preference.
+     * The separate Phase-7 FX output budget remains externally owned. */
+    readonly autoResolveCanonicalFxPairs?: true;
   };
 }
 
@@ -220,6 +226,13 @@ export function executeM5CanonicalIntakeTradeTick(
           request.authorizedRouteDiscovery.permissions,
           request.plan.infrastructureFactors, request.plan.opportunityQuotes,
         );
+      const discoverFx = request.authorizedRouteDiscovery?.autoResolveCanonicalFxPairs === true;
+      if (discoverFx && request.plan.fxPairIdByTradePlanId !== undefined) {
+        throw new Error("Phase-7 canonical FX discovery cannot accept a caller FX pair map");
+      }
+      const discoveredFxPairs = discoverFx
+        ? derivePhase7UnambiguousCanonicalFxPairs(world, discovered!.opportunityQuotes)
+        : undefined;
       const remainingCargoWeightByLink = discovered === undefined
         ? request.dispatch.remainingCargoWeightByLink
         : bindPhase7DiscoveredCargoCapacity(
@@ -232,6 +245,8 @@ export function executeM5CanonicalIntakeTradeTick(
         plan: {
           ...request.plan,
           ...(discovered === undefined ? {} : discovered),
+          ...(discoveredFxPairs === undefined ? {}
+            : { fxPairIdByTradePlanId: discoveredFxPairs }),
           residualIntents: intake.residualIntents,
         },
         dispatch: {
