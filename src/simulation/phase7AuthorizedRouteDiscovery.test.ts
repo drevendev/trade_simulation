@@ -90,6 +90,7 @@ describe("M5 #673 Phase-1 authorized direct route opportunity discovery", () => 
       destinationRegionId: f.destination.regionId, goodId: WOOD,
       sourceResidualQuantity: 6, destinationResidualQuantity: 5,
       destinationRemainingBuyerSpend: 80,
+      shortageRateDestination: 1,
       cargoWeightPerUnit: f.world.definitionRegistry.goods[WOOD]!.cargoWeightPerUnit,
     });
     expect(discovered[0]!.physicalQuantityCap).toBe(Math.min(
@@ -100,6 +101,28 @@ describe("M5 #673 Phase-1 authorized direct route opportunity discovery", () => 
     expect(f.seller.desiredQuantity).toBe(6);
     expect(f.buyer.maxSpend).toBe(100);
     expect(f.residuals[1]!.remainingBuyerSpend).toBe(80);
+  });
+
+  it("projects same-tick local shortfall without misreporting Phase-8 realized telemetry", () => {
+    const f = fixture();
+    const localSeller: MarketIntent = {
+      ...f.seller, id: createMarketIntentId("mi:m5:local:seller"),
+      actor: f.buyer.actor, regionId: f.destination.regionId,
+      desiredQuantity: 3, sourcePlanId: "m5:local:seller",
+    };
+    const withLocalOffer: Phase7ActorResidualIntent[] = [
+      ...f.residuals, { intent: localSeller, residualQuantity: 3 },
+    ];
+    const openingWorld = f.world;
+    expect(f.discover()).toHaveLength(1);
+    expect(f.discover()[0]!.shortageRateDestination).toBe(1);
+    expect(f.discover(withLocalOffer)[0]!.shortageRateDestination).toBeCloseTo(0.4);
+    expect(f.discover([
+      ...f.residuals, { intent: { ...localSeller, desiredQuantity: 7 }, residualQuantity: 7 },
+    ])[0]!.shortageRateDestination).toBe(0);
+    expect(f.discover([...withLocalOffer].reverse())).toEqual(f.discover(withLocalOffer));
+    expect(f.world).toBe(openingWorld);
+    expect(f.world.shipments?.size).toBe(0);
   });
 
   it("is deterministic across intent order and frozen legal Map insertion order", () => {

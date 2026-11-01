@@ -41,6 +41,9 @@ export interface Phase7DiscoveredRouteOpportunity {
   readonly sourceResidualQuantity: number;
   readonly destinationResidualQuantity: number;
   readonly destinationRemainingBuyerSpend: number;
+  /** Phase-7 projected shortage if local residual sellers were matched first.
+   * This is NOT realized Phase-8 shortage telemetry or a new persistent EMA. */
+  readonly shortageRateDestination: number;
   readonly cargoWeightPerUnit: number;
   /** Quantity ceiling before actual seller stock, cash and FX preflight. */
   readonly physicalQuantityCap: number;
@@ -202,6 +205,7 @@ export function discoverPhase7DirectedTradeOpportunities(
       const available = sellers.get(group(origin.regionId, goodId)) ?? 0;
       const demanded = buyers.get(group(destination.regionId, goodId)) ?? 0;
       const remainingSpend = buyerSpend.get(group(destination.regionId, goodId)) ?? 0;
+      const localOffer = sellers.get(group(destination.regionId, goodId)) ?? 0;
       if (!usable || available <= quantityEpsilon || demanded <= quantityEpsilon ||
           remainingSpend <= moneyEpsilon) continue;
       const cap = Math.min(available, demanded, physicalCapacity / good.cargoWeightPerUnit,
@@ -210,11 +214,22 @@ export function discoverPhase7DirectedTradeOpportunities(
         throw new Error("Phase-7 route discovery invalid candidate physical cap");
       }
       if (cap <= quantityEpsilon || cap < minShipment) continue;
+      // Phase-7 cannot observe realized Phase-8 clearing yet. Approximate
+      // its shortage ratio with the same residual BUY and local SELL envelopes
+      // that Phase-8 will receive after any imports are reserved. This is a
+      // pre-trade scoring forecast, not a realized/EMA MarketExpectation write.
+      const potentialLocalCleared = Math.min(demanded, localOffer);
+      const shortageRateDestination = (demanded - potentialLocalCleared) / demanded;
+      if (!Number.isFinite(shortageRateDestination) ||
+          shortageRateDestination < 0 || shortageRateDestination > 1) {
+        throw new Error("Phase-7 route discovery invalid projected shortage rate");
+      }
       opportunities.push({
         planId: JSON.stringify(["m5:route", linkId, goodId]),
         linkId, originRegionId: origin.regionId, destinationRegionId: destination.regionId,
         goodId, sourceResidualQuantity: available, destinationResidualQuantity: demanded,
         destinationRemainingBuyerSpend: remainingSpend,
+        shortageRateDestination,
         cargoWeightPerUnit: good.cargoWeightPerUnit, physicalQuantityCap: cap,
         ...(legalQuantityCap === null ? {} : { legalQuantityCap }),
       });
