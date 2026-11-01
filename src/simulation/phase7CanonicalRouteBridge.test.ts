@@ -84,6 +84,7 @@ describe("M5 #673 canonical Phase-1 route discovery binds live Phase-7 intake", 
     expect(result.opportunityQuotes).toHaveLength(1);
     expect(result.opportunityQuotes[0]).toMatchObject({
       ...f.quote,
+      shortageRateDestination: 1,
       authorizedAtPhase1: true,
       legalQuantityCap: 2,
       cargoWeightPerUnit: f.world.definitionRegistry.goods[WOOD]!.cargoWeightPerUnit,
@@ -114,14 +115,15 @@ describe("M5 #673 canonical Phase-1 route discovery binds live Phase-7 intake", 
     expect(f.world.shipments?.size).toBe(0);
   });
 
-  it("refuses stale permissions and invalid shortage signals without partial effects", () => {
+  it("refuses stale permissions and overwrites forged shortage scoring evidence", () => {
     const f = fixture();
     expect(() => f.bind([f.quote], { ...f.permissions(2), tick: 16 }))
       .toThrow("current frozen Phase-1");
-    expect(() => f.bind([{ ...f.quote, shortageRateDestination: Number.NaN }]))
-      .toThrow("shortage signal");
-    expect(() => f.bind([{ ...f.quote, shortageRateDestination: 2 }]))
-      .toThrow("shortage signal");
+    for (const forged of [Number.NaN, -1, 2, Number.POSITIVE_INFINITY]) {
+      expect(f.bind([{ ...f.quote, shortageRateDestination: forged }])
+        .opportunityQuotes[0]!.shortageRateDestination).toBe(1);
+    }
+    expect(f.quote.shortageRateDestination).toBe(0.4);
     expect(f.world.shipments?.size).toBe(0);
   });
 });
