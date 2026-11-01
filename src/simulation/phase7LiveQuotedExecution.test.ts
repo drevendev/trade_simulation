@@ -1210,8 +1210,11 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
       return context;
     };
     const planId = JSON.stringify(["m5:route", f.link.linkId, GOOD]);
+    // Opt-in auto budget mode supplies NO external FX map: canonical live
+    // WorldState pool reserves are the only liquidity authority.
+    const { fxOutputByPairCurrency: _externalFxBudget, ...budgetFreeInput } = f.input;
     const plan = {
-      ...f.input,
+      ...budgetFreeInput,
       opportunityQuotes: f.input.opportunityQuotes.map(q => ({ ...q, planId })),
       fxPairIdByTradePlanId: undefined,
     };
@@ -1230,6 +1233,7 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
           ]),
         },
         autoResolveCanonicalFxPairs: true as const,
+        autoDeriveCanonicalFxOutputBudgets: true as const,
       },
       dispatch: {
         remainingCargoWeightByLink: f.state.remainingCargoWeightByLink,
@@ -1304,6 +1308,20 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
         fxPairIdByTradePlanId: new Map([[planId, f.pairId]]),
       },
     }))).toThrow("cannot accept a caller FX pair map");
+    expect(() => execute(uniqueWorld, () => ({
+      ...request(),
+      plan: {
+        ...request().plan,
+        fxOutputByPairCurrency: new Map([["forged", Number.POSITIVE_INFINITY]]),
+      },
+    }))).toThrow("cannot accept a caller FX budget");
+    expect(() => execute(uniqueWorld, () => ({
+      ...request(),
+      dispatch: {
+        remainingCargoWeightByLink: f.state.remainingCargoWeightByLink,
+        fxReservationByLotOrdinal: new Map(),
+      },
+    }))).toThrow("requires canonical pairs and auto reservations");
     expect(() => execute(f.world)).toThrow("exactly one live pool");
     expect(() => execute(missingWorld)).toThrow("exactly one live pool");
     for (const world of [uniqueWorld, f.world, missingWorld]) {
