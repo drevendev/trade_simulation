@@ -9,8 +9,10 @@ import { effectiveTransportLinkCapacity } from "./transportCapacity";
 import type { TickContext } from "./tickOrchestrator";
 import { buildInitialWorld } from "./worldState";
 import {
+  capturePhase7DirectedTradePermissionsAtPhase1,
   discoverPhase7DirectedTradeOpportunities,
   type Phase7FrozenDirectedTradePermissions,
+  type Phase7Phase1TradeLawProvider,
 } from "./phase7AuthorizedRouteDiscovery";
 
 const WOOD = "good:wood" as GoodId;
@@ -243,4 +245,82 @@ describe("M5 #673 Phase-1 authorized direct route opportunity discovery", () => 
     expect(() => f.discover([enormous, additional, f.residuals[1]!]))
       .toThrow("lost numeric precision");
   });
+  it("captures explicit Phase-1 link/good law decisions for use at Phase 7, deterministically", () => {
+    const f = fixture();
+    const phase1 = { ...f.context, phase: 1 };
+    const originalLinks = f.world.transportLinks;
+    const queries: string[] = [];
+    const decide: Phase7Phase1TradeLawProvider = query => {
+      expect(query.tick).toBe(17);
+      const link = f.world.transportLinks.get(query.linkId)!;
+      expect(query.originRegionId).toBe(link.fromRegionId);
+      expect(query.destinationRegionId).toBe(link.toRegionId);
+      expect(query.originControllerStateId)
+        .toBe(f.world.regions.get(link.fromRegionId)!.controllerStateId);
+      expect(query.destinationControllerStateId)
+        .toBe(f.world.regions.get(link.toRegionId)!.controllerStateId);
+      queries.push(JSON.stringify([query.linkId, query.goodId]));
+      return query.linkId === f.link.linkId && query.goodId === WOOD ? 2 : undefined;
+    };
+    const frozen = capturePhase7DirectedTradePermissionsAtPhase1(
+      f.world, phase1, decide,
+    );
+    expect(frozen.tick).toBe(17);
+    expect([...frozen.permittedGoodsByDirectedLink]).toEqual([
+      [f.link.linkId, new Map([[WOOD, 2]])],
+    ]);
+    expect(f.discover(f.residuals, frozen)[0]).toMatchObject({
+      linkId: f.link.linkId, goodId: WOOD, legalQuantityCap: 2,
+      physicalQuantityCap: 2,
+    });
+    const sorted = [...queries].sort();
+    expect(queries).toEqual(sorted);
+    const reversed = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].reverse()),
+    };
+    expect(capturePhase7DirectedTradePermissionsAtPhase1(reversed, phase1, decide))
+      .toEqual(frozen);
+    expect(f.world.transportLinks).toBe(originalLinks);
+    expect(f.world.shipments?.size).toBe(0);
+
+    const unbounded = capturePhase7DirectedTradePermissionsAtPhase1(
+      f.world, phase1,
+      query => query.linkId === f.link.linkId && query.goodId === WOOD ? null : undefined,
+    );
+    expect(f.discover(f.residuals, unbounded)[0]!.legalQuantityCap).toBeUndefined();
+    const denied = capturePhase7DirectedTradePermissionsAtPhase1(
+      f.world, phase1, () => undefined,
+    );
+    expect(denied.permittedGoodsByDirectedLink.size).toBe(0);
+    expect(f.discover(f.residuals, denied)).toEqual([]);
+  });
+
+  it("refuses Phase-7 law recomputation, stale jurisdiction and invalid legal caps", () => {
+    const f = fixture();
+    const phase1 = { ...f.context, phase: 1 };
+    const provider: Phase7Phase1TradeLawProvider = () => null;
+    expect(() => capturePhase7DirectedTradePermissionsAtPhase1(
+      f.world, f.context, provider,
+    )).toThrow("current Phase-1 law authority");
+    expect(() => capturePhase7DirectedTradePermissionsAtPhase1(
+      f.world, { ...phase1, tick: 17.5 }, provider,
+    )).toThrow("current Phase-1 law authority");
+    expect(() => capturePhase7DirectedTradePermissionsAtPhase1(
+      f.world, { ...phase1, effectiveJurisdictionByRegion: new Map() }, provider,
+    )).toThrow("incomplete jurisdiction");
+    const stale = new Map(phase1.effectiveJurisdictionByRegion);
+    stale.set(f.origin.regionId, null);
+    expect(() => capturePhase7DirectedTradePermissionsAtPhase1(
+      f.world, { ...phase1, effectiveJurisdictionByRegion: stale }, provider,
+    )).toThrow("stale jurisdiction");
+    for (const invalid of [-1, Number.NaN, Number.POSITIVE_INFINITY, "allowed"]) {
+      expect(() => capturePhase7DirectedTradePermissionsAtPhase1(
+        f.world, phase1,
+        () => invalid as number,
+      )).toThrow("finite nonnegative legal cap");
+    }
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
 });
