@@ -30,8 +30,10 @@ export interface Phase7AuthorizedRouteQuoteBinding {
  * supply a lighter cargo weight, or turn an absent Phase-1 entry into permission.
  * There is NO trade without complete current Phase-1 and Phase-2/4/5 evidence.
  *
- * The scoring shortage rate remains an explicit upstream input, not an
- * invented economic statistic; later market policy should own its derivation.
+ * The scoring shortage rate is recomputed from authenticated same-tick
+ * local residual BUY/SELL envelopes, not accepted from caller quote fields.
+ * It predicts the pre-Phase-8 local shortfall; realized shortage telemetry
+ * and persistent market expectations remain exclusively Phase-8-owned.
  */
 export function bindPhase7DiscoveredRouteQuotes(
   world: WorldState,
@@ -53,10 +55,6 @@ export function bindPhase7DiscoveredRouteQuotes(
         supplied.has(quote.planId)) {
       throw new Error("Phase-7 route bridge duplicate or malformed route quote identity");
     }
-    if (!Number.isFinite(quote.shortageRateDestination) ||
-        quote.shortageRateDestination < 0 || quote.shortageRateDestination > 1) {
-      throw new Error("Phase-7 route bridge requires a finite [0,1] shortage signal");
-    }
     supplied.set(quote.planId, quote);
   }
   if (supplied.size !== discovered.length) {
@@ -74,7 +72,11 @@ export function bindPhase7DiscoveredRouteQuotes(
     eligible.add(route.linkId);
     // Remove even a malicious optional legal cap. An absent bound is different
     // from an externally provided large number and must not be resurrected.
-    const { legalQuantityCap: _discarded, ...untrusted } = quote;
+    const {
+      legalQuantityCap: _discarded,
+      shortageRateDestination: _untrustedShortage,
+      ...untrusted
+    } = quote;
     return {
       ...untrusted,
       planId: route.planId,
@@ -84,6 +86,7 @@ export function bindPhase7DiscoveredRouteQuotes(
       goodId: route.goodId,
       authorizedAtPhase1: true,
       cargoWeightPerUnit: route.cargoWeightPerUnit,
+      shortageRateDestination: route.shortageRateDestination,
       ...(route.legalQuantityCap === undefined
         ? {} : { legalQuantityCap: route.legalQuantityCap }),
     };
