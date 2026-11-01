@@ -536,6 +536,83 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     expect(readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD)).toBe(10);
   });
 
+  it("executes canonical Phase-7 FX trade only through discovered current-tick directed permissions", () => {
+    const f = fxFixture();
+    const seller = f.input.residualIntents.find(e => e.intent.side === "SELL")!.intent;
+    const buyer = f.input.residualIntents.find(e => e.intent.side === "BUY")!.intent;
+    const planId = JSON.stringify(["m5:route", f.link.linkId, GOOD]);
+    const handler: PhaseHandler = (_world, context) => {
+      if (context.phase === 1) {
+        return { ...context, effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion };
+      }
+      if (context.phase === 2) {
+        return {
+          ...context, productionMarketIntents: [seller],
+          householdMarketIntents: [buyer],
+        };
+      }
+      if (context.phase === 4) return { ...context, phase4MarketAllocations: [] };
+      if (context.phase === 6) return { ...context, marketPrices: f.context.marketPrices };
+      return context;
+    };
+    const policy = {
+      phase1ImportTariffs: f.context.phase1ImportTariffs,
+      phase1ConsumptionTaxes: f.context.phase1ConsumptionTaxes,
+      transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+    };
+    const forged = {
+      ...f.input,
+      opportunityQuotes: f.input.opportunityQuotes.map(q => ({
+        ...q, planId, cargoWeightPerUnit: 0.001,
+        authorizedAtPhase1: false, legalQuantityCap: 0,
+      })),
+      eligibleDirectedLinkIdsAtPhase1: new Set<TransportLinkId>(),
+      fxPairIdByTradePlanId: new Map([[planId, f.pairId]]),
+    };
+    const request = () => ({
+      policy, plan: forged,
+      authorizedRouteDiscovery: {
+        permissions: {
+          tick: 7,
+          permittedGoodsByDirectedLink: new Map([
+            [f.link.linkId, new Map<GoodId, number | null>([[GOOD, null]])],
+          ]),
+        },
+      },
+      dispatch: {
+        remainingCargoWeightByLink: f.state.remainingCargoWeightByLink,
+        autoReserveFx: true as const,
+      },
+    });
+    const run = () => executeM5CanonicalIntakeTradeTick(
+      f.world, 7, handler, (_phase, world) => world, request,
+    );
+    const actual = run();
+    const replay = run();
+    expect(actual.phaseBoundaryError).toBeUndefined();
+    expect(actual.reconciliationErrors).toBeNull();
+    expect(actual.context.transactions.filter(t => t.type === "SHIPMENT_DISPATCH"))
+      .toHaveLength(1);
+    expect(actual.context.transactions.filter(t => t.type === "FX_OUTPUT"))
+      .toHaveLength(1);
+    expect(actual.context.transactions).toEqual(replay.context.transactions);
+    expect(actual.world.shipments).toEqual(replay.world.shipments);
+    expect(f.world.shipments?.size).toBe(0);
+
+    // The same forged legal flag and quantities cannot authorize an absent
+    // Phase-1 link/good decision, even if price/FX and buyer wallet are valid.
+    expect(() => executeM5CanonicalIntakeTradeTick(
+      f.world, 7, handler, (_phase, world) => world,
+      () => ({
+        ...request(),
+        authorizedRouteDiscovery: {
+          permissions: { tick: 7, permittedGoodsByDirectedLink: new Map() },
+        },
+      }),
+    )).toThrow("complete discovered route/good");
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
   it("refuses canonical Phase-7 execution without authentic earlier intake evidence", () => {
     const f = fxFixture();
     // Phase-1 and Phase-6 are present, but Phase-2/4/5 never supplied
