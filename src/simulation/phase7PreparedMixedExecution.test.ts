@@ -683,7 +683,7 @@ describe("M5 #673 committed prepared trade in the canonical 0..15 tick", () => {
     };
     expect(() => executeM5PreparedTradeTick(
       f.world, 7, phase1AndPhase8, noWorldTransition, forged, undefined, onlyFx,
-    )).toThrow(/frozen Phase-1 link\/good permission/);
+    )).toThrow(/eligible link lacks frozen Phase-1 permission/);
 
     const capped: Phase7Phase1TradeLawProvider = query =>
       query.goodId === GOOD &&
