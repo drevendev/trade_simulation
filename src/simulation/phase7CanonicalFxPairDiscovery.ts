@@ -10,14 +10,14 @@
  * A separate current-tick owner must still supply remaining FX budgets; the
  * live Phase-7 quote/reservation path verifies them against pool reserves.
  */
-import type { CurrencyId } from "../domain/id";
+import type { CurrencyId, RegionId } from "../domain/id";
 import { quoteFx, resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 import type { WorldState } from "./worldState";
 
 export interface Phase7FxPairRoute {
   readonly planId: string;
-  readonly originRegionId: string;
-  readonly destinationRegionId: string;
+  readonly originRegionId: RegionId;
+  readonly destinationRegionId: RegionId;
 }
 
 function unorderedPair(a: CurrencyId, b: CurrencyId): string {
@@ -69,8 +69,8 @@ export function derivePhase7UnambiguousCanonicalFxPairs(
       throw new Error("Phase-7 canonical FX pair lookup duplicate or missing plan ID");
     }
     seen.add(route.planId);
-    const origin = world.regions.get(route.originRegionId as never);
-    const destination = world.regions.get(route.destinationRegionId as never);
+    const origin = world.regions.get(route.originRegionId);
+    const destination = world.regions.get(route.destinationRegionId);
     if (!origin || !destination) {
       throw new Error("Phase-7 canonical FX pair lookup references an unknown Region");
     }
