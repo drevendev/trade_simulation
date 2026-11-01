@@ -174,7 +174,13 @@ export type Phase7CanonicalIntakeTickDispatch = Pick<
 
 export interface Phase7CanonicalIntakeTickRequest {
   readonly policy: Phase7LiveTickPolicy;
-  readonly plan: Omit<Phase7LiveWorldPlanInput, "residualIntents">;
+  readonly plan: Omit<
+    Phase7LiveWorldPlanInput, "residualIntents" | "fxPairIdByTradePlanId"
+  > & {
+    /** Optional ONLY in the canonical auto-resolution path; the live tick
+     * still requires a concrete validated map before quote/reservation. */
+    readonly fxPairIdByTradePlanId?: Phase7LiveWorldPlanInput["fxPairIdByTradePlanId"];
+  };
   readonly dispatch: Phase7CanonicalIntakeTickDispatch;
   /** Opt-in: derive eligible route/good set and legal/physical caps from
    * frozen Phase-1 permissions and the SAME post-Phase-4 canonical residuals.
@@ -233,6 +239,10 @@ export function executeM5CanonicalIntakeTradeTick(
       const discoveredFxPairs = discoverFx
         ? derivePhase7UnambiguousCanonicalFxPairs(world, discovered!.opportunityQuotes)
         : undefined;
+      const fxPairIdByTradePlanId = discoveredFxPairs ?? request.plan.fxPairIdByTradePlanId;
+      if (fxPairIdByTradePlanId === undefined) {
+        throw new Error("Phase-7 canonical intake requires explicit or discovered FX pair identity");
+      }
       const remainingCargoWeightByLink = discovered === undefined
         ? request.dispatch.remainingCargoWeightByLink
         : bindPhase7DiscoveredCargoCapacity(
@@ -245,8 +255,7 @@ export function executeM5CanonicalIntakeTradeTick(
         plan: {
           ...request.plan,
           ...(discovered === undefined ? {} : discovered),
-          ...(discoveredFxPairs === undefined ? {}
-            : { fxPairIdByTradePlanId: discoveredFxPairs }),
+          fxPairIdByTradePlanId,
           residualIntents: intake.residualIntents,
         },
         dispatch: {
