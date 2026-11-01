@@ -1173,3 +1173,262 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
   });
 
 });
+
+
+describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () => {
+  function canonicalDiscovery() {
+    const f = fxFixture();
+    const pair = resolveCanonicalFxPool(f.world, f.pairId).pool;
+    const matches = (pool: typeof pair) =>
+      [pool.baseCurrencyId, pool.quoteCurrencyId].includes(f.sourceCurrency) &&
+      [pool.baseCurrencyId, pool.quoteCurrencyId].includes(f.destCurrency);
+    const uniqueWorld: WorldState = {
+      ...f.world,
+      monetaryAuthorities: new Map([...f.world.monetaryAuthorities].map(([id, authority]) => [
+        id, { ...authority, fxPools: new Map([...authority.fxPools].filter(([pairId, pool]) =>
+          pairId === f.pairId || !matches(pool))) },
+      ])),
+    };
+    const missingWorld: WorldState = {
+      ...uniqueWorld,
+      monetaryAuthorities: new Map([...uniqueWorld.monetaryAuthorities].map(([id, authority]) => [
+        id, { ...authority, fxPools: new Map([...authority.fxPools].filter(([pairId]) =>
+          pairId !== f.pairId)) },
+      ])),
+    };
+    const seller = f.input.residualIntents.find(e => e.intent.side === "SELL")!.intent;
+    const buyer = f.input.residualIntents.find(e => e.intent.side === "BUY")!.intent;
+    const handler: PhaseHandler = (_world, context) => {
+      if (context.phase === 1) {
+        return { ...context, effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion };
+      }
+      if (context.phase === 2) {
+        return { ...context, productionMarketIntents: [seller], householdMarketIntents: [buyer] };
+      }
+      if (context.phase === 4) return { ...context, phase4MarketAllocations: [] };
+      if (context.phase === 6) return { ...context, marketPrices: f.context.marketPrices };
+      return context;
+    };
+    const planId = JSON.stringify(["m5:route", f.link.linkId, GOOD]);
+    const plan = {
+      ...f.input,
+      opportunityQuotes: f.input.opportunityQuotes.map(q => ({ ...q, planId })),
+      fxPairIdByTradePlanId: undefined,
+    };
+    const request = () => ({
+      policy: {
+        phase1ImportTariffs: f.context.phase1ImportTariffs,
+        phase1ConsumptionTaxes: f.context.phase1ConsumptionTaxes,
+        transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+      },
+      plan,
+      authorizedRouteDiscovery: {
+        permissions: {
+          tick: 7,
+          permittedGoodsByDirectedLink: new Map([
+            [f.link.linkId, new Map<GoodId, number | null>([[GOOD, null]])],
+          ]),
+        },
+        autoResolveCanonicalFxPairs: true as const,
+      },
+      dispatch: {
+        remainingCargoWeightByLink: f.state.remainingCargoWeightByLink,
+        autoReserveFx: true as const,
+      },
+    });
+    const execute = (world: WorldState, build = request) =>
+      executeM5CanonicalIntakeTradeTick(
+        world, 7, handler, (_phase, current) => current, build,
+      );
+    return { f, uniqueWorld, missingWorld, request, execute, planId };
+  }
+
+  it("executes an actual canonical cross-currency tick with a unique persisted pool and conserved endpoints", () => {
+    const { f, uniqueWorld, execute } = canonicalDiscovery();
+    const openingBuyer = readActorWallet(uniqueWorld, f.buyerActor).get(f.destCurrency)!;
+    const openingSeller = readActorWallet(uniqueWorld, f.sellerActor).get(f.sourceCurrency)!;
+    const openingFee = readActorWallet(uniqueWorld, f.feeReceiver).get(f.destCurrency)!;
+    const openingTreasury = uniqueWorld.states.get(f.destination.controllerStateId!)!
+      .treasury.get(f.destCurrency)!;
+    const openingGoods = readMarketActorInventory(uniqueWorld, f.sellerActor, "GENERAL").get(GOOD)!;
+    const openingPool = resolveCanonicalFxPool(uniqueWorld, f.pairId).pool.cash;
+    const actual = execute(uniqueWorld);
+    const replay = execute(uniqueWorld);
+    expect(actual.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(actual.phaseBoundaryError).toBeUndefined();
+    expect(actual.reconciliationErrors).toBeNull();
+    const transactions = actual.context.transactions;
+    expect(transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH")).toHaveLength(1);
+    expect(transactions.filter(tx => tx.type === "FX_INPUT")).toHaveLength(1);
+    expect(transactions.filter(tx => tx.type === "FX_OUTPUT")).toHaveLength(1);
+    expect(actual.world.shipments?.size).toBe(1);
+    const shipped = [...actual.world.shipments!.values()][0]!.quantity;
+    expect(shipped).toBeGreaterThan(0);
+    expect(openingGoods - readMarketActorInventory(
+      actual.world, f.sellerActor, "GENERAL").get(GOOD)!).toBeCloseTo(shipped, 9);
+    const sellerPaid = readActorWallet(actual.world, f.sellerActor)
+      .get(f.sourceCurrency)! - openingSeller;
+    const buyerPaid = openingBuyer - readActorWallet(actual.world, f.buyerActor)
+      .get(f.destCurrency)!;
+    const transportPaid = readActorWallet(actual.world, f.feeReceiver)
+      .get(f.destCurrency)! - openingFee;
+    const taxPaid = actual.world.states.get(f.destination.controllerStateId!)!
+      .treasury.get(f.destCurrency)! - openingTreasury;
+    const settledPool = resolveCanonicalFxPool(actual.world, f.pairId).pool.cash;
+    const poolSourceOut = openingPool.get(f.sourceCurrency)! - settledPool.get(f.sourceCurrency)!;
+    const poolDestIn = settledPool.get(f.destCurrency)! - openingPool.get(f.destCurrency)!;
+    expect(sellerPaid).toBeGreaterThan(0);
+    expect(poolSourceOut).toBeCloseTo(sellerPaid, 9);
+    expect(buyerPaid).toBeCloseTo(poolDestIn + transportPaid + taxPaid, 9);
+    expect(actual.context.transactions).toEqual(replay.context.transactions);
+    expect(actual.world.shipments).toEqual(replay.world.shipments);
+    expect(uniqueWorld.shipments?.size).toBe(0);
+    expect(readActorWallet(uniqueWorld, f.buyerActor).get(f.destCurrency)).toBe(openingBuyer);
+    expect(readMarketActorInventory(uniqueWorld, f.sellerActor, "GENERAL").get(GOOD))
+      .toBe(openingGoods);
+    expect(resolveCanonicalFxPool(uniqueWorld, f.pairId).pool.cash).toEqual(openingPool);
+  });
+
+  it("rejects caller FX identity and absent/ambiguous live pools before any shipment or monetary mutation", () => {
+    const { f, uniqueWorld, missingWorld, request, execute, planId } = canonicalDiscovery();
+    const buyerBefore = readActorWallet(uniqueWorld, f.buyerActor).get(f.destCurrency);
+    const sellerBefore = readMarketActorInventory(uniqueWorld, f.sellerActor, "GENERAL").get(GOOD);
+    const poolBefore = resolveCanonicalFxPool(uniqueWorld, f.pairId).pool.cash;
+    expect(() => execute(uniqueWorld, () => ({
+      ...request(),
+      plan: {
+        ...request().plan,
+        fxPairIdByTradePlanId: new Map([[planId, f.pairId]]),
+      },
+    }))).toThrow("cannot accept a caller FX pair map");
+    expect(() => execute(f.world)).toThrow("exactly one live pool");
+    expect(() => execute(missingWorld)).toThrow("exactly one live pool");
+    for (const world of [uniqueWorld, f.world, missingWorld]) {
+      expect(world.shipments?.size).toBe(0);
+      expect(readActorWallet(world, f.buyerActor).get(f.destCurrency)).toBe(buyerBefore);
+      expect(readMarketActorInventory(world, f.sellerActor, "GENERAL").get(GOOD))
+        .toBe(sellerBefore);
+    }
+    expect(resolveCanonicalFxPool(uniqueWorld, f.pairId).pool.cash).toEqual(poolBefore);
+  });
+
+  it("bypasses FX completely on an authorized same-currency directed link", () => {
+    const f = fxFixture();
+    const link = [...f.world.transportLinks.values()].find(candidate => {
+      const a = f.world.regions.get(candidate.fromRegionId);
+      const b = f.world.regions.get(candidate.toRegionId);
+      return a && b && a.regionId !== b.regionId &&
+        a.controllerStateId === b.controllerStateId &&
+        a.settlementCurrencyId === b.settlementCurrencyId &&
+        [...f.world.cohorts.values()].some(c => c.seed.regionKey === a.seed.key) &&
+        [...f.world.cohorts.values()].some(c => c.seed.regionKey === b.seed.key);
+    });
+    if (!link) throw new Error("baseline must provide a same-currency directed link");
+    const origin = f.world.regions.get(link.fromRegionId)!;
+    const destination = f.world.regions.get(link.toRegionId)!;
+    const seller = [...f.world.cohorts.values()].find(c => c.seed.regionKey === origin.seed.key)!;
+    const buyer = [...f.world.cohorts.values()].find(c => c.seed.regionKey === destination.seed.key)!;
+    const currency = origin.settlementCurrencyId;
+    const sellerActor: ActorRef = { type: "COHORT", cohortId: seller.cohortId };
+    const buyerActor: ActorRef = { type: "COHORT", cohortId: buyer.cohortId };
+    const world: WorldState = {
+      ...f.world,
+      cohorts: new Map(f.world.cohorts)
+        .set(seller.cohortId, {
+          ...seller, householdInventory: new Map(seller.householdInventory).set(GOOD, 10),
+        })
+        .set(buyer.cohortId, {
+          ...buyer, wallet: new Map(buyer.wallet).set(currency, 100),
+        }),
+      transportLinks: new Map(f.world.transportLinks)
+        .set(link.linkId, { ...link, feeReceiver: f.feeReceiver }),
+    };
+    const sell: MarketIntent = {
+      id: createMarketIntentId("mi:phase7:canonical:domestic:sell"),
+      actor: sellerActor, regionId: origin.regionId, goodId: GOOD,
+      side: "SELL", purpose: "INVENTORY_REBALANCE", desiredQuantity: 2,
+      minimumReserveQuantity: 0, sourcePlanId: "plan:phase7:domestic:sell",
+    };
+    const buy: MarketIntent = {
+      id: createMarketIntentId("mi:phase7:canonical:domestic:buy"),
+      actor: buyerActor, regionId: destination.regionId, goodId: GOOD,
+      side: "BUY", purpose: "CONSUMPTION", desiredQuantity: 2,
+      maxSpend: 100, sourcePlanId: "plan:phase7:domestic:buy",
+    };
+    const sourceMarket = [...world.markets.values()].find(m =>
+      m.seed.regionKey === origin.seed.key)!;
+    const destinationMarket = [...world.markets.values()].find(m =>
+      m.seed.regionKey === destination.seed.key)!;
+    const marketPrices = new Map([
+      [marketPriceKey(sourceMarket.marketId, GOOD), 3],
+      [marketPriceKey(destinationMarket.marketId, GOOD), 100],
+    ]);
+    const jurisdiction = f.context.effectiveJurisdictionByRegion;
+    const handler: PhaseHandler = (_world, context) => {
+      if (context.phase === 1) return { ...context, effectiveJurisdictionByRegion: jurisdiction };
+      if (context.phase === 2) {
+        return { ...context, productionMarketIntents: [sell], householdMarketIntents: [buy] };
+      }
+      if (context.phase === 4) return { ...context, phase4MarketAllocations: [] };
+      if (context.phase === 6) return { ...context, marketPrices };
+      return context;
+    };
+    const planId = JSON.stringify(["m5:route", link.linkId, GOOD]);
+    const request = () => ({
+      policy: {
+        phase1ImportTariffs: {
+          tick: 7, ratesByDestinationStateGood: new Map([
+            [phase7ImportTariffKey(destination.controllerStateId!, GOOD), 0],
+          ]),
+        },
+        phase1ConsumptionTaxes: {
+          tick: 7, ratesByDestinationStateGood: new Map([
+            [phase7ConsumptionTaxKey(destination.controllerStateId!, GOOD), 0],
+          ]),
+          collectionEfficiencyByState: new Map([[destination.controllerStateId!, 1]]),
+        },
+        transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+      },
+      plan: {
+        ...f.input,
+        opportunityQuotes: [{
+          ...f.input.opportunityQuotes[0]!, planId,
+          linkId: link.linkId, originRegionId: origin.regionId,
+          destinationRegionId: destination.regionId,
+        }],
+        infrastructureFactors: new Map([[link.linkId, 1]]),
+        eligibleDirectedLinkIdsAtPhase1: new Set<TransportLinkId>(),
+        fxPairIdByTradePlanId: undefined,
+        fxOutputByPairCurrency: new Map(),
+      },
+      authorizedRouteDiscovery: {
+        permissions: {
+          tick: 7,
+          permittedGoodsByDirectedLink: new Map([
+            [link.linkId, new Map<GoodId, number | null>([[GOOD, null]])],
+          ]),
+        },
+        autoResolveCanonicalFxPairs: true as const,
+      },
+      dispatch: {
+        remainingCargoWeightByLink: new Map([[link.linkId, 50]]),
+        autoReserveFx: true as const,
+      },
+    });
+    const run = () => executeM5CanonicalIntakeTradeTick(
+      world, 7, handler, (_phase, current) => current, request,
+    );
+    const settled = run();
+    expect(settled.phaseBoundaryError).toBeUndefined();
+    expect(settled.reconciliationErrors).toBeNull();
+    expect(settled.context.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH"))
+      .toHaveLength(1);
+    expect(settled.context.transactions.filter(tx => tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT"))
+      .toHaveLength(0);
+    expect(settled.world.shipments?.size).toBe(1);
+    expect(settled.context.transactions).toEqual(run().context.transactions);
+    expect(world.shipments?.size).toBe(0);
+    expect(readActorWallet(world, buyerActor).get(currency)).toBe(100);
+    expect(readMarketActorInventory(world, sellerActor, "GENERAL").get(GOOD)).toBe(10);
+  });
+});
