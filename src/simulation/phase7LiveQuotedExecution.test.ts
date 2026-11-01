@@ -1236,7 +1236,10 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
         autoReserveFx: true as const,
       },
     });
-    const execute = (world: WorldState, build = request) =>
+    const execute = (
+      world: WorldState,
+      build: Parameters<typeof executeM5CanonicalIntakeTradeTick>[4] = request,
+    ) =>
       executeM5CanonicalIntakeTradeTick(
         world, 7, handler, (_phase, current) => current, build,
       );
