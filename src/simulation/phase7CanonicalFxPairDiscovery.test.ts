@@ -97,7 +97,7 @@ describe("M5 #673: current WorldState owns opt-in Phase-7 FX pair identity", () 
     );
     expect([...first]).toEqual([[phase7FxOutputKey(f.solePool.pairId, f.source), expected]]);
     expect([...reversed]).toEqual([...first]);
-    expect([...f.uniqueWorld.shipments ?? []]).toHaveLength(0);
+    expect(f.uniqueWorld.shipments?.size).toBe(0);
   });
 
   it("respects the source-currency pool reserve floor, with no invented liquidity or stock mutation", () => {
@@ -122,7 +122,7 @@ describe("M5 #673: current WorldState owns opt-in Phase-7 FX pair identity", () 
     const output = derivePhase7CanonicalFxOutputBudgets(constrained, [f.route], pairs);
     expect(output.get(phase7FxOutputKey(f.solePool.pairId, f.source))).toBe(0);
     expect(f.uniqueWorld.monetaryAuthorities).not.toBe(constrained.monetaryAuthorities);
-    expect([...constrained.shipments ?? []]).toHaveLength(0);
+    expect(constrained.shipments?.size).toBe(0);
   });
 
   it("rejects forged, missing or surplus pool identities and same-currency FX claims", () => {
