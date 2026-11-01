@@ -20,7 +20,8 @@ import {
 import { buildInitialWorld, type WorldState } from "./worldState";
 import type { PhaseHandler } from "./tickOrchestrator";
 import { createTransactionId } from "./tickOrchestrator";
-import { executeM5PreparedTradeTick } from "./m5PreparedTradeTick";
+import { executeM5PreparedTradeTick, type Phase7LiveTradeInputBuilder } from "./m5PreparedTradeTick";
+import type { Phase7Phase1TradeLawProvider } from "./phase7AuthorizedRouteDiscovery";
 
 const GOOD = "good:food" as GoodId;
 const FX_ID = "plan:7:fx";
@@ -618,6 +619,95 @@ describe("M5 #673 committed prepared trade in the canonical 0..15 tick", () => {
     expect(result.world.shipments?.size).toBe(0);
     expect(result.context.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH"))
       .toHaveLength(2);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("captures law only at Phase 1 and binds it to real same-tick FX and domestic dispatch", () => {
+    const f = fixture();
+    let lastPhase = -1;
+    let phase7Calls = 0;
+    const observedLawPhases: number[] = [];
+    const handler: PhaseHandler = (world, context, pending) => {
+      lastPhase = context.phase;
+      return phase1AndPhase8(world, context, pending);
+    };
+    const decide: Phase7Phase1TradeLawProvider = query => {
+      observedLawPhases.push(lastPhase);
+      return query.goodId === GOOD &&
+        (query.linkId === f.fxRoute.link.linkId ||
+         query.linkId === f.domesticRoute.link.linkId)
+        ? null : undefined;
+    };
+    const build: Phase7LiveTradeInputBuilder = (world, context, frozen) => {
+      phase7Calls++;
+      expect(lastPhase).toBe(7);
+      expect(frozen?.tick).toBe(context.tick);
+      expect(frozen?.permittedGoodsByDirectedLink.get(f.fxRoute.link.linkId)?.get(GOOD))
+        .toBeNull();
+      expect(frozen?.permittedGoodsByDirectedLink.get(f.domesticRoute.link.linkId)?.get(GOOD))
+        .toBeNull();
+      return currentTradeInput(f)(world, context);
+    };
+    const first = executeM5PreparedTradeTick(
+      f.world, 7, handler, noWorldTransition, build, undefined, decide,
+    );
+    const replay = executeM5PreparedTradeTick(
+      f.world, 7, handler, noWorldTransition, build, undefined, decide,
+    );
+    expect(first.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(first.reconciliationErrors).toBeNull();
+    expect(first.phaseBoundaryError).toBeUndefined();
+    expect(first.context.transactions).toEqual(replay.context.transactions);
+    expect(first.world.shipments).toEqual(replay.world.shipments);
+    expect(first.context.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH"))
+      .toHaveLength(2);
+    expect(first.world.shipments?.size).toBe(2);
+    expect(phase7Calls).toBe(2);
+    expect(observedLawPhases.length).toBeGreaterThan(0);
+    expect(new Set(observedLawPhases)).toEqual(new Set([1]));
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("refuses denied routes and altered statutory caps before any mixed trade dispatch", () => {
+    const f = fixture();
+    const onlyFx: Phase7Phase1TradeLawProvider = query =>
+      query.linkId === f.fxRoute.link.linkId && query.goodId === GOOD
+        ? null : undefined;
+    const forged: Phase7LiveTradeInputBuilder = (world, context, frozen) => {
+      // Even a malicious/mistaken builder modifying its supplied Map must not
+      // rewrite the law snapshot retained by the tick coordinator.
+      const editable = frozen!.permittedGoodsByDirectedLink as
+        Map<TransportLinkId, Map<GoodId, number | null>>;
+      editable.set(f.domesticRoute.link.linkId, new Map([[GOOD, null]]));
+      return currentTradeInput(f)(world, context);
+    };
+    expect(() => executeM5PreparedTradeTick(
+      f.world, 7, phase1AndPhase8, noWorldTransition, forged, undefined, onlyFx,
+    )).toThrow(/frozen Phase-1 link\/good permission/);
+
+    const capped: Phase7Phase1TradeLawProvider = query =>
+      query.goodId === GOOD &&
+      (query.linkId === f.fxRoute.link.linkId ||
+       query.linkId === f.domesticRoute.link.linkId) ? 1 : undefined;
+    expect(() => executeM5PreparedTradeTick(
+      f.world, 7, phase1AndPhase8, noWorldTransition,
+      currentTradeInput(f), undefined, capped,
+    )).toThrow(/frozen Phase-1 legal quantity cap/);
+    expect(f.world.shipments?.size).toBe(0);
+    expect(f.input.priorTransactions).toEqual([]);
+  });
+
+  it("refuses missing Phase-1 jurisdiction before querying law or opening Phase-7 builder", () => {
+    const f = fixture();
+    let lawQueries = 0;
+    let planned = 0;
+    expect(() => executeM5PreparedTradeTick(
+      f.world, 7, (_world, context) => context, noWorldTransition,
+      () => { planned++; return null; }, undefined,
+      () => { lawQueries++; return null; },
+    )).toThrow(/incomplete jurisdiction/);
+    expect(lawQueries).toBe(0);
+    expect(planned).toBe(0);
     expect(f.world.shipments?.size).toBe(0);
   });
 
