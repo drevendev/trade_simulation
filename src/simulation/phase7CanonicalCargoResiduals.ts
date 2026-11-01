@@ -9,6 +9,7 @@
  * the original cargo-weight use, and zero-travel shipments may already have
  * been delivered. Neither source can reconstruct arbitrary earlier same-tick
  * reservations. Refuse them instead of manufacturing free capacity.
+ * Impossible future/invalid departures also invalidate this stock snapshot.
  *
  * This function never authorizes a route, reserves a lot or mutates the world.
  */
@@ -42,6 +43,10 @@ export function derivePhase7CanonicalCargoResiduals(
   // passed an incomplete journal. Never credit surviving cargo as full booked
   // capacity: dispatch-time losses and zero-travel deliveries make it unsafe.
   for (const shipment of world.shipments.values()) {
+    if (!Number.isSafeInteger(shipment.departureTick) || shipment.departureTick < 0 ||
+        shipment.departureTick > context.tick) {
+      throw new Error("Phase-7 canonical cargo cannot trust invalid or future shipment departure tick");
+    }
     if (shipment.departureTick === context.tick) {
       throw new Error("Phase-7 canonical cargo cannot infer earlier same-tick shipment capacity use");
     }
