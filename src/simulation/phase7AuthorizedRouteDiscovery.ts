@@ -11,7 +11,7 @@
  * absent fixture/entry is never permission, and Phase-14 transitions are never
  * inspected to authorize a current-tick shipment.
  */
-import type { GoodId, RegionId, TransportLinkId } from "../domain/id";
+import type { GoodId, RegionId, StateId, TransportLinkId } from "../domain/id";
 import { actorRefKey } from "../domain/genesisLedger";
 import type { TickContext } from "./tickOrchestrator";
 import type { WorldState } from "./worldState";
@@ -29,6 +29,90 @@ export interface Phase7FrozenDirectedTradePermissions {
   readonly permittedGoodsByDirectedLink: ReadonlyMap<
     TransportLinkId, ReadonlyMap<GoodId, number | null>
   >;
+}
+
+/**
+ * Current-tick Phase-1 capture boundary for an independently owned legal-policy
+ * provider. The policy must explicitly decide each configured directed link/good:
+ * undefined prohibits it, null permits it without an additional quantity cap,
+ * and a nonnegative number supplies a statutory quantity ceiling.
+ *
+ * This is NOT M6 policy generation. In particular, a link, jurisdiction or
+ * future PendingTransition never implies trade permission or a zero tariff.
+ * The result is tick-scoped evidence for Phase-7 route discovery; the caller
+ * must retain the snapshot from Phase 1 rather than recompute it in Phase 7.
+ */
+export interface Phase7Phase1TradeLawQuery {
+  readonly tick: number;
+  readonly linkId: TransportLinkId;
+  readonly originRegionId: RegionId;
+  readonly destinationRegionId: RegionId;
+  readonly originControllerStateId: StateId | null;
+  readonly destinationControllerStateId: StateId | null;
+  readonly goodId: GoodId;
+}
+
+export type Phase7Phase1TradeLawProvider = (
+  query: Readonly<Phase7Phase1TradeLawQuery>,
+) => number | null | undefined;
+
+export function capturePhase7DirectedTradePermissionsAtPhase1(
+  world: WorldState,
+  context: Pick<TickContext, "tick" | "phase" | "effectiveJurisdictionByRegion">,
+  decide: Phase7Phase1TradeLawProvider,
+): Phase7FrozenDirectedTradePermissions {
+  const effective = context.effectiveJurisdictionByRegion;
+  if (!Number.isSafeInteger(context.tick) || context.tick < 0 ||
+      context.phase !== 1 || !(effective instanceof Map) ||
+      typeof decide !== "function") {
+    throw new Error("Phase-1 trade permission capture requires current Phase-1 law authority");
+  }
+  // Validate the WHOLE activated jurisdiction snapshot before asking for any
+  // law decision. No partial/stale Map may silently authorize a different border.
+  if (effective.size !== world.regions.size) {
+    throw new Error("Phase-1 trade permission capture has incomplete jurisdiction");
+  }
+  for (const [regionId, region] of [...world.regions].sort(([a], [b]) => cmp(a, b))) {
+    if (!effective.has(regionId) ||
+        effective.get(regionId) !== region.controllerStateId ||
+        (region.controllerStateId !== null &&
+         !world.states.has(region.controllerStateId))) {
+      throw new Error("Phase-1 trade permission capture has stale jurisdiction");
+    }
+  }
+  const goods = Object.entries(world.definitionRegistry.goods)
+    .filter(([, definition]) => definition.tradable)
+    .sort(([a], [b]) => cmp(a, b));
+  const permittedGoodsByDirectedLink =
+    new Map<TransportLinkId, ReadonlyMap<GoodId, number | null>>();
+  for (const [linkId, link] of [...world.transportLinks].sort(([a], [b]) => cmp(a, b))) {
+    const origin = world.regions.get(link.fromRegionId);
+    const destination = world.regions.get(link.toRegionId);
+    if (link.linkId !== linkId || !origin || !destination) {
+      throw new Error("Phase-1 trade permission capture references an invalid directed link");
+    }
+    const permitted = new Map<GoodId, number | null>();
+    for (const [goodKey] of goods) {
+      const goodId = goodKey as GoodId;
+      const cap = decide(Object.freeze({
+        tick: context.tick, linkId,
+        originRegionId: origin.regionId,
+        destinationRegionId: destination.regionId,
+        originControllerStateId: origin.controllerStateId,
+        destinationControllerStateId: destination.controllerStateId,
+        goodId,
+      }));
+      if (cap === undefined) continue; // An absent legal decision is NOT permission.
+      if (cap !== null) {
+        if (typeof cap !== "number" || !Number.isFinite(cap) || cap < 0) {
+          throw new Error("Phase-1 trade permission capture requires a finite nonnegative legal cap");
+        }
+      }
+      permitted.set(goodId, cap);
+    }
+    if (permitted.size > 0) permittedGoodsByDirectedLink.set(linkId, permitted);
+  }
+  return { tick: context.tick, permittedGoodsByDirectedLink };
 }
 
 /** An unpriced, unreserved route opportunity; never a committed trade. */
