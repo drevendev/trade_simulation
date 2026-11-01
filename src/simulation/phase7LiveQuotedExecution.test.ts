@@ -1250,6 +1250,48 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
     return { f, uniqueWorld, missingWorld, request, execute, planId };
   }
 
+  it("executes a conserved full tick with canonical cargo capacity and no caller residual", () => {
+    const { f, uniqueWorld, request, execute } = canonicalDiscovery();
+    const autoCargo = () => ({
+      ...request(),
+      authorizedRouteDiscovery: {
+        ...request().authorizedRouteDiscovery,
+        autoDeriveCanonicalCargoCapacity: true as const,
+      },
+      dispatch: { autoReserveFx: true as const },
+    });
+    const openingBuyerCash = readActorWallet(uniqueWorld, f.buyerActor).get(f.destCurrency)!;
+    const openingSellerGoods = readMarketActorInventory(
+      uniqueWorld, f.sellerActor, "GENERAL",
+    ).get(GOOD)!;
+    const a = execute(uniqueWorld, autoCargo);
+    const b = execute(uniqueWorld, autoCargo);
+    expect(a.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(a.phaseBoundaryError).toBeUndefined();
+    expect(a.reconciliationErrors).toBeNull();
+    expect(a.context.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH"))
+      .toHaveLength(1);
+    expect(a.context.transactions.filter(tx => tx.type === "FX_INPUT"))
+      .toHaveLength(1);
+    expect(a.world.shipments?.size).toBe(1);
+    expect(a.context.transactions).toEqual(b.context.transactions);
+    expect(a.world.shipments).toEqual(b.world.shipments);
+    expect(uniqueWorld.shipments?.size).toBe(0);
+    expect(readActorWallet(uniqueWorld, f.buyerActor).get(f.destCurrency))
+      .toBe(openingBuyerCash);
+    expect(readMarketActorInventory(uniqueWorld, f.sellerActor, "GENERAL").get(GOOD))
+      .toBe(openingSellerGoods);
+
+    expect(() => execute(uniqueWorld, () => ({
+      ...autoCargo(),
+      dispatch: {
+        autoReserveFx: true as const,
+        remainingCargoWeightByLink: new Map([[f.link.linkId, 1e12]]),
+      },
+    }))).toThrow("cannot accept caller cargo residuals");
+    expect(uniqueWorld.shipments?.size).toBe(0);
+  });
+
   it("executes an actual canonical cross-currency tick with a unique persisted pool and conserved endpoints", () => {
     const { f, uniqueWorld, execute } = canonicalDiscovery();
     const openingBuyer = readActorWallet(uniqueWorld, f.buyerActor).get(f.destCurrency)!;
