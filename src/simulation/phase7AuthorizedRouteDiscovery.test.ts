@@ -170,6 +170,25 @@ describe("M5 #673 Phase-1 authorized direct route opportunity discovery", () => 
     stale.effectiveJurisdictionByRegion.set(f.origin.regionId, null);
     expect(() => f.discover(f.residuals, f.permissions, f.factors, stale))
       .toThrow("stale/invalid Phase-1 jurisdiction");
+
+    // A region outside this legal route is still part of the authoritative
+    // Phase-1 snapshot: dropping or forging it must not pass discovery.
+    const otherRegionId = [...f.world.regions.keys()].find(regionId =>
+      regionId !== f.origin.regionId &&
+      regionId !== f.destination.regionId &&
+      f.world.regions.get(regionId)!.controllerStateId !== null)!;
+    expect(otherRegionId).toBeDefined();
+    const partialControllers = new Map(f.context.effectiveJurisdictionByRegion);
+    partialControllers.delete(otherRegionId);
+    expect(() => f.discover(f.residuals, f.permissions, f.factors, {
+      ...f.context, effectiveJurisdictionByRegion: partialControllers,
+    })).toThrow("stale/invalid Phase-1 jurisdiction");
+    const forgedControllers = new Map(f.context.effectiveJurisdictionByRegion);
+    forgedControllers.set(otherRegionId, null);
+    expect(() => f.discover(f.residuals, f.permissions, f.factors, {
+      ...f.context, effectiveJurisdictionByRegion: forgedControllers,
+    })).toThrow("stale/invalid Phase-1 jurisdiction");
+
     expect(() => f.discover(f.residuals, f.permissions, new Map()))
       .toThrow("infrastructure factor");
   });

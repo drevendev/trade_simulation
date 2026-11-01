@@ -200,6 +200,18 @@ export function discoverPhase7DirectedTradeOpportunities(
       !(infrastructureFactors instanceof Map)) {
     throw new Error("Phase-7 route discovery requires current frozen Phase-1 legal and capacity evidence");
   }
+  // Reject partial or stale world-wide Phase-1 jurisdiction, even when the
+  // altered region is not an endpoint of a currently permitted route.
+  // Checking only selected links would let a forged snapshot pass discovery.
+  const effective = context.effectiveJurisdictionByRegion;
+  if (effective.size !== world.regions.size ||
+      [...world.regions].some(([regionId, region]) =>
+        !effective.has(regionId) ||
+        effective.get(regionId) !== region.controllerStateId ||
+        (region.controllerStateId !== null &&
+         !world.states.has(region.controllerStateId)))) {
+    throw new Error("Phase-7 route discovery has stale/invalid Phase-1 jurisdiction");
+  }
   const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon;
   const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon;
   const minShipment = world.simulationConfig.trade.shipmentMinimumQuantity;
