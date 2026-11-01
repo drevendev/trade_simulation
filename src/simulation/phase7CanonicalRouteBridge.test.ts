@@ -5,7 +5,10 @@ import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { GoodId, TransportLinkId } from "../domain/id";
 import { createMarketIntentId, type MarketIntent } from "./marketIntent";
 import { buildInitialWorld } from "./worldState";
-import { bindPhase7DiscoveredRouteQuotes } from "./phase7CanonicalRouteBridge";
+import {
+  bindPhase7DiscoveredCargoCapacity, bindPhase7DiscoveredRouteQuotes,
+} from "./phase7CanonicalRouteBridge";
+import { effectiveTransportLinkCapacity } from "./transportCapacity";
 import type { Phase7FrozenDirectedTradePermissions } from "./phase7AuthorizedRouteDiscovery";
 import type { Phase7LiveQuoteWithoutMarketNetPrices } from "./phase7LiveWorldPlan";
 import type { Phase7ActorResidualIntent } from "./phase7IntentMatching";
@@ -125,5 +128,30 @@ describe("M5 #673 canonical Phase-1 route discovery binds live Phase-7 intake", 
     }
     expect(f.quote.shortageRateDestination).toBe(0.4);
     expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("caps discovered cargo to physical link capacity without erasing prior reservations", () => {
+    const f = fixture();
+    const eligible = new Set<TransportLinkId>([f.link.linkId]);
+    const physical = effectiveTransportLinkCapacity(f.link, f.factors.get(f.link.linkId)!);
+    const before = f.world.shipments;
+    const bound = (remaining: number) => bindPhase7DiscoveredCargoCapacity(
+      f.world, f.factors, eligible, new Map([[f.link.linkId, remaining]]),
+    );
+    expect(physical).toBeGreaterThan(0);
+    expect(bound(physical * 100).get(f.link.linkId)).toBe(physical);
+    expect(bound(physical / 3).get(f.link.linkId)).toBe(physical / 3);
+    expect(bound(0).get(f.link.linkId)).toBe(0);
+    expect([...bound(physical * 100).keys()]).toEqual([f.link.linkId]);
+
+    expect(() => bindPhase7DiscoveredCargoCapacity(
+      f.world, f.factors, eligible, new Map(),
+    )).toThrow("missing current-tick capacity evidence");
+    expect(() => bound(Number.NaN)).toThrow("finite and non-negative");
+    expect(() => bound(-1)).toThrow("finite and non-negative");
+    expect(() => bindPhase7DiscoveredCargoCapacity(
+      f.world, new Map(), eligible, new Map([[f.link.linkId, physical]]),
+    )).toThrow("missing current-tick capacity evidence");
+    expect(f.world.shipments).toBe(before);
   });
 });
