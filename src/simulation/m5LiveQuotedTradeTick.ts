@@ -30,6 +30,8 @@ import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
 import { reservePhase7QuotedFxLots } from "./phase7AutoFxReservations";
 import type { FxReservation } from "./fxQuoteReservation";
 import { derivePhase7PostProcurementIntents } from "./phase7PostProcurementIntents";
+import { bindPhase7DiscoveredRouteQuotes } from "./phase7CanonicalRouteBridge";
+import type { Phase7FrozenDirectedTradePermissions } from "./phase7AuthorizedRouteDiscovery";
 
 /** Explicit frozen policy-owner facts; the live tick supplies all other context. */
 export type Phase7LiveTickPolicy = Pick<
@@ -171,6 +173,12 @@ export interface Phase7CanonicalIntakeTickRequest {
   readonly policy: Phase7LiveTickPolicy;
   readonly plan: Omit<Phase7LiveWorldPlanInput, "residualIntents">;
   readonly dispatch: Phase7CanonicalIntakeTickDispatch;
+  /** Opt-in: derive eligible route/good set and legal/physical caps from
+   * frozen Phase-1 permissions and the SAME post-Phase-4 canonical residuals.
+   * Without this, the legacy explicit-route request stays backward-compatible. */
+  readonly authorizedRouteDiscovery?: {
+    readonly permissions: Phase7FrozenDirectedTradePermissions;
+  };
 }
 
 export type Phase7CanonicalIntakeTickRequestBuilder = (
@@ -203,9 +211,20 @@ export function executeM5CanonicalIntakeTradeTick(
       const request = buildPhase7RouteRequest(world, context);
       if (request === null) return null;
       const intake = derivePhase7PostProcurementIntents(world, context);
+      const discovered = request.authorizedRouteDiscovery === undefined
+        ? undefined
+        : bindPhase7DiscoveredRouteQuotes(
+          world, context, intake.residualIntents,
+          request.authorizedRouteDiscovery.permissions,
+          request.plan.infrastructureFactors, request.plan.opportunityQuotes,
+        );
       return {
         policy: request.policy,
-        plan: { ...request.plan, residualIntents: intake.residualIntents },
+        plan: {
+          ...request.plan,
+          ...(discovered === undefined ? {} : discovered),
+          residualIntents: intake.residualIntents,
+        },
         dispatch: {
           ...request.dispatch, phase8MainIntents: intake.phase8MainIntents,
         },
