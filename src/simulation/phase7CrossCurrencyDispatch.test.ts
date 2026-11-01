@@ -511,3 +511,42 @@ describe("M5 / #673 prepared FX lots -> atomic FX dispatch -> actual Phase-8 res
     );
   });
 });
+
+describe("M5 #673 canonical cargo mass at cross-currency settlement", () => {
+  it("rejects forged cargo and invalid/nontradable goods before FX sizing or physical posting", () => {
+    const f = fixture();
+    const spoofed: CrossCurrencyDispatchRequest = {
+      ...f.request, cargoWeightPerUnit: 0.01,
+    };
+    unchanged(f.world, spoofed, () =>
+      settleCrossCurrencyTradeDispatch(f.world, spoofed));
+
+    const original = f.world.definitionRegistry.goods[GOOD]!;
+    const withDefinition = (definition: typeof original): WorldState => ({
+      ...f.world,
+      definitionRegistry: {
+        ...f.world.definitionRegistry,
+        goods: { ...f.world.definitionRegistry.goods, [GOOD]: definition },
+      },
+    });
+    for (const definition of [
+      { ...original, cargoWeightPerUnit: 3 },
+      { ...original, cargoWeightPerUnit: Number.POSITIVE_INFINITY },
+      { ...original, tradable: false },
+    ]) {
+      const altered = withDefinition(definition);
+      unchanged(altered, f.request, () =>
+        settleCrossCurrencyTradeDispatch(altered, f.request));
+    }
+
+    const heavy = withDefinition({ ...original, cargoWeightPerUnit: 3 });
+    const aligned: CrossCurrencyDispatchRequest = {
+      ...f.request, cargoWeightPerUnit: 3,
+    };
+    const settled = settleCrossCurrencyTradeDispatch(heavy, aligned);
+    expect(settled).not.toBeNull();
+    expect(settled!.remainingCargoWeightByLink.get(aligned.transportLinkId)).toBe(44);
+    expect(stock(settled!.world, aligned)).toBe(8);
+    expect(settled!.newTransactions.filter(tx => tx.type === "FX_INPUT")).toHaveLength(1);
+  });
+});

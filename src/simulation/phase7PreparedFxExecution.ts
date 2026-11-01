@@ -41,10 +41,18 @@ export interface Phase7FxPriceTerms {
   readonly consumptionTaxPerUnitDest: number;
 }
 
+/** Optional lot-specific frozen evidence; not an extra balance or tax owner. */
+export interface Phase7QuotedLotTerms<T> {
+  readonly terms: T;
+  readonly buyerDebitDest: number;
+}
+
 export interface Phase7PreparedFxExecutionInput {
   readonly tick: number;
   readonly planInput: Phase7PreparedTradePlanInput;
   readonly termsByTradePlanId: ReadonlyMap<string, Phase7FxPriceTerms>;
+  /** If supplied, covers ALL matched FX ordinals, overriding route-wide terms. */
+  readonly quotedFxTermsByLotOrdinal?: ReadonlyMap<number, Phase7QuotedLotTerms<Phase7FxPriceTerms>>;
   /** Index into prepared.actorMatches.lots, not into caller insertion order. */
   readonly fxReservationByLotOrdinal: ReadonlyMap<number, FxReservation>;
   readonly effectiveJurisdictionByRegion: ReadonlyMap<RegionId, StateId | null>;
@@ -57,6 +65,8 @@ export interface Phase7PreparedFxExecutionInput {
 export interface Phase7PreparedMixedExecutionInput extends Phase7PreparedFxExecutionInput {
   /** Quotes for domestic matched lots only. FX quotes retain their own map. */
   readonly sameCurrencyTermsByTradePlanId: ReadonlyMap<string, Phase7SameCurrencyPriceTerms>;
+  /** If supplied, covers ALL matched domestic ordinals. */
+  readonly quotedSameCurrencyTermsByLotOrdinal?: ReadonlyMap<number, Phase7QuotedLotTerms<Phase7SameCurrencyPriceTerms>>;
 }
 
 export interface Phase7PreparedFxExecutionResult {
@@ -117,6 +127,14 @@ function executePreparedCurrencyTradePlan(
   if (allowDomestic && !(domesticTermsByTradePlanId instanceof Map)) {
     refuse("mixed plan requires explicit same-currency frozen quotes");
   }
+  const quotedFxLots = input.quotedFxTermsByLotOrdinal;
+  const quotedDomesticLots = allowDomestic
+    ? (input as Phase7PreparedMixedExecutionInput).quotedSameCurrencyTermsByLotOrdinal
+    : undefined;
+  if ((quotedFxLots !== undefined && !(quotedFxLots instanceof Map)) ||
+      (quotedDomesticLots !== undefined && !(quotedDomesticLots instanceof Map))) {
+    refuse("lot-specific quotes must be keyed by matched ordinal");
+  }
   if (!Array.isArray(input.priorTransactions) ||
       !(input.termsByTradePlanId instanceof Map) ||
       !(input.fxReservationByLotOrdinal instanceof Map) ||
@@ -176,6 +194,74 @@ function executePreparedCurrencyTradePlan(
     !fxLotOrdinals.has(ordinal))) {
     refuse("orphan or domestic-bound FX lot reservation");
   }
+  const lotCount = prepared.actorMatches.lots.length;
+  if (quotedFxLots && (quotedFxLots.size !== fxLotOrdinals.size ||
+      [...quotedFxLots.keys()].some(ordinal => !fxLotOrdinals.has(ordinal)))) {
+    refuse("lot-specific FX quotes must cover every FX match, with no orphans");
+  }
+  if (quotedDomesticLots && (quotedDomesticLots.size !== lotCount - fxLotOrdinals.size ||
+      [...quotedDomesticLots.keys()].some(ordinal =>
+        !Number.isSafeInteger(ordinal) || ordinal < 0 || ordinal >= lotCount ||
+        fxLotOrdinals.has(ordinal)))) {
+    refuse("lot-specific domestic quotes must cover every domestic match, with no orphans");
+  }
+  for (const quoted of [...(quotedFxLots?.values() ?? []),
+    ...(quotedDomesticLots?.values() ?? [])]) {
+    if (!quoted || !Number.isFinite(quoted.buyerDebitDest) || quoted.buyerDebitDest <= 0) {
+      refuse("lot-specific quoted buyer debit must be positive and finite");
+    }
+  }
+  if (quotedFxLots || quotedDomesticLots) {
+    // Per-lot policy variation does not grant more cash than the accepted
+    // original aggregate route reservation. Fail before ANY physical dispatch.
+    const actualGrossByPlan = new Map<string, number>();
+    // The matcher separately authorizes each BUY intent's post-Phase-4
+    // remaining spend. Repricing two lots may preserve the route total while
+    // shifting an illegal debit to one intent. Also accumulate across lots
+    // and plans sharing the SAME BUY intent before any physical dispatch.
+    const actualGrossByBuyerIntent = new Map<string, number>();
+    for (const [ordinal, lot] of prepared.actorMatches.lots.entries()) {
+      const isFx = fxLotOrdinals.has(ordinal);
+      const lotQuote = isFx ? quotedFxLots?.get(ordinal) :
+        quotedDomesticLots?.get(ordinal);
+      const opportunity = quotes.get(lot.tradePlanId);
+      if (!opportunity) refuse("lot-specific quote lacks prepared opportunity");
+      const gross = lotQuote?.buyerDebitDest ??
+        lot.quantity * opportunity.landedGrossUnitCostDest;
+      const previous = actualGrossByPlan.get(lot.tradePlanId) ?? 0;
+      const total = previous + gross;
+      if (!Number.isFinite(total) || (gross > 0 && total === previous)) {
+        refuse("lot-specific aggregate buyer debit loses money precision");
+      }
+      actualGrossByPlan.set(lot.tradePlanId, total);
+      const authorizedBuyer = input.planInput.actorsByTradePlanId
+        .get(lot.tradePlanId)?.buyers.find(entry =>
+          entry.intent.id === lot.buyerIntentId);
+      const remainingSpend = authorizedBuyer?.remainingBuyerSpend;
+      if (remainingSpend === undefined || !Number.isFinite(remainingSpend) ||
+          remainingSpend < 0) {
+        refuse("lot-specific BUY intent lacks verified remaining spend");
+      }
+      const previousBuyer = actualGrossByBuyerIntent.get(lot.buyerIntentId) ?? 0;
+      const buyerTotal = previousBuyer + gross;
+      if (!Number.isFinite(buyerTotal) ||
+          (gross > 0 && buyerTotal === previousBuyer) ||
+          Math.abs((buyerTotal - previousBuyer) - gross) > moneyEpsilon) {
+        refuse("lot-specific cumulative BUY intent debit loses money precision");
+      }
+      if (buyerTotal > remainingSpend &&
+          !nearly(buyerTotal, remainingSpend, moneyEpsilon)) {
+        refuse("lot-specific buyer debit exceeds matched BUY intent remaining spend");
+      }
+      actualGrossByBuyerIntent.set(lot.buyerIntentId, buyerTotal);
+    }
+    for (const reservation of prepared.aggregate.reservations) {
+      const total = actualGrossByPlan.get(reservation.tradePlanId) ?? 0;
+      if (!nearly(total, reservation.buyerCashReservedDest, moneyEpsilon)) {
+        refuse("lot-specific buyer debits disagree with accepted aggregate reservation");
+      }
+    }
+  }
 
   let world = openingWorld;
   let transactions: readonly EconomicTransaction[] = input.priorTransactions;
@@ -193,7 +279,8 @@ function executePreparedCurrencyTradePlan(
 
     if (candidate.sourceCurrencyId === candidate.destinationCurrencyId) {
       if (!allowDomestic) refuse("domestic lot requires mixed coordinator");
-      const quote = domesticTermsByTradePlanId!.get(lot.tradePlanId);
+      const lotQuote = quotedDomesticLots?.get(ordinal);
+      const quote = lotQuote?.terms ?? domesticTermsByTradePlanId!.get(lot.tradePlanId);
       if (!quote) refuse("matched domestic lot lacks frozen price terms");
       for (const [name, value] of Object.entries(quote)) {
         if (typeof value !== "number") refuse(name + " must be numeric");
@@ -205,7 +292,9 @@ function executePreparedCurrencyTradePlan(
       const unitGross = quote.sellerNetUnitPrice +
         quote.transportFeePerUnitDest + quote.tariffPerUnitDest +
         quote.consumptionTaxPerUnitDest;
-      const expectedUnitGross = opportunity.landedGrossUnitCostDest;
+      const expectedGross = lotQuote?.buyerDebitDest ??
+        lot.quantity * opportunity.landedGrossUnitCostDest;
+      const expectedUnitGross = expectedGross / lot.quantity;
       const unitTolerance = Math.min(moneyEpsilon,
         Number.EPSILON * Math.max(1, unitGross, expectedUnitGross));
       if (!Number.isFinite(unitGross) || unitGross <= 0 ||
@@ -221,7 +310,7 @@ function executePreparedCurrencyTradePlan(
       const tariff = lot.quantity * quote.tariffPerUnitDest;
       const tax = lot.quantity * quote.consumptionTaxPerUnitDest;
       const gross = invoice + fee + tariff + tax;
-      const plannedGross = lot.quantity * expectedUnitGross;
+      const plannedGross = expectedGross;
       if (![invoice, fee, tariff, tax, gross, plannedGross].every(Number.isFinite) ||
           gross <= 0 || !nearly(gross, plannedGross, moneyEpsilon)) {
         refuse("domestic buyer debit loses numeric precision");
@@ -301,7 +390,8 @@ function executePreparedCurrencyTradePlan(
       capacity = settled.remainingCargoWeightByLink;
       continue;
     }
-    const terms = input.termsByTradePlanId.get(lot.tradePlanId);
+    const lotQuote = quotedFxLots?.get(ordinal);
+    const terms = lotQuote?.terms ?? input.termsByTradePlanId.get(lot.tradePlanId);
     const pair = input.planInput.fxPairIdByTradePlanId?.get(lot.tradePlanId);
     const fxReservation = input.fxReservationByLotOrdinal.get(ordinal);
     if (!terms || !pair || !fxReservation) {
@@ -325,7 +415,9 @@ function executePreparedCurrencyTradePlan(
     const unitGross = unitFxInput + terms.transportFeePerUnitDest +
       terms.tariffPerUnitDest + terms.consumptionTaxPerUnitDest;
     if (!Number.isFinite(unitGross) || unitGross <= 0 ||
-        !nearly(unitGross, opportunity.landedGrossUnitCostDest, moneyEpsilon)) {
+        !nearly(unitGross,
+          (lotQuote?.buyerDebitDest ?? lot.quantity * opportunity.landedGrossUnitCostDest) /
+            lot.quantity, moneyEpsilon)) {
       refuse("actual FX charges disagree with planner's gross quote");
     }
     const shipmentId = `sh:m5fx:${input.tick}:${candidate.tradePlanId}:${ordinal}`;
@@ -387,7 +479,9 @@ function executePreparedCurrencyTradePlan(
       tx.type === "FX_INPUT" || tx.type === "TRANSPORT_FEE" ||
       tx.type === "IMPORT_TARIFF" || tx.type === "CONSUMPTION_TAX",
     ).reduce((sum, tx) => sum + (tx.moneyAmount ?? 0), 0);
-    if (!nearly(charged, settled.sizing.buyerGrossDebitDest, moneyEpsilon)) {
+    if (!nearly(charged, settled.sizing.buyerGrossDebitDest, moneyEpsilon) ||
+        (lotQuote && nearly(realized, lot.quantity, quantityEpsilon) &&
+          !nearly(charged, lotQuote.buyerDebitDest, moneyEpsilon))) {
       refuse("actual destination buyer cash debit contradicts FX receipt");
     }
     committed.push({

@@ -156,6 +156,15 @@ export function settleCrossCurrencyTradeDispatch(
   const availableCargo = request.remainingCargoWeightByLink.get(request.transportLinkId);
   if (availableCargo === undefined) return refuse("missing directed link cargo residual");
   nonnegative(availableCargo, "available cargo");
+  // Check canonical mass BEFORE FX sizing: the prepared plan and its caller
+  // are not authorities for physical weight or directed-link capacity.
+  const goodDefinition = world.definitionRegistry.goods[request.goodId];
+  if (!goodDefinition || !goodDefinition.tradable ||
+      !Number.isFinite(goodDefinition.cargoWeightPerUnit) ||
+      goodDefinition.cargoWeightPerUnit <= 0 ||
+      request.cargoWeightPerUnit !== goodDefinition.cargoWeightPerUnit) {
+    return refuse("cargo weight must equal canonical tradable GoodDefinition");
+  }
   const goods = readMarketActorInventory(world, request.seller,
     request.sellerInventoryBucket, "seller");
   const sellerAvailable = goods.get(request.goodId) ?? 0;

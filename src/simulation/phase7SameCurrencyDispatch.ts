@@ -122,6 +122,16 @@ export function settleSameCurrencyTradeDispatch(
     return refuse("canonical shipment registry missing");
   }
   validateTradeShipmentState(world, shipment);
+  // A prepared caller may forge cargoWeightPerUnit even if the live route
+  // planner correctly hydrated it. The physical settlement boundary must
+  // independently bind capacity debit to the immutable goods definition.
+  const goodDefinition = world.definitionRegistry.goods[shipment.goodId];
+  if (!goodDefinition || !goodDefinition.tradable ||
+      !Number.isFinite(goodDefinition.cargoWeightPerUnit) ||
+      goodDefinition.cargoWeightPerUnit <= 0 ||
+      request.cargoWeightPerUnit !== goodDefinition.cargoWeightPerUnit) {
+    return refuse("cargo weight must equal canonical tradable GoodDefinition");
+  }
   const routineLoss = applyRoutineDispatchLoss(world, shipment, bundleId);
   validateTradeShipmentState(world, routineLoss.survivingShipment);
   if (world.shipments.has(shipment.id)) {
