@@ -80,6 +80,34 @@ describe("M5 #673 canonical cargo residual provenance", () => {
     expect(f.world.shipments?.size).toBe(0);
   });
 
+  it("rejects impossible shipment departure clocks but permits past in-transit cargo", () => {
+    const f = fixture();
+    for (const departureTick of [-1, 7.5, 8, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const shipment = {
+        departureTick, transportLinkId: f.first.linkId, quantity: 0.9,
+      } as TradeShipmentState;
+      const invalid: WorldState = {
+        ...f.world,
+        shipments: new Map<ShipmentId, TradeShipmentState>([
+          ["sh:invalid-departure" as ShipmentId, shipment],
+        ]),
+      };
+      expect(() => f.derive(invalid))
+        .toThrow("invalid or future shipment departure tick");
+    }
+    const earlier = {
+      departureTick: 6, transportLinkId: f.first.linkId, quantity: 0.9,
+    } as TradeShipmentState;
+    const past: WorldState = {
+      ...f.world,
+      shipments: new Map<ShipmentId, TradeShipmentState>([
+        ["sh:previous-tick" as ShipmentId, earlier],
+      ]),
+    };
+    expect([...f.derive(past)]).toEqual([...f.derive()]);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
   it("rejects missing authority and malformed evidence rather than inventing capacity", () => {
     const f = fixture();
     const { shipments: _omitted, ...withoutShipmentRegistry } = f.world;
