@@ -236,7 +236,9 @@
       if (!Object.prototype.hasOwnProperty.call(runs, mode)) return;
       const problem = mode === "m3" ? validateM3(data) : (!data || !Array.isArray(data.samples) ? "invalid M4 observations" : null);
       runs[mode] = problem ? { status: "error", error: "Saved run could not be displayed: " + problem } : { status: "ready", data };
-      if (select.value === mode) render();
+      // A newer payload supersedes the currently displayed recording.
+      // Do not let the old timer play through a replacement sample set.
+      if (select.value === mode) { stopPlayback(); render(); }
     },
     failure(mode, message) {
       if (!Object.prototype.hasOwnProperty.call(runs, mode)) return;
