@@ -317,6 +317,51 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
       .toThrow(/registry is missing/);
   });
 
+  it("rejects prefix-only restored shipment and FX identities before any delivery", () => {
+    const valid = sample();
+    for (const id of ["sh:", "sh:   "]) {
+      const forged: TradeShipmentState = { ...valid, id: id as ShipmentId };
+      const shipments = new Map([[forged.id, forged]]);
+      const candidate: WorldState = { ...world, shipments };
+      expect(() => validateTradeShipmentState(candidate, forged))
+        .toThrow(/sh: prefix/);
+      expect(() => validateTradeShipmentRegistry(candidate))
+        .toThrow(/sh: prefix/);
+      expect(() => deliverDueTradeShipments(candidate, {
+        tick: forged.arrivalTick,
+        phase: forged.arrivalTick === forged.departureTick ? 7 : 1,
+        priorTransactions: [],
+      })).toThrow(/sh: prefix/);
+      expect(candidate.shipments).toBe(shipments);
+      expect(shipments.get(forged.id)).toBe(forged);
+    }
+    // The invoice may be frozen in a different currency from payment.
+    const foreign = {
+      ...valid, invoiceCurrencyId: differentCurrency(valid.buyerPaymentCurrencyId),
+    };
+    for (const fxSettlementId of ["fxs:", "fxs:   "]) {
+      const forged = { ...foreign, fxSettlementId };
+      const shipments = new Map([[forged.id, forged]]);
+      const candidate: WorldState = { ...world, shipments };
+      expect(() => validateTradeShipmentState(candidate, forged))
+        .toThrow(/FX settlement id.*fxs: prefix/);
+      expect(() => validateTradeShipmentRegistry(candidate))
+        .toThrow(/FX settlement id.*fxs: prefix/);
+      expect(() => deliverDueTradeShipments(candidate, {
+        tick: forged.arrivalTick,
+        phase: forged.arrivalTick === forged.departureTick ? 7 : 1,
+        priorTransactions: [],
+      })).toThrow(/FX settlement id.*fxs: prefix/);
+      expect(candidate.shipments).toBe(shipments);
+      expect(shipments.get(forged.id)).toBe(forged);
+    }
+    // Existing dispatch-shaped identifiers remain valid.
+    expect(() => validateTradeShipmentState(world, valid)).not.toThrow();
+    expect(() => validateTradeShipmentState(world, {
+      ...foreign, fxSettlementId: "fxs:real-settlement",
+    })).not.toThrow();
+  });
+
   it("does not mistake an uncommitted actor match or quote for a stock movement", () => {
     const valid = sample();
     const stored = new Map([[valid.id, valid]]);
