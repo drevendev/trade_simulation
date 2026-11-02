@@ -115,6 +115,45 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
     expect(world.shipments?.size).toBe(0);
   });
 
+  it("refuses a known but nontradable good in persisted cargo before delivery", () => {
+    const shipment = sample();
+    const goods = world.definitionRegistry.goods;
+    const definition = goods[shipment.goodId];
+    if (!definition) throw new Error("Missing shipment GoodDefinition fixture");
+    expect(definition.tradable).toBe(true);
+    expect(() => validateTradeShipmentState(world, shipment)).not.toThrow();
+
+    // Preserve an existing GoodId while making it ineligible for physical
+    // trade. Mere definition existence must not authorize in-transit stock.
+    const nontradableWorld: WorldState = {
+      ...world,
+      definitionRegistry: {
+        ...world.definitionRegistry,
+        goods: { ...goods, [shipment.goodId]: { ...definition, tradable: false } },
+      },
+      shipments: new Map([[shipment.id, shipment]]),
+    };
+    const persisted = nontradableWorld.shipments;
+    const owner = shipment.buyer;
+    if (owner.type !== "STATE") throw new Error("Expected State buyer fixture");
+    const originalInventory = nontradableWorld.states.get(owner.stateId)!.publicInventory;
+
+    expect(() => validateTradeShipmentState(nontradableWorld, shipment))
+      .toThrow(/tradable GoodDefinition/);
+    expect(() => validateTradeShipmentRegistry(nontradableWorld))
+      .toThrow(/tradable GoodDefinition/);
+    expect(() => deliverDueTradeShipments(nontradableWorld, {
+      tick: shipment.arrivalTick,
+      phase: shipment.arrivalTick === shipment.departureTick ? 7 : 1,
+      priorTransactions: [],
+    })).toThrow(/tradable GoodDefinition/);
+    expect(nontradableWorld.shipments).toBe(persisted);
+    expect(persisted.get(shipment.id)).toBe(shipment);
+    expect(nontradableWorld.states.get(owner.stateId)!.publicInventory)
+      .toBe(originalInventory);
+    expect(world.shipments?.size).toBe(0);
+  });
+
   it("requires FX evidence only when the frozen invoice/payment currencies differ", () => {
     const shipment = sample();
     const other = differentCurrency(shipment.buyerPaymentCurrencyId);
