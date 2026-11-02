@@ -179,6 +179,12 @@ export function validateTradeShipmentState(
   assertGoodsActor(world, shipment.beneficialOwner, "beneficialOwner");
   assertResidentGoodsLocation(world, shipment.seller, shipment.originRegionId, "seller");
   assertResidentGoodsLocation(world, shipment.buyer, shipment.destinationRegionId, "buyer");
+  // Preserve region-first diagnostics for forged resident endpoints. State
+  // public stock has no region, so also reject otherwise-valid self-transfers.
+  // Both Phase-7 dispatch paths enforce this same distinct-owner invariant.
+  if (actorRefKey(shipment.seller) === actorRefKey(shipment.buyer)) {
+    throw new Error("Shipment seller and buyer must be distinct goods owners");
+  }
   if (actorRefKey(shipment.beneficialOwner) !== actorRefKey(shipment.buyer)) {
     throw new Error("Shipment core-v1 beneficial owner must be its paid buyer");
   }

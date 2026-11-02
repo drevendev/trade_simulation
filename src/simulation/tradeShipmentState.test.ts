@@ -169,6 +169,33 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
     })).toThrow(/arrival tick/);
   });
 
+  it("refuses self-owned persisted cargo before any delivery credit", () => {
+    const original = sample();
+    // State public inventory is intentionally unlocated, so the distinct
+    // origin/destination regions cannot themselves reject this forged record.
+    const impossible: TradeShipmentState = {
+      ...original, buyer: original.seller, beneficialOwner: original.seller,
+    };
+    const persisted: WorldState = {
+      ...world, shipments: new Map([[impossible.id, impossible]]),
+    };
+    const owner = original.seller;
+    if (owner.type !== "STATE") throw new Error("Expected State seller fixture");
+    const before = world.states.get(owner.stateId)!.publicInventory;
+    expect(() => validateTradeShipmentState(world, impossible))
+      .toThrow(/distinct goods owners/);
+    expect(() => validateTradeShipmentRegistry(persisted))
+      .toThrow(/distinct goods owners/);
+    expect(() => deliverDueTradeShipments(persisted, {
+      tick: impossible.arrivalTick,
+      phase: impossible.arrivalTick === impossible.departureTick ? 7 : 1,
+      priorTransactions: [],
+    })).toThrow(/distinct goods owners/);
+    expect(persisted.shipments?.get(impossible.id)).toBe(impossible);
+    expect(world.states.get(owner.stateId)!.publicInventory).toBe(before);
+    expect(persisted.states.get(owner.stateId)!.publicInventory).toBe(before);
+  });
+
   it("rejects phantom buyers, unsupported goods owners and forged ownership", () => {
     const valid = sample();
     expect(() => validateTradeShipmentState(world, {
