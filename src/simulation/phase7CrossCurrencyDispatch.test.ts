@@ -189,6 +189,36 @@ describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
     expect(delivered.transactions.filter(tx => tx.type === "GOODS_TRANSPORT_LOSS")).toHaveLength(1);
   });
 
+  it("rejects replaying an earlier tick's FX settlement while its goods remain in transit", () => {
+    const f = fixture();
+    const dispatched = settleCrossCurrencyTradeDispatch(f.world, f.request);
+    expect(dispatched).not.toBeNull();
+    const nextWorld = dispatched!.world;
+    expect(nextWorld.shipments?.get(f.request.shipmentId)?.fxSettlementId)
+      .toBe(f.request.settlementId);
+
+    const next: CrossCurrencyDispatchRequest = {
+      ...f.request,
+      tick: f.request.tick + 1,
+      bundleId: createTransactionBundleId("tb:8:cross:2"),
+      shipmentId: "sh:8:cross:2" as ShipmentId,
+      priorTransactions: [],
+      reservation: {
+        ...f.request.reservation,
+        tick: f.request.tick + 1,
+        requestId: "fx:req:dispatch-8",
+        quote: quoteFx(nextWorld, f.request.fxPairId,
+          f.destinationCurrency, f.sourceCurrency, 30, { maxInputAmount: 100 }),
+      },
+    };
+    unchanged(nextWorld, next, () =>
+      settleCrossCurrencyTradeDispatch(nextWorld, next));
+    expect(() => settleCrossCurrencyTradeDispatch(nextWorld, next))
+      .toThrow(/FX settlement ID already belongs to in-transit shipment/);
+    expect(() => validateTradeShipmentRegistry(nextWorld)).not.toThrow();
+    expect(nextWorld.shipments?.size).toBe(1);
+  });
+
   it("rejects unrepresentable physical attrition before any FX, goods or journal effects", () => {
     const f = fixture();
     const link = f.world.transportLinks.get(f.request.transportLinkId)!;
