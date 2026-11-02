@@ -52,7 +52,7 @@ function mixedArrivalFixture() {
     ...slow,
     id: "sh:delivery:mixed:instant" as ShipmentId, quantity: 2,
     transportLinkId: instantLinkId, routeLinkIds: [instantLinkId],
-    arrivalTick: 8,
+    arrivalTick: 8, buyerGoodsPaymentAmount: 20,
     ...(sourceCurrency === destinationCurrency ? {}
       : { fxSettlementId: "fxs:delivery:mixed:instant" }),
   };
@@ -75,6 +75,7 @@ function transitGoods(world: WorldState): number {
 describe("M5 #674 mixed same-tick and future-tick cargo conservation", () => {
   it("delivers zero-travel in Phase 7, carries delayed goods to Phase 1, and replays deterministically", () => {
     const { buyer, slow, instant, forward, reverse } = mixedArrivalFixture();
+    if (buyer.type !== "STATE") throw new Error("Expected State buyer");
     const beforeGoods = buyerGoods(forward, buyer);
     const openingTotal = beforeGoods + transitGoods(forward);
     const beforeStates = forward.states;
@@ -132,10 +133,8 @@ describe("M5 #674 mixed same-tick and future-tick cargo conservation", () => {
     expect(buyerGoods(arrival.world, buyer)).toBe(beforeGoods + 5);
     expect(buyerGoods(arrival.world, buyer) + transitGoods(arrival.world))
       .toBe(openingTotal);
-    expect(arrival.world.states.get(buyer.type === "STATE" ? buyer.stateId
-      : [...arrival.world.states.keys()][0]!)?.treasury)
-      .toEqual(forward.states.get(buyer.type === "STATE" ? buyer.stateId
-        : [...forward.states.keys()][0]!)?.treasury);
+    expect(arrival.world.states.get(buyer.stateId)!.treasury)
+      .toEqual(forward.states.get(buyer.stateId)!.treasury);
     expect(() => validateTradeShipmentRegistry(arrival.world)).not.toThrow();
 
     const replay1 = deliverDueTradeShipments(arrival.world, {
