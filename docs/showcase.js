@@ -4,6 +4,7 @@
   const byId = id => document.getElementById(id);
   const select = byId("showcase-milestone");
   const slider = byId("spotlight-tick");
+  const playButton = byId("spotlight-play");
   const readout = byId("spotlight-readout");
   const metrics = byId("spotlight-metrics");
   const summary = byId("m4-run-summary");
@@ -11,7 +12,19 @@
   const tag = byId("showcase-mode-tag");
   const description = byId("showcase-run-description");
   const source = byId("showcase-source");
-  if (![select, slider, readout, metrics, summary, heading, tag, description, source].every(Boolean)) return;
+  if (![select, slider, playButton, readout, metrics, summary, heading, tag, description, source].every(Boolean)) return;
+  let playbackTimer = null;
+  function stopPlayback() {
+    if (playbackTimer !== null) window.clearInterval(playbackTimer);
+    playbackTimer = null;
+    playButton.textContent = "▶ Play";
+    playButton.setAttribute("aria-label", "Play recorded ticks");
+    playButton.setAttribute("aria-pressed", "false");
+  }
+  // Playback is opt-in and advances existing samples only; it never runs the economy.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stopPlayback();
+  });
   const runs = { m4: { status: "loading" }, m3: { status: "loading" } };
   const num = v => Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const pct = v => (v * 100).toFixed(1) + "%";
@@ -106,6 +119,8 @@
   }
 
   function unavailable(message) {
+    stopPlayback();
+    playButton.disabled = true;
     slider.disabled = true;
     slider.value = "0";
     slider.max = "0";
@@ -182,6 +197,7 @@
     }
     if (!samples.length) return unavailable("This run has no observed ticks");
     slider.disabled = false;
+    playButton.disabled = samples.length < 2;
     slider.min = "0";
     slider.max = String(samples.length - 1);
     slider.step = "1";
@@ -197,8 +213,25 @@
     renderTick();
   }
 
-  select.addEventListener("change", render);
-  slider.addEventListener("input", renderTick);
+  select.addEventListener("change", () => { stopPlayback(); render(); });
+  slider.addEventListener("input", () => { stopPlayback(); renderTick(); });
+  playButton.addEventListener("click", () => {
+    if (playbackTimer !== null) return stopPlayback();
+    if (playButton.disabled || slider.disabled) return;
+    // Replaying a finished saved run starts at its real first observation.
+    if (Number(slider.value) >= Number(slider.max)) slider.value = "0";
+    renderTick();
+    playButton.textContent = "Ⅱ Pause";
+    playButton.setAttribute("aria-label", "Pause recorded ticks");
+    playButton.setAttribute("aria-pressed", "true");
+    playbackTimer = window.setInterval(() => {
+      const next = Number(slider.value) + 1;
+      if (!Number.isSafeInteger(next) || next > Number(slider.max)) return stopPlayback();
+      slider.value = String(next);
+      renderTick();
+      if (next === Number(slider.max)) stopPlayback();
+    }, 850);
+  });
   window.showcaseSavedRun = {
     validateM3,
     ready(mode, data) {
