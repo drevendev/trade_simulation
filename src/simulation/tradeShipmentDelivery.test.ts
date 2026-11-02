@@ -209,4 +209,78 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
       { tick: 8, phase: 1, priorTransactions: [] });
     expect(stateGoods(okay.world, buyer)).toBe(1e16 + 2);
   });
+
+  it("delivers mixed ProductionUnit stock buckets once without cross-bucket goods loss", () => {
+    const { inTransit, shipment } = fixture();
+    const destinationKey = inTransit.regions.get(shipment.destinationRegionId)!.seed.key;
+    const unit = [...inTransit.productionUnits.values()].find(candidate =>
+      candidate.seed.regionKey === destinationKey);
+    if (!unit) throw new Error("Missing destination-region ProductionUnit fixture");
+    const buyer: ActorRef = {
+      type: "PRODUCTION_UNIT", productionUnitId: unit.productionUnitId,
+    };
+    const entries = [
+      { id: "sh:delivery:bucket:a" as ShipmentId, bucket: "INPUT" as const, quantity: 0.25 },
+      { id: "sh:delivery:bucket:b" as ShipmentId, bucket: "OUTPUT" as const, quantity: 0.5 },
+      { id: "sh:delivery:bucket:c" as ShipmentId, bucket: "INVESTMENT" as const, quantity: 1.25 },
+    ];
+    const cargo: TradeShipmentState[] = entries.map(entry => ({
+      ...shipment, id: entry.id, quantity: entry.quantity,
+      buyer, beneficialOwner: buyer, destinationInventoryBucket: entry.bucket,
+    }));
+    const withCargo = (ordered: readonly TradeShipmentState[]): WorldState => ({
+      ...inTransit, shipments: new Map(ordered.map(item => [item.id, item])),
+    });
+    const forward = withCargo(cargo);
+    const reverse = withCargo([...cargo].reverse());
+    const request = {
+      tick: shipment.arrivalTick, phase: 1 as const, priorTransactions: [],
+    };
+    const openingGoods = [unit.inputInventory, unit.outputInventory,
+      unit.investmentInventory].reduce((sum, bucket) => sum + (bucket.get(GOOD) ?? 0), 0);
+    const inTransitGoods = cargo.reduce((sum, item) => sum + item.quantity, 0);
+
+    const first = deliverDueTradeShipments(forward, request);
+    const reordered = deliverDueTradeShipments(reverse, request);
+    expect(first.deliveredShipmentIds).toEqual(entries.map(entry => entry.id));
+    expect(reordered.deliveredShipmentIds).toEqual(first.deliveredShipmentIds);
+    expect(reordered.newTransactions).toEqual(first.newTransactions);
+    expect(first.newTransactions).toHaveLength(3);
+    expect(first.newTransactions.every(tx =>
+      tx.type === "SHIPMENT_DELIVERY" && tx.moneyAmount === undefined &&
+      tx.currencyId === undefined)).toBe(true);
+
+    const deliveredUnit = first.world.productionUnits.get(unit.productionUnitId)!;
+    const inventories = {
+      INPUT: deliveredUnit.inputInventory,
+      OUTPUT: deliveredUnit.outputInventory,
+      INVESTMENT: deliveredUnit.investmentInventory,
+    };
+    const opening = {
+      INPUT: unit.inputInventory,
+      OUTPUT: unit.outputInventory,
+      INVESTMENT: unit.investmentInventory,
+    };
+    for (const entry of entries) {
+      expect(inventories[entry.bucket].get(GOOD) ?? 0).toBeCloseTo(
+        (opening[entry.bucket].get(GOOD) ?? 0) + entry.quantity, 12);
+      expect(first.newTransactions.find(tx =>
+        tx.transactionId === createTransactionId("tx:delivery:" + entry.id))?.reason)
+        .toBe("IN_TRANSIT_TO_" + entry.bucket + "_STOCK:" + entry.id);
+    }
+    const closingGoods = Object.values(inventories)
+      .reduce((sum, bucket) => sum + (bucket.get(GOOD) ?? 0), 0);
+    expect(closingGoods).toBeCloseTo(openingGoods + inTransitGoods, 12);
+    expect(first.world.shipments?.size).toBe(0);
+    expect(forward.shipments?.size).toBe(3);
+    expect(forward.productionUnits.get(unit.productionUnitId)).toBe(unit);
+
+    const replay = deliverDueTradeShipments(first.world, {
+      ...request, priorTransactions: first.transactions,
+    });
+    expect(replay.world).toBe(first.world);
+    expect(replay.newTransactions).toEqual([]);
+    expect(replay.world.productionUnits.get(unit.productionUnitId)).toBe(deliveredUnit);
+  });
+
 });
