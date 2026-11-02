@@ -330,7 +330,9 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
     };
     const wrongBucket: WorldState = {
       ...first.world,
-      shipments: new Map([[prior.id, { ...prior, destinationInventoryBucket: "INPUT" }]]),
+      shipments: new Map<ShipmentId, TradeShipmentState>([
+        [prior.id, { ...prior, destinationInventoryBucket: "INPUT" }],
+      ]),
     };
     for (const malformed of [wrongKey, wrongBucket]) {
       expect(() => validateTradeShipmentRegistry(malformed)).toThrow();
