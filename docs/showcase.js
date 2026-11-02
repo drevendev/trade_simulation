@@ -18,7 +18,6 @@
     if (playbackTimer !== null) window.clearInterval(playbackTimer);
     playbackTimer = null;
     playButton.textContent = "▶ Play";
-    playButton.setAttribute("aria-label", "Play recorded ticks");
     playButton.setAttribute("aria-pressed", "false");
   }
   // Playback is opt-in and advances existing samples only; it never runs the economy.
@@ -222,7 +221,6 @@
     if (Number(slider.value) >= Number(slider.max)) slider.value = "0";
     renderTick();
     playButton.textContent = "Ⅱ Pause";
-    playButton.setAttribute("aria-label", "Pause recorded ticks");
     playButton.setAttribute("aria-pressed", "true");
     playbackTimer = window.setInterval(() => {
       const next = Number(slider.value) + 1;
