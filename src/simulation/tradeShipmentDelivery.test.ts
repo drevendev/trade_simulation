@@ -176,11 +176,11 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
     const bundleId = createTransactionBundleId("tb:prior:multi-leg");
     const firstId = createTransactionId("tx:prior:transport");
     const first = {
-      tick: 8, phase: 7 as const, type: "TRANSPORT_FEE" as const,
+      tick: 7, phase: 7 as const, type: "TRANSPORT_FEE" as const,
       transactionId: firstId, bundleId, amount: 1,
     };
     const second = {
-      tick: 8, phase: 7 as const, type: "IMPORT_TARIFF" as const,
+      tick: 7, phase: 7 as const, type: "IMPORT_TARIFF" as const,
       transactionId: createTransactionId("tx:prior:tariff"), bundleId, amount: 1,
     };
     // Two different economic legs can legally share a bundle ID.
