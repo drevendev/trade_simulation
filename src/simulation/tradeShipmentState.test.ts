@@ -166,8 +166,10 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
       ...world, shipments: new Map([[fxShipment.id, fxShipment], [unique.id, unique]]),
     })).not.toThrow();
     // Same-currency shipments have no FX receipt and may coexist.
-    const same = { ...valid,
-      invoiceCurrencyId: valid.buyerPaymentCurrencyId, fxSettlementId: undefined };
+    const { fxSettlementId: _unused, ...sameWithoutFx } = valid;
+    const same: TradeShipmentState = {
+      ...sameWithoutFx, invoiceCurrencyId: valid.buyerPaymentCurrencyId,
+    };
     expect(() => validateTradeShipmentRegistry({
       ...world, shipments: new Map([
         [valid.id, same], [second.id, { ...same, id: second.id }],
