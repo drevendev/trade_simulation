@@ -216,10 +216,19 @@ export function validateTradeShipmentRegistry(world: WorldState): void {
   if (!(world.shipments instanceof Map)) {
     throw new Error("Canonical shipment registry is missing");
   }
+  const fxSettlementIds = new Set<string>();
   for (const [id, shipment] of world.shipments) {
     if (id !== shipment.id) {
       throw new Error("Shipment registry key differs from persistent id");
     }
     validateTradeShipmentState(world, shipment);
+    // A Phase-7 FX settlement pays for one dispatch. Distinct live cargo
+    // records cannot reuse the same frozen monetary receipt.
+    if (shipment.fxSettlementId !== undefined) {
+      if (fxSettlementIds.has(shipment.fxSettlementId)) {
+        throw new Error("Shipment registry reuses an FX settlement ID");
+      }
+      fxSettlementIds.add(shipment.fxSettlementId);
+    }
   }
 }
