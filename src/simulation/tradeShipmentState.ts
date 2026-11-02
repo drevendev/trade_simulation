@@ -138,6 +138,14 @@ export function validateTradeShipmentState(
   requiredId(shipment.buyerPaymentCurrencyId, "buyerPaymentCurrencyId");
 
   amount(shipment.quantity, "quantity", true);
+  // A dispatch refuses stock at or below quantityEpsilon. Persisted cargo
+  // must obey that same floor or it can become permanently undeliverable:
+  // a destination's binary64 inventory cannot reliably observe its credit.
+  const epsilon = world.simulationConfig.numeric.quantityEpsilon ?? 1e-9;
+  if (!Number.isFinite(epsilon) || epsilon <= 0 ||
+      shipment.quantity <= epsilon) {
+    throw new Error("Shipment quantity must exceed canonical quantity epsilon");
+  }
   amount(shipment.sellerNetUnitPrice, "sellerNetUnitPrice");
   amount(shipment.buyerGoodsPaymentAmount, "buyerGoodsPaymentAmount");
   amount(shipment.transportFeeAmount, "transportFeeAmount");
