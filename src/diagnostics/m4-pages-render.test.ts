@@ -198,6 +198,41 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     } finally { await page.close(); }
   }, 60_000);
 
+  it("stops playback when active saved observations are replaced, but not for an unrelated run", async () => {
+    const page = await pageAt("", 1280, false);
+    try {
+      const play = page.getByRole("button", { name: "Recorded tick playback", exact: true });
+      const slider = page.locator("#spotlight-tick");
+      const m4 = artifact();
+      expect(m4.samples.length).toBeGreaterThan(2);
+      const m3 = JSON.parse(readFileSync(path.join(docsDir, "m3-preview.json"), "utf8")) as M3Preview;
+      const update = async (mode: "m3" | "m4", data: M3Preview | M4Preview) => page.evaluate(
+        (payload) => {
+          const player = window as Window & {
+            showcaseSavedRun: { ready: (mode: string, data: unknown) => void };
+          };
+          player.showcaseSavedRun.ready(payload.mode, payload.data);
+        }, { mode, data },
+      );
+
+      await play.click();
+      expect(await play.getAttribute("aria-pressed")).toBe("true");
+      // An unrelated milestone finishing its fetch must not interrupt M4.
+      await update("m3", m3);
+      expect(await play.getAttribute("aria-pressed")).toBe("true");
+
+      // A refreshed active recording must cancel the interval before render()
+      // resets the sample index: never continue playing a different sample set.
+      await update("m4", { ...m4, samples: m4.samples.slice(0, 3) });
+      expect(await play.getAttribute("aria-pressed")).toBe("false");
+      expect(await slider.getAttribute("max")).toBe("2");
+      expect(await slider.inputValue()).toBe("0");
+      await page.waitForTimeout(1100);
+      expect(await slider.inputValue()).toBe("0");
+      expect(await play.isEnabled()).toBe(true);
+    } finally { await page.close(); }
+  }, 60_000);
+
   it("switches all spotlight numbers and units between the validated M4 and M3 runs", async () => {
     const page = await pageAt("", 1280, false);
     try {
