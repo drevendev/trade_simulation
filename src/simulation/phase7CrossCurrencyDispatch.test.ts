@@ -262,6 +262,69 @@ describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
       .toBe(50 - result.shipment.quantity);
   });
 
+  it("conserves goods when partial FX allocation suffers routine dispatch loss", () => {
+    const f = fixture(3);
+    const link = f.world.transportLinks.get(f.request.transportLinkId)!;
+    const world: WorldState = {
+      ...f.world,
+      transportLinks: new Map(f.world.transportLinks).set(link.linkId, {
+        ...link, seed: { ...link.seed, routinePhysicalLossRate: 0.25 },
+      }),
+    };
+    const openingSellerGoods = stock(world, f.request);
+    const openingBuyerGoods = readMarketActorInventory(world, f.buyer, "GENERAL")
+      .get(GOOD) ?? 0;
+    const openingBuyerCash = cash(world, f.buyer, f.destinationCurrency);
+    const before = snapshot(world, f.request);
+
+    const result = settleCrossCurrencyTradeDispatch(world, f.request)!;
+    const replay = settleCrossCurrencyTradeDispatch(world, f.request)!;
+    const gross = result.sizing.quantity;
+    const surviving = result.shipment.quantity;
+    const losses = result.newTransactions.filter(tx => tx.type === "GOODS_TRANSPORT_LOSS");
+    expect(gross).toBeGreaterThan(0);
+    expect(gross).toBeLessThan(f.request.plannedQuantity);
+    expect(surviving).toBeCloseTo(gross * 0.75, 12);
+    expect(losses).toHaveLength(1);
+    expect(losses[0]).toMatchObject({
+      source: f.buyer, goodId: GOOD, bundleId: f.request.bundleId,
+    });
+    expect(losses[0]!.quantity).toBeCloseTo(gross - surviving, 12);
+    expect(losses[0]!.moneyAmount).toBeUndefined();
+    expect(losses[0]!.currencyId).toBeUndefined();
+    expect(openingSellerGoods - stock(result.world, f.request)).toBeCloseTo(gross, 12);
+    expect(surviving + losses[0]!.quantity!).toBeCloseTo(gross, 12);
+    expect(result.remainingCargoWeightByLink.get(f.request.transportLinkId))
+      .toBeCloseTo(50 - gross, 12);
+    expect(result.fxReceipt.outputAmount).toBeCloseTo(gross * 3, 12);
+    expect(result.shipment.buyerGoodsPaymentAmount).toBe(result.fxReceipt.inputAmount);
+    expect(result.shipment.transportFeeAmount).toBeCloseTo(gross * 0.5, 12);
+    expect(result.shipment.tariffAmount).toBeCloseTo(gross * 0.25, 12);
+    expect(result.shipment.consumptionTaxAmount).toBeCloseTo(gross * 0.25, 12);
+    expect(openingBuyerCash - cash(result.world, f.buyer, f.destinationCurrency))
+      .toBeCloseTo(result.fxReceipt.inputAmount + gross, 9);
+    expect(result.transactions).toEqual(replay.transactions);
+    expect([...result.world.shipments!]).toEqual([...replay.world.shipments!]);
+    expect(snapshot(world, f.request)).toEqual(before);
+
+    const arrival = {
+      tick: result.shipment.arrivalTick,
+      phase: (result.shipment.arrivalTick === result.shipment.departureTick ? 7 : 1) as 1 | 7,
+      priorTransactions: result.transactions,
+    };
+    const delivered = deliverDueTradeShipments(result.world, arrival);
+    expect(readMarketActorInventory(delivered.world, f.buyer, "GENERAL").get(GOOD))
+      .toBeCloseTo(openingBuyerGoods + surviving, 12);
+    expect(delivered.world.shipments?.size).toBe(0);
+    expect(delivered.transactions.filter(tx => tx.type === "GOODS_TRANSPORT_LOSS"))
+      .toHaveLength(1);
+    const repeated = deliverDueTradeShipments(delivered.world, {
+      ...arrival, priorTransactions: delivered.transactions,
+    });
+    expect(repeated.newTransactions).toEqual([]);
+    expect(repeated.world).toBe(delivered.world);
+  });
+
   it("replays deterministically without changing caller-owned state, journal or pool", () => {
     const f = fixture();
     const before = snapshot(f.world, f.request);
