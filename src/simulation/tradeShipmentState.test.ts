@@ -125,15 +125,15 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
 
     // Preserve an existing GoodId while making it ineligible for physical
     // trade. Mere definition existence must not authorize in-transit stock.
+    const persisted = new Map([[shipment.id, shipment]]);
     const nontradableWorld: WorldState = {
       ...world,
       definitionRegistry: {
         ...world.definitionRegistry,
         goods: { ...goods, [shipment.goodId]: { ...definition, tradable: false } },
       },
-      shipments: new Map([[shipment.id, shipment]]),
+      shipments: persisted,
     };
-    const persisted = nontradableWorld.shipments;
     const owner = shipment.buyer;
     if (owner.type !== "STATE") throw new Error("Expected State buyer fixture");
     const originalInventory = nontradableWorld.states.get(owner.stateId)!.publicInventory;
