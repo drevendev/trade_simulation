@@ -170,6 +170,41 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
     expect(inTransit.shipments?.get(shipment.id)).toBe(shipment);
   });
 
+  it("refuses duplicate committed journal IDs without rejecting legitimate shared bundles", () => {
+    const { inTransit, shipment, buyer } = fixture();
+    const opening = stateGoods(inTransit, buyer);
+    const bundleId = createTransactionBundleId("tb:prior:multi-leg");
+    const firstId = createTransactionId("tx:prior:transport");
+    const first = {
+      tick: 8, phase: 7 as const, type: "TRANSPORT_FEE" as const,
+      transactionId: firstId, bundleId, amount: 1,
+    };
+    const second = {
+      tick: 8, phase: 7 as const, type: "IMPORT_TARIFF" as const,
+      transactionId: createTransactionId("tx:prior:tariff"), bundleId, amount: 1,
+    };
+    // Two different economic legs can legally share a bundle ID.
+    const validPrior = [first, second];
+    const delivered = deliverDueTradeShipments(inTransit, {
+      tick: 8, phase: 1, priorTransactions: validPrior,
+    });
+    expect(delivered.deliveredShipmentIds).toEqual([shipment.id]);
+    expect(delivered.transactions).toHaveLength(3);
+    expect(delivered.transactions.slice(0, 2)).toEqual(validPrior);
+
+    // Repeating a transaction ID, even under another bundle, would make the
+    // resulting ledger non-unique. Do not credit the receiver or consume cargo.
+    const duplicate = { ...second, transactionId: firstId,
+      bundleId: createTransactionBundleId("tb:prior:other") };
+    const invalidPrior = [first, second, duplicate];
+    expect(() => deliverDueTradeShipments(inTransit, {
+      tick: 8, phase: 1, priorTransactions: invalidPrior,
+    })).toThrow(/duplicate prior transaction identity/);
+    expect(stateGoods(inTransit, buyer)).toBe(opening);
+    expect(inTransit.shipments?.get(shipment.id)).toBe(shipment);
+    expect(invalidPrior).toEqual([first, second, duplicate]);
+  });
+
   it("refuses binary64 lost credits, overflowing stock, and cumulative precision loss", () => {
     const { inTransit, shipment, buyer } = fixture();
     if (buyer.type !== "STATE") throw new Error("expected State");
