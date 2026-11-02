@@ -191,7 +191,7 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
       phase: impossible.arrivalTick === impossible.departureTick ? 7 : 1,
       priorTransactions: [],
     })).toThrow(/distinct goods owners/);
-    expect(persisted.shipments.get(impossible.id)).toBe(impossible);
+    expect(persisted.shipments?.get(impossible.id)).toBe(impossible);
     expect(world.states.get(owner.stateId)!.publicInventory).toBe(before);
     expect(persisted.states.get(owner.stateId)!.publicInventory).toBe(before);
   });
