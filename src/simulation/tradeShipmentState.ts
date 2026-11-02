@@ -177,6 +177,12 @@ export function validateTradeShipmentState(
   assertGoodsActor(world, shipment.seller, "seller");
   assertGoodsActor(world, shipment.buyer, "buyer");
   assertGoodsActor(world, shipment.beneficialOwner, "beneficialOwner");
+  // Phase-7 settlement forbids an actor selling to itself. Reject the same
+  // impossible ownership transfer when validating replayed in-transit stock,
+  // before any Phase-1/7 delivery could credit a forged recipient.
+  if (actorRefKey(shipment.seller) === actorRefKey(shipment.buyer)) {
+    throw new Error("Shipment seller and buyer must be distinct goods owners");
+  }
   assertResidentGoodsLocation(world, shipment.seller, shipment.originRegionId, "seller");
   assertResidentGoodsLocation(world, shipment.buyer, shipment.destinationRegionId, "buyer");
   if (actorRefKey(shipment.beneficialOwner) !== actorRefKey(shipment.buyer)) {
