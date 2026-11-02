@@ -124,7 +124,7 @@ export function validateTradeShipmentState(
     throw new Error("Shipment record is missing");
   }
   requiredId(shipment.id, "id");
-  if (!shipment.id.startsWith("sh:")) {
+  if (!shipment.id.startsWith("sh:") || shipment.id.slice(3).trim().length === 0) {
     throw new Error("Shipment id must carry the sh: prefix");
   }
   requiredId(shipment.goodId, "goodId");
@@ -208,7 +208,8 @@ export function validateTradeShipmentState(
     }
   } else {
     requiredId(shipment.fxSettlementId, "fxSettlementId");
-    if (!shipment.fxSettlementId!.startsWith("fxs:")) {
+    if (!shipment.fxSettlementId!.startsWith("fxs:") ||
+        shipment.fxSettlementId!.slice(4).trim().length === 0) {
       throw new Error("Shipment FX settlement id must carry fxs: prefix");
     }
   }
