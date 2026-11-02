@@ -34,7 +34,7 @@ import {
   assertPhase7ActorLocation, debitPhase7SellerGoods,
 } from "./phase7SameCurrencyDispatch";
 import {
-  validateTradeShipmentState,
+  validateTradeShipmentRegistry, validateTradeShipmentState,
   type TradeShipmentState, type ShipmentDestinationInventoryBucket,
 } from "./tradeShipmentState";
 import {
@@ -117,6 +117,9 @@ export function settleCrossCurrencyTradeDispatch(
   if (!(world.shipments instanceof Map)) {
     return refuse("persistent shipment registry missing");
   }
+  // Preflight all existing physical cargo before any FX, stock or fee transition.
+  // A previously persisted bad shipment cannot be carried into another settlement.
+  validateTradeShipmentRegistry(world);
   if (world.shipments.has(request.shipmentId) ||
       request.priorTransactions.some((tx) =>
         tx.bundleId === request.bundleId ||
