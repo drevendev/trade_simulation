@@ -208,7 +208,7 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
       const m3 = JSON.parse(readFileSync(path.join(docsDir, "m3-preview.json"), "utf8")) as M3Preview;
       const update = async (mode: "m3" | "m4", data: M3Preview | M4Preview) => page.evaluate(
         (payload) => {
-          const player = window as Window & {
+          const player = window as unknown as {
             showcaseSavedRun: { ready: (mode: string, data: unknown) => void };
           };
           player.showcaseSavedRun.ready(payload.mode, payload.data);
