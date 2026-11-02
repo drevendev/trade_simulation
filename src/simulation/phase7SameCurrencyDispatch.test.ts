@@ -306,6 +306,39 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
       () => settleSameCurrencyTradeDispatch(noReceiverWorld, request));
   });
 
+  it("refuses malformed pending cargo before a second paid dispatch, without blocking valid cargo", () => {
+    const { world, request } = fixture();
+    const first = settleSameCurrencyTradeDispatch(world, request);
+    const second: SameCurrencyDispatchRequest = {
+      ...request,
+      bundleId: createTransactionBundleId("tb:37:test:dispatch:2"),
+      shipment: { ...request.shipment, id: "sh:37:test:dispatch:2" as ShipmentId },
+      priorTransactions: first.transactions,
+      remainingCargoWeightByLink: first.remainingCargoWeightByLink,
+    };
+    // Multiple legitimate shipments may share a route and owners, with distinct
+    // shipment/bundle identities and fully funded independent settlements.
+    expect(() => validateTradeShipmentRegistry(first.world)).not.toThrow();
+    const legitimate = settleSameCurrencyTradeDispatch(first.world, second);
+    expect(legitimate.world.shipments?.size).toBe(2);
+    expect(stock(legitimate.world, second)).toBe(6);
+
+    const prior = first.world.shipments!.get(request.shipment.id)!;
+    const wrongKey: WorldState = {
+      ...first.world,
+      shipments: new Map([["sh:37:wrong-key" as ShipmentId, prior]]),
+    };
+    const wrongBucket: WorldState = {
+      ...first.world,
+      shipments: new Map([[prior.id, { ...prior, destinationInventoryBucket: "INPUT" }]]),
+    };
+    for (const malformed of [wrongKey, wrongBucket]) {
+      expect(() => validateTradeShipmentRegistry(malformed)).toThrow();
+      unchanged(malformed, second,
+        () => settleSameCurrencyTradeDispatch(malformed, second));
+    }
+  });
+
   it("rejects replayed shipment and transaction identity before money or stock leaves again", () => {
     const { world, request } = fixture();
     const committed = settleSameCurrencyTradeDispatch(world, request);
