@@ -134,6 +134,35 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
     })).toThrow(/same-currency/);
   });
 
+  it("rejects sub-epsilon persisted cargo before undeliverable stock can be credited", () => {
+    const original = sample();
+    const epsilon = world.simulationConfig.numeric.quantityEpsilon ?? 1e-9;
+    expect(epsilon).toBeGreaterThan(0);
+    // Successful dispatch requires quantity > epsilon; restore and delivery
+    // must enforce the same boundary rather than strand a tiny shipment.
+    for (const quantity of [Number.MIN_VALUE, epsilon / 2, epsilon]) {
+      const invalid = { ...original, quantity };
+      const shipments = new Map([[invalid.id, invalid]]);
+      const candidate: WorldState = { ...world, shipments };
+      expect(() => validateTradeShipmentState(candidate, invalid))
+        .toThrow(/quantity.*epsilon/);
+      expect(() => validateTradeShipmentRegistry(candidate))
+        .toThrow(/quantity.*epsilon/);
+      expect(() => deliverDueTradeShipments(candidate, {
+        tick: invalid.arrivalTick,
+        phase: invalid.arrivalTick === invalid.departureTick ? 7 : 1,
+        priorTransactions: [],
+      })).toThrow(/quantity.*epsilon/);
+      expect(candidate.shipments).toBe(shipments);
+      expect(shipments.get(invalid.id)).toEqual(invalid);
+      expect(world.shipments?.size).toBe(0);
+    }
+    // A representable positive quantity above the canonical floor remains legal.
+    expect(() => validateTradeShipmentState(world, {
+      ...original, quantity: 2 * epsilon,
+    })).not.toThrow();
+  });
+
   it("rejects invalid physical amount, money and tick evidence before it can become stock", () => {
     const valid = sample();
     for (const quantity of [0, -1, NaN, Infinity]) {
