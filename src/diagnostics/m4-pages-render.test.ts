@@ -155,6 +155,39 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     } finally { await page.close(); }
   }, 60_000);
 
+  it("plays only recorded samples after explicit opt-in, then pauses on user input and run changes", async () => {
+    const page = await pageAt("", 1280, false);
+    try {
+      const play = page.locator("#spotlight-play");
+      const slider = page.locator("#spotlight-tick");
+      expect(await play.isEnabled()).toBe(true);
+      expect(await play.getAttribute("aria-pressed")).toBe("false");
+      expect(await slider.inputValue()).toBe("0");
+      // Nothing advances on its own. Play operates on actual artifact samples.
+      await page.waitForTimeout(1000);
+      expect(await slider.inputValue()).toBe("0");
+      await play.click();
+      expect(await play.getAttribute("aria-pressed")).toBe("true");
+      await page.waitForFunction(() => Number((document.getElementById("spotlight-tick") as HTMLInputElement).value) > 0);
+      const index = Number(await slider.inputValue());
+      const sample = artifact().samples[index]!;
+      expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${sample.tick}`);
+      await play.click();
+      expect(await play.getAttribute("aria-pressed")).toBe("false");
+      const paused = await slider.inputValue();
+      await page.waitForTimeout(1000);
+      expect(await slider.inputValue()).toBe(paused);
+      await play.click();
+      await page.locator("#showcase-milestone").selectOption("m3");
+      expect(await play.getAttribute("aria-pressed")).toBe("false");
+      expect(await play.isEnabled()).toBe(true);
+      await page.locator("#showcase-milestone").selectOption("m4");
+      expect(await play.getAttribute("aria-pressed")).toBe("false");
+      // The saved run stays navigable without a running timer.
+      expect(await slider.isEnabled()).toBe(true);
+    } finally { await page.close(); }
+  }, 60_000);
+
   it("switches all spotlight numbers and units between the validated M4 and M3 runs", async () => {
     const page = await pageAt("", 1280, false);
     try {
