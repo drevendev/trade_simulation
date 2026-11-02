@@ -358,8 +358,8 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
       .toEqual(forward.states.get(
         shipment.buyer.type === "STATE" ? shipment.buyer.stateId
           : [...forward.states.keys()][0]!)?.treasury);
-    expect(delivered.world.cohorts.get(cohortId)!.wallets).toEqual(cohort.wallets);
-    expect(delivered.world.productionUnits.get(unitId)!.wallets).toEqual(unit.wallets);
+    expect(delivered.world.cohorts.get(cohortId)!.wallet).toEqual(cohort.wallet);
+    expect(delivered.world.productionUnits.get(unitId)!.wallet).toEqual(unit.wallet);
     expect(forward.shipments?.size).toBe(3);
     expect(forward.cohorts.get(cohortId)).toBe(cohort);
     expect(forward.productionUnits.get(unitId)).toBe(unit);
