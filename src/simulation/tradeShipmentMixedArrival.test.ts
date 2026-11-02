@@ -69,7 +69,7 @@ function buyerGoods(world: WorldState, buyer: ActorRef): number {
   return world.states.get(buyer.stateId)!.publicInventory.get(GOOD) ?? 0;
 }
 function transitGoods(world: WorldState): number {
-  return [...world.shipments.values()].reduce((sum, cargo) => sum + cargo.quantity, 0);
+  return [...(world.shipments?.values() ?? [])].reduce((sum, cargo) => sum + cargo.quantity, 0);
 }
 
 describe("M5 #674 mixed same-tick and future-tick cargo conservation", () => {
@@ -99,13 +99,13 @@ describe("M5 #674 mixed same-tick and future-tick cargo conservation", () => {
     });
     expect(sameTick.newTransactions[0]?.moneyAmount).toBeUndefined();
     expect(buyerGoods(sameTick.world, buyer)).toBe(beforeGoods + instant.quantity);
-    expect(sameTick.world.shipments.size).toBe(1);
-    expect(sameTick.world.shipments.get(slow.id)).toBe(slow);
+    expect(sameTick.world.shipments?.size).toBe(1);
+    expect(sameTick.world.shipments?.get(slow.id)).toBe(slow);
     expect(buyerGoods(sameTick.world, buyer) + transitGoods(sameTick.world))
       .toBe(openingTotal);
     expect(forward.states).toBe(beforeStates);
     expect(forward.shipments).toBe(beforeShipments);
-    expect(forward.shipments.size).toBe(2);
+    expect(forward.shipments?.size).toBe(2);
     expect(buyerGoods(forward, buyer)).toBe(beforeGoods);
 
     // Replaying the already committed Phase-7 close must not credit the first lot.
@@ -129,7 +129,7 @@ describe("M5 #674 mixed same-tick and future-tick cargo conservation", () => {
       destination: buyer,
     });
     expect(arrival.newTransactions[0]?.moneyAmount).toBeUndefined();
-    expect(arrival.world.shipments.size).toBe(0);
+    expect(arrival.world.shipments?.size).toBe(0);
     expect(buyerGoods(arrival.world, buyer)).toBe(beforeGoods + 5);
     expect(buyerGoods(arrival.world, buyer) + transitGoods(arrival.world))
       .toBe(openingTotal);
