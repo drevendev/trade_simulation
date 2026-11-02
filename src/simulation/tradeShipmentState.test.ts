@@ -4,6 +4,7 @@ import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPac
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { CurrencyId, GoodId, ShipmentId, StateId, ClanId } from "../domain/id";
 import type { ActorRef } from "../domain/genesisLedger";
+import { deliverDueTradeShipments } from "./tradeShipmentDelivery";
 import { buildInitialWorld, type WorldState } from "./worldState";
 import {
   validateTradeShipmentRegistry,
@@ -182,6 +183,66 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
     expect(() => validateTradeShipmentState(world, {
       ...valid, destinationInventoryBucket: "INPUT",
     })).toThrow(/inventory bucket/);
+  });
+
+
+  it("rejects region-mismatched Cohort/ProductionUnit endpoints before delivery", () => {
+    const valid = sample();
+    const originKey = world.regions.get(valid.originRegionId)!.seed.key;
+    const destinationKey = world.regions.get(valid.destinationRegionId)!.seed.key;
+    const cohorts = [...world.cohorts.values()];
+    const units = [...world.productionUnits.values()];
+    const sourceCohort = cohorts.find(cohort => cohort.seed.regionKey === originKey);
+    const destinationUnit = units.find(unit => unit.seed.regionKey === destinationKey);
+    const wrongSourceCohort = cohorts.find(cohort => cohort.seed.regionKey !== originKey);
+    const wrongSourceUnit = units.find(unit => unit.seed.regionKey !== originKey);
+    const wrongDestinationCohort = cohorts.find(cohort =>
+      cohort.seed.regionKey !== destinationKey);
+    const wrongDestinationUnit = units.find(unit =>
+      unit.seed.regionKey !== destinationKey);
+    if (!sourceCohort || !destinationUnit || !wrongSourceCohort ||
+        !wrongSourceUnit || !wrongDestinationCohort || !wrongDestinationUnit) {
+      throw new Error("Missing cross-region shipment actor fixtures");
+    }
+    const seller: ActorRef = { type: "COHORT", cohortId: sourceCohort.cohortId };
+    const buyer: ActorRef = {
+      type: "PRODUCTION_UNIT", productionUnitId: destinationUnit.productionUnitId,
+    };
+    const legal = { ...valid, seller, buyer, beneficialOwner: buyer,
+      destinationInventoryBucket: "INPUT" as const };
+    expect(() => validateTradeShipmentState(world, legal)).not.toThrow();
+
+    const foreignCohortBuyer: ActorRef = {
+      type: "COHORT", cohortId: wrongDestinationCohort.cohortId,
+    };
+    const foreignUnitBuyer: ActorRef = {
+      type: "PRODUCTION_UNIT", productionUnitId: wrongDestinationUnit.productionUnitId,
+    };
+    const cases: { record: TradeShipmentState; role: string }[] = [
+      { record: { ...legal, seller: {
+        type: "COHORT", cohortId: wrongSourceCohort.cohortId,
+      } }, role: "seller" },
+      { record: { ...legal, seller: {
+        type: "PRODUCTION_UNIT", productionUnitId: wrongSourceUnit.productionUnitId,
+      } }, role: "seller" },
+      { record: { ...legal, buyer: foreignCohortBuyer,
+        beneficialOwner: foreignCohortBuyer,
+        destinationInventoryBucket: "GENERAL" }, role: "buyer" },
+      { record: { ...legal, buyer: foreignUnitBuyer,
+        beneficialOwner: foreignUnitBuyer }, role: "buyer" },
+    ];
+    for (const { record, role } of cases) {
+      const candidate: WorldState = {
+        ...world, shipments: new Map([[record.id, record]]),
+      };
+      expect(() => validateTradeShipmentRegistry(candidate))
+        .toThrow(new RegExp(role + " region"));
+      expect(() => deliverDueTradeShipments(candidate, {
+        tick: record.arrivalTick, phase: 1, priorTransactions: [],
+      })).toThrow(new RegExp(role + " region"));
+      expect(candidate.shipments?.get(record.id)).toBe(record);
+      expect(world.shipments?.size).toBe(0);
+    }
   });
 
   it("accepts only in-transit records with an unambiguous shipment identity", () => {
