@@ -131,6 +131,11 @@ export function validateTradeShipmentState(
   if (!Object.prototype.hasOwnProperty.call(world.definitionRegistry.goods, shipment.goodId)) {
     throw new Error("Shipment goodId references an unknown GoodDefinition");
   }
+  // Phase-7 dispatch never ships a nontradable good. Reject a forged or
+  // corrupt persisted record before it can become buyer inventory on arrival.
+  if (!world.definitionRegistry.goods[shipment.goodId]?.tradable) {
+    throw new Error("Shipment goodId must reference a tradable GoodDefinition");
+  }
   requiredId(shipment.originRegionId, "originRegionId");
   requiredId(shipment.destinationRegionId, "destinationRegionId");
   requiredId(shipment.transportLinkId, "transportLinkId");
