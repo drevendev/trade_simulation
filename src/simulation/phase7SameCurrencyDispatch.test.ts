@@ -11,7 +11,7 @@ import {
 import {
   settleSameCurrencyTradeDispatch, type SameCurrencyDispatchRequest,
 } from "./phase7SameCurrencyDispatch";
-import { createTransactionBundleId, noOpPhaseHandler } from "./tickOrchestrator";
+import { createTransactionBundleId, createTransactionId, noOpPhaseHandler } from "./tickOrchestrator";
 import { executeM5ShipmentDeliveryTick } from "./m5ShipmentDeliveryTick";
 import { deliverDueTradeShipments } from "./tradeShipmentDelivery";
 import { buildInitialWorld, type WorldState } from "./worldState";
@@ -467,6 +467,29 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
       () => settleSameCurrencyTradeDispatch(committed.world, repeated));
     const journalOnly = { ...request, priorTransactions: committed.transactions };
     unchanged(world, journalOnly, () => settleSameCurrencyTradeDispatch(world, journalOnly));
+  });
+
+  it("rejects pre-existing duplicate journal transaction IDs even when unrelated to this lot", () => {
+    const { world, request } = fixture();
+    const sample = settleSameCurrencyTradeDispatch(world, request).newTransactions[0]!;
+    const prior = {
+      ...sample,
+      transactionId: createTransactionId("tx:prior:independent:1"),
+      bundleId: createTransactionBundleId("tb:prior:independent:1"),
+    };
+    const legitimate = { ...request, priorTransactions: [prior] };
+    const validResult = settleSameCurrencyTradeDispatch(world, legitimate);
+    expect(validResult.transactions).toHaveLength(validResult.newTransactions.length + 1);
+
+    // Distinct bundle IDs do not make reuse of a transaction ID safe.
+    const duplicate = {
+      ...prior, bundleId: createTransactionBundleId("tb:prior:independent:2"),
+    };
+    const corrupted = { ...request, priorTransactions: [prior, duplicate] };
+    unchanged(world, corrupted,
+      () => settleSameCurrencyTradeDispatch(world, corrupted));
+    expect(() => settleSameCurrencyTradeDispatch(world, corrupted))
+      .toThrow(/duplicate committed journal transaction identity/);
   });
 
   it("rejects unobservable microscopic physical debit or cargo capacity use", () => {
