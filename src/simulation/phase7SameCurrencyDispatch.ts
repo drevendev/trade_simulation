@@ -112,7 +112,8 @@ export function settleSameCurrencyTradeDispatch(
   if (!Number.isSafeInteger(tick) || tick < 0 || shipment.departureTick !== tick) {
     return refuse("shipment departure tick differs from current Phase-7 tick");
   }
-  if (typeof bundleId !== "string" || !bundleId.startsWith("tb:")) {
+  if (typeof bundleId !== "string" || !bundleId.startsWith("tb:") ||
+      bundleId.length <= "tb:".length) {
     return refuse("invalid transaction bundle ID");
   }
   if (!Array.isArray(request.priorTransactions)) {
