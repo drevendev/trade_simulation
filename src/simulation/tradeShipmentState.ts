@@ -31,6 +31,8 @@ export interface TradeShipmentState {
   readonly transportLinkId: TransportLinkId;
   readonly departureTick: number;
   readonly arrivalTick: number;
+  /** Frozen dispatch-time route duration; legacy records may omit this field. */
+  readonly travelTicksAtDispatch?: number;
   readonly status: "IN_TRANSIT";
   /** Dispatch-time invoice snapshot: not recomputed after a future policy change. */
   readonly invoiceCurrencyId: CurrencyId;
@@ -180,10 +182,14 @@ export function validateTradeShipmentState(
       link.toRegionId !== shipment.destinationRegionId) {
     throw new Error("Shipment route does not connect its dispatched regions");
   }
-  if (link.travelTicks === undefined ||
-      !Number.isSafeInteger(link.travelTicks) || link.travelTicks < 0 ||
-      !Number.isSafeInteger(shipment.departureTick + link.travelTicks) ||
-      shipment.arrivalTick !== shipment.departureTick + link.travelTicks) {
+  // A paid shipment keeps its dispatch-time arrival even when the live route
+  // travel time later changes. Legacy records without the snapshot retain
+  // their original link-based validation until migrated.
+  const frozenTravelTicks = shipment.travelTicksAtDispatch ?? link.travelTicks;
+  if (frozenTravelTicks === undefined ||
+      !Number.isSafeInteger(frozenTravelTicks) || frozenTravelTicks < 0 ||
+      !Number.isSafeInteger(shipment.departureTick + frozenTravelTicks) ||
+      shipment.arrivalTick !== shipment.departureTick + frozenTravelTicks) {
     throw new Error("Shipment arrival tick contradicts its directed link");
   }
 
