@@ -228,11 +228,14 @@ export function settleSameCurrencyTradeDispatch(
   const destinationTreasury: ActorRef | null = destinationController === null ? null :
     { type: "STATE", stateId: destinationController };
   const link = world.transportLinks.get(shipment.transportLinkId)!;
-  // Validate the route-time snapshot before persisting it; the prior
-  // shipment validator already checked the legacy pre-priced arrival.
+  // Persisted cargo validates against its frozen duration, but a NEW paid
+  // Phase-7 dispatch must use this tick's live directed-link duration.
+  // Never let a caller-supplied snapshot authorize an earlier arrival that
+  // becomes inconsistent once we freeze the canonical duration below.
   if (link.travelTicks === undefined || !Number.isSafeInteger(link.travelTicks) ||
-      link.travelTicks < 0) {
-    return refuse("live directed link has no valid dispatch-time travel duration");
+      link.travelTicks < 0 || !Number.isSafeInteger(tick + link.travelTicks) ||
+      shipment.arrivalTick !== tick + link.travelTicks) {
+    return refuse("shipment arrival tick must match current directed link travel duration");
   }
   const feeReceiver = link.feeReceiver ?? null;
   if (shipment.transportFeeAmount > 0 && feeReceiver === null) {
