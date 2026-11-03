@@ -5,7 +5,9 @@ import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { GoodId, ShipmentId, TransportLinkId } from "../domain/id";
 import type { ActorRef } from "../domain/genesisLedger";
 import { readActorWallet, readMarketActorInventory } from "./marketSettlementTransition";
-import { validateTradeShipmentRegistry, type TradeShipmentState } from "./tradeShipmentState";
+import {
+  validateTradeShipmentRegistry, validateTradeShipmentState, type TradeShipmentState,
+} from "./tradeShipmentState";
 import {
   settleSameCurrencyTradeDispatch, type SameCurrencyDispatchRequest,
 } from "./phase7SameCurrencyDispatch";
@@ -130,6 +132,43 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
       .toThrow(/invalid transaction bundle ID/);
     // Properly identified bundles must still settle.
     expect(() => settleSameCurrencyTradeDispatch(world, request)).not.toThrow();
+  });
+
+  it("rejects forged frozen duration before same-currency payment and stock commit", () => {
+    const f = fixture();
+    const link = f.world.transportLinks.get(f.request.shipment.transportLinkId)!;
+    const world: WorldState = {
+      ...f.world,
+      transportLinks: new Map(f.world.transportLinks).set(link.linkId, {
+        ...link, travelTicks: 5,
+      }),
+    };
+    // A persisted-shipment validator trusts this caller's internally
+    // consistent snapshot, which is correct for previously paid cargo but
+    // NOT authority for a new Phase-7 dispatch against the live route.
+    const forged: SameCurrencyDispatchRequest = {
+      ...f.request,
+      shipment: {
+        ...f.request.shipment,
+        arrivalTick: f.request.tick + 2,
+        travelTicksAtDispatch: 2,
+      },
+    };
+    expect(() => validateTradeShipmentState(world, forged.shipment)).not.toThrow();
+    unchanged(world, forged, () => settleSameCurrencyTradeDispatch(world, forged));
+    expect(() => settleSameCurrencyTradeDispatch(world, forged))
+      .toThrow(/arrival tick.*current directed link travel duration/);
+
+    // Valid prepared lots remain payable; the committed record freezes the
+    // live duration so later route changes cannot retroactively retime it.
+    const legitimate: SameCurrencyDispatchRequest = {
+      ...f.request,
+      shipment: { ...f.request.shipment, arrivalTick: f.request.tick + 5 },
+    };
+    const dispatched = settleSameCurrencyTradeDispatch(world, legitimate);
+    expect(dispatched.world.shipments?.get(legitimate.shipment.id))
+      .toMatchObject({ arrivalTick: f.request.tick + 5, travelTicksAtDispatch: 5 });
+    expect(() => validateTradeShipmentRegistry(dispatched.world)).not.toThrow();
   });
 
   it("keeps real paid cargo in transit until its future Phase-1 tick, with loss only at dispatch", () => {

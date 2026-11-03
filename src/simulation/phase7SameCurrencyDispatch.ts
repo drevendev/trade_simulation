@@ -228,6 +228,15 @@ export function settleSameCurrencyTradeDispatch(
   const destinationTreasury: ActorRef | null = destinationController === null ? null :
     { type: "STATE", stateId: destinationController };
   const link = world.transportLinks.get(shipment.transportLinkId)!;
+  // Persisted cargo validates against its frozen duration, but a NEW paid
+  // Phase-7 dispatch must use this tick's live directed-link duration.
+  // Never let a caller-supplied snapshot authorize an earlier arrival that
+  // becomes inconsistent once we freeze the canonical duration below.
+  if (link.travelTicks === undefined || !Number.isSafeInteger(link.travelTicks) ||
+      link.travelTicks < 0 || !Number.isSafeInteger(tick + link.travelTicks) ||
+      shipment.arrivalTick !== tick + link.travelTicks) {
+    return refuse("shipment arrival tick must match current directed link travel duration");
+  }
   const feeReceiver = link.feeReceiver ?? null;
   if (shipment.transportFeeAmount > 0 && feeReceiver === null) {
     return refuse("positive transport fee has no explicit recipient");
@@ -269,6 +278,7 @@ export function settleSameCurrencyTradeDispatch(
   );
   const frozenShipment: TradeShipmentState = Object.freeze({
     ...routineLoss.survivingShipment,
+    travelTicksAtDispatch: link.travelTicks,
     routeLinkIds: Object.freeze([...shipment.routeLinkIds]),
     seller: Object.freeze({ ...shipment.seller }),
     buyer: Object.freeze({ ...shipment.buyer }),
