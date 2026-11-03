@@ -30,8 +30,15 @@ import { quotePhase7ActualMatchedLots } from "./phase7ActualLotQuote";
 import { reservePhase7QuotedFxLots } from "./phase7AutoFxReservations";
 import type { FxReservation } from "./fxQuoteReservation";
 import { derivePhase7PostProcurementIntents } from "./phase7PostProcurementIntents";
-import { bindPhase7DiscoveredRouteQuotes } from "./phase7CanonicalRouteBridge";
+import {
+  bindPhase7DiscoveredCargoCapacity, bindPhase7DiscoveredRouteQuotes,
+} from "./phase7CanonicalRouteBridge";
 import type { Phase7FrozenDirectedTradePermissions } from "./phase7AuthorizedRouteDiscovery";
+import { derivePhase7CanonicalCargoResiduals } from "./phase7CanonicalCargoResiduals";
+import {
+  derivePhase7CanonicalFxOutputBudgets,
+  derivePhase7UnambiguousCanonicalFxPairs,
+} from "./phase7CanonicalFxPairDiscovery";
 
 /** Explicit frozen policy-owner facts; the live tick supplies all other context. */
 export type Phase7LiveTickPolicy = Pick<
@@ -161,9 +168,10 @@ export function executeM5LiveQuotedTradeTick(
  * even JavaScript callers passing extra forged fields cannot replace the
  * Phase-2/4/5 realized evidence from the current post-transition tick.
  */
-export type Phase7CanonicalIntakeTickDispatch = Pick<
-  Phase7LiveTickDispatch, "remainingCargoWeightByLink"
-> & (
+export type Phase7CanonicalIntakeTickDispatch = {
+  /** Optional only with explicit canonical fresh-tick capacity derivation. */
+  readonly remainingCargoWeightByLink?: Phase7LiveTickDispatch["remainingCargoWeightByLink"];
+} & (
   | { readonly fxReservationByLotOrdinal: ReadonlyMap<number, FxReservation>;
       readonly autoReserveFx?: never }
   | { readonly autoReserveFx: true; readonly fxReservationByLotOrdinal?: never }
@@ -171,13 +179,35 @@ export type Phase7CanonicalIntakeTickDispatch = Pick<
 
 export interface Phase7CanonicalIntakeTickRequest {
   readonly policy: Phase7LiveTickPolicy;
-  readonly plan: Omit<Phase7LiveWorldPlanInput, "residualIntents">;
+  readonly plan: Omit<
+    Phase7LiveWorldPlanInput,
+    "residualIntents" | "fxPairIdByTradePlanId" | "fxOutputByPairCurrency"
+  > & {
+    /** Optional only in the canonical auto-resolution path. */
+    readonly fxPairIdByTradePlanId?: Phase7LiveWorldPlanInput["fxPairIdByTradePlanId"];
+    /** Optional only when autoDeriveCanonicalFxOutputBudgets is selected. */
+    readonly fxOutputByPairCurrency?: Phase7LiveWorldPlanInput["fxOutputByPairCurrency"];
+  };
   readonly dispatch: Phase7CanonicalIntakeTickDispatch;
   /** Opt-in: derive eligible route/good set and legal/physical caps from
    * frozen Phase-1 permissions and the SAME post-Phase-4 canonical residuals.
    * Without this, the legacy explicit-route request stays backward-compatible. */
   readonly authorizedRouteDiscovery?: {
     readonly permissions: Phase7FrozenDirectedTradePermissions;
+    /** Resolve FX pair identities from live issuer-owned pools only when a
+     * unique pool exists for each cross-currency opportunity. Missing or
+     * multiple reverse-oriented pools fail closed: do not guess a preference.
+     * The separate Phase-7 FX output budget remains externally owned. */
+    readonly autoResolveCanonicalFxPairs?: true;
+    /** Use only persisted pool liquidity, not a caller-provided FX budget.
+     * Requires canonical pair discovery plus strict automatic reservations;
+     * no other tick-local uncommitted FX promises may be supplied. */
+    readonly autoDeriveCanonicalFxOutputBudgets?: true;
+    /** Derive full fresh-tick physical cargo capacity from the live directed
+     * links, never from externally asserted residuals. Reject any earlier
+     * same-tick dispatch, whose booked cargo cannot safely be reconstructed
+     * from surviving in-transit goods or a zero-travel delivery. */
+    readonly autoDeriveCanonicalCargoCapacity?: true;
   };
 }
 
@@ -218,15 +248,66 @@ export function executeM5CanonicalIntakeTradeTick(
           request.authorizedRouteDiscovery.permissions,
           request.plan.infrastructureFactors, request.plan.opportunityQuotes,
         );
+      const discoverFx = request.authorizedRouteDiscovery?.autoResolveCanonicalFxPairs === true;
+      const discoverFxBudgets =
+        request.authorizedRouteDiscovery?.autoDeriveCanonicalFxOutputBudgets === true;
+      if (discoverFx && request.plan.fxPairIdByTradePlanId !== undefined) {
+        throw new Error("Phase-7 canonical FX discovery cannot accept a caller FX pair map");
+      }
+      if (discoverFxBudgets) {
+        if (!discoverFx || request.dispatch.autoReserveFx !== true) {
+          throw new Error("Phase-7 canonical FX output discovery requires canonical pairs and auto reservations");
+        }
+        if (request.plan.fxOutputByPairCurrency !== undefined) {
+          throw new Error("Phase-7 canonical FX output discovery cannot accept a caller FX budget");
+        }
+      }
+      const discoveredFxPairs = discoverFx
+        ? derivePhase7UnambiguousCanonicalFxPairs(world, discovered!.opportunityQuotes)
+        : undefined;
+      const fxPairIdByTradePlanId = discoveredFxPairs ?? request.plan.fxPairIdByTradePlanId;
+      if (fxPairIdByTradePlanId === undefined) {
+        throw new Error("Phase-7 canonical intake requires explicit or discovered FX pair identity");
+      }
+      const fxOutputByPairCurrency = discoverFxBudgets
+        ? derivePhase7CanonicalFxOutputBudgets(
+          world, discovered!.opportunityQuotes, fxPairIdByTradePlanId,
+        )
+        : request.plan.fxOutputByPairCurrency;
+      if (!(fxOutputByPairCurrency instanceof Map)) {
+        throw new Error("Phase-7 canonical intake requires explicit or discovered FX output budgets");
+      }
+      const autoCargo = request.authorizedRouteDiscovery?.autoDeriveCanonicalCargoCapacity === true;
+      if (autoCargo && request.dispatch.remainingCargoWeightByLink !== undefined) {
+        throw new Error("Phase-7 canonical cargo discovery cannot accept caller cargo residuals");
+      }
+      if (!autoCargo && !(request.dispatch.remainingCargoWeightByLink instanceof Map)) {
+        throw new Error("Phase-7 canonical intake requires explicit cargo residuals or canonical cargo discovery");
+      }
+      const remainingCargoWeightByLink = autoCargo
+        ? derivePhase7CanonicalCargoResiduals(
+          world, context, request.plan.infrastructureFactors,
+          discovered!.eligibleDirectedLinkIdsAtPhase1,
+        )
+        : discovered === undefined
+          ? request.dispatch.remainingCargoWeightByLink!
+          : bindPhase7DiscoveredCargoCapacity(
+            world, request.plan.infrastructureFactors,
+            discovered.eligibleDirectedLinkIdsAtPhase1,
+            request.dispatch.remainingCargoWeightByLink!,
+          );
       return {
         policy: request.policy,
         plan: {
           ...request.plan,
           ...(discovered === undefined ? {} : discovered),
+          fxPairIdByTradePlanId,
+          fxOutputByPairCurrency,
           residualIntents: intake.residualIntents,
         },
         dispatch: {
-          ...request.dispatch, phase8MainIntents: intake.phase8MainIntents,
+          ...request.dispatch, remainingCargoWeightByLink,
+          phase8MainIntents: intake.phase8MainIntents,
         },
       };
     },

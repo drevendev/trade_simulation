@@ -23,11 +23,21 @@ import {
   type Phase7PreparedMixedExecutionInput,
 } from "./phase7PreparedFxExecution";
 import { deliverDueTradeShipments } from "./tradeShipmentDelivery";
+import {
+  capturePhase7DirectedTradePermissionsAtPhase1,
+  type Phase7FrozenDirectedTradePermissions,
+  type Phase7Phase1TradeLawProvider,
+} from "./phase7AuthorizedRouteDiscovery";
 
-/** Build from the LIVE post-Phase-6 world/context; null means no trade this tick. */
+/**
+ * Build from live post-Phase-6 evidence; null means no trade.
+ * The optional THIRD argument is an independent, tick-frozen Phase-1 law
+ * decision snapshot. Two-argument legacy builders remain compatible.
+ */
 export type Phase7LiveTradeInputBuilder = (
   world: WorldState,
   context: TickContext,
+  phase1Permissions?: Phase7FrozenDirectedTradePermissions,
 ) => Phase7PreparedMixedExecutionInput | null;
 
 function verifyLivePhase7Input(
@@ -52,6 +62,57 @@ function verifyLivePhase7Input(
 }
 
 /**
+ * The opt-in Phase-1 law path binds the *captured* directed link/good decisions
+ * to the prepared Phase-7 execution input before any goods or cash move.
+ * Passing a clone to the builder prevents that callback from editing the
+ * coordinator's authoritative permission evidence.
+ */
+function copyPhase1Permissions(
+  frozen: Phase7FrozenDirectedTradePermissions,
+): Phase7FrozenDirectedTradePermissions {
+  return {
+    tick: frozen.tick,
+    permittedGoodsByDirectedLink: new Map(
+      [...frozen.permittedGoodsByDirectedLink].map(([linkId, goods]) =>
+        [linkId, new Map(goods)] as const),
+    ),
+  };
+}
+
+function verifyFrozenPhase1Law(
+  input: Phase7PreparedMixedExecutionInput,
+  frozen: Phase7FrozenDirectedTradePermissions,
+): void {
+  const plan = input.planInput;
+  if (frozen.tick !== input.tick || !(frozen.permittedGoodsByDirectedLink instanceof Map) ||
+      !plan || !(plan.eligibleDirectedLinkIdsAtPhase1 instanceof Set) ||
+      !Array.isArray(plan.opportunities)) {
+    throw new Error("M5 Phase-7 requires frozen Phase-1 law evidence for this tick");
+  }
+  for (const linkId of plan.eligibleDirectedLinkIdsAtPhase1) {
+    if (!frozen.permittedGoodsByDirectedLink.has(linkId)) {
+      throw new Error("M5 Phase-7 eligible link lacks frozen Phase-1 permission");
+    }
+  }
+  for (const quote of plan.opportunities) {
+    const goods = frozen.permittedGoodsByDirectedLink.get(quote.linkId);
+    if (!(goods instanceof Map) ||
+        !goods.has(quote.goodId) ||
+        quote.authorizedAtPhase1 !== true ||
+        !plan.eligibleDirectedLinkIdsAtPhase1.has(quote.linkId)) {
+      throw new Error("M5 Phase-7 opportunity lacks frozen Phase-1 link/good permission");
+    }
+    const legalCap = goods.get(quote.goodId);
+    if (legalCap === undefined ||
+        (legalCap === null
+          ? quote.legalQuantityCap !== undefined
+          : quote.legalQuantityCap !== legalCap)) {
+      throw new Error("M5 Phase-7 opportunity disagrees with frozen Phase-1 legal quantity cap");
+    }
+  }
+}
+
+/**
  * Run one M5-capable canonical tick with prepared mixed-currency dispatch.
  * A Phase-8 handler consumes context.phase7MainIntents (the committed residuals)
  * rather than the unexecuted planning intentions. Neither input WorldState nor
@@ -64,7 +125,10 @@ export function executeM5PreparedTradeTick(
   applyPhaseTransition: PhaseWorldTransition,
   buildPhase7Input: Phase7LiveTradeInputBuilder,
   observePhaseTransition?: PhaseWorldTransitionObserver,
+  phase1TradeLawProvider?: Phase7Phase1TradeLawProvider,
 ): StatefulTickExecutionResult {
+  // Tick-local closure, never WorldState or a persistent law cache.
+  let frozenPhase1Permissions: Phase7FrozenDirectedTradePermissions | undefined;
   return executeStatefulTick(
     openingWorld,
     tickNumber,
@@ -75,9 +139,23 @@ export function executeM5PreparedTradeTick(
       let world = transitionedWorld;
       let nextContext = context;
       if (phase === 7) {
-        const input = buildPhase7Input(world, context);
+        if (phase1TradeLawProvider !== undefined &&
+            frozenPhase1Permissions?.tick !== context.tick) {
+          throw new Error("M5 Phase-7 requires current-tick captured Phase-1 law");
+        }
+        const input = buildPhase7Input(
+          world, context,
+          frozenPhase1Permissions === undefined
+            ? undefined : copyPhase1Permissions(frozenPhase1Permissions),
+        );
         if (input !== null) {
           verifyLivePhase7Input(input, context);
+          if (phase1TradeLawProvider !== undefined) {
+            if (frozenPhase1Permissions === undefined) {
+              throw new Error("M5 Phase-7 requires captured Phase-1 law");
+            }
+            verifyFrozenPhase1Law(input, frozenPhase1Permissions);
+          }
           const committed = executePreparedMixedCurrencyTradePlan(world, input);
           world = committed.world;
           nextContext = {
@@ -95,6 +173,13 @@ export function executeM5PreparedTradeTick(
         });
         world = delivered.world;
         nextContext = { ...nextContext, transactions: delivered.transactions };
+      }
+      if (phase === 1 && phase1TradeLawProvider !== undefined) {
+        // Phase-1 jurisdiction transitions and arrivals are already applied.
+        // No Phase-7 policy recomputation, no implicit permission default.
+        frozenPhase1Permissions = capturePhase7DirectedTradePermissionsAtPhase1(
+          world, nextContext, phase1TradeLawProvider,
+        );
       }
       return { world, context: nextContext };
     },
