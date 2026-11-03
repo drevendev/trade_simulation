@@ -155,6 +155,49 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     } finally { await page.close(); }
   }, 60_000);
 
+  it("announces actual recorded ticks instead of sample indices when scrubbing", async () => {
+    const page = await pageAt("", 1280, false);
+    try {
+      const slider = page.locator("#spotlight-tick");
+      const m4 = artifact().samples;
+      expect(m4.length).toBeGreaterThan(1);
+      expect(await slider.getAttribute("aria-valuetext"))
+        .toBe(`Tick ${m4[0]!.tick}, sample 1 of ${m4.length}`);
+
+      await slider.evaluate((node, index) => {
+        const input = node as HTMLInputElement;
+        input.value = String(index);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }, m4.length - 1);
+      expect(await slider.getAttribute("aria-valuetext"))
+        .toBe(`Tick ${m4[m4.length - 1]!.tick}, sample ${m4.length} of ${m4.length}`);
+
+      const m3: M3Preview = JSON.parse(readFileSync(path.join(docsDir, "m3-preview.json"), "utf8"));
+      expect(m3.ticks.length).toBeGreaterThan(1);
+      await page.locator("#showcase-milestone").selectOption("m3");
+      await page.waitForFunction(() =>
+        (document.getElementById("m4-run-summary")?.textContent ?? "").startsWith("Selected market:"));
+      const last = m3.ticks.length;
+      expect(await slider.getAttribute("aria-valuetext"))
+        .toBe(`Tick ${m3.ticks[last - 1]!.tick}, sample ${last} of ${last}`);
+      await slider.evaluate(node => {
+        const input = node as HTMLInputElement;
+        input.value = "0";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(await slider.getAttribute("aria-valuetext"))
+        .toBe(`Tick ${m3.ticks[0]!.tick}, sample 1 of ${last}`);
+
+      await page.evaluate(() => {
+        (window as unknown as { showcaseSavedRun: {
+          failure: (mode: string, message: string) => void;
+        } }).showcaseSavedRun.failure("m3", "unavailable recording");
+      });
+      expect(await slider.isDisabled()).toBe(true);
+      expect(await slider.getAttribute("aria-valuetext")).toBeNull();
+    } finally { await page.close(); }
+  }, 60_000);
+
   it("plays only recorded samples after explicit opt-in, then pauses on user input and run changes", async () => {
     const page = await pageAt("", 1280, false);
     try {
