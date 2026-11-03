@@ -19,7 +19,7 @@ import {
   applyConservingTradeMoneyLegs, type Phase7TradeMoneyLeg,
 } from "./phase7TradeMoneyLegs";
 import {
-  validateTradeShipmentState, type ShipmentDestinationInventoryBucket,
+  validateTradeShipmentRegistry, validateTradeShipmentState, type ShipmentDestinationInventoryBucket,
   type TradeShipmentState,
 } from "./tradeShipmentState";
 import {
@@ -112,7 +112,8 @@ export function settleSameCurrencyTradeDispatch(
   if (!Number.isSafeInteger(tick) || tick < 0 || shipment.departureTick !== tick) {
     return refuse("shipment departure tick differs from current Phase-7 tick");
   }
-  if (typeof bundleId !== "string" || !bundleId.startsWith("tb:")) {
+  if (typeof bundleId !== "string" || !bundleId.startsWith("tb:") ||
+      bundleId.length <= "tb:".length) {
     return refuse("invalid transaction bundle ID");
   }
   if (!Array.isArray(request.priorTransactions)) {
@@ -121,6 +122,9 @@ export function settleSameCurrencyTradeDispatch(
   if (!(world.shipments instanceof Map)) {
     return refuse("canonical shipment registry missing");
   }
+  // Existing in-transit stock must be valid before another paid dispatch.
+  // Otherwise a corrupt persisted registry could survive a new cash/goods commit.
+  validateTradeShipmentRegistry(world);
   validateTradeShipmentState(world, shipment);
   // A prepared caller may forge cargoWeightPerUnit even if the live route
   // planner correctly hydrated it. The physical settlement boundary must
