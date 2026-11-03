@@ -134,7 +134,15 @@ export function deliverDueTradeShipments(
   due.sort((a, b) => a.arrivalTick - b.arrivalTick ||
     (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
-  const priorIds = new Set(request.priorTransactions.map(tx => tx.transactionId));
+  // Each journal transaction ID identifies exactly one economic effect, even
+  // when legitimate money/physical legs share a transaction bundle.
+  const priorIds = new Set<string>();
+  for (const transaction of request.priorTransactions) {
+    if (priorIds.has(transaction.transactionId)) {
+      return fail("duplicate prior transaction identity");
+    }
+    priorIds.add(transaction.transactionId);
+  }
   const priorBundles = new Set(request.priorTransactions.map(tx => tx.bundleId));
   const totals = new Map<string, {
     first: number; sum: number; correction: number;
