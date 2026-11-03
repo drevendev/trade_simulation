@@ -241,6 +241,7 @@ export function settleCrossCurrencyTradeDispatch(
     transportLinkId: request.transportLinkId,
     departureTick: request.tick,
     arrivalTick: request.tick + link.travelTicks,
+    travelTicksAtDispatch: link.travelTicks,
     status: "IN_TRANSIT",
     invoiceCurrencyId: sizing.outputCurrencyId,
     buyerPaymentCurrencyId: sizing.inputCurrencyId,
