@@ -53,6 +53,43 @@ function stateGoods(world: WorldState, actor: ActorRef): number {
 }
 
 describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival", () => {
+  it("uses the canonical quantity precision default for a valid historic config without an override", () => {
+    const { inTransit, shipment, buyer } = fixture();
+    // NumericConfig.quantityEpsilon is optional, and both dispatch and
+    // persisted-cargo validation default it to 1e-9. Delivery must not
+    // strand already-paid cargo merely because this field was omitted.
+    const { quantityEpsilon: _omitted, ...numeric } = inTransit.simulationConfig.numeric;
+    const historic: WorldState = {
+      ...inTransit,
+      simulationConfig: { ...inTransit.simulationConfig, numeric },
+    };
+    expect(historic.simulationConfig.numeric.quantityEpsilon).toBeUndefined();
+    expect(() => validateTradeShipmentRegistry(historic)).not.toThrow();
+
+    const originalGoods = stateGoods(historic, buyer);
+    const delivered = deliverDueTradeShipments(historic, {
+      tick: shipment.arrivalTick, phase: 1, priorTransactions: [],
+    });
+    expect(stateGoods(delivered.world, buyer)).toBe(originalGoods + shipment.quantity);
+    expect(delivered.world.shipments?.size).toBe(0);
+    expect(delivered.newTransactions).toHaveLength(1);
+    expect(delivered.newTransactions[0]?.type).toBe("SHIPMENT_DELIVERY");
+    expect(historic.shipments?.get(shipment.id)).toBe(shipment);
+    expect(stateGoods(historic, buyer)).toBe(originalGoods);
+
+    // The omitted override does not relax the shared epsilon floor.
+    const tiny = { ...shipment, quantity: 5e-10 };
+    const corrupt: WorldState = {
+      ...historic, shipments: new Map([[tiny.id, tiny]]),
+    };
+    expect(() => validateTradeShipmentRegistry(corrupt)).toThrow(/quantity.*epsilon/);
+    expect(() => deliverDueTradeShipments(corrupt, {
+      tick: tiny.arrivalTick, phase: 1, priorTransactions: [],
+    })).toThrow(/quantity.*epsilon/);
+    expect(stateGoods(corrupt, buyer)).toBe(originalGoods);
+    expect(corrupt.shipments?.get(tiny.id)).toBe(tiny);
+  });
+
   it("delivers future-tick in-transit goods once, without a second cash or tax settlement", () => {
     const { inTransit, shipment, buyer } = fixture();
     const initial = stateGoods(inTransit, buyer);
@@ -168,6 +205,41 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
       { tick: 8, phase: 1, priorTransactions: [] })).toThrow(/quantity/);
     expect(stateGoods(inTransit, buyer)).toBe(before);
     expect(inTransit.shipments?.get(shipment.id)).toBe(shipment);
+  });
+
+  it("refuses duplicate committed journal IDs without rejecting legitimate shared bundles", () => {
+    const { inTransit, shipment, buyer } = fixture();
+    const opening = stateGoods(inTransit, buyer);
+    const bundleId = createTransactionBundleId("tb:prior:multi-leg");
+    const firstId = createTransactionId("tx:prior:transport");
+    const first = {
+      tick: 7, phase: 7 as const, type: "TRANSPORT_FEE" as const,
+      transactionId: firstId, bundleId, amount: 1,
+    };
+    const second = {
+      tick: 7, phase: 7 as const, type: "IMPORT_TARIFF" as const,
+      transactionId: createTransactionId("tx:prior:tariff"), bundleId, amount: 1,
+    };
+    // Two different economic legs can legally share a bundle ID.
+    const validPrior = [first, second];
+    const delivered = deliverDueTradeShipments(inTransit, {
+      tick: 8, phase: 1, priorTransactions: validPrior,
+    });
+    expect(delivered.deliveredShipmentIds).toEqual([shipment.id]);
+    expect(delivered.transactions).toHaveLength(3);
+    expect(delivered.transactions.slice(0, 2)).toEqual(validPrior);
+
+    // Repeating a transaction ID, even under another bundle, would make the
+    // resulting ledger non-unique. Do not credit the receiver or consume cargo.
+    const duplicate = { ...second, transactionId: firstId,
+      bundleId: createTransactionBundleId("tb:prior:other") };
+    const invalidPrior = [first, second, duplicate];
+    expect(() => deliverDueTradeShipments(inTransit, {
+      tick: 8, phase: 1, priorTransactions: invalidPrior,
+    })).toThrow(/duplicate prior transaction identity/);
+    expect(stateGoods(inTransit, buyer)).toBe(opening);
+    expect(inTransit.shipments?.get(shipment.id)).toBe(shipment);
+    expect(invalidPrior).toEqual([first, second, duplicate]);
   });
 
   it("refuses binary64 lost credits, overflowing stock, and cumulative precision loss", () => {

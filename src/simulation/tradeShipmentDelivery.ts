@@ -103,8 +103,11 @@ export function deliverDueTradeShipments(
       !Array.isArray(request.priorTransactions)) {
     return fail("invalid tick, phase or committed journal");
   }
-  const epsilon = world.simulationConfig.numeric.quantityEpsilon;
-  if (epsilon === undefined || !Number.isFinite(epsilon) || epsilon < 0) {
+  // NumericConfig.quantityEpsilon is optional for historic fixtures. The
+  // persisted-cargo validator and Phase-7 dispatch use the canonical 1e-9
+  // default; Phase-1/7 delivery must use that same precision boundary.
+  const epsilon = world.simulationConfig.numeric.quantityEpsilon ?? 1e-9;
+  if (!Number.isFinite(epsilon) || epsilon <= 0) {
     return fail("invalid canonical quantity precision");
   }
   const registry = world.shipments;
@@ -131,7 +134,15 @@ export function deliverDueTradeShipments(
   due.sort((a, b) => a.arrivalTick - b.arrivalTick ||
     (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
-  const priorIds = new Set(request.priorTransactions.map(tx => tx.transactionId));
+  // Each journal transaction ID identifies exactly one economic effect, even
+  // when legitimate money/physical legs share a transaction bundle.
+  const priorIds = new Set<string>();
+  for (const transaction of request.priorTransactions) {
+    if (priorIds.has(transaction.transactionId)) {
+      return fail("duplicate prior transaction identity");
+    }
+    priorIds.add(transaction.transactionId);
+  }
   const priorBundles = new Set(request.priorTransactions.map(tx => tx.bundleId));
   const totals = new Map<string, {
     first: number; sum: number; correction: number;

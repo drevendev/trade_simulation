@@ -115,6 +115,45 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
     expect(world.shipments?.size).toBe(0);
   });
 
+  it("refuses a known but nontradable good in persisted cargo before delivery", () => {
+    const shipment = sample();
+    const goods = world.definitionRegistry.goods;
+    const definition = goods[shipment.goodId];
+    if (!definition) throw new Error("Missing shipment GoodDefinition fixture");
+    expect(definition.tradable).toBe(true);
+    expect(() => validateTradeShipmentState(world, shipment)).not.toThrow();
+
+    // Preserve an existing GoodId while making it ineligible for physical
+    // trade. Mere definition existence must not authorize in-transit stock.
+    const persisted = new Map([[shipment.id, shipment]]);
+    const nontradableWorld: WorldState = {
+      ...world,
+      definitionRegistry: {
+        ...world.definitionRegistry,
+        goods: { ...goods, [shipment.goodId]: { ...definition, tradable: false } },
+      },
+      shipments: persisted,
+    };
+    const owner = shipment.buyer;
+    if (owner.type !== "STATE") throw new Error("Expected State buyer fixture");
+    const originalInventory = nontradableWorld.states.get(owner.stateId)!.publicInventory;
+
+    expect(() => validateTradeShipmentState(nontradableWorld, shipment))
+      .toThrow(/tradable GoodDefinition/);
+    expect(() => validateTradeShipmentRegistry(nontradableWorld))
+      .toThrow(/tradable GoodDefinition/);
+    expect(() => deliverDueTradeShipments(nontradableWorld, {
+      tick: shipment.arrivalTick,
+      phase: shipment.arrivalTick === shipment.departureTick ? 7 : 1,
+      priorTransactions: [],
+    })).toThrow(/tradable GoodDefinition/);
+    expect(nontradableWorld.shipments).toBe(persisted);
+    expect(persisted.get(shipment.id)).toBe(shipment);
+    expect(nontradableWorld.states.get(owner.stateId)!.publicInventory)
+      .toBe(originalInventory);
+    expect(world.shipments?.size).toBe(0);
+  });
+
   it("requires FX evidence only when the frozen invoice/payment currencies differ", () => {
     const shipment = sample();
     const other = differentCurrency(shipment.buyerPaymentCurrencyId);
@@ -132,6 +171,35 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
     expect(() => validateTradeShipmentState(world, {
       ...same, fxSettlementId: "fxs:wrong",
     })).toThrow(/same-currency/);
+  });
+
+  it("rejects sub-epsilon persisted cargo before undeliverable stock can be credited", () => {
+    const original = sample();
+    const epsilon = world.simulationConfig.numeric.quantityEpsilon ?? 1e-9;
+    expect(epsilon).toBeGreaterThan(0);
+    // Successful dispatch requires quantity > epsilon; restore and delivery
+    // must enforce the same boundary rather than strand a tiny shipment.
+    for (const quantity of [Number.MIN_VALUE, epsilon / 2, epsilon]) {
+      const invalid = { ...original, quantity };
+      const shipments = new Map([[invalid.id, invalid]]);
+      const candidate: WorldState = { ...world, shipments };
+      expect(() => validateTradeShipmentState(candidate, invalid))
+        .toThrow(/quantity.*epsilon/);
+      expect(() => validateTradeShipmentRegistry(candidate))
+        .toThrow(/quantity.*epsilon/);
+      expect(() => deliverDueTradeShipments(candidate, {
+        tick: invalid.arrivalTick,
+        phase: invalid.arrivalTick === invalid.departureTick ? 7 : 1,
+        priorTransactions: [],
+      })).toThrow(/quantity.*epsilon/);
+      expect(candidate.shipments).toBe(shipments);
+      expect(shipments.get(invalid.id)).toEqual(invalid);
+      expect(world.shipments?.size).toBe(0);
+    }
+    // A representable positive quantity above the canonical floor remains legal.
+    expect(() => validateTradeShipmentState(world, {
+      ...original, quantity: 2 * epsilon,
+    })).not.toThrow();
   });
 
   it("forbids one frozen FX settlement ID from backing two live cargo records", () => {
@@ -329,6 +397,51 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
     const { shipments: _legacy, ...worldWithoutShipments } = world;
     expect(() => validateTradeShipmentRegistry(worldWithoutShipments))
       .toThrow(/registry is missing/);
+  });
+
+  it("rejects prefix-only restored shipment and FX identities before any delivery", () => {
+    const valid = sample();
+    for (const id of ["sh:", "sh:   "]) {
+      const forged: TradeShipmentState = { ...valid, id: id as ShipmentId };
+      const shipments = new Map([[forged.id, forged]]);
+      const candidate: WorldState = { ...world, shipments };
+      expect(() => validateTradeShipmentState(candidate, forged))
+        .toThrow(/sh: prefix/);
+      expect(() => validateTradeShipmentRegistry(candidate))
+        .toThrow(/sh: prefix/);
+      expect(() => deliverDueTradeShipments(candidate, {
+        tick: forged.arrivalTick,
+        phase: forged.arrivalTick === forged.departureTick ? 7 : 1,
+        priorTransactions: [],
+      })).toThrow(/sh: prefix/);
+      expect(candidate.shipments).toBe(shipments);
+      expect(shipments.get(forged.id)).toBe(forged);
+    }
+    // The invoice may be frozen in a different currency from payment.
+    const foreign = {
+      ...valid, invoiceCurrencyId: differentCurrency(valid.buyerPaymentCurrencyId),
+    };
+    for (const fxSettlementId of ["fxs:", "fxs:   "]) {
+      const forged = { ...foreign, fxSettlementId };
+      const shipments = new Map([[forged.id, forged]]);
+      const candidate: WorldState = { ...world, shipments };
+      expect(() => validateTradeShipmentState(candidate, forged))
+        .toThrow(/FX settlement id.*fxs: prefix/);
+      expect(() => validateTradeShipmentRegistry(candidate))
+        .toThrow(/FX settlement id.*fxs: prefix/);
+      expect(() => deliverDueTradeShipments(candidate, {
+        tick: forged.arrivalTick,
+        phase: forged.arrivalTick === forged.departureTick ? 7 : 1,
+        priorTransactions: [],
+      })).toThrow(/FX settlement id.*fxs: prefix/);
+      expect(candidate.shipments).toBe(shipments);
+      expect(shipments.get(forged.id)).toBe(forged);
+    }
+    // Existing dispatch-shaped identifiers remain valid.
+    expect(() => validateTradeShipmentState(world, valid)).not.toThrow();
+    expect(() => validateTradeShipmentState(world, {
+      ...foreign, fxSettlementId: "fxs:real-settlement",
+    })).not.toThrow();
   });
 
   it("does not mistake an uncommitted actor match or quote for a stock movement", () => {

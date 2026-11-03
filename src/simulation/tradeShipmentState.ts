@@ -124,12 +124,17 @@ export function validateTradeShipmentState(
     throw new Error("Shipment record is missing");
   }
   requiredId(shipment.id, "id");
-  if (!shipment.id.startsWith("sh:")) {
+  if (!shipment.id.startsWith("sh:") || shipment.id.slice(3).trim().length === 0) {
     throw new Error("Shipment id must carry the sh: prefix");
   }
   requiredId(shipment.goodId, "goodId");
   if (!Object.prototype.hasOwnProperty.call(world.definitionRegistry.goods, shipment.goodId)) {
     throw new Error("Shipment goodId references an unknown GoodDefinition");
+  }
+  // Phase-7 dispatch never ships a nontradable good. Reject a forged or
+  // corrupt persisted record before it can become buyer inventory on arrival.
+  if (!world.definitionRegistry.goods[shipment.goodId]?.tradable) {
+    throw new Error("Shipment goodId must reference a tradable GoodDefinition");
   }
   requiredId(shipment.originRegionId, "originRegionId");
   requiredId(shipment.destinationRegionId, "destinationRegionId");
@@ -138,6 +143,14 @@ export function validateTradeShipmentState(
   requiredId(shipment.buyerPaymentCurrencyId, "buyerPaymentCurrencyId");
 
   amount(shipment.quantity, "quantity", true);
+  // A dispatch refuses stock at or below quantityEpsilon. Persisted cargo
+  // must obey that same floor or it can become permanently undeliverable:
+  // a destination's binary64 inventory cannot reliably observe its credit.
+  const epsilon = world.simulationConfig.numeric.quantityEpsilon ?? 1e-9;
+  if (!Number.isFinite(epsilon) || epsilon <= 0 ||
+      shipment.quantity <= epsilon) {
+    throw new Error("Shipment quantity must exceed canonical quantity epsilon");
+  }
   amount(shipment.sellerNetUnitPrice, "sellerNetUnitPrice");
   amount(shipment.buyerGoodsPaymentAmount, "buyerGoodsPaymentAmount");
   amount(shipment.transportFeeAmount, "transportFeeAmount");
@@ -200,7 +213,8 @@ export function validateTradeShipmentState(
     }
   } else {
     requiredId(shipment.fxSettlementId, "fxSettlementId");
-    if (!shipment.fxSettlementId!.startsWith("fxs:")) {
+    if (!shipment.fxSettlementId!.startsWith("fxs:") ||
+        shipment.fxSettlementId!.slice(4).trim().length === 0) {
       throw new Error("Shipment FX settlement id must carry fxs: prefix");
     }
   }

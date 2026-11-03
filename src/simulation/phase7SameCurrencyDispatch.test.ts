@@ -117,6 +117,21 @@ function unchanged(world: WorldState, request: SameCurrencyDispatchRequest, act:
 }
 
 describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
+  it("rejects prefix-only bundle IDs before paid dispatch, without mutating inputs", () => {
+    const { world, request } = fixture();
+    // The typed factory accepts this prefix-only string. The settlement
+    // boundary must reject it instead of emitting non-identifying tx:tb: IDs.
+    const prefixOnly: SameCurrencyDispatchRequest = {
+      ...request, bundleId: createTransactionBundleId("tb:"),
+    };
+    unchanged(world, prefixOnly,
+      () => settleSameCurrencyTradeDispatch(world, prefixOnly));
+    expect(() => settleSameCurrencyTradeDispatch(world, prefixOnly))
+      .toThrow(/invalid transaction bundle ID/);
+    // Properly identified bundles must still settle.
+    expect(() => settleSameCurrencyTradeDispatch(world, request)).not.toThrow();
+  });
+
   it("keeps real paid cargo in transit until its future Phase-1 tick, with loss only at dispatch", () => {
     const f = fixture();
     const link = f.world.transportLinks.get(f.request.shipment.transportLinkId)!;
@@ -367,6 +382,41 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
     };
     unchanged(noReceiverWorld, request,
       () => settleSameCurrencyTradeDispatch(noReceiverWorld, request));
+  });
+
+  it("refuses malformed pending cargo before a second paid dispatch, without blocking valid cargo", () => {
+    const { world, request } = fixture();
+    const first = settleSameCurrencyTradeDispatch(world, request);
+    const second: SameCurrencyDispatchRequest = {
+      ...request,
+      bundleId: createTransactionBundleId("tb:37:test:dispatch:2"),
+      shipment: { ...request.shipment, id: "sh:37:test:dispatch:2" as ShipmentId },
+      priorTransactions: first.transactions,
+      remainingCargoWeightByLink: first.remainingCargoWeightByLink,
+    };
+    // Multiple legitimate shipments may share a route and owners, with distinct
+    // shipment/bundle identities and fully funded independent settlements.
+    expect(() => validateTradeShipmentRegistry(first.world)).not.toThrow();
+    const legitimate = settleSameCurrencyTradeDispatch(first.world, second);
+    expect(legitimate.world.shipments?.size).toBe(2);
+    expect(stock(legitimate.world, second)).toBe(6);
+
+    const prior = first.world.shipments!.get(request.shipment.id)!;
+    const wrongKey: WorldState = {
+      ...first.world,
+      shipments: new Map([["sh:37:wrong-key" as ShipmentId, prior]]),
+    };
+    const wrongBucket: WorldState = {
+      ...first.world,
+      shipments: new Map<ShipmentId, TradeShipmentState>([
+        [prior.id, { ...prior, destinationInventoryBucket: "INPUT" }],
+      ]),
+    };
+    for (const malformed of [wrongKey, wrongBucket]) {
+      expect(() => validateTradeShipmentRegistry(malformed)).toThrow();
+      unchanged(malformed, second,
+        () => settleSameCurrencyTradeDispatch(malformed, second));
+    }
   });
 
   it("rejects replayed shipment and transaction identity before money or stock leaves again", () => {

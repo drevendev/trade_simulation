@@ -155,6 +155,178 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     } finally { await page.close(); }
   }, 60_000);
 
+  it("announces actual recorded ticks instead of sample indices when scrubbing", async () => {
+    const page = await pageAt("", 1280, false);
+    try {
+      const slider = page.locator("#spotlight-tick");
+      const m4 = artifact().samples;
+      expect(m4.length).toBeGreaterThan(1);
+      expect(await slider.getAttribute("aria-valuetext"))
+        .toBe(`Tick ${m4[0]!.tick}, sample 1 of ${m4.length}`);
+
+      await slider.evaluate((node, index) => {
+        const input = node as HTMLInputElement;
+        input.value = String(index);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }, m4.length - 1);
+      expect(await slider.getAttribute("aria-valuetext"))
+        .toBe(`Tick ${m4[m4.length - 1]!.tick}, sample ${m4.length} of ${m4.length}`);
+
+      const m3: M3Preview = JSON.parse(readFileSync(path.join(docsDir, "m3-preview.json"), "utf8"));
+      expect(m3.ticks.length).toBeGreaterThan(1);
+      await page.locator("#showcase-milestone").selectOption("m3");
+      await page.waitForFunction(() =>
+        (document.getElementById("m4-run-summary")?.textContent ?? "").startsWith("Selected market:"));
+      const last = m3.ticks.length;
+      expect(await slider.getAttribute("aria-valuetext"))
+        .toBe(`Tick ${m3.ticks[last - 1]!.tick}, sample ${last} of ${last}`);
+      await slider.evaluate(node => {
+        const input = node as HTMLInputElement;
+        input.value = "0";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(await slider.getAttribute("aria-valuetext"))
+        .toBe(`Tick ${m3.ticks[0]!.tick}, sample 1 of ${last}`);
+
+      await page.evaluate(() => {
+        (window as unknown as { showcaseSavedRun: {
+          failure: (mode: string, message: string) => void;
+        } }).showcaseSavedRun.failure("m3", "unavailable recording");
+      });
+      expect(await slider.isDisabled()).toBe(true);
+      expect(await slider.getAttribute("aria-valuetext")).toBeNull();
+    } finally { await page.close(); }
+  }, 60_000);
+
+  it("plays only recorded samples after explicit opt-in, then pauses on user input and run changes", async () => {
+    const page = await pageAt("", 1280, false);
+    try {
+      const play = page.locator("#spotlight-play");
+      const slider = page.locator("#spotlight-tick");
+      const readout = page.locator("#spotlight-readout");
+      expect(await readout.getAttribute("aria-live")).toBe("polite");
+      expect(await play.isEnabled()).toBe(true);
+      expect(await play.getAttribute("aria-pressed")).toBe("false");
+      expect(await play.getAttribute("aria-label")).toBe("Recorded tick playback");
+      expect(await page.getByRole("button", { name: "Recorded tick playback", exact: true }).count()).toBe(1);
+      expect(await slider.inputValue()).toBe("0");
+      // Nothing advances on its own. Play operates on actual artifact samples.
+      await page.waitForTimeout(1000);
+      expect(await slider.inputValue()).toBe("0");
+      await play.click();
+      expect(await readout.getAttribute("aria-live")).toBe("off");
+      expect(await play.getAttribute("aria-pressed")).toBe("true");
+      expect(await play.getAttribute("aria-label")).toBe("Recorded tick playback");
+      expect(await page.getByRole("button", { name: "Recorded tick playback", exact: true }).count()).toBe(1);
+      await page.waitForFunction(() => Number((document.getElementById("spotlight-tick") as HTMLInputElement).value) > 0);
+      const index = Number(await slider.inputValue());
+      const sample = artifact().samples[index]!;
+      expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${sample.tick}`);
+      await play.click();
+      expect(await readout.getAttribute("aria-live")).toBe("polite");
+      expect(await play.getAttribute("aria-pressed")).toBe("false");
+      expect(await play.getAttribute("aria-label")).toBe("Recorded tick playback");
+      expect(await page.getByRole("button", { name: "Recorded tick playback", exact: true }).count()).toBe(1);
+      await slider.evaluate(node => {
+        const input = node as HTMLInputElement;
+        input.value = "0";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(await readout.getAttribute("aria-live")).toBe("polite");
+      expect(await slider.getAttribute("aria-valuetext")).toContain("sample 1 of");
+      await page.waitForTimeout(1000);
+      expect(await slider.inputValue()).toBe("0");
+      await play.click();
+      await page.locator("#showcase-milestone").selectOption("m3");
+      expect(await readout.getAttribute("aria-live")).toBe("polite");
+      expect(await play.getAttribute("aria-pressed")).toBe("false");
+      expect(await play.getAttribute("aria-label")).toBe("Recorded tick playback");
+      expect(await page.getByRole("button", { name: "Recorded tick playback", exact: true }).count()).toBe(1);
+      expect(await play.isEnabled()).toBe(true);
+      await page.locator("#showcase-milestone").selectOption("m4");
+      expect(await play.getAttribute("aria-pressed")).toBe("false");
+      expect(await play.getAttribute("aria-label")).toBe("Recorded tick playback");
+      expect(await page.getByRole("button", { name: "Recorded tick playback", exact: true }).count()).toBe(1);
+      // The saved run stays navigable without a running timer.
+      expect(await slider.isEnabled()).toBe(true);
+    } finally { await page.close(); }
+  }, 60_000);
+
+  it("finishes at the last recorded sample and restarts only after another Play click", async () => {
+    const page = await pageAt("", 1280, false);
+    try {
+      const slider = page.locator("#spotlight-tick");
+      const play = page.getByRole("button", { name: "Recorded tick playback", exact: true });
+      const samples = artifact().samples;
+      expect(samples.length).toBeGreaterThan(2);
+      const finalIndex = samples.length - 1;
+      // Start one sample before the end to exercise the actual timer boundary.
+      await slider.evaluate((node, index) => {
+        const input = node as HTMLInputElement;
+        input.value = String(index);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }, finalIndex - 1);
+      await play.click();
+      expect(await play.getAttribute("aria-pressed")).toBe("true");
+      await page.waitForFunction(() => {
+        const button = document.getElementById("spotlight-play");
+        const input = document.getElementById("spotlight-tick") as HTMLInputElement;
+        return button?.getAttribute("aria-pressed") === "false" && input.value === input.max;
+      });
+      expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${samples[finalIndex]!.tick}`);
+      await page.waitForTimeout(1100);
+      expect(await slider.inputValue()).toBe(String(finalIndex));
+      expect(await play.getAttribute("aria-pressed")).toBe("false");
+
+      // Replaying the terminal sample requires an explicit click and starts
+      // at the first REAL sample, not an interpolated or synthetic tick.
+      await play.click();
+      expect(await play.getAttribute("aria-pressed")).toBe("true");
+      expect(await slider.inputValue()).toBe("0");
+      expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${samples[0]!.tick}`);
+      await page.waitForFunction(() => Number(
+        (document.getElementById("spotlight-tick") as HTMLInputElement).value,
+      ) > 0);
+      await play.click();
+      expect(await play.getAttribute("aria-pressed")).toBe("false");
+    } finally { await page.close(); }
+  }, 60_000);
+
+  it("stops playback when active saved observations are replaced, but not for an unrelated run", async () => {
+    const page = await pageAt("", 1280, false);
+    try {
+      const play = page.getByRole("button", { name: "Recorded tick playback", exact: true });
+      const slider = page.locator("#spotlight-tick");
+      const m4 = artifact();
+      expect(m4.samples.length).toBeGreaterThan(2);
+      const m3 = JSON.parse(readFileSync(path.join(docsDir, "m3-preview.json"), "utf8")) as M3Preview;
+      const update = async (mode: "m3" | "m4", data: M3Preview | M4Preview) => page.evaluate(
+        (payload) => {
+          const player = window as unknown as {
+            showcaseSavedRun: { ready: (mode: string, data: unknown) => void };
+          };
+          player.showcaseSavedRun.ready(payload.mode, payload.data);
+        }, { mode, data },
+      );
+
+      await play.click();
+      expect(await play.getAttribute("aria-pressed")).toBe("true");
+      // An unrelated milestone finishing its fetch must not interrupt M4.
+      await update("m3", m3);
+      expect(await play.getAttribute("aria-pressed")).toBe("true");
+
+      // A refreshed active recording must cancel the interval before render()
+      // resets the sample index: never continue playing a different sample set.
+      await update("m4", { ...m4, samples: m4.samples.slice(0, 3) });
+      expect(await play.getAttribute("aria-pressed")).toBe("false");
+      expect(await slider.getAttribute("max")).toBe("2");
+      expect(await slider.inputValue()).toBe("0");
+      await page.waitForTimeout(1100);
+      expect(await slider.inputValue()).toBe("0");
+      expect(await play.isEnabled()).toBe(true);
+    } finally { await page.close(); }
+  }, 60_000);
+
   it("switches all spotlight numbers and units between the validated M4 and M3 runs", async () => {
     const page = await pageAt("", 1280, false);
     try {
