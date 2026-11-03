@@ -9,7 +9,8 @@ import { validateTradeShipmentRegistry, type TradeShipmentState } from "./tradeS
 import {
   settleSameCurrencyTradeDispatch, type SameCurrencyDispatchRequest,
 } from "./phase7SameCurrencyDispatch";
-import { createTransactionBundleId } from "./tickOrchestrator";
+import { createTransactionBundleId, noOpPhaseHandler } from "./tickOrchestrator";
+import { executeM5ShipmentDeliveryTick } from "./m5ShipmentDeliveryTick";
 import { deliverDueTradeShipments } from "./tradeShipmentDelivery";
 import { buildInitialWorld, type WorldState } from "./worldState";
 
@@ -116,6 +117,68 @@ function unchanged(world: WorldState, request: SameCurrencyDispatchRequest, act:
 }
 
 describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
+  it("keeps real paid cargo in transit until its future Phase-1 tick, with loss only at dispatch", () => {
+    const f = fixture();
+    const link = f.world.transportLinks.get(f.request.shipment.transportLinkId)!;
+    const world: WorldState = {
+      ...f.world,
+      transportLinks: new Map(f.world.transportLinks).set(link.linkId, {
+        ...link, travelTicks: 2,
+        seed: { ...link.seed, routinePhysicalLossRate: 0.25 },
+      }),
+    };
+    const shipment: TradeShipmentState = {
+      ...f.request.shipment, arrivalTick: f.request.tick + 2,
+    };
+    const request: SameCurrencyDispatchRequest = { ...f.request, shipment };
+    const openingSeller = stock(world, request);
+    const openingBuyer = readMarketActorInventory(world, f.buyer, "GENERAL").get(GOOD) ?? 0;
+
+    // Only the Phase-7 dispatch pays the seller and charges transport/taxes.
+    const dispatched = settleSameCurrencyTradeDispatch(world, request);
+    expect(stock(dispatched.world, request)).toBe(openingSeller - 2);
+    expect(dispatched.world.shipments?.get(shipment.id)?.quantity).toBe(1.5);
+    expect(dispatched.newTransactions.filter(tx => tx.type === "GOODS_TRANSPORT_LOSS"))
+      .toHaveLength(1);
+    expect(dispatched.newTransactions.filter(tx => tx.type === "SHIPMENT_DELIVERY"))
+      .toHaveLength(0);
+
+    const noOpTransition = (_phase: number, state: WorldState) => state;
+    const waiting = executeM5ShipmentDeliveryTick(
+      dispatched.world, request.tick + 1, noOpPhaseHandler, noOpTransition,
+    );
+    expect(waiting.world.shipments?.get(shipment.id)?.quantity).toBe(1.5);
+    expect(waiting.context.transactions).toEqual([]);
+    expect(readMarketActorInventory(waiting.world, f.buyer, "GENERAL").get(GOOD) ?? 0)
+      .toBe(openingBuyer);
+
+    const arrived = executeM5ShipmentDeliveryTick(
+      waiting.world, request.tick + 2, noOpPhaseHandler, noOpTransition,
+    );
+    expect(arrived.world.shipments?.has(shipment.id)).toBe(false);
+    expect(arrived.context.transactions).toMatchObject([{
+      type: "SHIPMENT_DELIVERY", phase: 1, tick: request.tick + 2,
+      quantity: 1.5, goodId: GOOD,
+    }]);
+    expect(arrived.context.transactions.every(tx =>
+      tx.type !== "GOODS_TRANSPORT_LOSS" && tx.moneyAmount === undefined)).toBe(true);
+    expect(readMarketActorInventory(arrived.world, f.buyer, "GENERAL").get(GOOD) ?? 0)
+      .toBeCloseTo(openingBuyer + 1.5, 12);
+    expect(stock(arrived.world, request)).toBe(openingSeller - 2);
+    expect((openingSeller - stock(arrived.world, request)) -
+      (readMarketActorInventory(arrived.world, f.buyer, "GENERAL").get(GOOD)! - openingBuyer))
+      .toBeCloseTo(0.5, 12);
+
+    const replay = executeM5ShipmentDeliveryTick(
+      arrived.world, request.tick + 3, noOpPhaseHandler, noOpTransition,
+    );
+    expect(replay.context.transactions).toEqual([]);
+    expect(replay.world.shipments?.size).toBe(0);
+    expect(readMarketActorInventory(replay.world, f.buyer, "GENERAL").get(GOOD))
+      .toEqual(readMarketActorInventory(arrived.world, f.buyer, "GENERAL").get(GOOD));
+    expect(world.shipments?.size).toBe(0);
+  });
+
   it("destroys directed-link attrition exactly once without a cash refund or arrival re-loss", () => {
     const f = fixture();
     const link = f.world.transportLinks.get(f.request.shipment.transportLinkId)!;
