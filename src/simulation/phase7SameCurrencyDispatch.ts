@@ -228,6 +228,12 @@ export function settleSameCurrencyTradeDispatch(
   const destinationTreasury: ActorRef | null = destinationController === null ? null :
     { type: "STATE", stateId: destinationController };
   const link = world.transportLinks.get(shipment.transportLinkId)!;
+  // Validate the route-time snapshot before persisting it; the prior
+  // shipment validator already checked the legacy pre-priced arrival.
+  if (link.travelTicks === undefined || !Number.isSafeInteger(link.travelTicks) ||
+      link.travelTicks < 0) {
+    return refuse("live directed link has no valid dispatch-time travel duration");
+  }
   const feeReceiver = link.feeReceiver ?? null;
   if (shipment.transportFeeAmount > 0 && feeReceiver === null) {
     return refuse("positive transport fee has no explicit recipient");
