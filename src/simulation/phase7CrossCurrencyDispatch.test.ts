@@ -605,6 +605,63 @@ describe("M5 / #673 prepared FX lots -> atomic FX dispatch -> actual Phase-8 res
   });
 });
 
+describe("M5 #674 persisted shipment registry before cross-currency FX", () => {
+  it("refuses malformed earlier cargo before posting a new FX settlement", () => {
+    const f = fixture();
+    const prior = settleCrossCurrencyTradeDispatch(f.world, f.request)!;
+    const priorId = "sh:7:prior:fx" as ShipmentId;
+    const previous = {
+      ...prior.shipment, id: priorId, fxSettlementId: "fxs:7:prior:fx",
+    };
+    const wrongKey: WorldState = {
+      ...f.world,
+      shipments: new Map([["sh:7:wrong:key" as ShipmentId, previous]]),
+    };
+    const wrongBucket: WorldState = {
+      ...f.world,
+      shipments: new Map([[priorId, {
+        ...previous, destinationInventoryBucket: "INPUT" as const,
+      }]]),
+    };
+    for (const [world, diagnostic] of [
+      [wrongKey, /Shipment registry key differs/],
+      [wrongBucket, /Shipment destination inventory bucket contradicts/],
+    ] as const) {
+      const before = snapshot(world, f.request);
+      expect(() => settleCrossCurrencyTradeDispatch(world, f.request))
+        .toThrow(diagnostic);
+      expect(snapshot(world, f.request)).toEqual(before);
+    }
+  });
+
+  it("permits a second paid FX dispatch when prior cargo is valid", () => {
+    const f = fixture();
+    const first = settleCrossCurrencyTradeDispatch(f.world, f.request)!;
+    validateTradeShipmentRegistry(first.world);
+    const second: CrossCurrencyDispatchRequest = {
+      ...f.request,
+      bundleId: createTransactionBundleId("tb:7:cross:second"),
+      settlementId: createFxSettlementId("fxs:7:cross:second"),
+      shipmentId: "sh:7:cross:second" as ShipmentId,
+      plannedQuantity: 1,
+      priorTransactions: first.transactions,
+      remainingCargoWeightByLink: first.remainingCargoWeightByLink,
+      reservation: {
+        ...f.request.reservation,
+        requestId: "fx:req:dispatch-7-second",
+        quote: quoteFx(first.world, f.request.fxPairId,
+          f.destinationCurrency, f.sourceCurrency, 3, { maxInputAmount: 60 }),
+      },
+    };
+    const next = settleCrossCurrencyTradeDispatch(first.world, second);
+    expect(next).not.toBeNull();
+    expect(next!.world.shipments?.size).toBe(2);
+    expect(stock(next!.world, second)).toBe(7);
+    expect(first.world.shipments?.size).toBe(1);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+});
+
 describe("M5 #673 canonical cargo mass at cross-currency settlement", () => {
   it("rejects forged cargo and invalid/nontradable goods before FX sizing or physical posting", () => {
     const f = fixture();
