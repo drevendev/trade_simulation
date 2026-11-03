@@ -121,6 +121,7 @@
     stopPlayback();
     playButton.disabled = true;
     slider.disabled = true;
+    slider.removeAttribute("aria-valuetext");
     slider.value = "0";
     slider.max = "0";
     readout.textContent = message;
@@ -136,6 +137,10 @@
     if (!Number.isSafeInteger(i) || i < 0 || i >= samples.length) return unavailable("Selected sample unavailable");
     const tick = samples[i];
     readout.textContent = "tick " + tick.tick + " · sample " + (i + 1) + " of " + samples.length;
+    // The range's native numeric value is a sample index, not an economy tick.
+    // Expose the actual recorded tick to assistive technology on every update.
+    slider.setAttribute("aria-valuetext", "Tick " + tick.tick +
+      ", sample " + (i + 1) + " of " + samples.length);
     let cards;
     if (mode === "m4") {
       const u = run.data.region;
