@@ -53,6 +53,32 @@ function stateGoods(world: WorldState, actor: ActorRef): number {
 }
 
 describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival", () => {
+  it("preserves frozen paid arrival when the live directed-link travel time changes", () => {
+    const { inTransit, shipment, buyer } = fixture(2);
+    const frozen = { ...shipment, travelTicksAtDispatch: 2 };
+    const link = inTransit.transportLinks.get(shipment.transportLinkId)!;
+    const changed: WorldState = {
+      ...inTransit,
+      transportLinks: new Map(inTransit.transportLinks).set(link.linkId,
+        { ...link, travelTicks: 5 }),
+      shipments: new Map([[frozen.id, frozen]]),
+    };
+    expect(() => validateTradeShipmentRegistry(changed)).not.toThrow();
+    const forged: WorldState = {
+      ...changed,
+      shipments: new Map([[frozen.id, { ...frozen, arrivalTick: frozen.arrivalTick + 1 }]]),
+    };
+    expect(() => validateTradeShipmentRegistry(forged)).toThrow(/arrival tick/);
+    const before = stateGoods(changed, buyer);
+    const delivered = deliverDueTradeShipments(changed, {
+      tick: frozen.arrivalTick, phase: 1, priorTransactions: [],
+    });
+    expect(stateGoods(delivered.world, buyer)).toBe(before + frozen.quantity);
+    expect(delivered.deliveredShipmentIds).toEqual([frozen.id]);
+    expect(delivered.world.shipments?.size).toBe(0);
+    expect(changed.shipments?.get(frozen.id)).toBe(frozen);
+  });
+
   it("uses the canonical quantity precision default for a valid historic config without an override", () => {
     const { inTransit, shipment, buyer } = fixture();
     // NumericConfig.quantityEpsilon is optional, and both dispatch and
