@@ -259,6 +259,12 @@ export function settleSameCurrencyTradeDispatch(
   // Even a zero-price sale remains an explicit journal record for stock provenance.
   if (!transactionIds.includes(tx("goods"))) transactionIds.push(tx("goods"));
   const seen = new Set(request.priorTransactions.map((item) => item.transactionId));
+  // The returned journal must not inherit ambiguous transaction identities,
+  // even when the duplicate was in a prior bundle unrelated to this trade.
+  // The delivery path enforces the same prior-journal uniqueness invariant.
+  if (seen.size !== request.priorTransactions.length) {
+    return refuse("duplicate committed journal transaction identity");
+  }
   if (request.priorTransactions.some((item) => item.bundleId === bundleId) ||
       transactionIds.some((id) => seen.has(id))) {
     return refuse("reused bundle or transaction identity");
