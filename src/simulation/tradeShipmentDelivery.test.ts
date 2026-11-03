@@ -327,4 +327,92 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
     expect(replay.world.productionUnits.get(unit.productionUnitId)).toBe(deliveredUnit);
   });
 
+  it("delivers simultaneous zero-travel cargo to three beneficial-owner kinds without double credit", () => {
+    const { inTransit, shipment } = fixture(0);
+    const destinationKey = inTransit.regions.get(shipment.destinationRegionId)!.seed.key;
+    const cohortEntry = [...inTransit.cohorts].find(([, cohort]) =>
+      cohort.seed.regionKey === destinationKey);
+    const unitEntry = [...inTransit.productionUnits].find(([, unit]) =>
+      unit.seed.regionKey === destinationKey);
+    if (!cohortEntry || !unitEntry) throw new Error("Missing destination resident fixtures");
+    const [cohortId, cohort] = cohortEntry;
+    const [unitId, unit] = unitEntry;
+    const cohortBuyer: ActorRef = { type: "COHORT", cohortId };
+    const unitBuyer: ActorRef = { type: "PRODUCTION_UNIT", productionUnitId: unitId };
+    const cargo: TradeShipmentState[] = [
+      {
+        ...shipment, id: "sh:delivery:owners:a" as ShipmentId,
+        departureTick: 9, arrivalTick: 9, quantity: 2,
+      },
+      {
+        ...shipment, id: "sh:delivery:owners:b" as ShipmentId,
+        departureTick: 9, arrivalTick: 9, quantity: 1.5,
+        buyer: cohortBuyer, beneficialOwner: cohortBuyer,
+      },
+      {
+        ...shipment, id: "sh:delivery:owners:c" as ShipmentId,
+        departureTick: 9, arrivalTick: 9, quantity: 0.25,
+        buyer: unitBuyer, beneficialOwner: unitBuyer,
+        destinationInventoryBucket: "INPUT",
+      },
+    ];
+    const withCargo = (entries: readonly TradeShipmentState[]): WorldState => ({
+      ...inTransit, shipments: new Map(entries.map(entry => [entry.id, entry])),
+    });
+    const forward = withCargo(cargo);
+    const reverse = withCargo([...cargo].reverse());
+    validateTradeShipmentRegistry(forward);
+    const originalState = stateGoods(forward, shipment.buyer);
+    const originalCohort = cohort.householdInventory.get(GOOD) ?? 0;
+    const originalUnit = unit.inputInventory.get(GOOD) ?? 0;
+    const originalTotal = originalState + originalCohort + originalUnit;
+    const transitTotal = cargo.reduce((sum, item) => sum + item.quantity, 0);
+    const request = { tick: 9, phase: 7 as const, priorTransactions: [] };
+
+    expect(() => deliverDueTradeShipments(forward, {
+      ...request, phase: 1,
+    })).toThrow(/Phase-7 close/);
+    const delivered = deliverDueTradeShipments(forward, request);
+    const reordered = deliverDueTradeShipments(reverse, request);
+    expect(delivered.deliveredShipmentIds).toEqual(cargo.map(item => item.id));
+    expect(reordered.deliveredShipmentIds).toEqual(delivered.deliveredShipmentIds);
+    expect(reordered.newTransactions).toEqual(delivered.newTransactions);
+    expect(delivered.world.shipments?.size).toBe(0);
+    expect(delivered.newTransactions).toHaveLength(3);
+    expect(delivered.newTransactions.every(tx =>
+      tx.type === "SHIPMENT_DELIVERY" && tx.phase === 7 &&
+      tx.currencyId === undefined && tx.moneyAmount === undefined)).toBe(true);
+
+    const finalState = stateGoods(delivered.world, shipment.buyer);
+    const finalCohort = delivered.world.cohorts.get(cohortId)!;
+    const finalUnit = delivered.world.productionUnits.get(unitId)!;
+    expect(finalState - originalState).toBeCloseTo(2, 12);
+    expect((finalCohort.householdInventory.get(GOOD) ?? 0) - originalCohort)
+      .toBeCloseTo(1.5, 12);
+    expect((finalUnit.inputInventory.get(GOOD) ?? 0) - originalUnit)
+      .toBeCloseTo(0.25, 12);
+    expect(finalUnit.outputInventory).toEqual(unit.outputInventory);
+    expect(finalUnit.investmentInventory).toEqual(unit.investmentInventory);
+    expect(finalState + (finalCohort.householdInventory.get(GOOD) ?? 0) +
+      (finalUnit.inputInventory.get(GOOD) ?? 0))
+      .toBeCloseTo(originalTotal + transitTotal, 12);
+    expect(delivered.world.states.get(
+      shipment.buyer.type === "STATE" ? shipment.buyer.stateId
+        : [...delivered.world.states.keys()][0]!)?.treasury)
+      .toEqual(forward.states.get(
+        shipment.buyer.type === "STATE" ? shipment.buyer.stateId
+          : [...forward.states.keys()][0]!)?.treasury);
+    expect(delivered.world.cohorts.get(cohortId)!.wallet).toEqual(cohort.wallet);
+    expect(delivered.world.productionUnits.get(unitId)!.wallet).toEqual(unit.wallet);
+    expect(forward.shipments?.size).toBe(3);
+    expect(forward.cohorts.get(cohortId)).toBe(cohort);
+    expect(forward.productionUnits.get(unitId)).toBe(unit);
+
+    const replay = deliverDueTradeShipments(delivered.world, {
+      ...request, priorTransactions: delivered.transactions,
+    });
+    expect(replay.world).toBe(delivered.world);
+    expect(replay.newTransactions).toEqual([]);
+  });
+
 });
