@@ -53,6 +53,43 @@ function stateGoods(world: WorldState, actor: ActorRef): number {
 }
 
 describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival", () => {
+  it("uses the canonical quantity precision default for a valid historic config without an override", () => {
+    const { inTransit, shipment, buyer } = fixture();
+    // NumericConfig.quantityEpsilon is optional, and both dispatch and
+    // persisted-cargo validation default it to 1e-9. Delivery must not
+    // strand already-paid cargo merely because this field was omitted.
+    const { quantityEpsilon: _omitted, ...numeric } = inTransit.simulationConfig.numeric;
+    const historic: WorldState = {
+      ...inTransit,
+      simulationConfig: { ...inTransit.simulationConfig, numeric },
+    };
+    expect(historic.simulationConfig.numeric.quantityEpsilon).toBeUndefined();
+    expect(() => validateTradeShipmentRegistry(historic)).not.toThrow();
+
+    const originalGoods = stateGoods(historic, buyer);
+    const delivered = deliverDueTradeShipments(historic, {
+      tick: shipment.arrivalTick, phase: 1, priorTransactions: [],
+    });
+    expect(stateGoods(delivered.world, buyer)).toBe(originalGoods + shipment.quantity);
+    expect(delivered.world.shipments?.size).toBe(0);
+    expect(delivered.newTransactions).toHaveLength(1);
+    expect(delivered.newTransactions[0]?.type).toBe("SHIPMENT_DELIVERY");
+    expect(historic.shipments?.get(shipment.id)).toBe(shipment);
+    expect(stateGoods(historic, buyer)).toBe(originalGoods);
+
+    // The omitted override does not relax the shared epsilon floor.
+    const tiny = { ...shipment, quantity: 5e-10 };
+    const corrupt: WorldState = {
+      ...historic, shipments: new Map([[tiny.id, tiny]]),
+    };
+    expect(() => validateTradeShipmentRegistry(corrupt)).toThrow(/quantity.*epsilon/);
+    expect(() => deliverDueTradeShipments(corrupt, {
+      tick: tiny.arrivalTick, phase: 1, priorTransactions: [],
+    })).toThrow(/quantity.*epsilon/);
+    expect(stateGoods(corrupt, buyer)).toBe(originalGoods);
+    expect(corrupt.shipments?.get(tiny.id)).toBe(tiny);
+  });
+
   it("delivers future-tick in-transit goods once, without a second cash or tax settlement", () => {
     const { inTransit, shipment, buyer } = fixture();
     const initial = stateGoods(inTransit, buyer);
