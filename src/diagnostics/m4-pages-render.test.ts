@@ -198,6 +198,46 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     } finally { await page.close(); }
   }, 60_000);
 
+  it("finishes at the last recorded sample and restarts only after another Play click", async () => {
+    const page = await pageAt("", 1280, false);
+    try {
+      const slider = page.locator("#spotlight-tick");
+      const play = page.getByRole("button", { name: "Recorded tick playback", exact: true });
+      const samples = artifact().samples;
+      expect(samples.length).toBeGreaterThan(2);
+      const finalIndex = samples.length - 1;
+      // Start one sample before the end to exercise the actual timer boundary.
+      await slider.evaluate((node, index) => {
+        const input = node as HTMLInputElement;
+        input.value = String(index);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }, finalIndex - 1);
+      await play.click();
+      expect(await play.getAttribute("aria-pressed")).toBe("true");
+      await page.waitForFunction(() => {
+        const button = document.getElementById("spotlight-play");
+        const input = document.getElementById("spotlight-tick") as HTMLInputElement;
+        return button?.getAttribute("aria-pressed") === "false" && input.value === input.max;
+      });
+      expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${samples[finalIndex]!.tick}`);
+      await page.waitForTimeout(1100);
+      expect(await slider.inputValue()).toBe(String(finalIndex));
+      expect(await play.getAttribute("aria-pressed")).toBe("false");
+
+      // Replaying the terminal sample requires an explicit click and starts
+      // at the first REAL sample, not an interpolated or synthetic tick.
+      await play.click();
+      expect(await play.getAttribute("aria-pressed")).toBe("true");
+      expect(await slider.inputValue()).toBe("0");
+      expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${samples[0]!.tick}`);
+      await page.waitForFunction(() => Number(
+        (document.getElementById("spotlight-tick") as HTMLInputElement).value,
+      ) > 0);
+      await play.click();
+      expect(await play.getAttribute("aria-pressed")).toBe("false");
+    } finally { await page.close(); }
+  }, 60_000);
+
   it("stops playback when active saved observations are replaced, but not for an unrelated run", async () => {
     const page = await pageAt("", 1280, false);
     try {
