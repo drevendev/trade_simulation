@@ -203,6 +203,8 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
     try {
       const play = page.locator("#spotlight-play");
       const slider = page.locator("#spotlight-tick");
+      const readout = page.locator("#spotlight-readout");
+      expect(await readout.getAttribute("aria-live")).toBe("polite");
       expect(await play.isEnabled()).toBe(true);
       expect(await play.getAttribute("aria-pressed")).toBe("false");
       expect(await play.getAttribute("aria-label")).toBe("Recorded tick playback");
@@ -212,6 +214,7 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
       await page.waitForTimeout(1000);
       expect(await slider.inputValue()).toBe("0");
       await play.click();
+      expect(await readout.getAttribute("aria-live")).toBe("off");
       expect(await play.getAttribute("aria-pressed")).toBe("true");
       expect(await play.getAttribute("aria-label")).toBe("Recorded tick playback");
       expect(await page.getByRole("button", { name: "Recorded tick playback", exact: true }).count()).toBe(1);
@@ -220,14 +223,22 @@ describe("REQ-VISUALIZATION-009: M4 Pages render", () => {
       const sample = artifact().samples[index]!;
       expect(await page.locator("#spotlight-readout").innerText()).toContain(`tick ${sample.tick}`);
       await play.click();
+      expect(await readout.getAttribute("aria-live")).toBe("polite");
       expect(await play.getAttribute("aria-pressed")).toBe("false");
       expect(await play.getAttribute("aria-label")).toBe("Recorded tick playback");
       expect(await page.getByRole("button", { name: "Recorded tick playback", exact: true }).count()).toBe(1);
-      const paused = await slider.inputValue();
+      await slider.evaluate(node => {
+        const input = node as HTMLInputElement;
+        input.value = "0";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(await readout.getAttribute("aria-live")).toBe("polite");
+      expect(await slider.getAttribute("aria-valuetext")).toContain("sample 1 of");
       await page.waitForTimeout(1000);
-      expect(await slider.inputValue()).toBe(paused);
+      expect(await slider.inputValue()).toBe("0");
       await play.click();
       await page.locator("#showcase-milestone").selectOption("m3");
+      expect(await readout.getAttribute("aria-live")).toBe("polite");
       expect(await play.getAttribute("aria-pressed")).toBe("false");
       expect(await play.getAttribute("aria-label")).toBe("Recorded tick playback");
       expect(await page.getByRole("button", { name: "Recorded tick playback", exact: true }).count()).toBe(1);
