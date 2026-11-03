@@ -117,6 +117,21 @@ function unchanged(world: WorldState, request: SameCurrencyDispatchRequest, act:
 }
 
 describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
+  it("rejects prefix-only bundle IDs before paid dispatch, without mutating inputs", () => {
+    const { world, request } = fixture();
+    // The typed factory accepts this prefix-only string. The settlement
+    // boundary must reject it instead of emitting non-identifying tx:tb: IDs.
+    const prefixOnly: SameCurrencyDispatchRequest = {
+      ...request, bundleId: createTransactionBundleId("tb:"),
+    };
+    unchanged(world, prefixOnly,
+      () => settleSameCurrencyTradeDispatch(world, prefixOnly));
+    expect(() => settleSameCurrencyTradeDispatch(world, prefixOnly))
+      .toThrow(/invalid transaction bundle ID/);
+    // Properly identified bundles must still settle.
+    expect(() => settleSameCurrencyTradeDispatch(world, request)).not.toThrow();
+  });
+
   it("keeps real paid cargo in transit until its future Phase-1 tick, with loss only at dispatch", () => {
     const f = fixture();
     const link = f.world.transportLinks.get(f.request.shipment.transportLinkId)!;
