@@ -19,7 +19,7 @@ import {
   applyConservingTradeMoneyLegs, type Phase7TradeMoneyLeg,
 } from "./phase7TradeMoneyLegs";
 import {
-  validateTradeShipmentState, type ShipmentDestinationInventoryBucket,
+  validateTradeShipmentRegistry, validateTradeShipmentState, type ShipmentDestinationInventoryBucket,
   type TradeShipmentState,
 } from "./tradeShipmentState";
 import {
@@ -121,6 +121,9 @@ export function settleSameCurrencyTradeDispatch(
   if (!(world.shipments instanceof Map)) {
     return refuse("canonical shipment registry missing");
   }
+  // Existing in-transit stock must be valid before another paid dispatch.
+  // Otherwise a corrupt persisted registry could survive a new cash/goods commit.
+  validateTradeShipmentRegistry(world);
   validateTradeShipmentState(world, shipment);
   // A prepared caller may forge cargoWeightPerUnit even if the live route
   // planner correctly hydrated it. The physical settlement boundary must
