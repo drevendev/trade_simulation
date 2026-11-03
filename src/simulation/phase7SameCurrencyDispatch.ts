@@ -269,6 +269,7 @@ export function settleSameCurrencyTradeDispatch(
   );
   const frozenShipment: TradeShipmentState = Object.freeze({
     ...routineLoss.survivingShipment,
+    travelTicksAtDispatch: link.travelTicks,
     routeLinkIds: Object.freeze([...shipment.routeLinkIds]),
     seller: Object.freeze({ ...shipment.seller }),
     buyer: Object.freeze({ ...shipment.buyer }),
