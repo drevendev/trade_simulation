@@ -103,8 +103,11 @@ export function deliverDueTradeShipments(
       !Array.isArray(request.priorTransactions)) {
     return fail("invalid tick, phase or committed journal");
   }
-  const epsilon = world.simulationConfig.numeric.quantityEpsilon;
-  if (epsilon === undefined || !Number.isFinite(epsilon) || epsilon < 0) {
+  // NumericConfig.quantityEpsilon is optional for historic fixtures. The
+  // persisted-cargo validator and Phase-7 dispatch use the canonical 1e-9
+  // default; Phase-1/7 delivery must use that same precision boundary.
+  const epsilon = world.simulationConfig.numeric.quantityEpsilon ?? 1e-9;
+  if (!Number.isFinite(epsilon) || epsilon <= 0) {
     return fail("invalid canonical quantity precision");
   }
   const registry = world.shipments;
