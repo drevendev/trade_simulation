@@ -126,6 +126,13 @@ export function settleCrossCurrencyTradeDispatch(
         tx.fxSettlementId === request.settlementId)) {
     return refuse("replayed shipment, bundle or FX settlement");
   }
+  // Prior transactions are scoped to the current tick. A cargo shipment
+  // dispatched on an earlier tick retains its frozen FX settlement identity
+  // even after the earlier tick's journal has rolled off.
+  if ([...world.shipments.values()].some((shipment) =>
+    shipment.fxSettlementId === request.settlementId)) {
+    return refuse("FX settlement ID already belongs to in-transit shipment");
+  }
   if (actorRefKey(request.seller) === actorRefKey(request.buyer)) {
     return refuse("buyer and seller must be distinct goods owners");
   }

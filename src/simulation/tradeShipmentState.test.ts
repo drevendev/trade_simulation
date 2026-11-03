@@ -202,6 +202,49 @@ describe("M5 #673 persistent in-transit stock schema and canonical genesis", () 
     })).not.toThrow();
   });
 
+  it("forbids one frozen FX settlement ID from backing two live cargo records", () => {
+    const valid = sample();
+    const fxShipment: TradeShipmentState = {
+      ...valid,
+      invoiceCurrencyId: differentCurrency(valid.buyerPaymentCurrencyId),
+      fxSettlementId: "fxs:in-transit:shared",
+    };
+    const second: TradeShipmentState = {
+      ...fxShipment, id: "sh:37:alpha-beta:food:2" as ShipmentId,
+    };
+    const records = new Map([[fxShipment.id, fxShipment], [second.id, second]]);
+    const corrupt: WorldState = { ...world, shipments: records };
+    expect(() => validateTradeShipmentState(world, fxShipment)).not.toThrow();
+    expect(() => validateTradeShipmentState(world, second)).not.toThrow();
+    expect(() => validateTradeShipmentRegistry(corrupt))
+      .toThrow(/reuses an FX settlement ID/);
+    expect(() => deliverDueTradeShipments(corrupt, {
+      tick: fxShipment.arrivalTick,
+      phase: fxShipment.arrivalTick === fxShipment.departureTick ? 7 : 1,
+      priorTransactions: [],
+    })).toThrow(/reuses an FX settlement ID/);
+    expect(corrupt.shipments).toBe(records);
+    expect(records.size).toBe(2);
+    expect(world.shipments?.size).toBe(0);
+
+    const unique: TradeShipmentState = {
+      ...second, fxSettlementId: "fxs:in-transit:second",
+    };
+    expect(() => validateTradeShipmentRegistry({
+      ...world, shipments: new Map([[fxShipment.id, fxShipment], [unique.id, unique]]),
+    })).not.toThrow();
+    // Same-currency shipments have no FX receipt and may coexist.
+    const { fxSettlementId: _unused, ...sameWithoutFx } = valid;
+    const same: TradeShipmentState = {
+      ...sameWithoutFx, invoiceCurrencyId: valid.buyerPaymentCurrencyId,
+    };
+    expect(() => validateTradeShipmentRegistry({
+      ...world, shipments: new Map([
+        [valid.id, same], [second.id, { ...same, id: second.id }],
+      ]),
+    })).not.toThrow();
+  });
+
   it("rejects invalid physical amount, money and tick evidence before it can become stock", () => {
     const valid = sample();
     for (const quantity of [0, -1, NaN, Infinity]) {
