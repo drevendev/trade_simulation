@@ -19,6 +19,9 @@
     playbackTimer = null;
     playButton.textContent = "▶ Play";
     playButton.setAttribute("aria-pressed", "false");
+    // During automatic playback, do not queue an announcement every 850ms.
+    // Manual scrubbing and paused selections remain polite live updates.
+    readout.setAttribute("aria-live", "polite");
   }
   // Playback is opt-in and advances existing samples only; it never runs the economy.
   document.addEventListener("visibilitychange", () => {
@@ -222,6 +225,9 @@
   playButton.addEventListener("click", () => {
     if (playbackTimer !== null) return stopPlayback();
     if (playButton.disabled || slider.disabled) return;
+    // Automatic sample stepping must not flood screen-reader live queues.
+    // The scrubber still exposes each actual tick via aria-valuetext.
+    readout.setAttribute("aria-live", "off");
     // Replaying a finished saved run starts at its real first observation.
     if (Number(slider.value) >= Number(slider.max)) slider.value = "0";
     renderTick();
