@@ -242,6 +242,50 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
     expect(invalidPrior).toEqual([first, second, duplicate]);
   });
 
+  it("keeps all owner stocks unchanged if a later due delivery overflows", () => {
+    const { inTransit, shipment, seller, buyer } = fixture();
+    if (seller.type !== "STATE" || buyer.type !== "STATE") {
+      throw new Error("expected two State owners");
+    }
+    const sellerState = inTransit.states.get(seller.stateId)!;
+    const states = new Map(inTransit.states).set(seller.stateId, {
+      ...sellerState,
+      publicInventory: new Map(sellerState.publicInventory).set(GOOD, Number.MAX_VALUE),
+    });
+    const later: TradeShipmentState = {
+      ...shipment, id: "sh:delivery:unit:b" as ShipmentId,
+      seller: buyer, buyer: seller, beneficialOwner: seller,
+      quantity: Number.MAX_VALUE,
+      ...(shipment.fxSettlementId === undefined ? {} : {
+        fxSettlementId: "fxs:delivery:unit:b",
+      }),
+    };
+    const world: WorldState = {
+      ...inTransit, states,
+      shipments: new Map([[shipment.id, shipment], [later.id, later]]),
+    };
+    validateTradeShipmentRegistry(world);
+    const request = { tick: 8, phase: 1 as const, priorTransactions: [] };
+    const firstOnly: WorldState = {
+      ...world, shipments: new Map([[shipment.id, shipment]]),
+    };
+    expect(stateGoods(deliverDueTradeShipments(firstOnly, request).world, buyer))
+      .toBe(stateGoods(world, buyer) + shipment.quantity);
+
+    const buyerBefore = stateGoods(world, buyer);
+    const sellerBefore = stateGoods(world, seller);
+    // The earlier lexicographic shipment can credit successfully, but the
+    // second destination would overflow. No intermediate WorldState escapes.
+    expect(() => deliverDueTradeShipments(world, request)).toThrow(/overflows/);
+    expect(stateGoods(world, buyer)).toBe(buyerBefore);
+    expect(stateGoods(world, seller)).toBe(sellerBefore);
+    expect(world.states).toBe(states);
+    expect(world.shipments?.get(shipment.id)).toBe(shipment);
+    expect(world.shipments?.get(later.id)).toBe(later);
+    expect(world.shipments?.size).toBe(2);
+    expect(inTransit.states.get(seller.stateId)).toBe(sellerState);
+  });
+
   it("refuses binary64 lost credits, overflowing stock, and cumulative precision loss", () => {
     const { inTransit, shipment, buyer } = fixture();
     if (buyer.type !== "STATE") throw new Error("expected State");
