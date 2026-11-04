@@ -276,6 +276,15 @@ export function settleCrossCurrencyTradeDispatch(
   ] as const;
   const ids = [saleId, dispatchId, ...charges.map((part) => tx(part.suffix)),
     ...(routineLoss.destruction ? [routineLoss.destruction.transactionId] : [])];
+  // A persisted journal is untrusted runtime evidence. A unique undefined,
+  // prefix-only or non-string ID would otherwise survive duplicate detection
+  // and be returned as a committed transaction alongside the new trade.
+  if (request.priorTransactions.some((part) =>
+    !part || typeof part.transactionId !== "string" ||
+    !part.transactionId.startsWith("tx:") ||
+    part.transactionId.slice(3).trim().length === 0)) {
+    return refuse("malformed committed journal transaction identity");
+  }
   const usedIds = new Set(request.priorTransactions.map((part) => part.transactionId));
   // The committed journal is authoritative input, not just a collision set for
   // this lot. Never propagate duplicate historical IDs into an FX bundle.
