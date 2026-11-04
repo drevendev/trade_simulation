@@ -8,7 +8,7 @@ import { readActorWallet, readMarketActorInventory } from "./marketSettlementTra
 import { quoteFx, resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 import { validateTradeShipmentRegistry } from "./tradeShipmentState";
 import { deliverDueTradeShipments } from "./tradeShipmentDelivery";
-import { createFxSettlementId, createTransactionBundleId } from "./tickOrchestrator";
+import { createFxSettlementId, createTransactionBundleId, createTransactionId } from "./tickOrchestrator";
 import {
   settleCrossCurrencyTradeDispatch, type CrossCurrencyDispatchRequest,
 } from "./phase7CrossCurrencyDispatch";
@@ -380,6 +380,31 @@ describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
       remainingCargoWeightByLink: first.remainingCargoWeightByLink };
     unchanged(first.world, repeated,
       () => settleCrossCurrencyTradeDispatch(first.world, repeated));
+  });
+
+  it("rejects duplicated prior transaction IDs across unrelated FX bundles before settlement", () => {
+    const f = fixture();
+    const sample = settleCrossCurrencyTradeDispatch(f.world, f.request)!;
+    const fee = sample.newTransactions.find((tx) => tx.type === "TRANSPORT_FEE")!;
+    const prior = {
+      ...fee,
+      transactionId: createTransactionId("tx:prior:independent:1"),
+      bundleId: createTransactionBundleId("tb:prior:independent:1"),
+    };
+    // A distinct valid prior bundle must remain composable with a new FX lot.
+    const valid = { ...f.request, priorTransactions: [prior] };
+    const settled = settleCrossCurrencyTradeDispatch(f.world, valid);
+    expect(settled?.transactions).toHaveLength(1 + settled!.newTransactions.length);
+
+    // Different bundles cannot share one committed transaction identity.
+    const duplicate = {
+      ...prior, bundleId: createTransactionBundleId("tb:prior:independent:2"),
+    };
+    const corrupted = { ...f.request, priorTransactions: [prior, duplicate] };
+    unchanged(f.world, corrupted,
+      () => settleCrossCurrencyTradeDispatch(f.world, corrupted));
+    expect(() => settleCrossCurrencyTradeDispatch(f.world, corrupted))
+      .toThrow(/duplicate committed journal transaction identity/);
   });
 
   it("refuses missing fee receiver or destination tax authority and keeps source world intact", () => {
