@@ -277,6 +277,11 @@ export function settleCrossCurrencyTradeDispatch(
   const ids = [saleId, dispatchId, ...charges.map((part) => tx(part.suffix)),
     ...(routineLoss.destruction ? [routineLoss.destruction.transactionId] : [])];
   const usedIds = new Set(request.priorTransactions.map((part) => part.transactionId));
+  // The committed journal is authoritative input, not just a collision set for
+  // this lot. Never propagate duplicate historical IDs into an FX bundle.
+  if (usedIds.size !== request.priorTransactions.length) {
+    return refuse("duplicate committed journal transaction identity");
+  }
   if (ids.some((id) => usedIds.has(id))) {
     return refuse("reused journal transaction identity");
   }
