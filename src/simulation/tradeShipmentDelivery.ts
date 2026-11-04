@@ -186,6 +186,20 @@ export function deliverDueTradeShipments(
          transaction.bundleId.slice(3).trim().length === 0)) {
       return fail("malformed prior transaction bundle identity");
     }
+    // Optional links identify their own committed origin/FX receipt. Their
+    // branded shape is part of the persistent journal contract even when
+    // the linked transaction occurred in an earlier (non-retained) tick.
+    // Do not infer a same-journal existence requirement from these links.
+    for (const [field, prefix] of [
+      ["originatingTransactionId", "tx:"], ["fxSettlementId", "fxs:"],
+    ] as const) {
+      const value = transaction[field];
+      if (value !== undefined &&
+          (typeof value !== "string" || !value.startsWith(prefix) ||
+           value.slice(prefix.length).trim().length === 0)) {
+        return fail("malformed prior transaction linked identity: " + field);
+      }
+    }
     priorIds.add(transaction.transactionId);
   }
   const priorBundles = new Set(request.priorTransactions.map(tx => tx.bundleId));
