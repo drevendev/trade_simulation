@@ -558,6 +558,46 @@ describe("M5 #673 Phase-7 live world opportunity planning", () => {
     expect(f.world.shipments?.size).toBe(0);
   });
 
+  it("rejects incomplete or forged world-wide Phase-1 jurisdiction beyond routed endpoints", () => {
+    const f = fixture();
+    const routed = new Set(f.input.opportunityQuotes.flatMap(quote => [
+      quote.originRegionId, quote.destinationRegionId,
+    ]));
+    const unrelated = [...f.world.regions.keys()].find(id => !routed.has(id));
+    if (!unrelated) throw new Error("regression needs an unrelated Region");
+    const actualController = f.world.regions.get(unrelated)!.controllerStateId;
+    const foreignController = [...f.world.states.keys()].find(id => id !== actualController);
+    if (!foreignController) throw new Error("regression needs an alternate State");
+
+    // Complete authoritative Phase-1 data remains accepted, even when the
+    // quoted route touches only a subset of the world's Regions.
+    expect(derivePhase7Phase1ImportTariffs(
+      f.world, f.context, f.input.opportunityQuotes,
+    )).toHaveLength(f.input.opportunityQuotes.length);
+
+    const missing = new Map(f.context.effectiveJurisdictionByRegion);
+    missing.delete(unrelated);
+    const changed = new Map(f.context.effectiveJurisdictionByRegion);
+    changed.set(unrelated, foreignController);
+    const extra = new Map(f.context.effectiveJurisdictionByRegion);
+    extra.set("region:phantom" as typeof unrelated, null);
+
+    const openingInventory = f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD);
+    const openingShipments = f.world.shipments?.size;
+    for (const snapshot of [missing, changed, extra]) {
+      const forgedContext = { ...f.context, effectiveJurisdictionByRegion: snapshot };
+      expect(() => derivePhase7Phase1ImportTariffs(
+        f.world, forgedContext, f.input.opportunityQuotes,
+      )).toThrow("incomplete/stale world-wide Phase-1 jurisdiction");
+      expect(() => preparePhase7LiveWorldTradePlan(
+        f.world, forgedContext, f.input,
+      )).toThrow("incomplete/stale world-wide Phase-1 jurisdiction");
+      expect(f.world.states.get(f.state.stateId)!.publicInventory.get(GOOD))
+        .toBe(openingInventory);
+      expect(f.world.shipments?.size).toBe(openingShipments);
+    }
+  });
+
   it("rejects invented same-State and uncontrolled-destination tariffs from live quotes", () => {
     const f = fixture();
     const route = f.input.opportunityQuotes[0]!;
