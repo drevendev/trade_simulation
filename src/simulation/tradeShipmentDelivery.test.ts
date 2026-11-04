@@ -301,6 +301,59 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
     expect(inTransit.shipments?.get(shipment.id)).toBe(shipment);
   });
 
+  it("preflights prior journal chronology, amount and optional bundle before cargo credit", () => {
+    const { inTransit, shipment, buyer } = fixture();
+    const tick = shipment.arrivalTick;
+    const before = stateGoods(inTransit, buyer);
+    const prior = {
+      tick: tick - 1, phase: 7, type: "TRANSPORT_FEE",
+      transactionId: createTransactionId("tx:prior:shape"),
+      bundleId: createTransactionBundleId("tb:prior:shape"), amount: 0.5,
+    };
+    const { bundleId: _priorBundle, ...unbundledPrior } = prior;
+    const sameTick = {
+      ...unbundledPrior, tick, phase: 1,
+      transactionId: createTransactionId("tx:prior:same-tick"),
+    };
+    // Historical receipts may be unbundled, and this-tick Phase-1 receipts
+    // are valid predecessors of another Phase-1 delivery.
+    const accepted = deliverDueTradeShipments(inTransit, {
+      tick, phase: 1, priorTransactions: [prior, sameTick],
+    });
+    expect(accepted.deliveredShipmentIds).toEqual([shipment.id]);
+    expect(accepted.transactions.slice(0, 2)).toEqual([prior, sameTick]);
+    expect(stateGoods(accepted.world, buyer)).toBe(before + shipment.quantity);
+
+    const invalidRecords = [
+      { tick: -1 }, { tick: Number.NaN }, { tick: tick + 1 },
+      { phase: -1 }, { phase: 16 }, { tick, phase: 7 },
+      { type: "" }, { type: "   " }, { type: undefined },
+      { amount: Number.NaN }, { amount: Number.POSITIVE_INFINITY },
+      { amount: undefined },
+    ];
+    for (const patch of invalidRecords) {
+      const corrupt = { ...prior, ...patch };
+      const journal = [corrupt] as unknown as typeof accepted.transactions;
+      expect(() => deliverDueTradeShipments(inTransit, {
+        tick, phase: 1, priorTransactions: journal,
+      })).toThrow(/malformed prior transaction record/);
+      expect(journal[0]).toBe(corrupt);
+      expect(stateGoods(inTransit, buyer)).toBe(before);
+      expect(inTransit.shipments?.get(shipment.id)).toBe(shipment);
+    }
+    // Bundles are optional, but a supplied bundle cannot be a malformed key.
+    for (const badBundle of [null, "", "tb:", "tb:  ", "not-tb:old", 17]) {
+      const corrupt = { ...prior, bundleId: badBundle };
+      const journal = [corrupt] as unknown as typeof accepted.transactions;
+      expect(() => deliverDueTradeShipments(inTransit, {
+        tick, phase: 1, priorTransactions: journal,
+      })).toThrow(/malformed prior transaction bundle identity/);
+      expect(journal[0]).toBe(corrupt);
+      expect(stateGoods(inTransit, buyer)).toBe(before);
+      expect(inTransit.shipments?.get(shipment.id)).toBe(shipment);
+    }
+  });
+
   it("keeps all owner stocks unchanged if a later due delivery overflows", () => {
     const { inTransit, shipment, seller, buyer } = fixture();
     if (seller.type !== "STATE" || buyer.type !== "STATE") {
