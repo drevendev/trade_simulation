@@ -179,15 +179,27 @@ export function settleCrossCurrencyTradeDispatch(
     request.sellerInventoryBucket, "seller");
   const sellerAvailable = goods.get(request.goodId) ?? 0;
   nonnegative(sellerAvailable, "seller opening goods");
+  const originController = request.effectiveJurisdictionByRegion.get(
+    request.originRegionId,
+  )!;
   const destinationController = request.effectiveJurisdictionByRegion.get(
     request.destinationRegionId,
   )!;
+  if (originController !== null && !world.states.has(originController)) {
+    return refuse("current origin controller State is missing");
+  }
   if (destinationController !== null && !world.states.has(destinationController)) {
     return refuse("current destination controller State is missing");
   }
   if (destinationController === null &&
       (request.tariffPerUnitDest !== 0 || request.consumptionTaxPerUnitDest !== 0)) {
     return refuse("uncontrolled destination cannot charge State taxes");
+  }
+  // A currency border is not necessarily a State border after succession or
+  // monetary change. FX may be required within one State, but import tariff
+  // cannot be manufactured where Phase-1 jurisdiction reports no State border.
+  if (originController === destinationController && request.tariffPerUnitDest !== 0) {
+    return refuse("same-State cross-currency route cannot charge an import tariff");
   }
 
   const sizingRequest: CrossCurrencyLotSizingRequest = {
