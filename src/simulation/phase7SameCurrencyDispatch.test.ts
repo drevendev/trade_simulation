@@ -469,6 +469,23 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
     unchanged(world, journalOnly, () => settleSameCurrencyTradeDispatch(world, journalOnly));
   });
 
+  it("rejects malformed committed transaction IDs before any trade side effect", () => {
+    const { world, request } = fixture();
+    const prior = {
+      ...settleSameCurrencyTradeDispatch(world, request).newTransactions[0]!,
+      transactionId: createTransactionId("tx:earlier:valid"),
+      bundleId: createTransactionBundleId("tb:earlier:valid"),
+    };
+    for (const invalid of ["tx:", "tx:   ", "unprefixed", undefined, 17]) {
+      const corrupted = { ...request, priorTransactions: [{ ...prior,
+        transactionId: invalid as unknown as typeof prior.transactionId }] };
+      unchanged(world, corrupted,
+        () => settleSameCurrencyTradeDispatch(world, corrupted));
+      expect(() => settleSameCurrencyTradeDispatch(world, corrupted))
+        .toThrow(/malformed committed journal transaction identity/);
+    }
+  });
+
   it("rejects pre-existing duplicate journal transaction IDs even when unrelated to this lot", () => {
     const { world, request } = fixture();
     const sample = settleSameCurrencyTradeDispatch(world, request).newTransactions[0]!;

@@ -382,6 +382,23 @@ describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
       () => settleCrossCurrencyTradeDispatch(first.world, repeated));
   });
 
+  it("rejects malformed committed transaction IDs before any FX or stock effect", () => {
+    const f = fixture();
+    const prior = {
+      ...settleCrossCurrencyTradeDispatch(f.world, f.request)!.newTransactions[0]!,
+      transactionId: createTransactionId("tx:earlier:valid"),
+      bundleId: createTransactionBundleId("tb:earlier:valid"),
+    };
+    for (const invalid of ["tx:", "tx:   ", "unprefixed", undefined, 17]) {
+      const corrupted = { ...f.request, priorTransactions: [{ ...prior,
+        transactionId: invalid as unknown as typeof prior.transactionId }] };
+      unchanged(f.world, corrupted,
+        () => settleCrossCurrencyTradeDispatch(f.world, corrupted));
+      expect(() => settleCrossCurrencyTradeDispatch(f.world, corrupted))
+        .toThrow(/malformed committed journal transaction identity/);
+    }
+  });
+
   it("rejects duplicated prior transaction IDs across unrelated FX bundles before settlement", () => {
     const f = fixture();
     const sample = settleCrossCurrencyTradeDispatch(f.world, f.request)!;
