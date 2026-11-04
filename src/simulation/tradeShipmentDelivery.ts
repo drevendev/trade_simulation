@@ -149,6 +149,27 @@ export function deliverDueTradeShipments(
     if (priorIds.has(transaction.transactionId)) {
       return fail("duplicate prior transaction identity");
     }
+    // A prior journal is untrusted persisted evidence, not just a set of IDs.
+    // Never publish a cargo receipt alongside an impossible tick/phase, missing
+    // economic kind, or nonfinite amount. Earlier ticks may carry any phase;
+    // this tick may only carry effects from completed phases.
+    if (!Number.isSafeInteger(transaction.tick) || transaction.tick < 0 ||
+        transaction.tick > request.tick ||
+        !Number.isSafeInteger(transaction.phase) ||
+        transaction.phase < 0 || transaction.phase > 15 ||
+        (transaction.tick === request.tick && transaction.phase > request.phase) ||
+        typeof transaction.type !== "string" || transaction.type.trim().length === 0 ||
+        typeof transaction.amount !== "number" || !Number.isFinite(transaction.amount)) {
+      return fail("malformed prior transaction record");
+    }
+    // Bundling is optional in the common EconomicTransaction schema, but any
+    // supplied bundle must be a usable canonical identity.
+    if (transaction.bundleId !== undefined &&
+        (typeof transaction.bundleId !== "string" ||
+         !transaction.bundleId.startsWith("tb:") ||
+         transaction.bundleId.slice(3).trim().length === 0)) {
+      return fail("malformed prior transaction bundle identity");
+    }
     priorIds.add(transaction.transactionId);
   }
   const priorBundles = new Set(request.priorTransactions.map(tx => tx.bundleId));
