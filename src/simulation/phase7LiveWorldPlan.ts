@@ -175,6 +175,16 @@ function assertCurrentPhase1LegalQuotes(
       throw new Error("Phase-7 live legal quote cannot charge a tariff without a destination-State border");
     }
   }
+  // The frozen Phase-1 snapshot is world-wide. Checking only selected route
+  // endpoints would accept a partial or forged jurisdiction map and could let
+  // route authorization depend on which opportunities a caller submitted.
+  if (jurisdiction.size !== world.regions.size ||
+      [...world.regions].some(([id, region]) =>
+        !jurisdiction.has(id) ||
+        jurisdiction.get(id) !== region.controllerStateId ||
+        (region.controllerStateId !== null && !world.states.has(region.controllerStateId)))) {
+    throw new Error("Phase-7 live legal quote has incomplete/stale world-wide Phase-1 jurisdiction");
+  }
 }
 
 /**
