@@ -258,6 +258,15 @@ export function settleSameCurrencyTradeDispatch(
   if (routineLoss.destruction) transactionIds.push(routineLoss.destruction.transactionId);
   // Even a zero-price sale remains an explicit journal record for stock provenance.
   if (!transactionIds.includes(tx("goods"))) transactionIds.push(tx("goods"));
+  // A persisted journal is untrusted runtime evidence. A unique undefined,
+  // prefix-only or non-string ID would otherwise survive duplicate detection
+  // and be returned as a committed transaction alongside the new trade.
+  if (request.priorTransactions.some((part) =>
+    !part || typeof part.transactionId !== "string" ||
+    !part.transactionId.startsWith("tx:") ||
+    part.transactionId.slice(3).trim().length === 0)) {
+    return refuse("malformed committed journal transaction identity");
+  }
   const seen = new Set(request.priorTransactions.map((item) => item.transactionId));
   // The returned journal must not inherit ambiguous transaction identities,
   // even when the duplicate was in a prior bundle unrelated to this trade.
