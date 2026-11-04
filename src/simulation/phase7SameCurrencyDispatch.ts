@@ -162,6 +162,18 @@ export function settleSameCurrencyTradeDispatch(
       !request.effectiveJurisdictionByRegion.has(shipment.destinationRegionId)) {
     return refuse("current-tick effective jurisdiction is missing");
   }
+  // A direct prepared-lot caller must not bypass Phase-1's world-wide
+  // jurisdiction snapshot contract just because its chosen route is present.
+  // The effective map may reflect legal succession rather than seed geography,
+  // but it must cover precisely the live regions and name only existing States.
+  if (request.effectiveJurisdictionByRegion.size !== world.regions.size ||
+      [...world.regions.keys()].some((regionId) => {
+        if (!request.effectiveJurisdictionByRegion.has(regionId)) return true;
+        const controller = request.effectiveJurisdictionByRegion.get(regionId);
+        return controller !== null && (controller === undefined || !world.states.has(controller));
+      })) {
+    return refuse("current-tick jurisdiction snapshot is incomplete or references an unknown State");
+  }
   actorLocation(world, shipment.seller, shipment.originRegionId,
     request.effectiveJurisdictionByRegion, "seller");
   actorLocation(world, shipment.buyer, shipment.destinationRegionId,
