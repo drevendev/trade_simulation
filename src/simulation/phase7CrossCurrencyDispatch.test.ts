@@ -443,6 +443,48 @@ describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
     }));
   });
 
+  it("uses the frozen State border, not the FX currency border, for import tariff authority", () => {
+    const f = fixture();
+    const destinationController = f.request.effectiveJurisdictionByRegion.get(
+      f.request.destinationRegionId,
+    );
+    if (!destinationController) throw new Error("fixture needs a destination State");
+
+    // A jurisdiction transition can leave two Regions in one State with
+    // distinct settlement currencies. FX remains necessary, tariff does not.
+    const sameState = new Map(f.request.effectiveJurisdictionByRegion);
+    sameState.set(f.request.originRegionId, destinationController);
+    const illegalTariff: CrossCurrencyDispatchRequest = {
+      ...f.request, effectiveJurisdictionByRegion: sameState,
+    };
+    unchanged(f.world, illegalTariff, () =>
+      settleCrossCurrencyTradeDispatch(f.world, illegalTariff));
+    expect(() => settleCrossCurrencyTradeDispatch(f.world, illegalTariff))
+      .toThrow(/same-State cross-currency route cannot charge an import tariff/);
+
+    const tariffFree: CrossCurrencyDispatchRequest = {
+      ...illegalTariff, tariffPerUnitDest: 0,
+    };
+    const settled = settleCrossCurrencyTradeDispatch(f.world, tariffFree);
+    expect(settled).not.toBeNull();
+    expect(settled!.shipment.tariffAmount).toBe(0);
+    expect(settled!.newTransactions.filter(tx => tx.type === "IMPORT_TARIFF"))
+      .toHaveLength(0);
+    expect(settled!.fxReceipt.outputAmount).toBeGreaterThan(0);
+
+    // No arbitrary State identifier can authorize an origin border, even if
+    // the seller is a non-State actor in an otherwise valid cargo route.
+    const unknownOrigin = new Map(f.request.effectiveJurisdictionByRegion);
+    unknownOrigin.set(f.request.originRegionId,
+      "state:missing-phase1" as typeof destinationController);
+    const forged: CrossCurrencyDispatchRequest = {
+      ...f.request, effectiveJurisdictionByRegion: unknownOrigin,
+    };
+    unchanged(f.world, forged, () => settleCrossCurrencyTradeDispatch(f.world, forged));
+    expect(() => settleCrossCurrencyTradeDispatch(f.world, forged))
+      .toThrow(/current origin controller State is missing/);
+  });
+
   it("fails FX seller-credit precision without removing goods or publishing any journal", () => {
     const f = fixture();
     if (f.seller.type !== "COHORT") throw new Error("fixture needs a cohort seller");
