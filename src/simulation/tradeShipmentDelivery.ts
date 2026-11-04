@@ -138,6 +138,14 @@ export function deliverDueTradeShipments(
   // when legitimate money/physical legs share a transaction bundle.
   const priorIds = new Set<string>();
   for (const transaction of request.priorTransactions) {
+    // Phase-7 dispatch validates journal identity before money or goods
+    // settlement. Apply the same fail-closed boundary to Phase-1/7 arrival:
+    // malformed historical IDs must never be carried into a delivery receipt.
+    if (!transaction || typeof transaction.transactionId !== "string" ||
+        !transaction.transactionId.startsWith("tx:") ||
+        transaction.transactionId.slice(3).trim().length === 0) {
+      return fail("malformed prior transaction identity");
+    }
     if (priorIds.has(transaction.transactionId)) {
       return fail("duplicate prior transaction identity");
     }

@@ -268,6 +268,39 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
     expect(invalidPrior).toEqual([first, second, duplicate]);
   });
 
+  it("rejects malformed committed transaction identities before crediting paid cargo", () => {
+    const { inTransit, shipment, buyer } = fixture();
+    const originalGoods = stateGoods(inTransit, buyer);
+    const valid = {
+      tick: 7, phase: 7 as const, type: "TRANSPORT_FEE" as const,
+      transactionId: createTransactionId("tx:prior:valid"),
+      bundleId: createTransactionBundleId("tb:prior:valid"), amount: 1,
+    };
+    // A valid unrelated prior receipt must remain intact in the output.
+    const accepted = deliverDueTradeShipments(inTransit, {
+      tick: shipment.arrivalTick, phase: 1, priorTransactions: [valid],
+    });
+    expect(accepted.transactions[0]).toEqual(valid);
+    expect(accepted.deliveredShipmentIds).toEqual([shipment.id]);
+
+    for (const invalidId of [undefined, null, "", "tx:", "tx:   ", "not-tx:abc", 7]) {
+      const forged = { ...valid, transactionId: invalidId };
+      const priorTransactions = [forged] as unknown as typeof accepted.transactions;
+      expect(() => deliverDueTradeShipments(inTransit, {
+        tick: shipment.arrivalTick, phase: 1, priorTransactions,
+      })).toThrow(/malformed prior transaction identity/);
+      expect(priorTransactions[0]).toBe(forged);
+      expect(stateGoods(inTransit, buyer)).toBe(originalGoods);
+      expect(inTransit.shipments?.get(shipment.id)).toBe(shipment);
+    }
+    expect(() => deliverDueTradeShipments(inTransit, {
+      tick: shipment.arrivalTick, phase: 1,
+      priorTransactions: [null] as unknown as typeof accepted.transactions,
+    })).toThrow(/malformed prior transaction identity/);
+    expect(stateGoods(inTransit, buyer)).toBe(originalGoods);
+    expect(inTransit.shipments?.get(shipment.id)).toBe(shipment);
+  });
+
   it("keeps all owner stocks unchanged if a later due delivery overflows", () => {
     const { inTransit, shipment, seller, buyer } = fixture();
     if (seller.type !== "STATE" || buyer.type !== "STATE") {
