@@ -310,10 +310,10 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
       transactionId: createTransactionId("tx:prior:shape"),
       bundleId: createTransactionBundleId("tb:prior:shape"), amount: 0.5,
     };
+    const { bundleId: _priorBundle, ...unbundledPrior } = prior;
     const sameTick = {
-      ...prior, tick, phase: 1,
+      ...unbundledPrior, tick, phase: 1,
       transactionId: createTransactionId("tx:prior:same-tick"),
-      bundleId: undefined,
     };
     // Historical receipts may be unbundled, and this-tick Phase-1 receipts
     // are valid predecessors of another Phase-1 delivery.
