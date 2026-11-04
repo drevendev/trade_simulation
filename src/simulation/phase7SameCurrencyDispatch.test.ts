@@ -406,6 +406,47 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
     expect(stock(world, paid)).toBe(10);
   });
 
+  it("credits the Phase-1 current destination controller, not a stale seed treasury", () => {
+    const f = fixture();
+    const oldController = f.destinationState as Extract<ActorRef, { type: "STATE" }>;
+    // Changing only Phase-1 effective jurisdiction models a lawful handover
+    // while RegionState still retains its older seed controller and currency.
+    const successorId = [...f.world.states.keys()]
+      .find((stateId) => stateId !== oldController.stateId);
+    if (!successorId) throw new Error("Baseline fixture must have a second State");
+    const successor: ActorRef = { type: "STATE", stateId: successorId };
+    const currentJurisdiction = new Map(f.request.effectiveJurisdictionByRegion);
+    currentJurisdiction.set(f.request.shipment.destinationRegionId, successorId);
+    const active: SameCurrencyDispatchRequest = {
+      ...f.request, effectiveJurisdictionByRegion: currentJurisdiction,
+    };
+    const seedBalance = cash(f.world, oldController, active);
+    const activeBalance = cash(f.world, successor, active);
+    const buyerBalance = cash(f.world, f.buyer, active);
+    const settled = settleSameCurrencyTradeDispatch(f.world, active);
+    expect(cash(settled.world, successor, active)).toBe(activeBalance + 1.5);
+    expect(cash(settled.world, oldController, active)).toBe(seedBalance);
+    expect(cash(settled.world, f.buyer, active)).toBe(buyerBalance - 9.5);
+    expect(settled.newTransactions
+      .filter((tx) => tx.type === "IMPORT_TARIFF" || tx.type === "CONSUMPTION_TAX")
+      .map((tx) => tx.destination)).toEqual([successor, successor]);
+    expect(f.world.regions.get(active.shipment.destinationRegionId)!.controllerStateId)
+      .toBe(oldController.stateId);
+    expect(f.world.shipments?.size).toBe(0);
+
+    // A purported controller missing from the authoritative State registry is
+    // not a tax sink: refuse the entire bundle before any settlement effect.
+    const missingJurisdiction = new Map(active.effectiveJurisdictionByRegion);
+    missingJurisdiction.set(active.shipment.destinationRegionId,
+      "state:nonexistent" as typeof successorId);
+    const invalid: SameCurrencyDispatchRequest = {
+      ...active, effectiveJurisdictionByRegion: missingJurisdiction,
+    };
+    unchanged(f.world, invalid, () => settleSameCurrencyTradeDispatch(f.world, invalid));
+    expect(() => settleSameCurrencyTradeDispatch(f.world, invalid))
+      .toThrow(/destination jurisdiction State is missing/);
+  });
+
   it("fails closed on missing tax authority or positive fee with no recipient", () => {
     const { world, request } = fixture();
     const jurisdictions = new Map(request.effectiveJurisdictionByRegion);
