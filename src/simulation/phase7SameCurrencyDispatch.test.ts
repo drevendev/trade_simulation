@@ -568,6 +568,36 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
     unchanged(world, journalOnly, () => settleSameCurrencyTradeDispatch(world, journalOnly));
   });
 
+  it("refuses incomplete, surplus and unknown-State Phase-1 snapshots before payment", () => {
+    const { world, request } = fixture();
+    const originId = request.shipment.originRegionId;
+    const destinationId = request.shipment.destinationRegionId;
+    const unrelated = [...world.regions.keys()].find(
+      (id) => id !== originId && id !== destinationId,
+    );
+    if (!unrelated) throw new Error("Expected a third region for jurisdiction regression");
+
+    const complete = new Map(request.effectiveJurisdictionByRegion);
+    const absent = new Map(complete);
+    absent.delete(unrelated);
+    const extraneous = new Map(complete);
+    extraneous.set("region:unregistered" as RegionId, null);
+    const unknownState = new Map(complete);
+    unknownState.set(unrelated, "state:unregistered" as StateId);
+
+    for (const snapshot of [absent, extraneous, unknownState]) {
+      const invalid = { ...request, effectiveJurisdictionByRegion: snapshot };
+      unchanged(world, invalid, () => settleSameCurrencyTradeDispatch(world, invalid));
+      expect(() => settleSameCurrencyTradeDispatch(world, invalid))
+        .toThrow(/current-tick jurisdiction snapshot/);
+    }
+    // The legitimate complete map may include a Phase-1 successor State
+    // different from seed geography; this must remain a lawful border.
+    const settled = settleSameCurrencyTradeDispatch(world, request);
+    expect(settled.world.shipments?.has(request.shipment.id)).toBe(true);
+    expect(settled.newTransactions.some(tx => tx.type === "IMPORT_TARIFF")).toBe(true);
+  });
+
   it("rejects malformed committed transaction IDs before any trade side effect", () => {
     const { world, request } = fixture();
     const prior = {

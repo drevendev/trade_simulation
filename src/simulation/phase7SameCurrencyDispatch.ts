@@ -227,6 +227,18 @@ export function settleSameCurrencyTradeDispatch(
   if (destinationController !== null && !world.states.has(destinationController)) {
     return refuse("destination jurisdiction State is missing");
   }
+  // A direct prepared-lot caller must not bypass Phase-1's world-wide
+  // jurisdiction snapshot contract just because its chosen route is present.
+  // The effective map may reflect legal succession rather than seed geography,
+  // but it must cover precisely the live regions and name only existing States.
+  if (request.effectiveJurisdictionByRegion.size !== world.regions.size ||
+      [...world.regions.keys()].some((regionId) => {
+        if (!request.effectiveJurisdictionByRegion.has(regionId)) return true;
+        const controller = request.effectiveJurisdictionByRegion.get(regionId);
+        return controller !== null && (controller === undefined || !world.states.has(controller));
+      })) {
+    return refuse("current-tick jurisdiction snapshot is incomplete or references an unknown State");
+  }
   // Phase-1 law, not the currency or original seed controller, defines an
   // international border. Same-State routes may incur transport and ordinary
   // consumption taxes, but NEVER an import tariff.
