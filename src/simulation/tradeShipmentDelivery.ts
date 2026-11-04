@@ -159,8 +159,24 @@ export function deliverDueTradeShipments(
         transaction.phase < 0 || transaction.phase > 15 ||
         (transaction.tick === request.tick && transaction.phase > request.phase) ||
         typeof transaction.type !== "string" || transaction.type.trim().length === 0 ||
-        typeof transaction.amount !== "number" || !Number.isFinite(transaction.amount)) {
+        typeof transaction.amount !== "number" || !Number.isFinite(transaction.amount) ||
+        transaction.amount < 0) {
       return fail("malformed prior transaction record");
+    }
+    // EconomicTransaction represents transfer magnitudes, not signed deltas.
+    // An optional money/goods amount, when supplied by a persisted journal,
+    // must be a finite nonnegative number before any paid cargo is delivered.
+    // Missing optional fields remain valid for older/other transaction kinds.
+    const flowFields = [
+      "quantity", "unitPrice", "moneyAmount", "grossMoneyAmount",
+      "assessedTaxAmount", "taxAmount",
+    ] as const;
+    for (const field of flowFields) {
+      const value = transaction[field];
+      if (value !== undefined &&
+          (typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
+        return fail("malformed prior transaction flow amount: " + field);
+      }
     }
     // Bundling is optional in the common EconomicTransaction schema, but any
     // supplied bundle must be a usable canonical identity.

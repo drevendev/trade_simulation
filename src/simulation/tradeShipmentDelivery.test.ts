@@ -354,6 +354,45 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
     }
   });
 
+  it("refuses negative or nonfinite committed money/goods magnitudes before paid arrival", () => {
+    const { inTransit, shipment, buyer } = fixture();
+    const tick = shipment.arrivalTick;
+    const openingGoods = stateGoods(inTransit, buyer);
+    const prior = {
+      tick: tick - 1, phase: 7, type: "MARKET_SALE",
+      transactionId: createTransactionId("tx:prior:magnitudes"),
+      amount: 1, quantity: 2, unitPrice: 0.5,
+      moneyAmount: 1, grossMoneyAmount: 1,
+      assessedTaxAmount: 0.1, taxAmount: 0.1,
+    };
+    const accepted = deliverDueTradeShipments(inTransit, {
+      tick, phase: 1, priorTransactions: [prior],
+    });
+    expect(accepted.deliveredShipmentIds).toEqual([shipment.id]);
+    expect(stateGoods(accepted.world, buyer)).toBe(openingGoods + shipment.quantity);
+
+    const flowFields = [
+      "quantity", "unitPrice", "moneyAmount", "grossMoneyAmount",
+      "assessedTaxAmount", "taxAmount",
+    ] as const;
+    const corruptions: Record<string, unknown>[] = [{ amount: -1 }];
+    for (const field of flowFields) {
+      for (const invalid of [-1, Number.NaN, Number.POSITIVE_INFINITY, null, "1"]) {
+        corruptions.push({ [field]: invalid });
+      }
+    }
+    for (const patch of corruptions) {
+      const corrupt = { ...prior, ...patch };
+      const journal = [corrupt] as unknown as typeof accepted.transactions;
+      expect(() => deliverDueTradeShipments(inTransit, {
+        tick, phase: 1, priorTransactions: journal,
+      })).toThrow(/malformed prior transaction/);
+      expect(journal[0]).toBe(corrupt);
+      expect(stateGoods(inTransit, buyer)).toBe(openingGoods);
+      expect(inTransit.shipments?.get(shipment.id)).toBe(shipment);
+    }
+  });
+
   it("keeps all owner stocks unchanged if a later due delivery overflows", () => {
     const { inTransit, shipment, seller, buyer } = fixture();
     if (seller.type !== "STATE" || buyer.type !== "STATE") {
