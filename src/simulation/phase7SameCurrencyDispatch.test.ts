@@ -594,7 +594,7 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
     // The legitimate complete map may include a Phase-1 successor State
     // different from seed geography; this must remain a lawful border.
     const settled = settleSameCurrencyTradeDispatch(world, request);
-    expect(settled.world.shipments.has(request.shipment.id)).toBe(true);
+    expect(settled.world.shipments?.has(request.shipment.id)).toBe(true);
     expect(settled.newTransactions.some(tx => tx.type === "IMPORT_TARIFF")).toBe(true);
   });
 
