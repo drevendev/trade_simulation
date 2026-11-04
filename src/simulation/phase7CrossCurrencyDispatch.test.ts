@@ -385,7 +385,8 @@ describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
   it("rejects malformed committed transaction IDs before any FX or stock effect", () => {
     const f = fixture();
     const prior = {
-      ...settleCrossCurrencyTradeDispatch(f.world, f.request)!.newTransactions[0]!,
+      ...settleCrossCurrencyTradeDispatch(f.world, f.request)!.newTransactions
+        .find((tx) => tx.type === "TRANSPORT_FEE")!,
       transactionId: createTransactionId("tx:earlier:valid"),
       bundleId: createTransactionBundleId("tb:earlier:valid"),
     };
