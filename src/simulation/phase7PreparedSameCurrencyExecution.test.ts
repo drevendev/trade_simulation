@@ -57,8 +57,16 @@ function fixture() {
     ...receiver,
     wallet: new Map(receiver.wallet).set(currency, 1),
   });
+  // This test deliberately exercises a same-currency *international*
+  // route. A shared settlement currency does not imply a shared State.
+  const foreignStateId = [...root.states.keys()]
+    .find(id => id !== dest.controllerStateId);
+  if (!foreignStateId) throw new Error("another State is required for the customs fixture");
   const world: WorldState = {
     ...root,
+    regions: new Map(root.regions).set(origin.regionId, {
+      ...origin, controllerStateId: foreignStateId,
+    }),
     cohorts: cohortsNext,
     transportLinks: new Map(root.transportLinks).set(link.linkId, {
       ...link, feeReceiver: { type: "COHORT", cohortId: receiver.cohortId },

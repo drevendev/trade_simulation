@@ -99,8 +99,18 @@ function fixture() {
   grantCash(fxRoute.receiver.cohortId, fxRoute.destination.settlementCurrencyId, 1);
   grantCash(domesticRoute.receiver.cohortId, domesticRoute.destination.settlementCurrencyId, 1);
 
+  // The "domestic" plan denotes same-currency settlement, not legal
+  // sovereignty. Give this test route a distinct Phase-1 controlling State
+  // while preserving its two actual regional settlement currencies. This
+  // makes its positive import-tariff fixture legally international.
+  const foreignStateId = [...root.states.keys()]
+    .find(id => id !== domesticRoute.destination.controllerStateId);
+  if (!foreignStateId) throw new Error("another State is required for the customs fixture");
   const world: WorldState = {
     ...root, cohorts: cohortsNext,
+    regions: new Map(root.regions).set(domesticRoute.source.regionId, {
+      ...domesticRoute.source, controllerStateId: foreignStateId,
+    }),
     transportLinks: new Map(root.transportLinks)
       .set(fxRoute.link.linkId, {
         ...fxRoute.link, feeReceiver: actor(fxRoute.receiver.cohortId),

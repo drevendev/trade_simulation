@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
-import type { GoodId, ShipmentId, TransportLinkId } from "../domain/id";
+import type { GoodId, RegionId, ShipmentId, StateId, TransportLinkId } from "../domain/id";
 import type { ActorRef } from "../domain/genesisLedger";
 import { readActorWallet, readMarketActorInventory } from "./marketSettlementTransition";
 import {
@@ -83,14 +83,22 @@ function fixture(): {
     tariffAmount: 1, consumptionTaxAmount: 0.5,
     destinationInventoryBucket: "GENERAL",
   };
+  // Seed geography places this same-currency route inside one State. For
+  // positive customs-payment tests, model a Phase-1 border change while the
+  // monetary arrangement remains shared; currency does not define sovereignty.
+  const foreignController = [...root.states.keys()]
+    .find((stateId) => stateId !== destination.controllerStateId);
+  if (!foreignController) throw new Error("Baseline fixture must have another State");
+  const phase1Jurisdiction = new Map<RegionId, StateId | null>(
+    [...root.regions].map(([id, region]) => [id, region.controllerStateId]),
+  );
+  phase1Jurisdiction.set(origin.regionId, foreignController);
   const request: SameCurrencyDispatchRequest = {
     tick: 37, bundleId: createTransactionBundleId("tb:37:test:dispatch:1"),
     shipment, sellerInventoryBucket: "GENERAL", cargoWeightPerUnit: 1,
     phase1EligibleDirectedLinkIds: new Set<TransportLinkId>([link.linkId]),
     remainingCargoWeightByLink: new Map([[link.linkId, 50]]),
-    effectiveJurisdictionByRegion: new Map(
-      [...root.regions].map(([id, region]) => [id, region.controllerStateId]),
-    ),
+    effectiveJurisdictionByRegion: phase1Jurisdiction,
     priorTransactions: [],
   };
   return { world, request, seller, buyer, receiver, destinationState };
@@ -416,6 +424,9 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
     if (!successorId) throw new Error("Baseline fixture must have a second State");
     const successor: ActorRef = { type: "STATE", stateId: successorId };
     const currentJurisdiction = new Map(f.request.effectiveJurisdictionByRegion);
+    // With destination succession, the former local controller becomes the
+    // foreign origin controller for this still-common-currency route.
+    currentJurisdiction.set(f.request.shipment.originRegionId, oldController.stateId);
     currentJurisdiction.set(f.request.shipment.destinationRegionId, successorId);
     const active: SameCurrencyDispatchRequest = {
       ...f.request, effectiveJurisdictionByRegion: currentJurisdiction,
@@ -445,6 +456,53 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
     unchanged(f.world, invalid, () => settleSameCurrencyTradeDispatch(f.world, invalid));
     expect(() => settleSameCurrencyTradeDispatch(f.world, invalid))
       .toThrow(/destination jurisdiction State is missing/);
+  });
+
+  it("uses Phase-1 State borders, not shared currency, for import tariff legality", () => {
+    const f = fixture();
+    const jurisdiction = new Map(f.request.effectiveJurisdictionByRegion);
+    jurisdiction.set(f.request.shipment.originRegionId,
+      jurisdiction.get(f.request.shipment.destinationRegionId)!);
+    const domestic: SameCurrencyDispatchRequest = {
+      ...f.request, effectiveJurisdictionByRegion: jurisdiction,
+    };
+    // A forged pre-priced international tariff must not transfer cash to
+    // a treasury when Phase-1 says this route is domestic.
+    unchanged(f.world, domestic,
+      () => settleSameCurrencyTradeDispatch(f.world, domestic));
+    expect(() => settleSameCurrencyTradeDispatch(f.world, domestic))
+      .toThrow(/same-State route cannot charge an import tariff/);
+
+    // Domestic sales can still pay the transport receiver and consumption tax.
+    const lawful: SameCurrencyDispatchRequest = {
+      ...domestic, shipment: { ...domestic.shipment, tariffAmount: 0 },
+    };
+    const buyerBefore = cash(f.world, f.buyer, lawful);
+    const treasuryBefore = cash(f.world, f.destinationState, lawful);
+    const settled = settleSameCurrencyTradeDispatch(f.world, lawful);
+    expect(cash(settled.world, f.buyer, lawful)).toBe(buyerBefore - 8.5);
+    expect(cash(settled.world, f.destinationState, lawful)).toBe(treasuryBefore + 0.5);
+    expect(settled.newTransactions.map((tx) => tx.type)).not.toContain("IMPORT_TARIFF");
+    expect(settled.newTransactions.map((tx) => tx.type)).toContain("TRANSPORT_FEE");
+    expect(settled.world.shipments?.get(lawful.shipment.id)?.tariffAmount).toBe(0);
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("rejects a nonexistent origin State in Phase-1 before any trade posting", () => {
+    const f = fixture();
+    const jurisdictions = new Map(f.request.effectiveJurisdictionByRegion);
+    jurisdictions.set(f.request.shipment.originRegionId,
+      "state:missing" as StateId);
+    const forged: SameCurrencyDispatchRequest = {
+      ...f.request, effectiveJurisdictionByRegion: jurisdictions,
+    };
+    unchanged(f.world, forged,
+      () => settleSameCurrencyTradeDispatch(f.world, forged));
+    expect(() => settleSameCurrencyTradeDispatch(f.world, forged))
+      .toThrow(/origin jurisdiction State is missing/);
+    // The baseline international same-currency route remains legal.
+    const control = settleSameCurrencyTradeDispatch(f.world, f.request);
+    expect(control.newTransactions.some((tx) => tx.type === "IMPORT_TARIFF")).toBe(true);
   });
 
   it("fails closed on missing tax authority or positive fee with no recipient", () => {

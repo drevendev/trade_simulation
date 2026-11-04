@@ -215,11 +215,23 @@ export function settleSameCurrencyTradeDispatch(
     return refuse("cargo use loses physical capacity precision");
   }
 
+  const originController = request.effectiveJurisdictionByRegion.get(
+    shipment.originRegionId,
+  )!;
   const destinationController = request.effectiveJurisdictionByRegion.get(
     shipment.destinationRegionId,
   )!;
+  if (originController !== null && !world.states.has(originController)) {
+    return refuse("origin jurisdiction State is missing");
+  }
   if (destinationController !== null && !world.states.has(destinationController)) {
     return refuse("destination jurisdiction State is missing");
+  }
+  // Phase-1 law, not the currency or original seed controller, defines an
+  // international border. Same-State routes may incur transport and ordinary
+  // consumption taxes, but NEVER an import tariff.
+  if (originController === destinationController && shipment.tariffAmount !== 0) {
+    return refuse("same-State route cannot charge an import tariff");
   }
   if (destinationController === null &&
       (shipment.tariffAmount !== 0 || shipment.consumptionTaxAmount !== 0)) {
