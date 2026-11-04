@@ -4,7 +4,7 @@ import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPac
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { GoodId, ShipmentId } from "../domain/id";
 import type { ActorRef } from "../domain/genesisLedger";
-import { createTransactionBundleId, createTransactionId } from "./tickOrchestrator";
+import { createFxSettlementId, createTransactionBundleId, createTransactionId } from "./tickOrchestrator";
 import { deliverDueTradeShipments } from "./tradeShipmentDelivery";
 import { validateTradeShipmentRegistry, type TradeShipmentState } from "./tradeShipmentState";
 import { buildInitialWorld, type WorldState } from "./worldState";
@@ -390,6 +390,47 @@ describe("M5 #674 deterministic Phase-1 and zero-travel Phase-7 shipment arrival
       expect(journal[0]).toBe(corrupt);
       expect(stateGoods(inTransit, buyer)).toBe(openingGoods);
       expect(inTransit.shipments?.get(shipment.id)).toBe(shipment);
+    }
+  });
+
+  it("rejects corrupt historical origin/FX receipt links before paid cargo arrival", () => {
+    const { inTransit, shipment, buyer } = fixture();
+    const openingGoods = stateGoods(inTransit, buyer);
+    const prior = {
+      tick: shipment.arrivalTick - 1, phase: 7, type: "TRADE_GOODS_PAYMENT",
+      transactionId: createTransactionId("tx:prior:linked"),
+      originatingTransactionId: createTransactionId("tx:original:payment"),
+      fxSettlementId: createFxSettlementId("fxs:original:conversion"),
+      amount: 1,
+    };
+    // Links may name earlier-tick transactions that are not in this bounded
+    // journal. Both valid linked IDs and omitted optional IDs remain legal.
+    const accepted = deliverDueTradeShipments(inTransit, {
+      tick: shipment.arrivalTick, phase: 1, priorTransactions: [prior],
+    });
+    expect(accepted.deliveredShipmentIds).toEqual([shipment.id]);
+    expect(accepted.transactions[0]).toEqual(prior);
+    expect(stateGoods(accepted.world, buyer)).toBe(openingGoods + shipment.quantity);
+    const { originatingTransactionId: _origin, fxSettlementId: _fx, ...unlinked } = prior;
+    expect(deliverDueTradeShipments(inTransit, {
+      tick: shipment.arrivalTick, phase: 1, priorTransactions: [unlinked],
+    }).deliveredShipmentIds).toEqual([shipment.id]);
+
+    const invalidLinks = [undefined, null, "", "tx:", "tx:   ", "fxs:",
+      "fxs:   ", "noncanonical:receipt", 7, {}];
+    for (const field of ["originatingTransactionId", "fxSettlementId"] as const) {
+      for (const invalid of invalidLinks.filter(value => value !== undefined)) {
+        const corrupt = { ...prior, [field]: invalid };
+        // Some values have the correct prefix for the other field, but never
+        // for this field. A valid prefix with no suffix is also illegal.
+        const journal = [corrupt] as unknown as typeof accepted.transactions;
+        expect(() => deliverDueTradeShipments(inTransit, {
+          tick: shipment.arrivalTick, phase: 1, priorTransactions: journal,
+        })).toThrow(/malformed prior transaction linked identity/);
+        expect(journal[0]).toBe(corrupt);
+        expect(stateGoods(inTransit, buyer)).toBe(openingGoods);
+        expect(inTransit.shipments?.get(shipment.id)).toBe(shipment);
+      }
     }
   });
 
