@@ -35,8 +35,14 @@ export function derivePhase7CanonicalCargoResiduals(
       !(eligibleDirectedLinkIdsAtPhase1 instanceof Set)) {
     throw new Error("Phase-7 canonical cargo requires explicit infrastructure and Phase-1 eligibility");
   }
-  if (context.transactions.some(tx => tx.tick === context.tick &&
-      tx.type === "SHIPMENT_DISPATCH")) {
+  // Current-tick journal provenance is part of the capacity authority. A
+  // stale/future receipt (including a dispatch tagged with another tick) must
+  // not be ignored while granting a fresh, unspent physical link budget.
+  if (context.transactions.some(tx => !tx || tx.tick !== context.tick ||
+      !Number.isSafeInteger(tx.phase) || tx.phase < 0 || tx.phase > context.phase)) {
+    throw new Error("Phase-7 canonical cargo requires current-tick chronological journal evidence");
+  }
+  if (context.transactions.some(tx => tx.type === "SHIPMENT_DISPATCH")) {
     throw new Error("Phase-7 canonical cargo cannot infer earlier same-tick dispatch capacity use");
   }
   // A prior dispatch may survive in the registry even if an external caller
