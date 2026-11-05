@@ -310,6 +310,13 @@ export function settleCrossCurrencyTradeDispatch(
     part.transactionId.slice(3).trim().length === 0)) {
     return refuse("malformed committed journal transaction identity");
   }
+  // Phase-7 may carry earlier commits from THIS tick only. A forged
+  // older/future tick or later phase must not enter the FX settlement journal.
+  if (request.priorTransactions.some((part) =>
+    part.tick !== request.tick || !Number.isSafeInteger(part.phase) ||
+    part.phase < 0 || part.phase > 7)) {
+    return refuse("committed journal contains an out-of-tick or future-phase transaction");
+  }
   const usedIds = new Set(request.priorTransactions.map((part) => part.transactionId));
   // The committed journal is authoritative input, not just a collision set for
   // this lot. Never propagate duplicate historical IDs into an FX bundle.
