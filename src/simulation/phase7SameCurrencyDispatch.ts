@@ -68,6 +68,15 @@ export function hasMalformedPhase7JournalReference(part: EconomicTransaction): b
     malformed(part.fxSettlementId, "fxs:");
 }
 
+/** A committed current-tick journal may not carry orphaned goods or currency IDs. */
+export function hasUnknownPhase7JournalAsset(
+  world: WorldState, part: EconomicTransaction,
+): boolean {
+  return (part.currencyId !== undefined && !world.currencies.has(part.currencyId)) ||
+    (part.goodId !== undefined &&
+      !Object.prototype.hasOwnProperty.call(world.definitionRegistry.goods, part.goodId));
+}
+
 function actorLocation(world: WorldState, actor: ActorRef, regionId: RegionId,
   jurisdiction: ReadonlyMap<RegionId, StateId | null>, role: string): void {
   const region = world.regions.get(regionId);
@@ -304,6 +313,9 @@ export function settleSameCurrencyTradeDispatch(
   }
   if (request.priorTransactions.some(hasMalformedPhase7JournalReference)) {
     return refuse("malformed committed journal reference identity");
+  }
+  if (request.priorTransactions.some((part) => hasUnknownPhase7JournalAsset(world, part))) {
+    return refuse("committed journal references unknown good or currency");
   }
   // Phase-7 may carry earlier commits from THIS tick only. A caller cannot
   // smuggle an older/future tick or a later phase into the returned journal.
