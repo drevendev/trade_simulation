@@ -80,6 +80,38 @@ function fixture() {
 }
 
 describe("M5 #673 canonical Phase-1 route discovery binds live Phase-7 intake", () => {
+  it("builds canonical route templates without caller quotes and never invents economic prices", () => {
+    const f = fixture();
+    const build = () => bindPhase7DiscoveredRouteQuotes(
+      f.world, f.context, f.residual, f.permissions(2), f.factors, null,
+    );
+    const first = build();
+    expect(first.opportunityQuotes).toHaveLength(1);
+    const quote = first.opportunityQuotes[0]!;
+    expect(quote).toMatchObject({
+      planId: f.quote.planId, linkId: f.link.linkId,
+      originRegionId: f.quote.originRegionId,
+      destinationRegionId: f.quote.destinationRegionId,
+      goodId: WOOD, authorizedAtPhase1: true,
+      cargoWeightPerUnit: f.world.definitionRegistry.goods[WOOD]!.cargoWeightPerUnit,
+      shortageRateDestination: 1, legalQuantityCap: 2,
+      estimatedTariffRate: 0,
+    });
+    for (const field of [
+      "destinationReferenceGrossUnitPrice", "landedGrossUnitCostDest",
+      "estimatedTransportUnitCostDest", "estimatedFxInputPerSourceCurrency",
+    ] as const) {
+      expect(Number.isNaN(quote[field])).toBe(true);
+    }
+    expect(first).toEqual(build());
+    expect(f.world.shipments?.size).toBe(0);
+    expect(f.quote.estimatedFxInputPerSourceCurrency).toBe(0.001);
+    const unbounded = bindPhase7DiscoveredRouteQuotes(
+      f.world, f.context, f.residual, f.permissions(null), f.factors, null,
+    );
+    expect(unbounded.opportunityQuotes[0]).not.toHaveProperty("legalQuantityCap");
+  });
+
   it("overwrites forged legal flags, cargo mass and caps with current-tick owner evidence", () => {
     const f = fixture();
     const before = f.world.shipments;
