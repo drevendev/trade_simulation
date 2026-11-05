@@ -82,6 +82,7 @@ describe("M5 #673 canonical cargo residual provenance", () => {
 
   it("refuses stale or future journal provenance before inferring fresh cargo", () => {
     const f = fixture();
+    const linkSnapshot = JSON.stringify([...f.world.transportLinks]);
     const prior = {
       tick: 7, phase: 5, type: "OTHER_ECONOMIC_RECEIPT",
       transactionId: createTransactionId("tx:phase7:cargo:prior"), amount: 1,
@@ -110,7 +111,7 @@ describe("M5 #673 canonical cargo residual provenance", () => {
       ...f.context, transactions: [prior, { ...olderDispatch, tick: 7 }],
     })).toThrow("earlier same-tick dispatch capacity use");
     expect(f.world.shipments?.size).toBe(0);
-    expect(f.world.transportLinks).toBe(f.world.transportLinks);
+    expect(JSON.stringify([...f.world.transportLinks])).toBe(linkSnapshot);
     expect(f.context.transactions).toEqual([]);
   });
 
