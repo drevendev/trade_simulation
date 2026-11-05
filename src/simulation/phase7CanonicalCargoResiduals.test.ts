@@ -80,6 +80,41 @@ describe("M5 #673 canonical cargo residual provenance", () => {
     expect(f.world.shipments?.size).toBe(0);
   });
 
+  it("refuses stale or future journal provenance before inferring fresh cargo", () => {
+    const f = fixture();
+    const linkSnapshot = JSON.stringify([...f.world.transportLinks]);
+    const prior = {
+      tick: 7, phase: 5, type: "OTHER_ECONOMIC_RECEIPT",
+      transactionId: createTransactionId("tx:phase7:cargo:prior"), amount: 1,
+    };
+    const current = { ...f.context, transactions: [prior] };
+    expect([...f.derive(f.world, current)]).toEqual([...f.derive()]);
+    // Previously a historical/future SHIPMENT_DISPATCH with a mismatched
+    // tick bypassed the dispatch guard and falsely granted full capacity.
+    const olderDispatch = { ...prior, tick: 6, phase: 7,
+      type: "SHIPMENT_DISPATCH" };
+    for (const wrong of [
+      olderDispatch,
+      { ...olderDispatch, tick: 8 },
+      { ...prior, tick: 6 },
+      { ...prior, phase: 8 },
+      { ...prior, phase: -1 },
+      { ...prior, phase: 7.5 },
+    ]) {
+      expect(() => f.derive(f.world, {
+        ...f.context, transactions: [wrong],
+      })).toThrow("current-tick chronological journal evidence");
+    }
+    // The canonical actual current-tick dispatch is separately refused,
+    // including after legitimate earlier-phase receipts.
+    expect(() => f.derive(f.world, {
+      ...f.context, transactions: [prior, { ...olderDispatch, tick: 7 }],
+    })).toThrow("earlier same-tick dispatch capacity use");
+    expect(f.world.shipments?.size).toBe(0);
+    expect(JSON.stringify([...f.world.transportLinks])).toBe(linkSnapshot);
+    expect(f.context.transactions).toEqual([]);
+  });
+
   it("rejects impossible shipment departure clocks but permits past in-transit cargo", () => {
     const f = fixture();
     for (const departureTick of [-1, 7.5, 8, Number.NaN, Number.POSITIVE_INFINITY]) {
