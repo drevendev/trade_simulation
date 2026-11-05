@@ -57,6 +57,17 @@ function refuse(message: string): never {
 function validNonnegative(value: number, label: string): void {
   if (!Number.isFinite(value) || value < 0) refuse(label + " must be finite and nonnegative");
 }
+/** Prior committed rows are provenance records; optional links must be real typed IDs. */
+export function hasMalformedPhase7JournalReference(part: EconomicTransaction): boolean {
+  const malformed = (value: unknown, prefix: string): boolean =>
+    value !== undefined &&
+    (typeof value !== "string" || !value.startsWith(prefix) ||
+      value.slice(prefix.length).trim().length === 0);
+  return malformed(part.bundleId, "tb:") ||
+    malformed(part.originatingTransactionId, "tx:") ||
+    malformed(part.fxSettlementId, "fxs:");
+}
+
 function actorLocation(world: WorldState, actor: ActorRef, regionId: RegionId,
   jurisdiction: ReadonlyMap<RegionId, StateId | null>, role: string): void {
   const region = world.regions.get(regionId);
@@ -290,6 +301,9 @@ export function settleSameCurrencyTradeDispatch(
     !part.transactionId.startsWith("tx:") ||
     part.transactionId.slice(3).trim().length === 0)) {
     return refuse("malformed committed journal transaction identity");
+  }
+  if (request.priorTransactions.some(hasMalformedPhase7JournalReference)) {
+    return refuse("malformed committed journal reference identity");
   }
   // Phase-7 may carry earlier commits from THIS tick only. A caller cannot
   // smuggle an older/future tick or a later phase into the returned journal.

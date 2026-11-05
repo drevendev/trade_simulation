@@ -400,6 +400,36 @@ describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
     }
   });
 
+  it("refuses malformed optional committed-journal provenance IDs before any FX posting", () => {
+    const f = fixture();
+    const prior = {
+      ...settleCrossCurrencyTradeDispatch(f.world, f.request)!.newTransactions
+        .find((tx) => tx.type === "TRANSPORT_FEE")!,
+      transactionId: createTransactionId("tx:prior:reference:fx"),
+      bundleId: createTransactionBundleId("tb:prior:reference:fx"),
+      originatingTransactionId: createTransactionId("tx:prior:origin:fx"),
+      fxSettlementId: createFxSettlementId("fxs:prior:reference:fx"),
+    };
+    const accepted = { ...f.request, priorTransactions: [prior] };
+    expect(settleCrossCurrencyTradeDispatch(f.world, accepted)!.transactions)
+      .toHaveLength(settleCrossCurrencyTradeDispatch(f.world, accepted)!.newTransactions.length + 1);
+    for (const [field, value] of [
+      ["bundleId", "tb:"],
+      ["bundleId", "wrong:bundle"],
+      ["bundleId", 42],
+      ["originatingTransactionId", "tx:   "],
+      ["originatingTransactionId", "wrong:origin"],
+      ["fxSettlementId", "fxs:"],
+      ["fxSettlementId", "wrong:fx"],
+    ] as const) {
+      const damaged = { ...prior, [field]: value };
+      const corrupted = { ...f.request, priorTransactions: [damaged as typeof prior] };
+      unchanged(f.world, corrupted, () => settleCrossCurrencyTradeDispatch(f.world, corrupted));
+      expect(() => settleCrossCurrencyTradeDispatch(f.world, corrupted))
+        .toThrow(/malformed committed journal reference identity/);
+    }
+  });
+
   it("refuses prior trades from other ticks or later phases before FX, fees or cargo", () => {
     const f = fixture();
     const earlier = {
