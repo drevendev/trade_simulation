@@ -1250,6 +1250,50 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
     return { f, uniqueWorld, missingWorld, request, execute, planId };
   }
 
+  it("runs a deterministic conserved cross-currency tick without any caller route quotes", () => {
+    const { f, uniqueWorld, request, execute } = canonicalDiscovery();
+    const canonicalOnly = () => ({
+      ...request(),
+      plan: { ...request().plan, opportunityQuotes: [] },
+      authorizedRouteDiscovery: {
+        ...request().authorizedRouteDiscovery,
+        autoGenerateCanonicalRouteQuotes: true as const,
+        autoDeriveCanonicalCargoCapacity: true as const,
+      },
+      dispatch: { autoReserveFx: true as const },
+    });
+    const original = execute(uniqueWorld, () => ({
+      ...request(),
+      authorizedRouteDiscovery: {
+        ...request().authorizedRouteDiscovery,
+        autoDeriveCanonicalCargoCapacity: true as const,
+      },
+      dispatch: { autoReserveFx: true as const },
+    }));
+    const actual = execute(uniqueWorld, canonicalOnly);
+    const replay = execute(uniqueWorld, canonicalOnly);
+    expect(actual.phaseBoundaryError).toBeUndefined();
+    expect(actual.reconciliationErrors).toBeNull();
+    expect(actual.context.transactions).toEqual(original.context.transactions);
+    expect(actual.world.shipments).toEqual(original.world.shipments);
+    expect(actual.context.transactions).toEqual(replay.context.transactions);
+    expect(actual.context.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH"))
+      .toHaveLength(1);
+    expect(actual.context.transactions.filter(tx => tx.type === "FX_INPUT"))
+      .toHaveLength(1);
+    expect(uniqueWorld.shipments?.size).toBe(0);
+
+    // Opt-in must never mix independent caller quote objects with canonical
+    // discovery, even if the caller's price is seemingly valid.
+    expect(() => execute(uniqueWorld, () => ({
+      ...canonicalOnly(),
+      plan: request().plan,
+    }))).toThrow("cannot accept external route quotes");
+    expect(uniqueWorld.shipments?.size).toBe(0);
+    expect(readMarketActorInventory(uniqueWorld, f.sellerActor, "GENERAL").get(GOOD))
+      .toBeGreaterThan(0);
+  });
+
   it("executes a conserved full tick with canonical cargo capacity and no caller residual", () => {
     const { f, uniqueWorld, request, execute } = canonicalDiscovery();
     const autoCargo = () => ({
