@@ -81,16 +81,38 @@ export function bindPhase7DiscoveredRouteQuotes(
   residualIntents: readonly Phase7ActorResidualIntent[],
   permissions: Phase7FrozenDirectedTradePermissions,
   infrastructureFactors: ReadonlyMap<TransportLinkId, number>,
-  quotedRoutes: readonly Phase7LiveQuoteWithoutMarketNetPrices[],
+  quotedRoutes: readonly Phase7LiveQuoteWithoutMarketNetPrices[] | null,
 ): Phase7AuthorizedRouteQuoteBinding {
   const discovered = discoverPhase7DirectedTradeOpportunities(
     world, context, residualIntents, permissions, infrastructureFactors,
   );
-  if (!Array.isArray(quotedRoutes)) {
-    throw new Error("Phase-7 route bridge requires explicit quote-scoring evidence");
+  // Explicit null opts into quote-free canonical intake. These are NOT economic
+  // estimates: every sentinel price/fee/FX term must be overwritten by the
+  // authoritative Phase-1/6/7 hydration passes before route scoring/dispatch.
+  // NaN makes an accidentally skipped hydration fail closed, not trade at zero.
+  const quotes: readonly Phase7LiveQuoteWithoutMarketNetPrices[] =
+    quotedRoutes === null
+      ? discovered.map(route => ({
+        planId: route.planId,
+        linkId: route.linkId,
+        originRegionId: route.originRegionId,
+        destinationRegionId: route.destinationRegionId,
+        goodId: route.goodId,
+        authorizedAtPhase1: true,
+        cargoWeightPerUnit: route.cargoWeightPerUnit,
+        shortageRateDestination: route.shortageRateDestination,
+        destinationReferenceGrossUnitPrice: Number.NaN,
+        landedGrossUnitCostDest: Number.NaN,
+        estimatedTransportUnitCostDest: Number.NaN,
+        estimatedTariffRate: 0,
+        estimatedFxInputPerSourceCurrency: Number.NaN,
+      }))
+      : quotedRoutes;
+  if (!Array.isArray(quotes)) {
+    throw new Error("Phase-7 route bridge requires explicit quotes or canonical auto-generation");
   }
   const supplied = new Map<string, Phase7LiveQuoteWithoutMarketNetPrices>();
-  for (const quote of quotedRoutes) {
+  for (const quote of quotes) {
     if (!quote || typeof quote.planId !== "string" || !quote.planId ||
         supplied.has(quote.planId)) {
       throw new Error("Phase-7 route bridge duplicate or malformed route quote identity");
