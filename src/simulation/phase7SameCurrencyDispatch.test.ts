@@ -792,3 +792,31 @@ describe("M5 #673 canonical cargo mass at same-currency settlement", () => {
     expect(settled.newTransactions.filter(tx => tx.type === "SHIPMENT_DISPATCH")).toHaveLength(1);
   });
 });
+
+describe("M5 #673 current-tick journal asset registry integrity (same currency)", () => {
+  it("refuses orphaned good/currency references without carrying a poisoned journal", () => {
+    const f = fixture();
+    const sale = settleSameCurrencyTradeDispatch(f.world, f.request).newTransactions
+      .find((part) => part.type === "TRADE_GOODS_SALE")!;
+    const prior = {
+      ...sale,
+      transactionId: createTransactionId("tx:37:prior:asset"),
+      bundleId: createTransactionBundleId("tb:37:prior:asset"),
+    };
+    const valid = { ...f.request, priorTransactions: [prior] };
+    const accepted = settleSameCurrencyTradeDispatch(f.world, valid);
+    expect(accepted.transactions[0]).toEqual(prior);
+    expect(accepted.newTransactions).not.toHaveLength(0);
+
+    for (const malformed of [
+      { ...prior, goodId: "good:missing-phase7" as GoodId },
+      { ...prior, currencyId: "currency:missing-phase7" as NonNullable<typeof prior.currencyId> },
+    ]) {
+      const rejected = { ...f.request, priorTransactions: [malformed] };
+      unchanged(f.world, rejected,
+        () => settleSameCurrencyTradeDispatch(f.world, rejected));
+      expect(() => settleSameCurrencyTradeDispatch(f.world, rejected))
+        .toThrow(/committed journal references unknown good or currency/);
+    }
+  });
+});
