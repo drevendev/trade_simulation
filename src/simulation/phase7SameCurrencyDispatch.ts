@@ -291,6 +291,13 @@ export function settleSameCurrencyTradeDispatch(
     part.transactionId.slice(3).trim().length === 0)) {
     return refuse("malformed committed journal transaction identity");
   }
+  // Phase-7 may carry earlier commits from THIS tick only. A caller cannot
+  // smuggle an older/future tick or a later phase into the returned journal.
+  if (request.priorTransactions.some((part) =>
+    part.tick !== tick || !Number.isSafeInteger(part.phase) ||
+    part.phase < 0 || part.phase > 7)) {
+    return refuse("committed journal contains an out-of-tick or future-phase transaction");
+  }
   const seen = new Set(request.priorTransactions.map((item) => item.transactionId));
   // The returned journal must not inherit ambiguous transaction identities,
   // even when the duplicate was in a prior bundle unrelated to this trade.
