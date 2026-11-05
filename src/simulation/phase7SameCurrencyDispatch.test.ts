@@ -615,6 +615,40 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
     }
   });
 
+  it("refuses malformed optional committed-journal provenance IDs without a side effect", () => {
+    const { world, request } = fixture();
+    const prior = {
+      ...settleSameCurrencyTradeDispatch(world, request).newTransactions[0]!,
+      transactionId: createTransactionId("tx:prior:reference:same"),
+      bundleId: createTransactionBundleId("tb:prior:reference:same"),
+      originatingTransactionId: createTransactionId("tx:prior:origin:same"),
+    };
+    const legitimate = { ...request, priorTransactions: [prior] };
+    expect(settleSameCurrencyTradeDispatch(world, legitimate).transactions)
+      .toHaveLength(settleSameCurrencyTradeDispatch(world, legitimate).newTransactions.length + 1);
+    // An optional FX provenance reference is valid even on a prior journal row
+    // carried into a same-currency dispatch.
+    const withFx = { ...prior, fxSettlementId: "fxs:prior:reference:same" };
+    expect(settleSameCurrencyTradeDispatch(world, {
+      ...request, priorTransactions: [withFx as typeof prior],
+    }).newTransactions.length).toBeGreaterThan(0);
+    for (const [field, value] of [
+      ["bundleId", "tb:"],
+      ["bundleId", "wrong:bundle"],
+      ["bundleId", 42],
+      ["originatingTransactionId", "tx:   "],
+      ["originatingTransactionId", "wrong:origin"],
+      ["fxSettlementId", "fxs:"],
+      ["fxSettlementId", "wrong:fx"],
+    ] as const) {
+      const damaged = { ...prior, [field]: value };
+      const corrupted = { ...request, priorTransactions: [damaged as typeof prior] };
+      unchanged(world, corrupted, () => settleSameCurrencyTradeDispatch(world, corrupted));
+      expect(() => settleSameCurrencyTradeDispatch(world, corrupted))
+        .toThrow(/malformed committed journal reference identity/);
+    }
+  });
+
   it("refuses prior trades from other ticks or later phases before moving goods or cash", () => {
     const { world, request } = fixture();
     const earlier = {
