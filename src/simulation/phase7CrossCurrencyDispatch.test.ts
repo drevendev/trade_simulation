@@ -427,6 +427,34 @@ describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
     }
   });
 
+  it("rejects non-finite committed journal amounts before posting a new FX-backed lot", () => {
+    const f = fixture();
+    const earlier = {
+      ...settleCrossCurrencyTradeDispatch(f.world, f.request)!.newTransactions
+        .find((tx) => tx.type === "TRANSPORT_FEE")!,
+      transactionId: createTransactionId("tx:prior:finite:fx"),
+      bundleId: createTransactionBundleId("tb:prior:finite:fx"),
+    };
+    const accepted = { ...f.request, priorTransactions: [earlier] };
+    const valid = settleCrossCurrencyTradeDispatch(f.world, accepted)!;
+    expect(valid.transactions).toHaveLength(valid.newTransactions.length + 1);
+    for (const damaged of [
+      { ...earlier, amount: Number.NaN },
+      { ...earlier, amount: undefined as unknown as number },
+      { ...earlier, moneyAmount: Number.POSITIVE_INFINITY },
+      { ...earlier, quantity: Number.NaN },
+      { ...earlier, unitPrice: Number.NEGATIVE_INFINITY },
+      { ...earlier, grossMoneyAmount: Number.POSITIVE_INFINITY },
+      { ...earlier, assessedTaxAmount: Number.NaN },
+      { ...earlier, taxAmount: Number.NaN },
+    ]) {
+      const poisoned = { ...f.request, priorTransactions: [damaged] };
+      unchanged(f.world, poisoned, () => settleCrossCurrencyTradeDispatch(f.world, poisoned));
+      expect(() => settleCrossCurrencyTradeDispatch(f.world, poisoned))
+        .toThrow(/committed journal contains non-finite economic amount/);
+    }
+  });
+
   it("rejects duplicated prior transaction IDs across unrelated FX bundles before settlement", () => {
     const f = fixture();
     const sample = settleCrossCurrencyTradeDispatch(f.world, f.request)!;
