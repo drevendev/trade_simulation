@@ -1463,6 +1463,99 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
     expect(settledMoney(dispatched.world)).toEqual(alreadyPaid);
   });
 
+  it("delivers two paid FX lots concurrently without replaying settlement or goods", () => {
+    const f = fxFixture(true);
+    const paid = executePhase7LiveQuotedMixedTradePlan(
+      f.world, f.context, f.input, f.state,
+    );
+    const shipments = [...paid.world.shipments!.values()];
+    expect(paid.committedLots).toHaveLength(2);
+    expect(paid.unfilledLotOrdinals).toEqual([]);
+    expect(shipments).toHaveLength(2);
+    expect(new Set(shipments.map(s => s.id)).size).toBe(2);
+    expect(shipments.every(s =>
+      s.departureTick === f.context.tick && s.arrivalTick > s.departureTick &&
+      s.goodId === GOOD,
+    )).toBe(true);
+    expect(paid.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH"))
+      .toHaveLength(2);
+    expect(paid.transactions.filter(tx => tx.type === "FX_INPUT")).toHaveLength(2);
+    expect(paid.transactions.filter(tx => tx.type === "FX_OUTPUT")).toHaveLength(2);
+
+    const stock = (world: WorldState, actor: ActorRef) =>
+      readMarketActorInventory(world, actor, "GENERAL").get(GOOD) ?? 0;
+    const conservedGoods = (world: WorldState) =>
+      stock(world, f.sellerActor) + stock(world, f.buyerActor) +
+      [...world.shipments!.values()].filter(s => s.goodId === GOOD)
+        .reduce((total, s) => total + s.quantity, 0);
+    const openingGoods = conservedGoods(f.world);
+    const totalQuantity = shipments.reduce((sum, s) => sum + s.quantity, 0);
+    expect(conservedGoods(paid.world)).toBeCloseTo(openingGoods, 9);
+    expect(stock(f.world, f.sellerActor) - stock(paid.world, f.sellerActor))
+      .toBeCloseTo(totalQuantity, 9);
+    const paidSellerStock = stock(paid.world, f.sellerActor);
+    const paidBuyerStock = stock(paid.world, f.buyerActor);
+    const paidBalances = (world: WorldState) => ({
+      seller: [...readActorWallet(world, f.sellerActor)],
+      buyer: [...readActorWallet(world, f.buyerActor)],
+      feeReceiver: [...readActorWallet(world, f.feeReceiver)],
+      destinationTreasury: [...world.states.get(f.destination.controllerStateId!)!.treasury],
+      fxPool: [...resolveCanonicalFxPool(world, f.pairId).pool.cash],
+    });
+    const settled = paidBalances(paid.world);
+    const seen = new Set<string>();
+    let deliveredQuantity = 0;
+    let current = paid.world;
+    const finalTick = Math.max(...shipments.map(s => s.arrivalTick)) + 1;
+
+    // The same beneficiary receives two independently paid, in-transit lots;
+    // all intervening ticks must preserve BOTH quantities and every monetary leg.
+    for (let tick = f.context.tick + 1; tick <= finalTick; tick += 1) {
+      const next = executeM5LiveQuotedTradeTick(
+        current, tick, noOpPhaseHandler, (_phase, world) => world, () => null,
+      );
+      expect(next.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(next.phaseBoundaryError).toBeUndefined();
+      expect(next.reconciliationErrors).toBeNull();
+      expect(paidBalances(next.world)).toEqual(settled);
+      expect(conservedGoods(next.world)).toBeCloseTo(openingGoods, 9);
+      expect(stock(next.world, f.sellerActor)).toBe(paidSellerStock);
+      expect(next.context.transactions.filter(tx =>
+        tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT" ||
+        tx.type === "TRADE_GOODS_SALE" || tx.type === "IMPORT_TARIFF" ||
+        tx.type === "CONSUMPTION_TAX" || tx.type === "TRANSPORT_FEE",
+      )).toEqual([]);
+
+      const deliveries = next.context.transactions.filter(
+        tx => tx.type === "SHIPMENT_DELIVERY",
+      );
+      for (const delivery of deliveries) {
+        expect(delivery).toMatchObject({ tick, phase: 1, goodId: GOOD });
+        expect(delivery.currencyId).toBeUndefined();
+        expect(delivery.moneyAmount).toBeUndefined();
+        const shipment = shipments.find(s =>
+          delivery.transactionId === "tx:delivery:" + s.id);
+        expect(shipment).toBeDefined();
+        expect(seen.has(delivery.transactionId)).toBe(false);
+        expect(shipment!.arrivalTick).toBe(tick);
+        seen.add(delivery.transactionId);
+        deliveredQuantity += delivery.quantity!;
+      }
+      for (const shipment of shipments) {
+        expect(next.world.shipments!.has(shipment.id))
+          .toBe(tick < shipment.arrivalTick);
+      }
+      expect(stock(next.world, f.buyerActor) - paidBuyerStock)
+        .toBeCloseTo(deliveredQuantity, 9);
+      current = next.world;
+    }
+    expect(seen.size).toBe(2);
+    expect(deliveredQuantity).toBeCloseTo(totalQuantity, 9);
+    expect(current.shipments?.size).toBe(0);
+    expect(f.world.shipments?.size).toBe(0);
+    expect(paid.world.shipments?.size).toBe(2);
+  });
+
   it("rejects caller FX identity and absent/ambiguous live pools before any shipment or monetary mutation", () => {
     const { f, uniqueWorld, missingWorld, request, execute, planId } = canonicalDiscovery();
     const buyerBefore = readActorWallet(uniqueWorld, f.buyerActor).get(f.destCurrency);
