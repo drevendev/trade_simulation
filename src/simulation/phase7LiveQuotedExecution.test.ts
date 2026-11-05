@@ -1557,29 +1557,8 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
   });
 
 
-  it("delivers independently paid FX cargo with staggered real dispatch ticks", () => {
+  it("delivers independently paid FX cargo from TWO complete dispatch ticks", () => {
     const f = fxFixture();
-    const first = executePhase7LiveQuotedMixedTradePlan(
-      f.world, f.context, f.input, f.state,
-    );
-    expect(first.committedLots).toHaveLength(1);
-    expect(first.world.shipments?.size).toBe(1);
-    const early = [...first.world.shipments!.values()][0]!;
-    const activeLink = first.world.transportLinks.get(f.link.linkId)!;
-    const initialTravelTicks = activeLink.travelTicks;
-    if (initialTravelTicks === undefined || initialTravelTicks <= 0) {
-      throw new Error("fixture requires positive link travel time");
-    }
-    expect(early.arrivalTick).toBe(7 + initialTravelTicks);
-
-    // A real transport-condition change before the next dispatch changes the
-    // SECOND promised arrival, not the frozen arrival of already-paid cargo.
-    const slowerLink = { ...activeLink, travelTicks: initialTravelTicks + 3 };
-    const inFlight: WorldState = {
-      ...first.world,
-      transportLinks: new Map(first.world.transportLinks)
-        .set(f.link.linkId, slowerLink),
-    };
     const handler: PhaseHandler = (_world, context) => {
       if (context.phase === 1) {
         return { ...context,
@@ -1590,28 +1569,65 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
       }
       return context;
     };
+    const requestForTick = (world: WorldState, tick: number) => ({
+      policy: {
+        phase1ImportTariffs: { ...f.context.phase1ImportTariffs, tick },
+        phase1ConsumptionTaxes: { ...f.context.phase1ConsumptionTaxes, tick },
+        transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+      },
+      plan: {
+        ...f.input,
+        fxOutputByPairCurrency: new Map([[
+          phase7FxOutputKey(f.pairId, f.sourceCurrency),
+          quoteFx(world, f.pairId, f.destCurrency, f.sourceCurrency, 0)
+            .maxOutputByPoolReserve,
+        ]]),
+      },
+      dispatch: {
+        remainingCargoWeightByLink: new Map([[f.link.linkId, 50]]),
+        autoReserveFx: true as const,
+        phase8MainIntents: f.state.phase8MainIntents,
+      },
+    });
+    // Neither shipment is seeded by the direct Phase-7 fixture: both are
+    // paid and dispatched by the 16-phase stateful tick orchestrator.
+    const firstTick = () => executeM5LiveQuotedTradeTick(
+      f.world, 7, handler, (_phase, world) => world,
+      world => requestForTick(world, 7),
+    );
+    const first = firstTick();
+    expect(first.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(first.phaseBoundaryError).toBeUndefined();
+    expect(first.reconciliationErrors).toBeNull();
+    expect(first.context.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH"))
+      .toHaveLength(1);
+    expect(first.context.transactions.filter(tx => tx.type === "FX_INPUT"))
+      .toHaveLength(1);
+    expect(first.context.transactions.filter(tx => tx.type === "FX_OUTPUT"))
+      .toHaveLength(1);
+    expect(firstTick().context.transactions).toEqual(first.context.transactions);
+    expect(firstTick().world.shipments).toEqual(first.world.shipments);
+    expect(first.world.shipments?.size).toBe(1);
+    const early = [...first.world.shipments!.values()][0]!;
+    expect(early.departureTick).toBe(7);
+    const activeLink = first.world.transportLinks.get(f.link.linkId)!;
+    const initialTravelTicks = activeLink.travelTicks;
+    if (initialTravelTicks === undefined || initialTravelTicks <= 0) {
+      throw new Error("fixture requires positive link travel time");
+    }
+    expect(early.arrivalTick).toBe(7 + initialTravelTicks);
+
+    // Transport travel time changes only subsequent departures; the already
+    // paid shipment retains its previously committed arrival timestamp.
+    const slowerLink = { ...activeLink, travelTicks: initialTravelTicks + 3 };
+    const inFlight: WorldState = {
+      ...first.world,
+      transportLinks: new Map(first.world.transportLinks)
+        .set(f.link.linkId, slowerLink),
+    };
     const secondTick = () => executeM5LiveQuotedTradeTick(
       inFlight, 8, handler, (_phase, world) => world,
-      world => ({
-        policy: {
-          phase1ImportTariffs: { ...f.context.phase1ImportTariffs, tick: 8 },
-          phase1ConsumptionTaxes: { ...f.context.phase1ConsumptionTaxes, tick: 8 },
-          transportFeeCostPolicy: f.context.transportFeeCostPolicy,
-        },
-        plan: {
-          ...f.input,
-          fxOutputByPairCurrency: new Map([[
-            phase7FxOutputKey(f.pairId, f.sourceCurrency),
-            quoteFx(world, f.pairId, f.destCurrency, f.sourceCurrency, 0)
-              .maxOutputByPoolReserve,
-          ]]),
-        },
-        dispatch: {
-          remainingCargoWeightByLink: new Map([[f.link.linkId, 50]]),
-          autoReserveFx: true as const,
-          phase8MainIntents: f.state.phase8MainIntents,
-        },
-      }),
+      world => requestForTick(world, 8),
     );
     const second = secondTick();
     expect(second.phaseTrace).toEqual([...Array(16).keys()]);
