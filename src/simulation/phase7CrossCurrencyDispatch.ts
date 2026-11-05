@@ -32,6 +32,7 @@ import {
 } from "./phase7TradeMoneyLegs";
 import {
   assertPhase7ActorLocation, debitPhase7SellerGoods,
+  hasMalformedPhase7JournalReference,
 } from "./phase7SameCurrencyDispatch";
 import {
   validateTradeShipmentRegistry, validateTradeShipmentState,
@@ -309,6 +310,9 @@ export function settleCrossCurrencyTradeDispatch(
     !part.transactionId.startsWith("tx:") ||
     part.transactionId.slice(3).trim().length === 0)) {
     return refuse("malformed committed journal transaction identity");
+  }
+  if (request.priorTransactions.some(hasMalformedPhase7JournalReference)) {
+    return refuse("malformed committed journal reference identity");
   }
   // Phase-7 may carry earlier commits from THIS tick only. A forged
   // older/future tick or later phase must not enter the FX settlement journal.
