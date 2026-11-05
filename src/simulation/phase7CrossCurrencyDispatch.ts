@@ -94,7 +94,7 @@ function nonnegative(value: number, label: string): void {
 }
 function nonempty(value: unknown, prefix: string, label: string): void {
   if (typeof value !== "string" || !value.startsWith(prefix) ||
-      value.length <= prefix.length) {
+      value.slice(prefix.length).trim().length === 0) {
     refuse("invalid " + label);
   }
 }
