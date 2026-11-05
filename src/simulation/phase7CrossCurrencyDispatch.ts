@@ -317,6 +317,17 @@ export function settleCrossCurrencyTradeDispatch(
     part.phase < 0 || part.phase > 7)) {
     return refuse("committed journal contains an out-of-tick or future-phase transaction");
   }
+  // A prior committed journal may contain legitimate signed economic deltas,
+  // but NEVER NaN/Infinity or absent required amounts. Re-publishing those
+  // records would poison downstream conservation and diagnostic sums even when
+  // this new shipment's own money/goods movements are otherwise valid.
+  if (request.priorTransactions.some((part) =>
+    !Number.isFinite(part.amount) ||
+    [part.quantity, part.unitPrice, part.moneyAmount, part.grossMoneyAmount,
+      part.assessedTaxAmount, part.taxAmount].some((value) =>
+      value !== undefined && !Number.isFinite(value)))) {
+    return refuse("committed journal contains non-finite economic amount");
+  }
   const usedIds = new Set(request.priorTransactions.map((part) => part.transactionId));
   // The committed journal is authoritative input, not just a collision set for
   // this lot. Never propagate duplicate historical IDs into an FX bundle.
