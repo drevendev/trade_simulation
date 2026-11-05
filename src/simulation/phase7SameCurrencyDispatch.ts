@@ -124,7 +124,7 @@ export function settleSameCurrencyTradeDispatch(
     return refuse("shipment departure tick differs from current Phase-7 tick");
   }
   if (typeof bundleId !== "string" || !bundleId.startsWith("tb:") ||
-      bundleId.length <= "tb:".length) {
+      bundleId.slice("tb:".length).trim().length === 0) {
     return refuse("invalid transaction bundle ID");
   }
   if (!Array.isArray(request.priorTransactions)) {
