@@ -1382,6 +1382,87 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
     expect(resolveCanonicalFxPool(uniqueWorld, f.pairId).pool.cash).toEqual(openingPool);
   });
 
+
+  it("conserves paid cargo across later ticks and delivers once without replaying FX or tax", () => {
+    const { f, uniqueWorld, execute } = canonicalDiscovery();
+    const dispatched = execute(uniqueWorld);
+    expect(dispatched.phaseBoundaryError).toBeUndefined();
+    expect(dispatched.reconciliationErrors).toBeNull();
+    const shipment = [...dispatched.world.shipments!.values()][0]!;
+    expect(dispatched.world.shipments?.size).toBe(1);
+    expect(shipment.departureTick).toBe(7);
+    expect(shipment.arrivalTick).toBeGreaterThan(7);
+
+    const stock = (world: WorldState, actor: ActorRef) =>
+      readMarketActorInventory(world, actor, "GENERAL").get(GOOD) ?? 0;
+    const allPaidGoods = (world: WorldState) =>
+      stock(world, f.sellerActor) + stock(world, f.buyerActor) +
+      [...(world.shipments?.values() ?? [])]
+        .filter(s => s.goodId === GOOD).reduce((total, s) => total + s.quantity, 0);
+    const originalGoods = allPaidGoods(uniqueWorld);
+    expect(allPaidGoods(dispatched.world)).toBeCloseTo(originalGoods, 9);
+    expect(stock(uniqueWorld, f.sellerActor) - stock(dispatched.world, f.sellerActor))
+      .toBeCloseTo(shipment.quantity, 9);
+
+    const settledMoney = (world: WorldState) => ({
+      seller: [...readActorWallet(world, f.sellerActor)],
+      buyer: [...readActorWallet(world, f.buyerActor)],
+      feeReceiver: [...readActorWallet(world, f.feeReceiver)],
+      destinationTreasury: [...world.states.get(f.destination.controllerStateId!)!.treasury],
+      fxPool: [...resolveCanonicalFxPool(world, f.pairId).pool.cash],
+    });
+    const alreadyPaid = settledMoney(dispatched.world);
+    const buyerGoodsBeforeArrival = stock(dispatched.world, f.buyerActor);
+    let current = dispatched.world;
+    let deliveryCount = 0;
+
+    // A real successive 0..15 tick execution must carry the paid shipment
+    // through transit and publish exactly one Phase-1 physical credit.
+    for (let tick = 8; tick <= shipment.arrivalTick + 1; tick += 1) {
+      const next = executeM5LiveQuotedTradeTick(
+        current, tick, noOpPhaseHandler, (_phase, world) => world, () => null,
+      );
+      expect(next.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(next.phaseBoundaryError).toBeUndefined();
+      expect(next.reconciliationErrors).toBeNull();
+      expect(settledMoney(next.world)).toEqual(alreadyPaid);
+      expect(allPaidGoods(next.world)).toBeCloseTo(originalGoods, 9);
+      expect(next.context.transactions.filter(tx =>
+        tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT" ||
+        tx.type === "TRADE_GOODS_SALE" || tx.type === "IMPORT_TARIFF" ||
+        tx.type === "CONSUMPTION_TAX" || tx.type === "TRANSPORT_FEE",
+      )).toEqual([]);
+      const deliveries = next.context.transactions.filter(
+        tx => tx.type === "SHIPMENT_DELIVERY",
+      );
+      deliveryCount += deliveries.length;
+      if (tick < shipment.arrivalTick) {
+        expect(deliveries).toEqual([]);
+        expect(next.world.shipments?.has(shipment.id)).toBe(true);
+        expect(stock(next.world, f.buyerActor)).toBe(buyerGoodsBeforeArrival);
+      } else if (tick === shipment.arrivalTick) {
+        expect(deliveries).toHaveLength(1);
+        expect(deliveries[0]).toMatchObject({
+          tick, phase: 1, amount: shipment.quantity, quantity: shipment.quantity,
+          goodId: GOOD,
+        });
+        expect(deliveries[0]?.currencyId).toBeUndefined();
+        expect(deliveries[0]?.moneyAmount).toBeUndefined();
+        expect(stock(next.world, f.buyerActor) - buyerGoodsBeforeArrival)
+          .toBeCloseTo(shipment.quantity, 9);
+        expect(next.world.shipments?.has(shipment.id)).toBe(false);
+      } else {
+        expect(deliveries).toEqual([]);
+        expect(next.world.shipments?.size).toBe(0);
+      }
+      current = next.world;
+    }
+    expect(deliveryCount).toBe(1);
+    expect(uniqueWorld.shipments?.size).toBe(0);
+    expect(dispatched.world.shipments?.has(shipment.id)).toBe(true);
+    expect(settledMoney(dispatched.world)).toEqual(alreadyPaid);
+  });
+
   it("rejects caller FX identity and absent/ambiguous live pools before any shipment or monetary mutation", () => {
     const { f, uniqueWorld, missingWorld, request, execute, planId } = canonicalDiscovery();
     const buyerBefore = readActorWallet(uniqueWorld, f.buyerActor).get(f.destCurrency);
