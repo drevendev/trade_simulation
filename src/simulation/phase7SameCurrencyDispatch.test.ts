@@ -138,6 +138,13 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
       () => settleSameCurrencyTradeDispatch(world, prefixOnly));
     expect(() => settleSameCurrencyTradeDispatch(world, prefixOnly))
       .toThrow(/invalid transaction bundle ID/);
+    const whitespaceOnly: SameCurrencyDispatchRequest = {
+      ...request, bundleId: createTransactionBundleId("tb:  \t"),
+    };
+    unchanged(world, whitespaceOnly,
+      () => settleSameCurrencyTradeDispatch(world, whitespaceOnly));
+    expect(() => settleSameCurrencyTradeDispatch(world, whitespaceOnly))
+      .toThrow(/invalid transaction bundle ID/);
     // Properly identified bundles must still settle.
     expect(() => settleSameCurrencyTradeDispatch(world, request)).not.toThrow();
   });

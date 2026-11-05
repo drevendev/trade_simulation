@@ -152,6 +152,21 @@ function unchanged(world: WorldState, request: CrossCurrencyDispatchRequest,
 }
 
 describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
+  it("rejects whitespace-only required typed ID suffixes before FX or goods mutation", () => {
+    const { world, request } = fixture();
+    const malformed: ReadonlyArray<Partial<CrossCurrencyDispatchRequest>> = [
+      { bundleId: "tb:  \t" as CrossCurrencyDispatchRequest["bundleId"] },
+      { settlementId: "fxs: \t " as CrossCurrencyDispatchRequest["settlementId"] },
+      { shipmentId: "sh: \t" as CrossCurrencyDispatchRequest["shipmentId"] },
+    ];
+    for (const patch of malformed) {
+      const invalid = { ...request, ...patch };
+      unchanged(world, invalid, () => settleCrossCurrencyTradeDispatch(world, invalid));
+      expect(() => settleCrossCurrencyTradeDispatch(world, invalid))
+        .toThrow(/invalid (bundle ID|FX settlement ID|shipment ID)/);
+    }
+    expect(settleCrossCurrencyTradeDispatch(world, request)).not.toBeNull();
+  });
   it("keeps the gross FX invoice, destroys routine cargo once and delivers only survivors", () => {
     const f = fixture();
     const link = f.world.transportLinks.get(f.request.transportLinkId)!;
