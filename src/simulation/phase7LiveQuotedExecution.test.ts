@@ -1566,12 +1566,15 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
     expect(first.world.shipments?.size).toBe(1);
     const early = [...first.world.shipments!.values()][0]!;
     const activeLink = first.world.transportLinks.get(f.link.linkId)!;
-    expect(activeLink.travelTicks).toBeGreaterThan(0);
-    expect(early.arrivalTick).toBe(7 + activeLink.travelTicks);
+    const initialTravelTicks = activeLink.travelTicks;
+    if (initialTravelTicks === undefined || initialTravelTicks <= 0) {
+      throw new Error("fixture requires positive link travel time");
+    }
+    expect(early.arrivalTick).toBe(7 + initialTravelTicks);
 
     // A real transport-condition change before the next dispatch changes the
     // SECOND promised arrival, not the frozen arrival of already-paid cargo.
-    const slowerLink = { ...activeLink, travelTicks: activeLink.travelTicks + 3 };
+    const slowerLink = { ...activeLink, travelTicks: initialTravelTicks + 3 };
     const inFlight: WorldState = {
       ...first.world,
       transportLinks: new Map(first.world.transportLinks)
@@ -1606,6 +1609,7 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
         dispatch: {
           remainingCargoWeightByLink: new Map([[f.link.linkId, 50]]),
           autoReserveFx: true as const,
+          phase8MainIntents: f.state.phase8MainIntents,
         },
       }),
     );
