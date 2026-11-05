@@ -957,3 +957,41 @@ describe("M5 #673 current-tick journal asset registry integrity (FX)", () => {
     }
   });
 });
+
+describe("M5 #673 current-tick journal actor and region provenance (FX)", () => {
+  it("preserves registered endpoints and refuses orphaned references before FX or goods posting", () => {
+    const f = fixture();
+    const sale = settleCrossCurrencyTradeDispatch(f.world, f.request)!.newTransactions
+      .find((part) => part.type === "TRADE_GOODS_SALE")!;
+    const prior = {
+      ...sale,
+      transactionId: createTransactionId("tx:7:prior:endpoint"),
+      bundleId: createTransactionBundleId("tb:7:prior:endpoint"),
+      fxSettlementId: createFxSettlementId("fxs:7:prior:endpoint"),
+    };
+    const valid = { ...f.request, priorTransactions: [prior] };
+    const accepted = settleCrossCurrencyTradeDispatch(f.world, valid);
+    expect(accepted).not.toBeNull();
+    expect(accepted!.transactions[0]).toEqual(prior);
+
+    const missingActor = (type: string, key: string) =>
+      ({ type, [key]: "missing:phase7" }) as unknown as ActorRef;
+    for (const malformed of [
+      { ...prior, source: missingActor("COHORT", "cohortId") },
+      { ...prior, destination: missingActor("CLAN", "clanId") },
+      { ...prior, source: missingActor("STATE", "stateId") },
+      { ...prior, destination: missingActor("PRODUCTION_UNIT", "productionUnitId") },
+      { ...prior, source: missingActor("MONETARY_AUTHORITY", "authorityId") },
+      { ...prior, source: null as unknown as ActorRef },
+      { ...prior, destination: { type: "UNKNOWN" } as unknown as ActorRef },
+      { ...prior, sourceRegionId: "region:missing-phase7" as RegionId },
+      { ...prior, destinationRegionId: "region:missing-phase7" as RegionId },
+    ]) {
+      const rejected = { ...f.request, priorTransactions: [malformed] };
+      unchanged(f.world, rejected,
+        () => settleCrossCurrencyTradeDispatch(f.world, rejected));
+      expect(() => settleCrossCurrencyTradeDispatch(f.world, rejected))
+        .toThrow(/committed journal references unknown actor or region/);
+    }
+  });
+});
