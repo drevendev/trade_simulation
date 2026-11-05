@@ -1556,6 +1556,154 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
     expect(paid.world.shipments?.size).toBe(2);
   });
 
+
+  it("delivers independently paid FX cargo with staggered real dispatch ticks", () => {
+    const f = fxFixture();
+    const first = executePhase7LiveQuotedMixedTradePlan(
+      f.world, f.context, f.input, f.state,
+    );
+    expect(first.committedLots).toHaveLength(1);
+    expect(first.world.shipments?.size).toBe(1);
+    const early = [...first.world.shipments!.values()][0]!;
+    const activeLink = first.world.transportLinks.get(f.link.linkId)!;
+    const initialTravelTicks = activeLink.travelTicks;
+    if (initialTravelTicks === undefined || initialTravelTicks <= 0) {
+      throw new Error("fixture requires positive link travel time");
+    }
+    expect(early.arrivalTick).toBe(7 + initialTravelTicks);
+
+    // A real transport-condition change before the next dispatch changes the
+    // SECOND promised arrival, not the frozen arrival of already-paid cargo.
+    const slowerLink = { ...activeLink, travelTicks: initialTravelTicks + 3 };
+    const inFlight: WorldState = {
+      ...first.world,
+      transportLinks: new Map(first.world.transportLinks)
+        .set(f.link.linkId, slowerLink),
+    };
+    const handler: PhaseHandler = (_world, context) => {
+      if (context.phase === 1) {
+        return { ...context,
+          effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion };
+      }
+      if (context.phase === 6) {
+        return { ...context, marketPrices: f.context.marketPrices };
+      }
+      return context;
+    };
+    const secondTick = () => executeM5LiveQuotedTradeTick(
+      inFlight, 8, handler, (_phase, world) => world,
+      world => ({
+        policy: {
+          phase1ImportTariffs: { ...f.context.phase1ImportTariffs, tick: 8 },
+          phase1ConsumptionTaxes: { ...f.context.phase1ConsumptionTaxes, tick: 8 },
+          transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+        },
+        plan: {
+          ...f.input,
+          fxOutputByPairCurrency: new Map([[
+            phase7FxOutputKey(f.pairId, f.sourceCurrency),
+            quoteFx(world, f.pairId, f.destCurrency, f.sourceCurrency, 0)
+              .maxOutputByPoolReserve,
+          ]]),
+        },
+        dispatch: {
+          remainingCargoWeightByLink: new Map([[f.link.linkId, 50]]),
+          autoReserveFx: true as const,
+          phase8MainIntents: f.state.phase8MainIntents,
+        },
+      }),
+    );
+    const second = secondTick();
+    expect(second.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(second.phaseBoundaryError).toBeUndefined();
+    expect(second.reconciliationErrors).toBeNull();
+    expect(second.context.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH"))
+      .toHaveLength(1);
+    expect(second.context.transactions.filter(tx => tx.type === "FX_INPUT"))
+      .toHaveLength(1);
+    expect(second.context.transactions.filter(tx => tx.type === "FX_OUTPUT"))
+      .toHaveLength(1);
+    const late = [...second.world.shipments!.values()]
+      .find(shipment => shipment.departureTick === 8)!;
+    expect(late).toBeDefined();
+    expect(late.id).not.toBe(early.id);
+    expect(late.arrivalTick).toBe(8 + slowerLink.travelTicks);
+    expect(late.arrivalTick).toBeGreaterThan(early.arrivalTick);
+    expect(secondTick().context.transactions).toEqual(second.context.transactions);
+    expect(secondTick().world.shipments).toEqual(second.world.shipments);
+
+    const stock = (world: WorldState, actor: ActorRef) =>
+      readMarketActorInventory(world, actor, "GENERAL").get(GOOD) ?? 0;
+    const conserved = (world: WorldState) =>
+      stock(world, f.sellerActor) + stock(world, f.buyerActor) +
+      [...world.shipments!.values()].filter(s => s.goodId === GOOD)
+        .reduce((sum, shipment) => sum + shipment.quantity, 0);
+    const originalGoods = conserved(f.world);
+    expect(conserved(first.world)).toBeCloseTo(originalGoods, 9);
+    expect(conserved(second.world)).toBeCloseTo(originalGoods, 9);
+    const afterSecondPayment = (world: WorldState) => ({
+      seller: [...readActorWallet(world, f.sellerActor)],
+      buyer: [...readActorWallet(world, f.buyerActor)],
+      fees: [...readActorWallet(world, f.feeReceiver)],
+      treasury: [...world.states.get(f.destination.controllerStateId!)!.treasury],
+      fx: [...resolveCanonicalFxPool(world, f.pairId).pool.cash],
+    });
+    const settled = afterSecondPayment(second.world);
+    const firstBuyerGoods = stock(first.world, f.buyerActor);
+    const firstArrival = second.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY");
+    expect(firstArrival.map(tx => tx.transactionId)).toEqual(
+      early.arrivalTick === 8 ? ["tx:delivery:" + early.id] : [],
+    );
+    const seen = new Set(firstArrival.map(tx => tx.transactionId));
+    let delivered = firstArrival.reduce((sum, tx) => sum + (tx.quantity ?? 0), 0);
+    expect(stock(second.world, f.buyerActor) - firstBuyerGoods)
+      .toBeCloseTo(delivered, 9);
+    let current = second.world;
+    for (let tick = 9; tick <= late.arrivalTick + 1; tick += 1) {
+      const next = executeM5LiveQuotedTradeTick(
+        current, tick, noOpPhaseHandler, (_phase, world) => world, () => null,
+      );
+      expect(next.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(next.phaseBoundaryError).toBeUndefined();
+      expect(next.reconciliationErrors).toBeNull();
+      expect(afterSecondPayment(next.world)).toEqual(settled);
+      expect(conserved(next.world)).toBeCloseTo(originalGoods, 9);
+      expect(next.context.transactions.filter(tx =>
+        tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT" ||
+        tx.type === "TRADE_GOODS_SALE" || tx.type === "IMPORT_TARIFF" ||
+        tx.type === "CONSUMPTION_TAX" || tx.type === "TRANSPORT_FEE",
+      )).toEqual([]);
+      const receipts = next.context.transactions.filter(tx =>
+        tx.type === "SHIPMENT_DELIVERY");
+      const due = [early, late].filter(s => s.arrivalTick === tick);
+      expect(receipts.map(tx => tx.transactionId))
+        .toEqual(due.map(s => "tx:delivery:" + s.id));
+      for (const tx of receipts) {
+        expect(seen.has(tx.transactionId)).toBe(false);
+        expect(tx).toMatchObject({ tick, phase: 1, goodId: GOOD });
+        expect(tx.currencyId).toBeUndefined();
+        expect(tx.moneyAmount).toBeUndefined();
+        seen.add(tx.transactionId);
+        delivered += tx.quantity!;
+      }
+      expect(stock(next.world, f.buyerActor) - firstBuyerGoods)
+        .toBeCloseTo(delivered, 9);
+      for (const shipment of [early, late]) {
+        expect(next.world.shipments!.has(shipment.id))
+          .toBe(tick < shipment.arrivalTick);
+      }
+      current = next.world;
+    }
+    expect(seen.size).toBe(2);
+    expect(delivered).toBeCloseTo(early.quantity + late.quantity, 9);
+    expect(current.shipments?.size).toBe(0);
+    expect(conserved(current)).toBeCloseTo(originalGoods, 9);
+    expect(f.world.shipments?.size).toBe(0);
+    expect(first.world.shipments?.has(early.id)).toBe(true);
+    expect(inFlight.shipments?.has(early.id)).toBe(true);
+  });
+
   it("rejects caller FX identity and absent/ambiguous live pools before any shipment or monetary mutation", () => {
     const { f, uniqueWorld, missingWorld, request, execute, planId } = canonicalDiscovery();
     const buyerBefore = readActorWallet(uniqueWorld, f.buyerActor).get(f.destCurrency);
