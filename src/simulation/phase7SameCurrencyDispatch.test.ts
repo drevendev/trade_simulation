@@ -615,6 +615,32 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
     }
   });
 
+  it("refuses prior trades from other ticks or later phases before moving goods or cash", () => {
+    const { world, request } = fixture();
+    const earlier = {
+      ...settleSameCurrencyTradeDispatch(world, request).newTransactions[0]!,
+      transactionId: createTransactionId("tx:prior:journal-tick:same"),
+      bundleId: createTransactionBundleId("tb:prior:journal-tick:same"),
+    };
+    // Another bundle committed in the same tick is valid evidence.
+    const valid = { ...request, priorTransactions: [earlier] };
+    expect(settleSameCurrencyTradeDispatch(world, valid).transactions)
+      .toHaveLength(1 + settleSameCurrencyTradeDispatch(world, valid).newTransactions.length);
+
+    for (const bad of [
+      { ...earlier, tick: request.tick - 1 },
+      { ...earlier, tick: request.tick + 1 },
+      { ...earlier, tick: Number.NaN },
+      { ...earlier, phase: 8 as typeof earlier.phase },
+      { ...earlier, phase: -1 as typeof earlier.phase },
+    ]) {
+      const stale = { ...request, priorTransactions: [bad] };
+      unchanged(world, stale, () => settleSameCurrencyTradeDispatch(world, stale));
+      expect(() => settleSameCurrencyTradeDispatch(world, stale))
+        .toThrow(/committed journal contains an out-of-tick or future-phase transaction/);
+    }
+  });
+
   it("rejects pre-existing duplicate journal transaction IDs even when unrelated to this lot", () => {
     const { world, request } = fixture();
     const sample = settleSameCurrencyTradeDispatch(world, request).newTransactions[0]!;
