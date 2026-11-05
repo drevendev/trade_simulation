@@ -928,3 +928,32 @@ describe("M5 #673 canonical cargo mass at cross-currency settlement", () => {
     expect(settled!.newTransactions.filter(tx => tx.type === "FX_INPUT")).toHaveLength(1);
   });
 });
+
+describe("M5 #673 current-tick journal asset registry integrity (FX)", () => {
+  it("refuses orphaned good/currency references before any FX or goods settlement", () => {
+    const f = fixture();
+    const sale = settleCrossCurrencyTradeDispatch(f.world, f.request)!.newTransactions
+      .find((part) => part.type === "TRADE_GOODS_SALE")!;
+    const prior = {
+      ...sale,
+      transactionId: createTransactionId("tx:7:prior:asset"),
+      bundleId: createTransactionBundleId("tb:7:prior:asset"),
+      fxSettlementId: createFxSettlementId("fxs:7:prior:asset"),
+    };
+    const valid = { ...f.request, priorTransactions: [prior] };
+    const accepted = settleCrossCurrencyTradeDispatch(f.world, valid);
+    expect(accepted).not.toBeNull();
+    expect(accepted!.transactions[0]).toEqual(prior);
+
+    for (const malformed of [
+      { ...prior, goodId: "good:missing-phase7" as GoodId },
+      { ...prior, currencyId: "currency:missing-phase7" as NonNullable<typeof prior.currencyId> },
+    ]) {
+      const rejected = { ...f.request, priorTransactions: [malformed] };
+      unchanged(f.world, rejected,
+        () => settleCrossCurrencyTradeDispatch(f.world, rejected));
+      expect(() => settleCrossCurrencyTradeDispatch(f.world, rejected))
+        .toThrow(/committed journal references unknown good or currency/);
+    }
+  });
+});
