@@ -77,6 +77,29 @@ export function hasUnknownPhase7JournalAsset(
       !Object.prototype.hasOwnProperty.call(world.definitionRegistry.goods, part.goodId));
 }
 
+/** Prior journal actors and location provenance must resolve in the live registries. */
+export function hasUnknownPhase7JournalEndpoint(
+  world: WorldState, part: EconomicTransaction,
+): boolean {
+  // TypeScript callers are typed, but persisted journal evidence can be forged
+  // at runtime. Optional endpoints are legal for non-transfer transaction types.
+  const missingActor = (actor: ActorRef | undefined): boolean => {
+    if (actor === undefined) return false;
+    if (actor === null || typeof actor !== "object") return true;
+    switch (actor.type) {
+      case "COHORT": return !world.cohorts.has(actor.cohortId);
+      case "CLAN": return !world.clans.has(actor.clanId);
+      case "STATE": return !world.states.has(actor.stateId);
+      case "PRODUCTION_UNIT": return !world.productionUnits.has(actor.productionUnitId);
+      case "MONETARY_AUTHORITY": return !world.monetaryAuthorities.has(actor.authorityId);
+      default: return true;
+    }
+  };
+  return missingActor(part.source) || missingActor(part.destination) ||
+    (part.sourceRegionId !== undefined && !world.regions.has(part.sourceRegionId)) ||
+    (part.destinationRegionId !== undefined && !world.regions.has(part.destinationRegionId));
+}
+
 function actorLocation(world: WorldState, actor: ActorRef, regionId: RegionId,
   jurisdiction: ReadonlyMap<RegionId, StateId | null>, role: string): void {
   const region = world.regions.get(regionId);
@@ -316,6 +339,9 @@ export function settleSameCurrencyTradeDispatch(
   }
   if (request.priorTransactions.some((part) => hasUnknownPhase7JournalAsset(world, part))) {
     return refuse("committed journal references unknown good or currency");
+  }
+  if (request.priorTransactions.some((part) => hasUnknownPhase7JournalEndpoint(world, part))) {
+    return refuse("committed journal references unknown actor or region");
   }
   // Phase-7 may carry earlier commits from THIS tick only. A caller cannot
   // smuggle an older/future tick or a later phase into the returned journal.

@@ -33,6 +33,7 @@ import {
 import {
   assertPhase7ActorLocation, debitPhase7SellerGoods,
   hasMalformedPhase7JournalReference, hasUnknownPhase7JournalAsset,
+  hasUnknownPhase7JournalEndpoint,
 } from "./phase7SameCurrencyDispatch";
 import {
   validateTradeShipmentRegistry, validateTradeShipmentState,
@@ -316,6 +317,9 @@ export function settleCrossCurrencyTradeDispatch(
   }
   if (request.priorTransactions.some((part) => hasUnknownPhase7JournalAsset(world, part))) {
     return refuse("committed journal references unknown good or currency");
+  }
+  if (request.priorTransactions.some((part) => hasUnknownPhase7JournalEndpoint(world, part))) {
+    return refuse("committed journal references unknown actor or region");
   }
   // Phase-7 may carry earlier commits from THIS tick only. A forged
   // older/future tick or later phase must not enter the FX settlement journal.
