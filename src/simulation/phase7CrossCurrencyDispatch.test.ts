@@ -400,6 +400,33 @@ describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
     }
   });
 
+  it("refuses prior trades from other ticks or later phases before FX, fees or cargo", () => {
+    const f = fixture();
+    const earlier = {
+      ...settleCrossCurrencyTradeDispatch(f.world, f.request)!.newTransactions
+        .find((tx) => tx.type === "TRANSPORT_FEE")!,
+      transactionId: createTransactionId("tx:prior:journal-tick:fx"),
+      bundleId: createTransactionBundleId("tb:prior:journal-tick:fx"),
+    };
+    // Independent journal rows from the current tick remain composable.
+    const valid = { ...f.request, priorTransactions: [earlier] };
+    const settled = settleCrossCurrencyTradeDispatch(f.world, valid)!;
+    expect(settled.transactions).toHaveLength(settled.newTransactions.length + 1);
+
+    for (const bad of [
+      { ...earlier, tick: f.request.tick - 1 },
+      { ...earlier, tick: f.request.tick + 1 },
+      { ...earlier, tick: Number.NaN },
+      { ...earlier, phase: 8 as typeof earlier.phase },
+      { ...earlier, phase: -1 as typeof earlier.phase },
+    ]) {
+      const stale = { ...f.request, priorTransactions: [bad] };
+      unchanged(f.world, stale, () => settleCrossCurrencyTradeDispatch(f.world, stale));
+      expect(() => settleCrossCurrencyTradeDispatch(f.world, stale))
+        .toThrow(/committed journal contains an out-of-tick or future-phase transaction/);
+    }
+  });
+
   it("rejects duplicated prior transaction IDs across unrelated FX bundles before settlement", () => {
     const f = fixture();
     const sample = settleCrossCurrencyTradeDispatch(f.world, f.request)!;
