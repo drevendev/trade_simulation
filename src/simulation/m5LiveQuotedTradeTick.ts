@@ -194,6 +194,10 @@ export interface Phase7CanonicalIntakeTickRequest {
    * Without this, the legacy explicit-route request stays backward-compatible. */
   readonly authorizedRouteDiscovery?: {
     readonly permissions: Phase7FrozenDirectedTradePermissions;
+    /** Construct route scoring templates solely from frozen legal discovery and
+     * live residual intents. Must supply NO external opportunityQuotes. Prices,
+     * fees, taxes and FX are hydrated later from their canonical owners. */
+    readonly autoGenerateCanonicalRouteQuotes?: true;
     /** Resolve FX pair identities from live issuer-owned pools only when a
      * unique pool exists for each cross-currency opportunity. Missing or
      * multiple reverse-oriented pools fail closed: do not guess a preference.
@@ -241,12 +245,19 @@ export function executeM5CanonicalIntakeTradeTick(
       const request = buildPhase7RouteRequest(world, context);
       if (request === null) return null;
       const intake = derivePhase7PostProcurementIntents(world, context);
+      const autoRoutes =
+        request.authorizedRouteDiscovery?.autoGenerateCanonicalRouteQuotes === true;
+      if (autoRoutes && (!Array.isArray(request.plan.opportunityQuotes) ||
+          request.plan.opportunityQuotes.length !== 0)) {
+        throw new Error("Phase-7 canonical quote generation cannot accept external route quotes");
+      }
       const discovered = request.authorizedRouteDiscovery === undefined
         ? undefined
         : bindPhase7DiscoveredRouteQuotes(
           world, context, intake.residualIntents,
           request.authorizedRouteDiscovery.permissions,
-          request.plan.infrastructureFactors, request.plan.opportunityQuotes,
+          request.plan.infrastructureFactors,
+          autoRoutes ? null : request.plan.opportunityQuotes,
         );
       const discoverFx = request.authorizedRouteDiscovery?.autoResolveCanonicalFxPairs === true;
       const discoverFxBudgets =
