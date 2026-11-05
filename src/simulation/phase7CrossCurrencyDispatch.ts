@@ -191,6 +191,19 @@ export function settleCrossCurrencyTradeDispatch(
   if (destinationController !== null && !world.states.has(destinationController)) {
     return refuse("current destination controller State is missing");
   }
+  // The frozen Phase-1 jurisdiction snapshot must describe the entire live
+  // world, not only the currently traded route. Otherwise a caller can pass an
+  // incomplete or polluted legal context and still settle an FX-backed lot.
+  // Legitimate controller succession is allowed: seed geography is not law.
+  if (request.effectiveJurisdictionByRegion.size !== world.regions.size ||
+      [...world.regions.keys()].some((regionId) => {
+        if (!request.effectiveJurisdictionByRegion.has(regionId)) return true;
+        const controller = request.effectiveJurisdictionByRegion.get(regionId);
+        return controller !== null && (controller === undefined ||
+          !world.states.has(controller));
+      })) {
+    return refuse("incomplete or invalid world-wide Phase-1 jurisdiction");
+  }
   if (destinationController === null &&
       (request.tariffPerUnitDest !== 0 || request.consumptionTaxPerUnitDest !== 0)) {
     return refuse("uncontrolled destination cannot charge State taxes");
