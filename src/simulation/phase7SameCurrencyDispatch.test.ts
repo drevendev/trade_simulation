@@ -641,6 +641,33 @@ describe("M5 / #673 atomic prepriced same-currency physical dispatch", () => {
     }
   });
 
+  it("rejects non-finite committed journal amounts before posting a new same-currency lot", () => {
+    const { world, request } = fixture();
+    const earlier = {
+      ...settleSameCurrencyTradeDispatch(world, request).newTransactions[0]!,
+      transactionId: createTransactionId("tx:prior:finite:same"),
+      bundleId: createTransactionBundleId("tb:prior:finite:same"),
+    };
+    const accepted = { ...request, priorTransactions: [earlier] };
+    expect(settleSameCurrencyTradeDispatch(world, accepted).transactions)
+      .toHaveLength(settleSameCurrencyTradeDispatch(world, accepted).newTransactions.length + 1);
+    for (const damaged of [
+      { ...earlier, amount: Number.NaN },
+      { ...earlier, amount: undefined as unknown as number },
+      { ...earlier, moneyAmount: Number.POSITIVE_INFINITY },
+      { ...earlier, quantity: Number.NaN },
+      { ...earlier, unitPrice: Number.NEGATIVE_INFINITY },
+      { ...earlier, grossMoneyAmount: Number.POSITIVE_INFINITY },
+      { ...earlier, assessedTaxAmount: Number.NaN },
+      { ...earlier, taxAmount: Number.NaN },
+    ]) {
+      const poisoned = { ...request, priorTransactions: [damaged] };
+      unchanged(world, poisoned, () => settleSameCurrencyTradeDispatch(world, poisoned));
+      expect(() => settleSameCurrencyTradeDispatch(world, poisoned))
+        .toThrow(/committed journal contains non-finite economic amount/);
+    }
+  });
+
   it("rejects pre-existing duplicate journal transaction IDs even when unrelated to this lot", () => {
     const { world, request } = fixture();
     const sample = settleSameCurrencyTradeDispatch(world, request).newTransactions[0]!;
