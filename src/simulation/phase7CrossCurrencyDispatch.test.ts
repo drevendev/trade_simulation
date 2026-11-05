@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
-import type { GoodId, ShipmentId, TransportLinkId } from "../domain/id";
+import type { GoodId, RegionId, ShipmentId, StateId, TransportLinkId } from "../domain/id";
 import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import { readActorWallet, readMarketActorInventory } from "./marketSettlementTransition";
 import { quoteFx, resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
@@ -483,6 +483,49 @@ describe("M5 #673 atomic cross-currency Phase-7 dispatch", () => {
     unchanged(f.world, forged, () => settleCrossCurrencyTradeDispatch(f.world, forged));
     expect(() => settleCrossCurrencyTradeDispatch(f.world, forged))
       .toThrow(/current origin controller State is missing/);
+  });
+
+  it("requires a complete current Phase-1 world snapshot before FX dispatch", () => {
+    const f = fixture();
+    const unrelatedRegionId = [...f.world.regions.keys()].find((id) =>
+      id !== f.request.originRegionId && id !== f.request.destinationRegionId);
+    if (!unrelatedRegionId) throw new Error("fixture needs a third live Region");
+    const baseline = f.request.effectiveJurisdictionByRegion;
+
+    // A per-route-only check wrongly accepts every one of these snapshots.
+    const missing = new Map(baseline);
+    missing.delete(unrelatedRegionId);
+    const extra = new Map(baseline).set(
+      "region:ghost-fx-phase1" as RegionId, null,
+    );
+    const unknownController = new Map(baseline).set(
+      unrelatedRegionId, "state:ghost-fx-phase1" as StateId,
+    );
+    for (const jurisdiction of [missing, extra, unknownController]) {
+      const forged: CrossCurrencyDispatchRequest = {
+        ...f.request, effectiveJurisdictionByRegion: jurisdiction,
+      };
+      unchanged(f.world, forged, () => settleCrossCurrencyTradeDispatch(f.world, forged));
+      expect(() => settleCrossCurrencyTradeDispatch(f.world, forged))
+        .toThrow(/incomplete or invalid world-wide Phase-1 jurisdiction/);
+    }
+
+    // A real Phase-1 controller change on an unrelated Region remains legal:
+    // historical seed jurisdiction must never override the frozen snapshot.
+    const nextController = [...f.world.states.keys()].find((id) =>
+      id !== baseline.get(unrelatedRegionId));
+    if (!nextController) throw new Error("fixture needs a successor State");
+    const succession: CrossCurrencyDispatchRequest = {
+      ...f.request,
+      effectiveJurisdictionByRegion: new Map(baseline).set(
+        unrelatedRegionId, nextController,
+      ),
+    };
+    const settled = settleCrossCurrencyTradeDispatch(f.world, succession);
+    expect(settled).not.toBeNull();
+    expect(settled!.shipment.quantity).toBeGreaterThan(0);
+    expect(stock(f.world, succession)).toBe(10);
+    expect(f.world.shipments?.size).toBe(0);
   });
 
   it("fails FX seller-credit precision without removing goods or publishing any journal", () => {
