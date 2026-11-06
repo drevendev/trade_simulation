@@ -43,7 +43,11 @@ import {
   capturePhase7ImportTariffsAtPhase1,
   type Phase7Phase1TariffLawProvider,
 } from "./phase7Phase1TariffCapture";
-import type { Phase7FrozenImportTariffSnapshot } from "./phase7LiveWorldPlan";
+import { capturePhase7ConsumptionTaxesAtPhase1 } from "./phase7Phase1ConsumptionTaxCapture";
+import type { TaxPolicyProvider } from "./marketSettlement";
+import type {
+  Phase7FrozenImportTariffSnapshot, Phase7FrozenConsumptionTaxSnapshot,
+} from "./phase7LiveWorldPlan";
 import {
   derivePhase7CanonicalFxOutputBudgets,
   derivePhase7UnambiguousCanonicalFxPairs,
@@ -98,6 +102,45 @@ function copyTariffs(source: Phase7FrozenImportTariffSnapshot): Phase7FrozenImpo
     tick: source.tick,
     ratesByDestinationStateGood: new Map(source.ratesByDestinationStateGood),
   };
+}
+
+/** Two Maps constitute one immutable-in-contract consumption-tax snapshot. */
+function copyConsumptionTaxes(
+  source: Phase7FrozenConsumptionTaxSnapshot,
+): Phase7FrozenConsumptionTaxSnapshot {
+  return {
+    tick: source.tick,
+    ratesByDestinationStateGood: new Map(source.ratesByDestinationStateGood),
+    collectionEfficiencyByState: new Map(source.collectionEfficiencyByState),
+  };
+}
+
+function sameConsumptionTaxes(
+  captured: Phase7FrozenConsumptionTaxSnapshot | undefined,
+  observed: Phase7FrozenConsumptionTaxSnapshot | undefined,
+  tick: number,
+): boolean {
+  return captured !== undefined && observed !== undefined &&
+    captured.tick === tick && observed.tick === tick &&
+    observed.ratesByDestinationStateGood instanceof Map &&
+    observed.collectionEfficiencyByState instanceof Map &&
+    captured.ratesByDestinationStateGood.size === observed.ratesByDestinationStateGood.size &&
+    captured.collectionEfficiencyByState.size === observed.collectionEfficiencyByState.size &&
+    [...captured.ratesByDestinationStateGood].every(([key, rate]) =>
+      observed.ratesByDestinationStateGood.has(key) &&
+      Object.is(observed.ratesByDestinationStateGood.get(key), rate)) &&
+    [...captured.collectionEfficiencyByState].every(([stateId, rate]) =>
+      observed.collectionEfficiencyByState.has(stateId) &&
+      Object.is(observed.collectionEfficiencyByState.get(stateId), rate));
+}
+
+function sameOptionalConsumptionTaxes(
+  captured: Phase7FrozenConsumptionTaxSnapshot | undefined,
+  observed: Phase7FrozenConsumptionTaxSnapshot | undefined,
+): boolean {
+  return captured === undefined || observed === undefined
+    ? captured === observed
+    : sameConsumptionTaxes(captured, observed, captured.tick);
 }
 
 /** Deep-copy Map values; a handler or request builder must not own the law source. */
@@ -204,11 +247,13 @@ export function executeM5LiveQuotedTradeTick(
   observePhaseTransition?: PhaseWorldTransitionObserver,
   phase1TariffLawProvider?: Phase7Phase1TariffLawProvider,
   phase1TradeLawProvider?: Phase7Phase1TradeLawProvider,
+  phase1ConsumptionTaxProvider?: TaxPolicyProvider,
 ): StatefulTickExecutionResult {
   // Phase-1 captures the only authoritative law rates. The context exposes a
   // separate read-only copy for handlers, never the private settlement source.
   let capturedPhase1Tariffs: Phase7FrozenImportTariffSnapshot | undefined;
   let capturedPhase1TradeLaw: Phase7FrozenDirectedTradePermissions | undefined;
+  let capturedPhase1ConsumptionTaxes: Phase7FrozenConsumptionTaxSnapshot | undefined;
   return executeStatefulTick(
     openingWorld,
     tickNumber,
@@ -219,6 +264,11 @@ export function executeM5LiveQuotedTradeTick(
       let world = transitionedWorld;
       let nextContext = context;
       if (phase === 7) {
+        if (phase1ConsumptionTaxProvider !== undefined && !sameConsumptionTaxes(
+          capturedPhase1ConsumptionTaxes, context.phase1ConsumptionTaxes, context.tick,
+        )) {
+          throw new Error("Phase-7 requires unmodified current-tick Phase-1 consumption taxes");
+        }
         if (phase1TradeLawProvider !== undefined && !sameTradeLaw(
           capturedPhase1TradeLaw, context.phase1DirectedTradePermissions, context.tick,
         )) {
@@ -238,6 +288,8 @@ export function executeM5LiveQuotedTradeTick(
           ? undefined : copyTariffs(context.phase1ImportTariffs);
         const phase1TradeLawForBuilder = context.phase1DirectedTradePermissions === undefined
           ? undefined : copyTradeLaw(context.phase1DirectedTradePermissions);
+        const phase1ConsumptionTaxesForBuilder = context.phase1ConsumptionTaxes === undefined
+          ? undefined : copyConsumptionTaxes(context.phase1ConsumptionTaxes);
         const builderContext: TickContext = {
           ...context,
           marketPrices: new Map(capturedPhase6Prices),
@@ -247,6 +299,9 @@ export function executeM5LiveQuotedTradeTick(
           }),
           ...(phase1TradeLawForBuilder === undefined ? {} : {
             phase1DirectedTradePermissions: copyTradeLaw(phase1TradeLawForBuilder),
+          }),
+          ...(phase1ConsumptionTaxesForBuilder === undefined ? {} : {
+            phase1ConsumptionTaxes: copyConsumptionTaxes(phase1ConsumptionTaxesForBuilder),
           }),
         };
         const request = buildPhase7Request(world, builderContext);
@@ -262,6 +317,13 @@ export function executeM5LiveQuotedTradeTick(
           phase1TradeLawForBuilder, context.phase1DirectedTradePermissions,
         )) {
           throw new Error("M5 Phase-7 request builder cannot modify Phase-1 trade permissions");
+        }
+        if (!sameOptionalConsumptionTaxes(
+          phase1ConsumptionTaxesForBuilder, builderContext.phase1ConsumptionTaxes,
+        ) || !sameOptionalConsumptionTaxes(
+          phase1ConsumptionTaxesForBuilder, context.phase1ConsumptionTaxes,
+        )) {
+          throw new Error("M5 Phase-7 request builder cannot modify Phase-1 consumption taxes");
         }
         if (!samePhase6Prices(capturedPhase6Prices, builderContext.marketPrices) ||
             !samePhase6Prices(capturedPhase6Prices, context.marketPrices)) {
@@ -282,6 +344,10 @@ export function executeM5LiveQuotedTradeTick(
               request.policy.phase1ImportTariffs !== undefined) {
             throw new Error("M5 Phase-7 cannot override captured Phase-1 tariffs with caller policy");
           }
+          if (phase1ConsumptionTaxProvider !== undefined &&
+              request.policy.phase1ConsumptionTaxes !== undefined) {
+            throw new Error("M5 Phase-7 cannot override captured Phase-1 consumption taxes with caller policy");
+          }
           // Explicit field selection is intentional. Even an object with extra
           // runtime properties cannot override the authoritative tick/phase,
           // Phase-6 market prices, Phase-1 jurisdiction, or committed journal.
@@ -292,7 +358,8 @@ export function executeM5LiveQuotedTradeTick(
             effectiveJurisdictionByRegion: capturedPhase1Jurisdictions,
             phase1ImportTariffs: phase1TariffLawProvider === undefined
               ? request.policy.phase1ImportTariffs : capturedPhase1Tariffs,
-            phase1ConsumptionTaxes: request.policy.phase1ConsumptionTaxes,
+            phase1ConsumptionTaxes: phase1ConsumptionTaxProvider === undefined
+              ? request.policy.phase1ConsumptionTaxes : capturedPhase1ConsumptionTaxes,
             transportFeeCostPolicy: request.policy.transportFeeCostPolicy,
           };
           let fxReservationByLotOrdinal: ReadonlyMap<number, FxReservation>;
@@ -364,6 +431,15 @@ export function executeM5LiveQuotedTradeTick(
         nextContext = {
           ...nextContext,
           phase1DirectedTradePermissions: copyTradeLaw(capturedPhase1TradeLaw),
+        };
+      }
+      if (phase === 1 && phase1ConsumptionTaxProvider !== undefined) {
+        capturedPhase1ConsumptionTaxes = capturePhase7ConsumptionTaxesAtPhase1(
+          world, nextContext, phase1ConsumptionTaxProvider,
+        );
+        nextContext = {
+          ...nextContext,
+          phase1ConsumptionTaxes: copyConsumptionTaxes(capturedPhase1ConsumptionTaxes),
         };
       }
       return { world, context: nextContext };
@@ -453,6 +529,7 @@ export function executeM5CanonicalIntakeTradeTick(
   observePhaseTransition?: PhaseWorldTransitionObserver,
   phase1TariffLawProvider?: Phase7Phase1TariffLawProvider,
   phase1TradeLawProvider?: Phase7Phase1TradeLawProvider,
+  phase1ConsumptionTaxProvider?: TaxPolicyProvider,
 ): StatefulTickExecutionResult {
   return executeM5LiveQuotedTradeTick(
     openingWorld, tickNumber, handler, applyPhaseTransition,
@@ -555,5 +632,6 @@ export function executeM5CanonicalIntakeTradeTick(
     observePhaseTransition,
     phase1TariffLawProvider,
     phase1TradeLawProvider,
+    phase1ConsumptionTaxProvider,
   );
 }
