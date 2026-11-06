@@ -107,7 +107,11 @@ describe("M5 #673 captured directed trade law through the 16-phase tick", () => 
     )).toThrow("Caller cannot replace captured Phase-1 trade permissions");
     expect(() => executeM5CanonicalIntakeTradeTick(
       f.world, 12, f.phase1, unchanged,
-      () => ({ ...request(), authorizedRouteDiscovery: undefined }),
+      () => {
+        const bypass = { ...request() };
+        delete bypass.authorizedRouteDiscovery;
+        return bypass;
+      },
       undefined, undefined, () => null,
     )).toThrow("requires canonical route discovery");
   });
