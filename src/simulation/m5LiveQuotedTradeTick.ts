@@ -33,7 +33,11 @@ import { derivePhase7PostProcurementIntents } from "./phase7PostProcurementInten
 import {
   bindPhase7DiscoveredCargoCapacity, bindPhase7DiscoveredRouteQuotes,
 } from "./phase7CanonicalRouteBridge";
-import type { Phase7FrozenDirectedTradePermissions } from "./phase7AuthorizedRouteDiscovery";
+import {
+  capturePhase7DirectedTradePermissionsAtPhase1,
+  type Phase7FrozenDirectedTradePermissions,
+  type Phase7Phase1TradeLawProvider,
+} from "./phase7AuthorizedRouteDiscovery";
 import { derivePhase7CanonicalCargoResiduals } from "./phase7CanonicalCargoResiduals";
 import {
   capturePhase7ImportTariffsAtPhase1,
@@ -88,6 +92,53 @@ function matchesCapturedTariffs(
       observed.ratesByDestinationStateGood.get(key) === rate);
 }
 
+/** Deep-copy Map values; a handler or request builder must not own the law source. */
+function copyTradeLaw(source: Phase7FrozenDirectedTradePermissions): Phase7FrozenDirectedTradePermissions {
+  return {
+    tick: source.tick,
+    permittedGoodsByDirectedLink: new Map(
+      [...source.permittedGoodsByDirectedLink].map(([link, goods]) =>
+        [link, new Map(goods)] as const),
+    ),
+  };
+}
+
+function sameTradeLaw(
+  source: Phase7FrozenDirectedTradePermissions | undefined,
+  shown: Phase7FrozenDirectedTradePermissions | undefined,
+  tick: number,
+): boolean {
+  return source !== undefined && shown !== undefined &&
+    source.tick === tick && shown.tick === tick &&
+    shown.permittedGoodsByDirectedLink instanceof Map &&
+    source.permittedGoodsByDirectedLink.size === shown.permittedGoodsByDirectedLink.size &&
+    [...source.permittedGoodsByDirectedLink].every(([link, goods]) => {
+      const visible = shown.permittedGoodsByDirectedLink.get(link);
+      return visible instanceof Map && visible.size === goods.size &&
+        [...goods].every(([good, cap]) => visible.has(good) && visible.get(good) === cap);
+    });
+}
+
+/** Protect raw live-quote callers too: captured permission cannot be bypassed. */
+function assertTradeQuotesAllowed(
+  request: Phase7LiveTickRequest,
+  law: Phase7FrozenDirectedTradePermissions,
+): void {
+  if (!Array.isArray(request.plan.opportunityQuotes)) {
+    throw new Error("Phase-7 captured trade law requires explicit route quotes");
+  }
+  for (const quote of request.plan.opportunityQuotes) {
+    const goods = law.permittedGoodsByDirectedLink.get(quote.linkId);
+    if (!(goods instanceof Map) || !goods.has(quote.goodId)) {
+      throw new Error("Phase-7 quote lacks captured Phase-1 directed trade permission");
+    }
+    const cap = goods.get(quote.goodId);
+    if (quote.legalQuantityCap !== (cap === null ? undefined : cap)) {
+      throw new Error("Phase-7 quote cannot override captured Phase-1 legal quantity cap");
+    }
+  }
+}
+
 /**
  * Run canonical phases 0..15. Exactly at Phase-7 close, quote the actual
  * matched quantities from live Phase-1/6 evidence and commit the existing
@@ -103,10 +154,12 @@ export function executeM5LiveQuotedTradeTick(
   buildPhase7Request: Phase7LiveTickRequestBuilder,
   observePhaseTransition?: PhaseWorldTransitionObserver,
   phase1TariffLawProvider?: Phase7Phase1TariffLawProvider,
+  phase1TradeLawProvider?: Phase7Phase1TradeLawProvider,
 ): StatefulTickExecutionResult {
   // Phase-1 captures the only authoritative law rates. The context exposes a
   // separate read-only copy for handlers, never the private settlement source.
   let capturedPhase1Tariffs: Phase7FrozenImportTariffSnapshot | undefined;
+  let capturedPhase1TradeLaw: Phase7FrozenDirectedTradePermissions | undefined;
   return executeStatefulTick(
     openingWorld,
     tickNumber,
@@ -117,6 +170,11 @@ export function executeM5LiveQuotedTradeTick(
       let world = transitionedWorld;
       let nextContext = context;
       if (phase === 7) {
+        if (phase1TradeLawProvider !== undefined && !sameTradeLaw(
+          capturedPhase1TradeLaw, context.phase1DirectedTradePermissions, context.tick,
+        )) {
+          throw new Error("Phase-7 requires unmodified current-tick Phase-1 trade permissions");
+        }
         if (phase1TariffLawProvider !== undefined && !matchesCapturedTariffs(
           capturedPhase1Tariffs, context.phase1ImportTariffs, context.tick,
         )) {
@@ -124,6 +182,9 @@ export function executeM5LiveQuotedTradeTick(
         }
         const request = buildPhase7Request(world, context);
         if (request !== null) {
+          if (phase1TradeLawProvider !== undefined) {
+            assertTradeQuotesAllowed(request, capturedPhase1TradeLaw!);
+          }
           if (phase1TariffLawProvider !== undefined &&
               request.policy.phase1ImportTariffs !== undefined) {
             throw new Error("M5 Phase-7 cannot override captured Phase-1 tariffs with caller policy");
@@ -202,6 +263,16 @@ export function executeM5LiveQuotedTradeTick(
           },
         };
       }
+      if (phase === 1 && phase1TradeLawProvider !== undefined) {
+        // Phase-1 law sees the activated jurisdictions after due deliveries.
+        capturedPhase1TradeLaw = capturePhase7DirectedTradePermissionsAtPhase1(
+          world, nextContext, phase1TradeLawProvider,
+        );
+        nextContext = {
+          ...nextContext,
+          phase1DirectedTradePermissions: copyTradeLaw(capturedPhase1TradeLaw),
+        };
+      }
       return { world, context: nextContext };
     },
   );
@@ -241,7 +312,8 @@ export interface Phase7CanonicalIntakeTickRequest {
    * frozen Phase-1 permissions and the SAME post-Phase-4 canonical residuals.
    * Without this, the legacy explicit-route request stays backward-compatible. */
   readonly authorizedRouteDiscovery?: {
-    readonly permissions: Phase7FrozenDirectedTradePermissions;
+    /** Omit only when the current tick captures law via phase1TradeLawProvider. */
+    readonly permissions?: Phase7FrozenDirectedTradePermissions;
     /** Construct route scoring templates solely from frozen legal discovery and
      * live residual intents. Must supply NO external opportunityQuotes. Prices,
      * fees, taxes and FX are hydrated later from their canonical owners. */
@@ -287,12 +359,28 @@ export function executeM5CanonicalIntakeTradeTick(
   buildPhase7RouteRequest: Phase7CanonicalIntakeTickRequestBuilder,
   observePhaseTransition?: PhaseWorldTransitionObserver,
   phase1TariffLawProvider?: Phase7Phase1TariffLawProvider,
+  phase1TradeLawProvider?: Phase7Phase1TradeLawProvider,
 ): StatefulTickExecutionResult {
   return executeM5LiveQuotedTradeTick(
     openingWorld, tickNumber, handler, applyPhaseTransition,
     (world, context) => {
+      // Copy BEFORE calling the untrusted builder; it can mutate its context.
+      const trustedLaw = phase1TradeLawProvider === undefined ||
+        context.phase1DirectedTradePermissions === undefined
+        ? undefined : copyTradeLaw(context.phase1DirectedTradePermissions);
       const request = buildPhase7RouteRequest(world, context);
       if (request === null) return null;
+      if (phase1TradeLawProvider !== undefined) {
+        if (request.authorizedRouteDiscovery === undefined) {
+          throw new Error("Captured Phase-1 trade law requires canonical route discovery");
+        }
+        if (request.authorizedRouteDiscovery.permissions !== undefined) {
+          throw new Error("Caller cannot replace captured Phase-1 trade permissions");
+        }
+      } else if (request.authorizedRouteDiscovery !== undefined &&
+          request.authorizedRouteDiscovery.permissions === undefined) {
+        throw new Error("Route discovery requires explicit Phase-1 law without provider");
+      }
       const intake = derivePhase7PostProcurementIntents(world, context);
       const autoRoutes =
         request.authorizedRouteDiscovery?.autoGenerateCanonicalRouteQuotes === true;
@@ -304,7 +392,7 @@ export function executeM5CanonicalIntakeTradeTick(
         ? undefined
         : bindPhase7DiscoveredRouteQuotes(
           world, context, intake.residualIntents,
-          request.authorizedRouteDiscovery.permissions,
+          trustedLaw ?? request.authorizedRouteDiscovery.permissions!,
           request.plan.infrastructureFactors,
           autoRoutes ? null : request.plan.opportunityQuotes,
         );
@@ -373,5 +461,6 @@ export function executeM5CanonicalIntakeTradeTick(
     },
     observePhaseTransition,
     phase1TariffLawProvider,
+    phase1TradeLawProvider,
   );
 }
