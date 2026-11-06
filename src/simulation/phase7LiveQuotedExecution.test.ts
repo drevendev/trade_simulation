@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   executeM5CanonicalIntakeTradeTick, executeM5LiveQuotedTradeTick,
 } from "./m5LiveQuotedTradeTick";
-import { createTransactionId, noOpPhaseHandler, type PhaseHandler } from "./tickOrchestrator";
+import { createTransactionId, noOpPhaseHandler, type PhaseHandler, type TickContext } from "./tickOrchestrator";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
@@ -274,6 +274,77 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
         .toBe(originalSellerStock);
       expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency))
         .toBe(originalBuyerCash);
+    }
+  });
+
+  it("isolates captured Phase-1 tariff and nested trade-permission Maps from Phase-7 builders", () => {
+    const f = fxFixture();
+    const tariffKey = phase7ImportTariffKey(f.destination.controllerStateId!, GOOD);
+    const sellerStart = readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD);
+    const buyerStart = readActorWallet(f.world, f.buyerActor).get(f.destCurrency);
+
+    for (const mutation of ["tariff", "permission"] as const) {
+      for (const withTradeRequest of [false, true]) {
+        let publishedTariffs: TickContext["phase1ImportTariffs"];
+        let publishedLaw: TickContext["phase1DirectedTradePermissions"];
+        const handler: PhaseHandler = (_world, context) => {
+          if (context.phase === 1) {
+            return { ...context, effectiveJurisdictionByRegion: new Map(
+              f.context.effectiveJurisdictionByRegion,
+            ) };
+          }
+          if (context.phase === 2) {
+            publishedTariffs = context.phase1ImportTariffs;
+            publishedLaw = context.phase1DirectedTradePermissions;
+          }
+          if (context.phase === 6) {
+            return { ...context, marketPrices: new Map(f.context.marketPrices) };
+          }
+          return context;
+        };
+        expect(() => executeM5LiveQuotedTradeTick(
+          f.world, 7, handler, (_phase, world) => world,
+          (_world, context) => {
+            expect(context.phase1ImportTariffs).not.toBe(publishedTariffs);
+            expect(context.phase1DirectedTradePermissions).not.toBe(publishedLaw);
+            if (mutation === "tariff") {
+              (context.phase1ImportTariffs!.ratesByDestinationStateGood as Map<string, number>)
+                .set(tariffKey, 999);
+            } else {
+              const visible = context.phase1DirectedTradePermissions!
+                .permittedGoodsByDirectedLink as Map<TransportLinkId, Map<GoodId, number | null>>;
+              expect(visible.get(f.link.linkId)).not.toBe(
+                publishedLaw?.permittedGoodsByDirectedLink.get(f.link.linkId),
+              );
+              visible.get(f.link.linkId)!.set(GOOD, 0);
+            }
+            return withTradeRequest ? {
+              policy: {
+                phase1ConsumptionTaxes: f.context.phase1ConsumptionTaxes,
+                transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+              },
+              plan: f.input,
+              dispatch: f.state,
+            } : null;
+          },
+          undefined,
+          ({ goodId }) => goodId === GOOD ? 0.1 : undefined,
+          ({ linkId, goodId }) => linkId === f.link.linkId && goodId === GOOD
+            ? null : undefined,
+        )).toThrow(
+          mutation === "tariff"
+            ? "M5 Phase-7 request builder cannot modify Phase-1 tariffs"
+            : "M5 Phase-7 request builder cannot modify Phase-1 trade permissions",
+        );
+        expect(publishedTariffs?.ratesByDestinationStateGood.get(tariffKey)).toBe(0.1);
+        expect(publishedLaw?.permittedGoodsByDirectedLink.get(f.link.linkId)?.get(GOOD))
+          .toBeNull();
+        expect(f.world.shipments?.size).toBe(0);
+        expect(readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD))
+          .toBe(sellerStart);
+        expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency))
+          .toBe(buyerStart);
+      }
     }
   });
 
