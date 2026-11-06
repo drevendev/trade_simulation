@@ -92,6 +92,14 @@ function matchesCapturedTariffs(
       observed.ratesByDestinationStateGood.get(key) === rate);
 }
 
+/** A frozen tariff is still backed by a mutable Map at runtime. */
+function copyTariffs(source: Phase7FrozenImportTariffSnapshot): Phase7FrozenImportTariffSnapshot {
+  return {
+    tick: source.tick,
+    ratesByDestinationStateGood: new Map(source.ratesByDestinationStateGood),
+  };
+}
+
 /** Deep-copy Map values; a handler or request builder must not own the law source. */
 function copyTradeLaw(source: Phase7FrozenDirectedTradePermissions): Phase7FrozenDirectedTradePermissions {
   return {
@@ -117,6 +125,25 @@ function sameTradeLaw(
       return visible instanceof Map && visible.size === goods.size &&
         [...goods].every(([good, cap]) => visible.has(good) && visible.get(good) === cap);
     });
+}
+
+/** Compare optional Phase-1 snapshots without inventing policy when absent. */
+function sameOptionalTariffs(
+  captured: Phase7FrozenImportTariffSnapshot | undefined,
+  observed: Phase7FrozenImportTariffSnapshot | undefined,
+): boolean {
+  return captured === undefined || observed === undefined
+    ? captured === observed
+    : matchesCapturedTariffs(captured, observed, captured.tick);
+}
+
+function sameOptionalTradeLaw(
+  captured: Phase7FrozenDirectedTradePermissions | undefined,
+  observed: Phase7FrozenDirectedTradePermissions | undefined,
+): boolean {
+  return captured === undefined || observed === undefined
+    ? captured === observed
+    : sameTradeLaw(captured, observed, captured.tick);
 }
 
 /** Protect raw live-quote callers too: captured permission cannot be bypassed. */
@@ -207,12 +234,35 @@ export function executeM5LiveQuotedTradeTick(
         // influence the current tick's invoice through a forged price.
         const capturedPhase6Prices = new Map(context.marketPrices);
         const capturedPhase1Jurisdictions = new Map(context.effectiveJurisdictionByRegion);
+        const phase1TariffsForBuilder = context.phase1ImportTariffs === undefined
+          ? undefined : copyTariffs(context.phase1ImportTariffs);
+        const phase1TradeLawForBuilder = context.phase1DirectedTradePermissions === undefined
+          ? undefined : copyTradeLaw(context.phase1DirectedTradePermissions);
         const builderContext: TickContext = {
           ...context,
           marketPrices: new Map(capturedPhase6Prices),
           effectiveJurisdictionByRegion: new Map(capturedPhase1Jurisdictions),
+          ...(phase1TariffsForBuilder === undefined ? {} : {
+            phase1ImportTariffs: copyTariffs(phase1TariffsForBuilder),
+          }),
+          ...(phase1TradeLawForBuilder === undefined ? {} : {
+            phase1DirectedTradePermissions: copyTradeLaw(phase1TradeLawForBuilder),
+          }),
         };
         const request = buildPhase7Request(world, builderContext);
+        // Both law snapshots are checked even for a null/no-trade request.
+        // Keep the outer context intact for subsequent Phase-8 and closing gates.
+        if (!sameOptionalTariffs(phase1TariffsForBuilder, builderContext.phase1ImportTariffs) ||
+            !sameOptionalTariffs(phase1TariffsForBuilder, context.phase1ImportTariffs)) {
+          throw new Error("M5 Phase-7 request builder cannot modify Phase-1 tariffs");
+        }
+        if (!sameOptionalTradeLaw(
+          phase1TradeLawForBuilder, builderContext.phase1DirectedTradePermissions,
+        ) || !sameOptionalTradeLaw(
+          phase1TradeLawForBuilder, context.phase1DirectedTradePermissions,
+        )) {
+          throw new Error("M5 Phase-7 request builder cannot modify Phase-1 trade permissions");
+        }
         if (!samePhase6Prices(capturedPhase6Prices, builderContext.marketPrices) ||
             !samePhase6Prices(capturedPhase6Prices, context.marketPrices)) {
           throw new Error("M5 Phase-7 request builder cannot modify Phase-6 market prices");
