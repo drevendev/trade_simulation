@@ -350,6 +350,126 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     }
   });
 
+  it("captures consumption-tax policy in Phase-1 and pays exactly once from the captured snapshot", () => {
+    const f = fxFixture();
+    const stateId = f.destination.controllerStateId!;
+    const calls: string[] = [];
+    const taxPolicy = {
+      getConsumptionTaxRate: (state: typeof stateId, goodId: string) => {
+        calls.push(JSON.stringify([state, goodId]));
+        return goodId === GOOD ? 0.1 : 0;
+      },
+      getCollectionEfficiency: () => 1,
+    };
+    const handler: PhaseHandler = (_world, context) => {
+      if (context.phase === 1) {
+        return { ...context, effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion };
+      }
+      if (context.phase === 6) return { ...context, marketPrices: f.context.marketPrices };
+      return context;
+    };
+    const policy = {
+      phase1ImportTariffs: f.context.phase1ImportTariffs,
+      transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+    };
+    const build = (_world: WorldState, context: TickContext) => {
+      expect(context.phase1ConsumptionTaxes?.ratesByDestinationStateGood
+        .get(phase7ConsumptionTaxKey(stateId, GOOD))).toBe(0.1);
+      expect(context.phase1ConsumptionTaxes?.collectionEfficiencyByState.get(stateId))
+        .toBe(1);
+      return { policy, plan: f.input, dispatch: f.state };
+    };
+    const run = () => executeM5LiveQuotedTradeTick(
+      f.world, 7, handler, (_phase, world) => world, build,
+      undefined, undefined, undefined, taxPolicy,
+    );
+    const actual = run();
+    const replay = run();
+    expect(actual.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(actual.phaseBoundaryError).toBeUndefined();
+    expect(actual.reconciliationErrors).toBeNull();
+    expect(actual.context.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH"))
+      .toHaveLength(1);
+    expect(actual.context.transactions.filter(tx => tx.type === "FX_INPUT"))
+      .toHaveLength(1);
+    expect(actual.context.transactions.filter(tx => tx.type === "FX_OUTPUT"))
+      .toHaveLength(1);
+    expect(actual.context.transactions).toEqual(replay.context.transactions);
+    expect(actual.world.shipments).toEqual(replay.world.shipments);
+    expect(new Set(calls).size).toBeGreaterThan(0);
+    expect(f.world.shipments?.size).toBe(0);
+    expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency)).toBe(100);
+
+    expect(() => executeM5LiveQuotedTradeTick(
+      f.world, 7, handler, (_phase, world) => world,
+      () => ({
+        policy: { ...policy, phase1ConsumptionTaxes: f.context.phase1ConsumptionTaxes },
+        plan: f.input, dispatch: f.state,
+      }),
+      undefined, undefined, undefined, taxPolicy,
+    )).toThrow("cannot override captured Phase-1 consumption taxes");
+    expect(f.world.shipments?.size).toBe(0);
+  });
+
+  it("rejects Phase-1 consumption-tax Map mutation even for a no-trade builder", () => {
+    const f = fxFixture();
+    const stateId = f.destination.controllerStateId!;
+    const rateKey = phase7ConsumptionTaxKey(stateId, GOOD);
+    const sellerStart = readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD);
+    const buyerStart = readActorWallet(f.world, f.buyerActor).get(f.destCurrency);
+    const taxPolicy = {
+      getConsumptionTaxRate: (_state: typeof stateId, goodId: string) =>
+        goodId === GOOD ? 0.1 : 0,
+      getCollectionEfficiency: () => 1,
+    };
+    for (const mutation of ["rate-change", "rate-remove", "efficiency-change", "efficiency-remove"] as const) {
+      for (const withTrade of [false, true]) {
+        let published: TickContext["phase1ConsumptionTaxes"];
+        const handler: PhaseHandler = (_world, context) => {
+          if (context.phase === 1) {
+            return { ...context, effectiveJurisdictionByRegion: new Map(
+              f.context.effectiveJurisdictionByRegion,
+            ) };
+          }
+          if (context.phase === 2) published = context.phase1ConsumptionTaxes;
+          if (context.phase === 6) return { ...context, marketPrices: new Map(f.context.marketPrices) };
+          return context;
+        };
+        expect(() => executeM5LiveQuotedTradeTick(
+          f.world, 7, handler, (_phase, world) => world,
+          (_world, context) => {
+            expect(context.phase1ConsumptionTaxes).not.toBe(published);
+            const visible = context.phase1ConsumptionTaxes!;
+            if (mutation.startsWith("rate-")) {
+              const rates = visible.ratesByDestinationStateGood as Map<string, number>;
+              if (mutation === "rate-change") rates.set(rateKey, 999);
+              else rates.delete(rateKey);
+            } else {
+              const efficiencies = visible.collectionEfficiencyByState as Map<typeof stateId, number>;
+              if (mutation === "efficiency-change") efficiencies.set(stateId, 0.5);
+              else efficiencies.delete(stateId);
+            }
+            return withTrade ? {
+              policy: {
+                phase1ImportTariffs: f.context.phase1ImportTariffs,
+                transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+              },
+              plan: f.input, dispatch: f.state,
+            } : null;
+          },
+          undefined, undefined, undefined, taxPolicy,
+        )).toThrow("M5 Phase-7 request builder cannot modify Phase-1 consumption taxes");
+        expect(published?.ratesByDestinationStateGood.get(rateKey)).toBe(0.1);
+        expect(published?.collectionEfficiencyByState.get(stateId)).toBe(1);
+        expect(f.world.shipments?.size).toBe(0);
+        expect(readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD))
+          .toBe(sellerStart);
+        expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency))
+          .toBe(buyerStart);
+      }
+    }
+  });
+
   it("settles one live FX invoice with explicit charges, conserved goods and two currencies", () => {
     const f = fxFixture();
     expect(f.quoted.quotes).toHaveLength(1);
