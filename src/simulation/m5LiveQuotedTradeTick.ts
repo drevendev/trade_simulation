@@ -150,6 +150,17 @@ function samePhase6Prices(
       observed.has(key) && Object.is(observed.get(key), value));
 }
 
+/** The Phase-1 jurisdiction map is another economic-law authority, not mutable
+ * builder input. Check its detached view even when the builder requests no trade. */
+function samePhase1Jurisdictions(
+  captured: TickContext["effectiveJurisdictionByRegion"],
+  observed: TickContext["effectiveJurisdictionByRegion"],
+): boolean {
+  return observed instanceof Map && captured.size === observed.size &&
+    [...captured].every(([region, state]) =>
+      observed.has(region) && Object.is(observed.get(region), state));
+}
+
 /**
  * Run canonical phases 0..15. Exactly at Phase-7 close, quote the actual
  * matched quantities from live Phase-1/6 evidence and commit the existing
@@ -195,13 +206,23 @@ export function executeM5LiveQuotedTradeTick(
         // A malicious/no-trade builder must not poison Phase-8 clearing, nor
         // influence the current tick's invoice through a forged price.
         const capturedPhase6Prices = new Map(context.marketPrices);
+        const capturedPhase1Jurisdictions = new Map(context.effectiveJurisdictionByRegion);
         const builderContext: TickContext = {
-          ...context, marketPrices: new Map(capturedPhase6Prices),
+          ...context,
+          marketPrices: new Map(capturedPhase6Prices),
+          effectiveJurisdictionByRegion: new Map(capturedPhase1Jurisdictions),
         };
         const request = buildPhase7Request(world, builderContext);
         if (!samePhase6Prices(capturedPhase6Prices, builderContext.marketPrices) ||
             !samePhase6Prices(capturedPhase6Prices, context.marketPrices)) {
           throw new Error("M5 Phase-7 request builder cannot modify Phase-6 market prices");
+        }
+        if (!samePhase1Jurisdictions(
+          capturedPhase1Jurisdictions, builderContext.effectiveJurisdictionByRegion,
+        ) || !samePhase1Jurisdictions(
+          capturedPhase1Jurisdictions, context.effectiveJurisdictionByRegion,
+        )) {
+          throw new Error("M5 Phase-7 request builder cannot modify Phase-1 jurisdictions");
         }
         if (request !== null) {
           if (phase1TradeLawProvider !== undefined) {
@@ -218,7 +239,7 @@ export function executeM5LiveQuotedTradeTick(
             tick: context.tick,
             phase: context.phase,
             marketPrices: capturedPhase6Prices,
-            effectiveJurisdictionByRegion: context.effectiveJurisdictionByRegion,
+            effectiveJurisdictionByRegion: capturedPhase1Jurisdictions,
             phase1ImportTariffs: phase1TariffLawProvider === undefined
               ? request.policy.phase1ImportTariffs : capturedPhase1Tariffs,
             phase1ConsumptionTaxes: request.policy.phase1ConsumptionTaxes,
@@ -247,7 +268,7 @@ export function executeM5LiveQuotedTradeTick(
             fxReservationByLotOrdinal,
             remainingCargoWeightByLink: request.dispatch.remainingCargoWeightByLink,
             phase8MainIntents: request.dispatch.phase8MainIntents,
-            effectiveJurisdictionByRegion: context.effectiveJurisdictionByRegion,
+            effectiveJurisdictionByRegion: capturedPhase1Jurisdictions,
             priorTransactions: context.transactions,
           };
           const committed = executePhase7LiveQuotedMixedTradePlan(
