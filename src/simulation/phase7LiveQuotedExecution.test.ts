@@ -308,8 +308,7 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
             expect(context.phase1ImportTariffs).not.toBe(publishedTariffs);
             expect(context.phase1DirectedTradePermissions).not.toBe(publishedLaw);
             if (mutation.startsWith("tariff-")) {
-              const rates = context.phase1ImportTariffs!.ratesByDestinationStateGood
-                as Map<string, number>;
+              const rates = context.phase1ImportTariffs!.ratesByDestinationStateGood as Map<string, number>;
               if (mutation === "tariff-change") rates.set(tariffKey, 999);
               else rates.delete(tariffKey);
             } else {
