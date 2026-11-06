@@ -1812,14 +1812,25 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
     expect(beforeMoney.buyer - paid.buyer)
       .toBeCloseTo(poolDestIn + feePaid + taxesPaid, 9);
     expect(taxesPaid).toBeGreaterThanOrEqual(shipment.tariffAmount);
-    // A zero cap or an absent law decision is not an unrestricted permit.
+    // A zero cap or an absent law decision must complete every phase without
+    // producing a paid trade. A Phase-7 boundary error is not a safe denial.
     for (const cap of [0, undefined]) {
       const denied = run(cap);
+      const deniedReplay = run(cap);
+      expect(denied.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(denied.phaseBoundaryError).toBeUndefined();
+      expect(denied.reconciliationErrors).toBeNull();
+      expect(denied.context.transactions).toEqual(deniedReplay.context.transactions);
+      expect(denied.world.shipments).toEqual(deniedReplay.world.shipments);
       expect(denied.world.shipments?.size).toBe(0);
       expect(denied.context.transactions.filter(tx =>
         tx.type === "SHIPMENT_DISPATCH" || tx.type === "FX_INPUT" ||
-        tx.type === "FX_OUTPUT")).toEqual([]);
+        tx.type === "FX_OUTPUT" || tx.type === "TRADE_GOODS_SALE" ||
+        tx.type === "IMPORT_TARIFF" || tx.type === "CONSUMPTION_TAX" ||
+        tx.type === "TRANSPORT_FEE" || tx.type === "SHIPMENT_DELIVERY")).toEqual([]);
       expect(money(denied.world)).toEqual(beforeMoney);
+      expect(stock(denied.world, f.sellerActor)).toBe(stock(uniqueWorld, f.sellerActor));
+      expect(stock(denied.world, f.buyerActor)).toBe(stock(uniqueWorld, f.buyerActor));
       expect(conserved(denied.world)).toBeCloseTo(beforeGoods, 9);
     }
     // A permitted route without an authoritative tariff fails closed.
