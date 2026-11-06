@@ -12,6 +12,7 @@ import type { RegionId, StateId, CurrencyId, CohortId, ProductionUnitId, Monetar
 import type { ActorRef } from "../domain/genesisLedger";
 import type { WorldState, PendingTransitions } from "./worldState";
 import type { Phase7FrozenImportTariffSnapshot } from "./phase7LiveWorldPlan";
+import type { Phase7FrozenDirectedTradePermissions } from "./phase7AuthorizedRouteDiscovery";
 import type { TickLedger } from "./ledger";
 import { createEmptyTickLedger, validateZeroFlowReconciliation } from "./ledger";
 import type { BudgetCommitmentLedger, MarketIntent } from "./marketIntent";
@@ -45,6 +46,8 @@ export interface TickContext {
   readonly effectiveJurisdictionByRegion: ReadonlyMap<RegionId, StateId | null>;
   /** Captured after Phase-1 activation, carried unchanged into Phase 7. Never a caller quote. */
   readonly phase1ImportTariffs?: Phase7FrozenImportTariffSnapshot;
+  /** Read-only consumer copy of current Phase-1 legal link/good decisions. */
+  readonly phase1DirectedTradePermissions?: Phase7FrozenDirectedTradePermissions;
   readonly rngSeed: number;
   readonly transactions: ReadonlyArray<EconomicTransaction>;
   readonly currentLedger: TickLedger;
