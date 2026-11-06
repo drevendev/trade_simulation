@@ -1720,6 +1720,144 @@ describe("M5 #673 canonical tick FX discovery: SLP-914-01 integration gate", () 
     expect(inFlight.shipments?.has(early.id)).toBe(true);
   });
 
+  it("settles a finite Phase-1 legal cap with authoritative tariff and delivers paid FX cargo exactly once", () => {
+    const { f, uniqueWorld, request } = canonicalDiscovery();
+    const seller = f.input.residualIntents.find(e => e.intent.side === "SELL")!.intent;
+    const buyer = f.input.residualIntents.find(e => e.intent.side === "BUY")!.intent;
+    const handler: PhaseHandler = (_world, context) => {
+      if (context.phase === 1) {
+        return { ...context, effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion };
+      }
+      if (context.phase === 2) {
+        return { ...context, productionMarketIntents: [seller], householdMarketIntents: [buyer] };
+      }
+      if (context.phase === 4) return { ...context, phase4MarketAllocations: [] };
+      if (context.phase === 6) return { ...context, marketPrices: f.context.marketPrices };
+      return context;
+    };
+    const build = () => {
+      const source = request();
+      const { phase1ImportTariffs: _callerTariffs, ...policy } = source.policy;
+      const { permissions: _callerLaw, ...discovery } = source.authorizedRouteDiscovery;
+      return {
+        ...source, policy,
+        plan: { ...source.plan, opportunityQuotes: [] },
+        authorizedRouteDiscovery: {
+          ...discovery,
+          autoGenerateCanonicalRouteQuotes: true as const,
+          autoDeriveCanonicalCargoCapacity: true as const,
+        },
+        dispatch: { autoReserveFx: true as const },
+      };
+    };
+    const run = (legalCap: number | undefined, tariffPresent = true) =>
+      executeM5CanonicalIntakeTradeTick(
+        uniqueWorld, 7, handler, (_phase, world) => world, build,
+        undefined,
+        query => tariffPresent && query.goodId === GOOD ? 0.1 : undefined,
+        query => query.linkId === f.link.linkId && query.goodId === GOOD
+          ? legalCap : undefined,
+      );
+    const stock = (world: WorldState, actor: ActorRef) =>
+      readMarketActorInventory(world, actor, "GENERAL").get(GOOD) ?? 0;
+    const conserved = (world: WorldState) =>
+      stock(world, f.sellerActor) + stock(world, f.buyerActor) +
+      [...(world.shipments?.values() ?? [])]
+        .filter(s => s.goodId === GOOD)
+        .reduce((total, s) => total + s.quantity, 0);
+    const money = (world: WorldState) => ({
+      buyer: readActorWallet(world, f.buyerActor).get(f.destCurrency) ?? 0,
+      seller: readActorWallet(world, f.sellerActor).get(f.sourceCurrency) ?? 0,
+      fee: readActorWallet(world, f.feeReceiver).get(f.destCurrency) ?? 0,
+      treasury: world.states.get(f.destination.controllerStateId!)!
+        .treasury.get(f.destCurrency) ?? 0,
+      poolSource: resolveCanonicalFxPool(world, f.pairId).pool.cash.get(f.sourceCurrency) ?? 0,
+      poolDestination: resolveCanonicalFxPool(world, f.pairId).pool.cash.get(f.destCurrency) ?? 0,
+    });
+    const beforeMoney = money(uniqueWorld);
+    const beforeGoods = conserved(uniqueWorld);
+    const result = run(1);
+    const replay = run(1);
+    expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(result.phaseBoundaryError).toBeUndefined();
+    expect(result.reconciliationErrors).toBeNull();
+    expect(result.context.phase1DirectedTradePermissions?.permittedGoodsByDirectedLink
+      .get(f.link.linkId)?.get(GOOD)).toBe(1);
+    expect(result.context.phase1ImportTariffs?.ratesByDestinationStateGood
+      .get(phase7ImportTariffKey(f.destination.controllerStateId!, GOOD))).toBe(0.1);
+    expect(result.context.transactions).toEqual(replay.context.transactions);
+    expect(result.world.shipments).toEqual(replay.world.shipments);
+    const transactions = result.context.transactions;
+    for (const type of [
+      "SHIPMENT_DISPATCH", "FX_INPUT", "FX_OUTPUT",
+      "TRADE_GOODS_SALE", "IMPORT_TARIFF", "TRANSPORT_FEE",
+    ]) {
+      expect(transactions.filter(tx => tx.type === type), type).toHaveLength(1);
+    }
+    const shipment = [...result.world.shipments!.values()][0]!;
+    expect(shipment.quantity).toBeGreaterThan(0);
+    expect(shipment.quantity).toBeLessThanOrEqual(1);
+    expect(shipment.tariffAmount).toBeGreaterThan(0);
+    expect(shipment.departureTick).toBe(7);
+    expect(shipment.arrivalTick).toBeGreaterThan(7);
+    expect(conserved(result.world)).toBeCloseTo(beforeGoods, 9);
+    expect(stock(uniqueWorld, f.sellerActor) - stock(result.world, f.sellerActor))
+      .toBeCloseTo(shipment.quantity, 9);
+    const paid = money(result.world);
+    const poolSourceOut = beforeMoney.poolSource - paid.poolSource;
+    const poolDestIn = paid.poolDestination - beforeMoney.poolDestination;
+    const feePaid = paid.fee - beforeMoney.fee;
+    const taxesPaid = paid.treasury - beforeMoney.treasury;
+    expect(paid.seller - beforeMoney.seller).toBeCloseTo(poolSourceOut, 9);
+    expect(beforeMoney.buyer - paid.buyer)
+      .toBeCloseTo(poolDestIn + feePaid + taxesPaid, 9);
+    expect(taxesPaid).toBeGreaterThanOrEqual(shipment.tariffAmount);
+    // A zero cap or an absent law decision is not an unrestricted permit.
+    for (const cap of [0, undefined]) {
+      const denied = run(cap);
+      expect(denied.world.shipments?.size).toBe(0);
+      expect(denied.context.transactions.filter(tx =>
+        tx.type === "SHIPMENT_DISPATCH" || tx.type === "FX_INPUT" ||
+        tx.type === "FX_OUTPUT")).toEqual([]);
+      expect(money(denied.world)).toEqual(beforeMoney);
+      expect(conserved(denied.world)).toBeCloseTo(beforeGoods, 9);
+    }
+    // A permitted route without an authoritative tariff fails closed.
+    expect(() => run(1, false)).toThrow(/missing destination State\/good policy rate/);
+    expect(uniqueWorld.shipments?.size).toBe(0);
+    expect(money(uniqueWorld)).toEqual(beforeMoney);
+    const settled = money(result.world);
+    const buyerBeforeDelivery = stock(result.world, f.buyerActor);
+    let current = result.world;
+    let received = 0;
+    for (let tick = 8; tick <= shipment.arrivalTick + 1; tick += 1) {
+      const next = executeM5LiveQuotedTradeTick(
+        current, tick, noOpPhaseHandler, (_phase, world) => world, () => null,
+      );
+      expect(next.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(next.phaseBoundaryError).toBeUndefined();
+      expect(next.reconciliationErrors).toBeNull();
+      expect(money(next.world)).toEqual(settled);
+      expect(conserved(next.world)).toBeCloseTo(beforeGoods, 9);
+      expect(next.context.transactions.filter(tx =>
+        tx.type === "TRADE_GOODS_SALE" || tx.type === "FX_INPUT" ||
+        tx.type === "FX_OUTPUT" || tx.type === "IMPORT_TARIFF" ||
+        tx.type === "CONSUMPTION_TAX" || tx.type === "TRANSPORT_FEE",
+      )).toEqual([]);
+      const deliveries = next.context.transactions.filter(tx =>
+        tx.type === "SHIPMENT_DELIVERY");
+      expect(deliveries.map(tx => tx.transactionId)).toEqual(
+        tick === shipment.arrivalTick ? ["tx:delivery:" + shipment.id] : [],
+      );
+      received += deliveries.length;
+      expect(stock(next.world, f.buyerActor) - buyerBeforeDelivery)
+        .toBeCloseTo(tick >= shipment.arrivalTick ? shipment.quantity : 0, 9);
+      current = next.world;
+    }
+    expect(received).toBe(1);
+    expect(current.shipments?.size).toBe(0);
+  });
+
   it("rejects caller FX identity and absent/ambiguous live pools before any shipment or monetary mutation", () => {
     const { f, uniqueWorld, missingWorld, request, execute, planId } = canonicalDiscovery();
     const buyerBefore = readActorWallet(uniqueWorld, f.buyerActor).get(f.destCurrency);
