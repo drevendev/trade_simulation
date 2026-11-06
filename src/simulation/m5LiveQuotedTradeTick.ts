@@ -36,6 +36,11 @@ import {
 import type { Phase7FrozenDirectedTradePermissions } from "./phase7AuthorizedRouteDiscovery";
 import { derivePhase7CanonicalCargoResiduals } from "./phase7CanonicalCargoResiduals";
 import {
+  capturePhase7ImportTariffsAtPhase1,
+  type Phase7Phase1TariffLawProvider,
+} from "./phase7Phase1TariffCapture";
+import type { Phase7FrozenImportTariffSnapshot } from "./phase7LiveWorldPlan";
+import {
   derivePhase7CanonicalFxOutputBudgets,
   derivePhase7UnambiguousCanonicalFxPairs,
 } from "./phase7CanonicalFxPairDiscovery";
@@ -69,6 +74,20 @@ export type Phase7LiveTickRequestBuilder = (
   context: TickContext,
 ) => Phase7LiveTickRequest | null;
 
+/** Protect the captured policy against replacement by later tick handlers. */
+function matchesCapturedTariffs(
+  captured: Phase7FrozenImportTariffSnapshot | undefined,
+  observed: Phase7FrozenImportTariffSnapshot | undefined,
+  tick: number,
+): boolean {
+  return captured !== undefined && observed !== undefined &&
+    captured.tick === tick && observed.tick === tick &&
+    observed.ratesByDestinationStateGood instanceof Map &&
+    captured.ratesByDestinationStateGood.size === observed.ratesByDestinationStateGood.size &&
+    [...captured.ratesByDestinationStateGood].every(([key, rate]) =>
+      observed.ratesByDestinationStateGood.get(key) === rate);
+}
+
 /**
  * Run canonical phases 0..15. Exactly at Phase-7 close, quote the actual
  * matched quantities from live Phase-1/6 evidence and commit the existing
@@ -83,7 +102,11 @@ export function executeM5LiveQuotedTradeTick(
   applyPhaseTransition: PhaseWorldTransition,
   buildPhase7Request: Phase7LiveTickRequestBuilder,
   observePhaseTransition?: PhaseWorldTransitionObserver,
+  phase1TariffLawProvider?: Phase7Phase1TariffLawProvider,
 ): StatefulTickExecutionResult {
+  // Phase-1 captures the only authoritative law rates. The context exposes a
+  // separate read-only copy for handlers, never the private settlement source.
+  let capturedPhase1Tariffs: Phase7FrozenImportTariffSnapshot | undefined;
   return executeStatefulTick(
     openingWorld,
     tickNumber,
@@ -94,8 +117,17 @@ export function executeM5LiveQuotedTradeTick(
       let world = transitionedWorld;
       let nextContext = context;
       if (phase === 7) {
+        if (phase1TariffLawProvider !== undefined && !matchesCapturedTariffs(
+          capturedPhase1Tariffs, context.phase1ImportTariffs, context.tick,
+        )) {
+          throw new Error("M5 Phase-7 requires unmodified current-tick Phase-1 tariff evidence");
+        }
         const request = buildPhase7Request(world, context);
         if (request !== null) {
+          if (phase1TariffLawProvider !== undefined &&
+              request.policy.phase1ImportTariffs !== undefined) {
+            throw new Error("M5 Phase-7 cannot override captured Phase-1 tariffs with caller policy");
+          }
           // Explicit field selection is intentional. Even an object with extra
           // runtime properties cannot override the authoritative tick/phase,
           // Phase-6 market prices, Phase-1 jurisdiction, or committed journal.
@@ -104,7 +136,8 @@ export function executeM5LiveQuotedTradeTick(
             phase: context.phase,
             marketPrices: context.marketPrices,
             effectiveJurisdictionByRegion: context.effectiveJurisdictionByRegion,
-            phase1ImportTariffs: request.policy.phase1ImportTariffs,
+            phase1ImportTariffs: phase1TariffLawProvider === undefined
+              ? request.policy.phase1ImportTariffs : capturedPhase1Tariffs,
             phase1ConsumptionTaxes: request.policy.phase1ConsumptionTaxes,
             transportFeeCostPolicy: request.policy.transportFeeCostPolicy,
           };
@@ -153,6 +186,21 @@ export function executeM5LiveQuotedTradeTick(
         });
         world = delivered.world;
         nextContext = { ...nextContext, transactions: delivered.transactions };
+      }
+      if (phase === 1 && phase1TariffLawProvider !== undefined) {
+        // Capture only after jurisdiction activation and Phase-1 deliveries.
+        capturedPhase1Tariffs = capturePhase7ImportTariffsAtPhase1(
+          world, nextContext, phase1TariffLawProvider,
+        );
+        nextContext = {
+          ...nextContext,
+          phase1ImportTariffs: {
+            tick: capturedPhase1Tariffs.tick,
+            ratesByDestinationStateGood: new Map(
+              capturedPhase1Tariffs.ratesByDestinationStateGood,
+            ),
+          },
+        };
       }
       return { world, context: nextContext };
     },
@@ -238,6 +286,7 @@ export function executeM5CanonicalIntakeTradeTick(
   applyPhaseTransition: PhaseWorldTransition,
   buildPhase7RouteRequest: Phase7CanonicalIntakeTickRequestBuilder,
   observePhaseTransition?: PhaseWorldTransitionObserver,
+  phase1TariffLawProvider?: Phase7Phase1TariffLawProvider,
 ): StatefulTickExecutionResult {
   return executeM5LiveQuotedTradeTick(
     openingWorld, tickNumber, handler, applyPhaseTransition,
@@ -323,5 +372,6 @@ export function executeM5CanonicalIntakeTradeTick(
       };
     },
     observePhaseTransition,
+    phase1TariffLawProvider,
   );
 }
