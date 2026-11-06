@@ -283,7 +283,7 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     const sellerStart = readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD);
     const buyerStart = readActorWallet(f.world, f.buyerActor).get(f.destCurrency);
 
-    for (const mutation of ["tariff", "permission"] as const) {
+    for (const mutation of ["tariff-change", "tariff-remove", "permission-change", "permission-remove"] as const) {
       for (const withTradeRequest of [false, true]) {
         let publishedTariffs: TickContext["phase1ImportTariffs"];
         let publishedLaw: TickContext["phase1DirectedTradePermissions"];
@@ -307,16 +307,19 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
           (_world, context) => {
             expect(context.phase1ImportTariffs).not.toBe(publishedTariffs);
             expect(context.phase1DirectedTradePermissions).not.toBe(publishedLaw);
-            if (mutation === "tariff") {
-              (context.phase1ImportTariffs!.ratesByDestinationStateGood as Map<string, number>)
-                .set(tariffKey, 999);
+            if (mutation.startsWith("tariff-")) {
+              const rates = context.phase1ImportTariffs!.ratesByDestinationStateGood
+                as Map<string, number>;
+              if (mutation === "tariff-change") rates.set(tariffKey, 999);
+              else rates.delete(tariffKey);
             } else {
               const visible = context.phase1DirectedTradePermissions!
                 .permittedGoodsByDirectedLink as Map<TransportLinkId, Map<GoodId, number | null>>;
               expect(visible.get(f.link.linkId)).not.toBe(
                 publishedLaw?.permittedGoodsByDirectedLink.get(f.link.linkId),
               );
-              visible.get(f.link.linkId)!.set(GOOD, 0);
+              if (mutation === "permission-change") visible.get(f.link.linkId)!.set(GOOD, 0);
+              else visible.get(f.link.linkId)!.delete(GOOD);
             }
             return withTradeRequest ? {
               policy: {
@@ -332,7 +335,7 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
           ({ linkId, goodId }) => linkId === f.link.linkId && goodId === GOOD
             ? null : undefined,
         )).toThrow(
-          mutation === "tariff"
+          mutation.startsWith("tariff-")
             ? "M5 Phase-7 request builder cannot modify Phase-1 tariffs"
             : "M5 Phase-7 request builder cannot modify Phase-1 trade permissions",
         );
