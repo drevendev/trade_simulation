@@ -243,15 +243,21 @@ type Phase7IntakeEvidence = Pick<
 
 function copyPhase7IntakeEvidence(context: Phase7IntakeEvidence): Phase7IntakeEvidence {
   return {
-    productionMarketIntents: context.productionMarketIntents?.map(intent => ({
-      ...intent, actor: { ...intent.actor },
-    })),
-    householdMarketIntents: context.householdMarketIntents?.map(intent => ({
-      ...intent, actor: { ...intent.actor },
-    })),
-    phase4MarketAllocations: context.phase4MarketAllocations?.map(allocation => ({
-      ...allocation, seller: { ...allocation.seller }, buyer: { ...allocation.buyer },
-    })),
+    ...(context.productionMarketIntents === undefined ? {} : {
+      productionMarketIntents: context.productionMarketIntents.map(intent => ({
+        ...intent, actor: { ...intent.actor },
+      })),
+    }),
+    ...(context.householdMarketIntents === undefined ? {} : {
+      householdMarketIntents: context.householdMarketIntents.map(intent => ({
+        ...intent, actor: { ...intent.actor },
+      })),
+    }),
+    ...(context.phase4MarketAllocations === undefined ? {} : {
+      phase4MarketAllocations: context.phase4MarketAllocations.map(allocation => ({
+        ...allocation, seller: { ...allocation.seller }, buyer: { ...allocation.buyer },
+      })),
+    }),
   };
 }
 
