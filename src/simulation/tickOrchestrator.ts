@@ -11,7 +11,7 @@
 import type { RegionId, StateId, CurrencyId, CohortId, ProductionUnitId, MonetaryAuthorityId, GoodId } from "../domain/id";
 import type { ActorRef } from "../domain/genesisLedger";
 import type { WorldState, PendingTransitions } from "./worldState";
-import type { Phase7FrozenImportTariffSnapshot } from "./phase7LiveWorldPlan";
+import type { Phase7FrozenImportTariffSnapshot, Phase7FrozenConsumptionTaxSnapshot } from "./phase7LiveWorldPlan";
 import type { Phase7FrozenDirectedTradePermissions } from "./phase7AuthorizedRouteDiscovery";
 import type { TickLedger } from "./ledger";
 import { createEmptyTickLedger, validateZeroFlowReconciliation } from "./ledger";
@@ -46,6 +46,8 @@ export interface TickContext {
   readonly effectiveJurisdictionByRegion: ReadonlyMap<RegionId, StateId | null>;
   /** Captured after Phase-1 activation, carried unchanged into Phase 7. Never a caller quote. */
   readonly phase1ImportTariffs?: Phase7FrozenImportTariffSnapshot;
+  /** M3 tax-policy provider facts captured once at Phase 1 for Phase-7 payment. */
+  readonly phase1ConsumptionTaxes?: Phase7FrozenConsumptionTaxSnapshot;
   /** Read-only consumer copy of current Phase-1 legal link/good decisions. */
   readonly phase1DirectedTradePermissions?: Phase7FrozenDirectedTradePermissions;
   readonly rngSeed: number;
