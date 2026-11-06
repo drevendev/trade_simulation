@@ -228,6 +228,55 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     }
   });
 
+  it("rejects Phase-1 jurisdiction tampering in both no-trade and paid-trade builders", () => {
+    const f = fxFixture();
+    const originalJurisdictions = new Map(f.context.effectiveJurisdictionByRegion);
+    const originalSellerStock = readMarketActorInventory(
+      f.world, f.sellerActor, "GENERAL",
+    ).get(GOOD);
+    const originalBuyerCash = readActorWallet(f.world, f.buyerActor)
+      .get(f.destCurrency);
+
+    for (const withTradeRequest of [false, true]) {
+      const phase1Jurisdictions = new Map(originalJurisdictions);
+      const handler: PhaseHandler = (_world, context) => {
+        if (context.phase === 1) {
+          return { ...context, effectiveJurisdictionByRegion: phase1Jurisdictions };
+        }
+        if (context.phase === 6) {
+          return { ...context, marketPrices: new Map(f.context.marketPrices) };
+        }
+        return context;
+      };
+      expect(() => executeM5LiveQuotedTradeTick(
+        f.world, 7, handler, (_phase, world) => world,
+        (_world, context) => {
+          expect(context.effectiveJurisdictionByRegion).not.toBe(phase1Jurisdictions);
+          // This is a runtime Map despite its ReadonlyMap TypeScript type.
+          const visible = context.effectiveJurisdictionByRegion as
+            Map<typeof f.destination.regionId, typeof f.destination.controllerStateId>;
+          visible.set(f.destination.regionId, null);
+          return withTradeRequest ? {
+            policy: {
+              phase1ImportTariffs: f.context.phase1ImportTariffs,
+              phase1ConsumptionTaxes: f.context.phase1ConsumptionTaxes,
+              transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+            },
+            plan: f.input,
+            dispatch: f.state,
+          } : null;
+        },
+      )).toThrow("M5 Phase-7 request builder cannot modify Phase-1 jurisdictions");
+      expect(phase1Jurisdictions).toEqual(originalJurisdictions);
+      expect(f.context.effectiveJurisdictionByRegion).toEqual(originalJurisdictions);
+      expect(f.world.shipments?.size).toBe(0);
+      expect(readMarketActorInventory(f.world, f.sellerActor, "GENERAL").get(GOOD))
+        .toBe(originalSellerStock);
+      expect(readActorWallet(f.world, f.buyerActor).get(f.destCurrency))
+        .toBe(originalBuyerCash);
+    }
+  });
+
   it("settles one live FX invoice with explicit charges, conserved goods and two currencies", () => {
     const f = fxFixture();
     expect(f.quoted.quotes).toHaveLength(1);
