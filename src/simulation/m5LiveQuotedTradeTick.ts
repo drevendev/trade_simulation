@@ -232,6 +232,64 @@ function samePhase1Jurisdictions(
 }
 
 /**
+ * Market intents and realized pre-production lots are tick-local accounting
+ * evidence, not mutable instructions for an external route-request builder.
+ * Keep an independent private value snapshot AND a detached builder view.
+ * ActorRefs are the only nested records in these two evidence structures.
+ */
+type Phase7IntakeEvidence = Pick<
+  TickContext, "productionMarketIntents" | "householdMarketIntents" | "phase4MarketAllocations"
+>;
+
+function copyPhase7IntakeEvidence(context: Phase7IntakeEvidence): Phase7IntakeEvidence {
+  return {
+    ...(context.productionMarketIntents === undefined ? {} : {
+      productionMarketIntents: context.productionMarketIntents.map(intent => ({
+        ...intent, actor: { ...intent.actor },
+      })),
+    }),
+    ...(context.householdMarketIntents === undefined ? {} : {
+      householdMarketIntents: context.householdMarketIntents.map(intent => ({
+        ...intent, actor: { ...intent.actor },
+      })),
+    }),
+    ...(context.phase4MarketAllocations === undefined ? {} : {
+      phase4MarketAllocations: context.phase4MarketAllocations.map(allocation => ({
+        ...allocation, seller: { ...allocation.seller }, buyer: { ...allocation.buyer },
+      })),
+    }),
+  };
+}
+
+/** Compare full plain evidence, including optional fields, actor ownership,
+ * array membership, -0 and NaN; JSON stringification loses those distinctions.
+ * The canonical MarketIntent/MarketAllocation shapes contain no Map or Set. */
+function sameEvidenceValue(expected: unknown, observed: unknown): boolean {
+  if (Object.is(expected, observed)) return true;
+  if (Array.isArray(expected) || Array.isArray(observed)) {
+    return Array.isArray(expected) && Array.isArray(observed) &&
+      expected.length === observed.length &&
+      expected.every((item, index) => sameEvidenceValue(item, observed[index]));
+  }
+  if (expected === null || observed === null ||
+      typeof expected !== "object" || typeof observed !== "object") return false;
+  const first = expected as Record<string, unknown>;
+  const second = observed as Record<string, unknown>;
+  const keys = Object.keys(first);
+  return keys.length === Object.keys(second).length &&
+    keys.every(key => Object.prototype.hasOwnProperty.call(second, key) &&
+      sameEvidenceValue(first[key], second[key]));
+}
+
+function samePhase7IntakeEvidence(
+  expected: Phase7IntakeEvidence, observed: Phase7IntakeEvidence,
+): boolean {
+  return sameEvidenceValue(expected.productionMarketIntents, observed.productionMarketIntents) &&
+    sameEvidenceValue(expected.householdMarketIntents, observed.householdMarketIntents) &&
+    sameEvidenceValue(expected.phase4MarketAllocations, observed.phase4MarketAllocations);
+}
+
+/**
  * Run canonical phases 0..15. Exactly at Phase-7 close, quote the actual
  * matched quantities from live Phase-1/6 evidence and commit the existing
  * fail-atomic trade bundle. Publish the resulting WorldState, journal and
@@ -290,8 +348,10 @@ export function executeM5LiveQuotedTradeTick(
           ? undefined : copyTradeLaw(context.phase1DirectedTradePermissions);
         const phase1ConsumptionTaxesForBuilder = context.phase1ConsumptionTaxes === undefined
           ? undefined : copyConsumptionTaxes(context.phase1ConsumptionTaxes);
+        const capturedPhase7Intake = copyPhase7IntakeEvidence(context);
         const builderContext: TickContext = {
           ...context,
+          ...copyPhase7IntakeEvidence(context),
           marketPrices: new Map(capturedPhase6Prices),
           effectiveJurisdictionByRegion: new Map(capturedPhase1Jurisdictions),
           ...(phase1TariffsForBuilder === undefined ? {} : {
@@ -305,6 +365,10 @@ export function executeM5LiveQuotedTradeTick(
           }),
         };
         const request = buildPhase7Request(world, builderContext);
+        if (!samePhase7IntakeEvidence(capturedPhase7Intake, builderContext) ||
+            !samePhase7IntakeEvidence(capturedPhase7Intake, context)) {
+          throw new Error("M5 Phase-7 request builder cannot modify Phase-2/4/5 intent or allocation evidence");
+        }
         // Both law snapshots are checked even for a null/no-trade request.
         // Keep the outer context intact for subsequent Phase-8 and closing gates.
         if (!sameOptionalTariffs(phase1TariffsForBuilder, builderContext.phase1ImportTariffs) ||
