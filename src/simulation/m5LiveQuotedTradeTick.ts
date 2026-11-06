@@ -139,6 +139,17 @@ function assertTradeQuotesAllowed(
   }
 }
 
+/** An untrusted Phase-7 builder must not rewrite live Phase-6 price evidence,
+ * even if it returns null (no trade). Keep the check independent of quote input. */
+function samePhase6Prices(
+  captured: ReadonlyMap<string, number>,
+  observed: ReadonlyMap<string, number>,
+): boolean {
+  return observed instanceof Map && captured.size === observed.size &&
+    [...captured].every(([key, value]) =>
+      observed.has(key) && Object.is(observed.get(key), value));
+}
+
 /**
  * Run canonical phases 0..15. Exactly at Phase-7 close, quote the actual
  * matched quantities from live Phase-1/6 evidence and commit the existing
@@ -180,7 +191,18 @@ export function executeM5LiveQuotedTradeTick(
         )) {
           throw new Error("M5 Phase-7 requires unmodified current-tick Phase-1 tariff evidence");
         }
-        const request = buildPhase7Request(world, context);
+        // Never expose the actual phase-6 price Map to a request builder.
+        // A malicious/no-trade builder must not poison Phase-8 clearing, nor
+        // influence the current tick's invoice through a forged price.
+        const capturedPhase6Prices = new Map(context.marketPrices);
+        const builderContext: TickContext = {
+          ...context, marketPrices: new Map(capturedPhase6Prices),
+        };
+        const request = buildPhase7Request(world, builderContext);
+        if (!samePhase6Prices(capturedPhase6Prices, builderContext.marketPrices) ||
+            !samePhase6Prices(capturedPhase6Prices, context.marketPrices)) {
+          throw new Error("M5 Phase-7 request builder cannot modify Phase-6 market prices");
+        }
         if (request !== null) {
           if (phase1TradeLawProvider !== undefined) {
             assertTradeQuotesAllowed(request, capturedPhase1TradeLaw!);
@@ -195,7 +217,7 @@ export function executeM5LiveQuotedTradeTick(
           const pricing: Phase7LivePricingContext = {
             tick: context.tick,
             phase: context.phase,
-            marketPrices: context.marketPrices,
+            marketPrices: capturedPhase6Prices,
             effectiveJurisdictionByRegion: context.effectiveJurisdictionByRegion,
             phase1ImportTariffs: phase1TariffLawProvider === undefined
               ? request.policy.phase1ImportTariffs : capturedPhase1Tariffs,
