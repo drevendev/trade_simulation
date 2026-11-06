@@ -394,6 +394,27 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
       .toHaveLength(1);
     expect(actual.context.transactions.filter(tx => tx.type === "FX_OUTPUT"))
       .toHaveLength(1);
+    // Numeric accounting oracle: the destination treasury must receive the
+    // consumption tax on the actual converted invoice, not just emit a receipt.
+    // Tariffs are a separate treasury leg and must not mask a missing tax credit.
+    const quotedLot = f.quoted.quotes[0]!;
+    const shipment = [...actual.world.shipments!.values()][0]!;
+    expect(shipment.quantity).toBeCloseTo(quotedLot.lot.quantity, 9);
+    const taxEntries = actual.context.transactions.filter(tx => tx.type === "CONSUMPTION_TAX");
+    const tariffEntries = actual.context.transactions.filter(tx => tx.type === "IMPORT_TARIFF");
+    expect(taxEntries).toHaveLength(1);
+    expect(tariffEntries).toHaveLength(1);
+    const taxCredit = taxEntries[0]!.moneyAmount!;
+    const tariffCredit = tariffEntries[0]!.moneyAmount!;
+    expect(taxEntries[0]!.currencyId).toBe(f.destCurrency);
+    expect(tariffEntries[0]!.currencyId).toBe(f.destCurrency);
+    expect(taxCredit).toBeCloseTo(quotedLot.invoiceMidDest * 0.1, 9);
+    expect(tariffCredit).toBeCloseTo(quotedLot.importTariffDest, 9);
+    const beforeTreasury = f.world.states.get(stateId)!.treasury.get(f.destCurrency) ?? 0;
+    const afterTreasury = actual.world.states.get(stateId)!.treasury.get(f.destCurrency) ?? 0;
+    expect(afterTreasury - beforeTreasury).toBeCloseTo(taxCredit + tariffCredit, 9);
+    expect(afterTreasury - beforeTreasury - tariffCredit)
+      .toBeCloseTo(quotedLot.invoiceMidDest * 0.1, 9);
     expect(actual.context.transactions).toEqual(replay.context.transactions);
     expect(actual.world.shipments).toEqual(replay.world.shipments);
     expect(new Set(calls).size).toBeGreaterThan(0);
