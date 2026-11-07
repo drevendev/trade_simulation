@@ -465,4 +465,81 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       .toBe(startingCash);
   });
 
+  it("releases the sellerless earlier good's shared wallet budget for a later executable good", () => {
+    const f = fixture();
+    const cohort = [...f.world.cohorts.values()].find(
+      c => c.seed.regionKey === f.source.seed.key,
+    )!;
+    const cash = 20;
+    const funded = {
+      ...cohort,
+      wallet: new Map(cohort.wallet).set(f.source.settlementCurrencyId, cash),
+    };
+    const opening: WorldState = {
+      ...f.world,
+      cohorts: new Map(f.world.cohorts).set(funded.cohortId, funded),
+    };
+    const GRAIN = "good:grain" as GoodId; // Defined in the baseline pack; no source SELL.
+    const buy = (suffix: string, goodId: GoodId, desiredQuantity: number) => ({
+      id: createMarketIntentId(`mi:m5-phase8-release-${suffix}`),
+      actor: { type: "COHORT" as const, cohortId: funded.cohortId },
+      regionId: f.source.regionId,
+      goodId,
+      side: "BUY" as const,
+      purpose: "CONSUMPTION" as const,
+      desiredQuantity,
+      maxSpend: 1_000_000,
+      inventoryBucket: "GENERAL" as const,
+      sourcePlanId: `plan:m5-phase8-release-${suffix}`,
+    });
+    // Grain sorts before iron in Phase-8 grouping and has no seller. A
+    // pre-clearing reservation of the full wallet for grain starves iron.
+    const intents = [buy("a-grain", GRAIN, 10), buy("b-iron", IRON, 5)];
+    const opts = {
+      ...f.options,
+      phase1TradeLawProvider: () => undefined,
+      settleMainMarketInPhase8: true as const,
+    };
+    const execute = (reverse: boolean) => {
+      const householdDemand: PhaseHandler = (world, context, pending) => {
+        const next = households(world, context, pending);
+        return context.phase === 2
+          ? { ...next, householdMarketIntents: reverse ? [...intents].reverse() : intents }
+          : next;
+      };
+      return executeM5AutonomousRegionalTradeTick(
+        opening, 7, householdDemand, (_phase, world) => world, opts,
+      );
+    };
+    const result = execute(false);
+    expect(result.phaseBoundaryError).toBeUndefined();
+    expect(result.reconciliationErrors).toBeNull();
+    expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+    const cohortFills = result.context.marketAllocations.filter(allocation =>
+      allocation.pass === "MAIN" && allocation.buyer.type === "COHORT" &&
+      allocation.buyer.cohortId === funded.cohortId,
+    );
+    expect(cohortFills.length).toBeGreaterThan(0);
+    expect(cohortFills.every(allocation => allocation.goodId === IRON)).toBe(true);
+    const quantity = cohortFills.reduce((sum, allocation) => sum + allocation.quantity, 0);
+    const debit = cohortFills.reduce(
+      (sum, allocation) => sum + allocation.quantity * allocation.buyerGrossUnitPrice, 0,
+    );
+    expect(quantity).toBeGreaterThan(0);
+    expect(quantity).toBeLessThanOrEqual(5);
+    expect(debit).toBeGreaterThan(0);
+    expect(debit).toBeLessThanOrEqual(cash + 1e-8);
+    const closing = result.world.cohorts.get(funded.cohortId)!;
+    expect(cash - closing.wallet.get(f.source.settlementCurrencyId)!)
+      .toBeCloseTo(debit, 8);
+    expect((closing.householdInventory.get(IRON) ?? 0) -
+      (funded.householdInventory.get(IRON) ?? 0)).toBeCloseTo(quantity, 8);
+    expect(closing.householdInventory.get(GRAIN) ?? 0)
+      .toBe(funded.householdInventory.get(GRAIN) ?? 0);
+    expect(execute(true).context.transactions).toEqual(result.context.transactions);
+    expect(execute(true).world.cohorts).toEqual(result.world.cohorts);
+    expect(opening.cohorts.get(funded.cohortId)!.wallet.get(f.source.settlementCurrencyId))
+      .toBe(cash);
+  });
+
 });
