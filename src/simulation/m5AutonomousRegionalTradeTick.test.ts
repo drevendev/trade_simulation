@@ -221,4 +221,83 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(f.world.productionUnits.get(f.sellerA.productionUnitId)!.inputInventory.get(IRON))
       .toBe(500);
   });
+
+  it("delivers a real autonomous FX shipment on its future Phase-1 tick, only once", () => {
+    const f = fixture();
+    // Force a two-tick physical route: this is the same link used by the
+    // actual Phase-7 candidate, tariff, FX and paid dispatch authorities.
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([[f.link.linkId, { ...f.link, travelTicks: 2 }]]),
+    };
+    const noTransition = (_phase: number, world: WorldState) => world;
+    const departed = executeM5AutonomousRegionalTradeTick(
+      opening, 7, households, noTransition, f.options,
+    );
+    expect(departed.reconciliationErrors).toBeNull();
+    const cargo = [...(departed.world.shipments?.values() ?? [])];
+    expect(cargo).toHaveLength(1);
+    const shipment = cargo[0]!;
+    expect(shipment.departureTick).toBe(7);
+    expect(shipment.arrivalTick).toBe(9);
+    expect(shipment.status).toBe("IN_TRANSIT");
+    expect(shipment.beneficialOwner).toEqual({
+      type: "PRODUCTION_UNIT", productionUnitId: f.buyerB.productionUnitId,
+    });
+    expect(shipment.destinationInventoryBucket).toBe("INPUT");
+
+    const destinationStock = (world: WorldState) =>
+      world.productionUnits.get(f.buyerB.productionUnitId)!.inputInventory.get(IRON) ?? 0;
+    const originalGoods = totalIron(opening);
+    const stockAtDispatch = destinationStock(departed.world);
+    expect(totalIron(departed.world)).toBeCloseTo(originalGoods, 8);
+
+    // New trade can be prohibited by a later Phase-1 law change. That does
+    // not cancel beneficial ownership or re-charge the already-paid cargo.
+    const noNewCrossBorder = {
+      ...f.options, phase1TradeLawProvider: () => undefined,
+    };
+    const observedPhase2: { tick: number; stock: number }[] = [];
+    const observeArrival: PhaseHandler = (world, context, pending) => {
+      if (context.phase === 2) {
+        observedPhase2.push({ tick: context.tick, stock: destinationStock(world) });
+      }
+      return households(world, context, pending);
+    };
+    const enRoute = executeM5AutonomousRegionalTradeTick(
+      departed.world, 8, observeArrival, noTransition, noNewCrossBorder,
+    );
+    expect(enRoute.reconciliationErrors).toBeNull();
+    expect(enRoute.world.shipments?.has(shipment.id)).toBe(true);
+    expect(enRoute.context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY"))
+      .toHaveLength(0);
+    expect(observedPhase2).toContainEqual({ tick: 8, stock: stockAtDispatch });
+    expect(totalIron(enRoute.world)).toBeCloseTo(originalGoods, 8);
+
+    const stockBeforeArrival = destinationStock(enRoute.world);
+    const arrived = executeM5AutonomousRegionalTradeTick(
+      enRoute.world, 9, observeArrival, noTransition, noNewCrossBorder,
+    );
+    expect(arrived.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(arrived.phaseBoundaryError).toBeUndefined();
+    expect(arrived.reconciliationErrors).toBeNull();
+    expect(arrived.world.shipments?.has(shipment.id)).toBe(false);
+    expect(arrived.context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY"))
+      .toMatchObject([{
+        tick: 9, phase: 1, goodId: IRON, quantity: shipment.quantity,
+      }]);
+    expect(observedPhase2).toContainEqual({
+      tick: 9, stock: stockBeforeArrival + shipment.quantity,
+    });
+    expect(totalIron(arrived.world)).toBeCloseTo(originalGoods, 8);
+    expect(arrived.context.transactions.filter(tx =>
+      tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT" ||
+      tx.type === "IMPORT_TARIFF" || tx.type === "SHIPMENT_DISPATCH",
+    )).toHaveLength(0);
+    expect(arrived.context.transactions.find(tx => tx.type === "SHIPMENT_DELIVERY")
+      ?.moneyAmount).toBeUndefined();
+    expect(departed.world.shipments?.has(shipment.id)).toBe(true);
+    expect(enRoute.world.shipments?.has(shipment.id)).toBe(true);
+  });
+
 });
