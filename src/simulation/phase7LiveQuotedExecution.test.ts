@@ -856,7 +856,7 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     expect(actual.reconciliationErrors).toBeNull();
     const sourcePrice = actual.context.marketPrices.get(marketPriceKey(sourceMarket.marketId, GOOD));
     const destinationPrice = actual.context.marketPrices.get(marketPriceKey(destinationMarket.marketId, GOOD));
-    const epsilon = world.simulationConfig.numeric.quantityEpsilon;
+    const epsilon = world.simulationConfig.numeric.quantityEpsilon ?? 1e-9;
     expect(sourcePrice).toBeCloseTo(repriceGoodInPhase6(
       3, 0, 2, 2,
       sourceMarket.expectationsByGood.get(GOOD) ?? ZERO_EXPECTATION,
