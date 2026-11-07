@@ -11,7 +11,9 @@
  * still belongs upstream before any stock or cash mutation.
  */
 import type { WorldState } from "./worldState";
-import type { PhaseHandler, TickContext } from "./tickOrchestrator";
+import { composePhaseHandlers, type PhaseHandler, type TickContext } from "./tickOrchestrator";
+import { createPhase6CanonicalPostProcurementPriceHandler } from "./phase6CanonicalPostProcurementPrices";
+import type { Phase6PriceConfig } from "./phase6MarketPriceFormation";
 import {
   executeStatefulTick,
   type PhaseWorldTransition,
@@ -583,6 +585,10 @@ export type Phase7CanonicalIntakeTickRequestBuilder = (
  * explicit no-trade decisions. Missing canonical intake data fails closed;
  * a null route request means no Phase-7 dispatch and leaves the normal
  * Phase-8 handler responsible for its own no-trade local intents.
+ *
+ * Optional canonicalPhase6PriceConfig binds the current-tick authoritative
+ * Phase-2/4/5 post-procurement residuals to Phase-6 prices before Phase-7
+ * quoting. The caller still owns the economic price parameters, not prices.
  */
 export function executeM5CanonicalIntakeTradeTick(
   openingWorld: WorldState,
@@ -594,9 +600,15 @@ export function executeM5CanonicalIntakeTradeTick(
   phase1TariffLawProvider?: Phase7Phase1TariffLawProvider,
   phase1TradeLawProvider?: Phase7Phase1TradeLawProvider,
   phase1ConsumptionTaxProvider?: TaxPolicyProvider,
+  canonicalPhase6PriceConfig?: Phase6PriceConfig,
 ): StatefulTickExecutionResult {
+  const phaseHandler = canonicalPhase6PriceConfig === undefined
+    ? handler
+    : composePhaseHandlers(
+      handler, createPhase6CanonicalPostProcurementPriceHandler(canonicalPhase6PriceConfig),
+    );
   return executeM5LiveQuotedTradeTick(
-    openingWorld, tickNumber, handler, applyPhaseTransition,
+    openingWorld, tickNumber, phaseHandler, applyPhaseTransition,
     (world, context) => {
       // Copy BEFORE calling the untrusted builder; it can mutate its context.
       const trustedLaw = phase1TradeLawProvider === undefined ||
