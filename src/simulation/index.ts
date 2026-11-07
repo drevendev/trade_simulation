@@ -213,6 +213,11 @@ export {
 } from "./m4ClosedEconomyOrchestrator";
 
 export {
+  createM5SettledPhase4Bridge,
+  type M5SettledPhase4Bridge,
+} from "./m5SettledPhase4Bridge";
+
+export {
   resolveCanonicalFxPool,
   quoteFx,
   type CanonicalFxPoolLocation,
