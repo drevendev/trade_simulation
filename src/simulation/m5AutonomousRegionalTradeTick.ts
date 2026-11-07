@@ -25,6 +25,10 @@ import type { Phase7Phase1TariffLawProvider } from "./phase7Phase1TariffCapture"
 import type { M4ClosedEconomyOptions } from "./m4ClosedEconomyOrchestrator";
 import { createM5CanonicalRegionalPhase2Bridge } from "./m5SettledPhase4Bridge";
 import { executeM5CanonicalIntakeTradeTick } from "./m5LiveQuotedTradeTick";
+import { createPhase8Handler } from "./phase8MainMarketClearing";
+import { executeMarketSettlement } from "./marketSettlement";
+import { applyMarketSettlementTransition } from "./marketSettlementTransition";
+import { applyMarketStateTransition } from "./marketStateTransition";
 
 export interface M5AutonomousRegionalTradeOptions {
   /** Same source of consumption-tax authority in Phase 4 and frozen Phase 1. */
@@ -37,6 +41,10 @@ export interface M5AutonomousRegionalTradeOptions {
   readonly infrastructureFactors: ReadonlyMap<TransportLinkId, number>;
   readonly phase1TradeLawProvider: Phase7Phase1TradeLawProvider;
   readonly phase1TariffLawProvider: Phase7Phase1TariffLawProvider;
+  /** Explicit opt-in: Phase-8 local MAIN clearing and paid physical settlement
+   * from Phase-7 committed residuals, replacing caller-owned Phase-8 hooks.
+   * Omit to retain backward-compatible upstream Phase-8 authority. */
+  readonly settleMainMarketInPhase8?: true;
 }
 
 /**
@@ -64,11 +72,46 @@ export function executeM5AutonomousRegionalTradeTick(
   const bridge = createM5CanonicalRegionalPhase2Bridge(
     upstreamHandler, applyOtherPhaseTransition, options.procurement,
   );
+  // Never re-create a main-market budget from opening plans: the committed
+  // Phase-7 residuals already exclude actual Phase-4 purchases and dispatch.
+  const phase8 = options.settleMainMarketInPhase8 === true
+    ? createPhase8Handler({
+      getFixtureIntents: (_world, context) => {
+        if (!Array.isArray(context.phase7MainIntents)) {
+          throw new Error("M5 autonomous Phase-8 requires committed Phase-7 residual intents");
+        }
+        return [...context.phase7MainIntents];
+      },
+      taxPolicy: options.procurement.taxPolicy,
+      ...(options.procurement.collectMarketTelemetry === undefined
+        ? {}
+        : { collectTelemetry: options.procurement.collectMarketTelemetry }),
+    })
+    : null;
+  const handler: PhaseHandler = (world, context, pending) => {
+    if (context.phase !== 8 || phase8 === null) return bridge.handler(world, context, pending);
+    // Opt-in Phase 8 is single-owned. Do not invoke upstream clearing/receipts.
+    const cleared = phase8(world, context, pending);
+    const counter = { value: 0 };
+    const postings = cleared.marketAllocations.flatMap(allocation => {
+      const bundle = executeMarketSettlement(allocation, context.tick, 8, counter);
+      return bundle.consumptionTaxTransaction === null ||
+        bundle.consumptionTaxTransaction === undefined
+        ? [bundle.marketSaleTransaction]
+        : [bundle.marketSaleTransaction, bundle.consumptionTaxTransaction];
+    });
+    return { ...cleared, transactions: [...cleared.transactions, ...postings] };
+  };
+  const applyTransition: PhaseWorldTransition = (phase, world, context) => {
+    if (phase !== 8 || phase8 === null) return bridge.applyPhaseTransition(phase, world, context);
+    // Publish the same Phase-8 physical purchase and market state exactly once.
+    return applyMarketStateTransition(applyMarketSettlementTransition(world, context), context);
+  };
   return executeM5CanonicalIntakeTradeTick(
     openingWorld,
     tickNumber,
-    bridge.handler,
-    bridge.applyPhaseTransition,
+    handler,
+    applyTransition,
     () => ({
       policy: { transportFeeCostPolicy },
       plan: {
