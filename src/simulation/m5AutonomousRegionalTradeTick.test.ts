@@ -457,7 +457,7 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     ).toBeCloseTo(quantity, 8);
     expect(result.context.transactions.filter(tx =>
       tx.phase === 8 && tx.type === "MARKET_SALE" &&
-      tx.source.type === "COHORT" && tx.source.cohortId === funded.cohortId,
+      tx.source?.type === "COHORT" && tx.source.cohortId === funded.cohortId,
     )).toHaveLength(fills.length);
     expect(execute(true).context.transactions).toEqual(result.context.transactions);
     expect(execute(true).world.cohorts).toEqual(result.world.cohorts);
