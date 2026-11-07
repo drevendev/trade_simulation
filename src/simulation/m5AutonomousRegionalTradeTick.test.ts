@@ -675,7 +675,7 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     )!;
     const funded = {
       ...cohort,
-      wallet: new Map(cohort.wallet).set(f.source.settlementCurrencyId, 1_000_000_000),
+      wallet: new Map(cohort.wallet).set(f.source.settlementCurrencyId, 100_000),
       householdInventory: new Map<GoodId, number>(),
     };
     const need = (
@@ -720,7 +720,7 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       item => item.cohortId === funded.cohortId,
     );
     expect(plan).toBeDefined();
-    expect(plan!.openingSpendableCash).toBe(1_000_000_000);
+    expect(plan!.openingSpendableCash).toBe(100_000);
     expect(plan!.expectedCurrentTickIncome).toBe(0);
     const desires = result.context.householdMarketIntents?.filter(intent =>
       intent.actor.type === "COHORT" && intent.actor.cohortId === funded.cohortId &&
@@ -738,7 +738,7 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(result.world.cohorts.get(funded.cohortId)!.householdInventory.get(IRON))
       .toBeCloseTo(bought, 8);
     expect(result.world.cohorts.get(funded.cohortId)!.wallet.get(f.source.settlementCurrencyId))
-      .toBeLessThan(1_000_000_000);
+      .toBeLessThan(100_000);
     expect(execute().context.transactions).toEqual(result.context.transactions);
     expect(execute().world.cohorts).toEqual(result.world.cohorts);
     expect(opening.cohorts.get(funded.cohortId)!.householdInventory.size).toBe(0);
