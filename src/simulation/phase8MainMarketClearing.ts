@@ -144,6 +144,7 @@ export const createPhase8Handler = (options?: {
     const intents = getFixtureIntents(world, context);
     const fixtureMarketIds = getFixtureMarketIds?.(world);
     const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon ?? 1e-9;
+    const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
 
     // One post-Phase-7 balance per actor and settlement currency. Unlike a
     // pre-clearing reservation across all intents, this ledger advances ONLY
@@ -472,7 +473,7 @@ export const createPhase8Handler = (options?: {
         for (const [key, debit] of debitedByWallet) {
           const available = availableByWallet.get(key);
           if (available === undefined || !Number.isFinite(debit) ||
-              debit < 0 || debit > available + Number.EPSILON * Math.max(1, available) * 16) {
+              debit < 0 || debit > available + moneyEpsilon) {
             throw new Error(`M5 Phase-8 buyer wallet ${key} overcommitted by clearing`);
           }
           availableByWallet.set(key, Math.max(0, available - debit));
