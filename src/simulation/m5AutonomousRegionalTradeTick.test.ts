@@ -725,6 +725,20 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(() => execute(duplicate)).toThrow(
       "M5 autonomous labor forbids externally supplied Phase-3 labor allocations",
     );
+    const duplicatePhase2: PhaseHandler = (world, context, pending) => {
+      const next = households(world, context, pending);
+      return context.phase === 2 ? { ...next, laborSupplyPlans: [] } : next;
+    };
+    expect(() => execute(duplicatePhase2)).toThrow(
+      "M5 autonomous labor forbids externally supplied Phase-2 labor supply",
+    );
+    const duplicatePhase5: PhaseHandler = (world, context, pending) => {
+      const next = households(world, context, pending);
+      return context.phase === 5 ? { ...next, wageSettlements: [] } : next;
+    };
+    expect(() => execute(duplicatePhase5)).toThrow(
+      "M5 autonomous labor forbids externally supplied Phase-5 settlement/production",
+    );
   });
 
 });
