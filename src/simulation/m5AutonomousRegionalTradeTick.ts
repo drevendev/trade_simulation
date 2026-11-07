@@ -24,6 +24,10 @@ import type { Phase7Phase1TradeLawProvider } from "./phase7AuthorizedRouteDiscov
 import type { Phase7Phase1TariffLawProvider } from "./phase7Phase1TariffCapture";
 import { phase9HouseholdHandler, type M4ClosedEconomyOptions } from "./m4ClosedEconomyOrchestrator";
 import { applyHouseholdConsumptionTransition } from "./householdConsumptionExecution";
+import { createPhase2LaborSupplyPlanningHandler } from "./laborSupplyPlanning";
+import { createPhase3LaborAllocationHandler } from "./laborAllocation";
+import { createPhase5WageSettlementHandler, applyWageSettlementTransition } from "./wageSettlement";
+import { createPhase5ProductionExecutionHandler, applyProductionExecutionTransition } from "./productionExecution";
 import { createM5CanonicalRegionalPhase2Bridge } from "./m5SettledPhase4Bridge";
 import { executeM5CanonicalIntakeTradeTick } from "./m5LiveQuotedTradeTick";
 import { createPhase8Handler } from "./phase8MainMarketClearing";
@@ -46,6 +50,12 @@ export interface M5AutonomousRegionalTradeOptions {
    * from Phase-7 committed residuals, replacing caller-owned Phase-8 hooks.
    * Omit to retain backward-compatible upstream Phase-8 authority. */
   readonly settleMainMarketInPhase8?: true;
+  /** Explicit opt-in: own complete Phase-2 labor supply, Phase-3 matching and
+   * Phase-5 wage plus physical production settlement from canonical M4 handlers.
+   * Phase-2 production demand already comes from the M5 regional bridge.
+   * Competing upstream labor/production evidence is rejected. Omit to retain
+   * caller-owned Phase-3/5 behavior. */
+  readonly settleLaborAndProductionInPhase5?: true;
   /** Explicit opt-in: realize the already-settled Phase-8 household inventories
    * at Phase 9, including physical consumption/spoilage and loss receipts.
    * Replaces upstream Phase-9 handler/transition to prevent double realization.
@@ -75,8 +85,41 @@ export function executeM5AutonomousRegionalTradeTick(
   const infrastructureFactors = new Map(options.infrastructureFactors);
   const scorePolicy = { ...options.scorePolicy };
   const transportFeeCostPolicy = { ...options.transportFeeCostPolicy };
+  const canonicalLabor = options.settleLaborAndProductionInPhase5 === true
+    ? {
+      phase2: createPhase2LaborSupplyPlanningHandler(),
+      phase3: createPhase3LaborAllocationHandler(),
+      wage: createPhase5WageSettlementHandler({ taxPolicy: options.procurement.wageTaxPolicy }),
+      production: createPhase5ProductionExecutionHandler(),
+    } : null;
+  const laborUpstream: PhaseHandler = (world, context, pending) => {
+    const upstream = upstreamHandler(world, context, pending);
+    if (canonicalLabor === null) return upstream;
+    if (context.phase === 2) {
+      if (context.laborSupplyPlans !== undefined || upstream.laborSupplyPlans !== undefined) {
+        throw new Error("M5 autonomous labor forbids externally supplied Phase-2 labor supply");
+      }
+      return canonicalLabor.phase2(world, upstream, pending);
+    }
+    if (context.phase === 3) {
+      if (context.laborAllocations !== undefined || upstream.laborAllocations !== undefined) {
+        throw new Error("M5 autonomous labor forbids externally supplied Phase-3 labor allocations");
+      }
+      return canonicalLabor.phase3(world, upstream, pending);
+    }
+    if (context.phase === 5) {
+      if (context.wageSettlements !== undefined || upstream.wageSettlements !== undefined ||
+          context.productionExecutions !== undefined || upstream.productionExecutions !== undefined ||
+          upstream.productionOutputIntents !== undefined) {
+        throw new Error("M5 autonomous labor forbids externally supplied Phase-5 settlement/production");
+      }
+      const afterWages = canonicalLabor.wage(world, upstream, pending);
+      return canonicalLabor.production(world, afterWages, pending);
+    }
+    return upstream;
+  };
   const bridge = createM5CanonicalRegionalPhase2Bridge(
-    upstreamHandler, applyOtherPhaseTransition, options.procurement,
+    laborUpstream, applyOtherPhaseTransition, options.procurement,
   );
   // Never re-create a main-market budget from opening plans: the committed
   // Phase-7 residuals already exclude actual Phase-4 purchases and dispatch.
@@ -116,6 +159,21 @@ export function executeM5AutonomousRegionalTradeTick(
     return { ...cleared, transactions: [...cleared.transactions, ...postings] };
   };
   const applyTransition: PhaseWorldTransition = (phase, world, context) => {
+    if (phase === 5 && canonicalLabor !== null) {
+      if (!Array.isArray(context.wageSettlements) ||
+          !Array.isArray(context.productionExecutions) ||
+          !Array.isArray(context.laborAllocations) ||
+          !Array.isArray(context.productionPlans)) {
+        throw new Error("M5 autonomous labor requires canonical Phase-5 settlement/production evidence");
+      }
+      const paid = applyWageSettlementTransition(
+        world, context.wageSettlements, context.tick, context,
+      );
+      return applyProductionExecutionTransition(
+        paid, context.productionExecutions, context.tick,
+        { productionPlans: context.productionPlans, laborAllocations: context.laborAllocations },
+      );
+    }
     if (phase === 9 && phase9 !== null) {
       if (!Array.isArray(context.householdConsumptionExecutions)) {
         throw new Error("M5 autonomous Phase-9 requires canonical household execution evidence");
