@@ -24,6 +24,7 @@ import type { Phase7Phase1TradeLawProvider } from "./phase7AuthorizedRouteDiscov
 import type { Phase7Phase1TariffLawProvider } from "./phase7Phase1TariffCapture";
 import { phase9HouseholdHandler, type M4ClosedEconomyOptions } from "./m4ClosedEconomyOrchestrator";
 import { applyHouseholdConsumptionTransition } from "./householdConsumptionExecution";
+import { createPhase2HouseholdConsumptionPlanningHandler } from "./householdConsumptionPlanning";
 import { createM5CanonicalRegionalPhase2Bridge } from "./m5SettledPhase4Bridge";
 import { executeM5CanonicalIntakeTradeTick } from "./m5LiveQuotedTradeTick";
 import { createPhase8Handler } from "./phase8MainMarketClearing";
@@ -46,6 +47,10 @@ export interface M5AutonomousRegionalTradeOptions {
    * from Phase-7 committed residuals, replacing caller-owned Phase-8 hooks.
    * Omit to retain backward-compatible upstream Phase-8 authority. */
   readonly settleMainMarketInPhase8?: true;
+  /** Explicit opt-in: derive Phase-2 household budgets and local BUY intents from
+   * the canonical live CohortState and prior-close prices. Replaces any
+   * upstream household plans/intents; duplicate owners fail closed. */
+  readonly planHouseholdNeedsInPhase2?: true;
   /** Explicit opt-in: realize the already-settled Phase-8 household inventories
    * at Phase 9, including physical consumption/spoilage and loss receipts.
    * Replaces upstream Phase-9 handler/transition to prevent double realization.
@@ -75,8 +80,22 @@ export function executeM5AutonomousRegionalTradeTick(
   const infrastructureFactors = new Map(options.infrastructureFactors);
   const scorePolicy = { ...options.scorePolicy };
   const transportFeeCostPolicy = { ...options.transportFeeCostPolicy };
+  const householdPhase2 = options.planHouseholdNeedsInPhase2 === true
+    ? createPhase2HouseholdConsumptionPlanningHandler({ taxPolicy: options.procurement.taxPolicy })
+    : null;
+  const regionalUpstream: PhaseHandler = (world, context, pending) => {
+    const upstream = upstreamHandler(world, context, pending);
+    if (context.phase !== 2 || householdPhase2 === null) return upstream;
+    if (context.householdMarketIntents !== undefined ||
+        context.householdConsumptionPlans !== undefined ||
+        upstream.householdMarketIntents !== undefined ||
+        upstream.householdConsumptionPlans !== undefined) {
+      throw new Error("M5 canonical household Phase-2 forbids externally supplied household plans/intents");
+    }
+    return householdPhase2(world, upstream, pending);
+  };
   const bridge = createM5CanonicalRegionalPhase2Bridge(
-    upstreamHandler, applyOtherPhaseTransition, options.procurement,
+    regionalUpstream, applyOtherPhaseTransition, options.procurement,
   );
   // Never re-create a main-market budget from opening plans: the committed
   // Phase-7 residuals already exclude actual Phase-4 purchases and dispatch.
