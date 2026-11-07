@@ -9,7 +9,9 @@ import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import type { GoodId, TransportLinkId } from "../domain/id";
 import { createMarketIntentId, type MarketIntent } from "./marketIntent";
-import { marketPriceKey } from "./phase6MarketPriceFormation";
+import { marketPriceKey, ZERO_EXPECTATION, type Phase6PriceConfig } from "./phase6MarketPriceFormation";
+import { computeEffectiveDemand } from "./marketClearing";
+import { repriceGoodInPhase6 } from "./marketPricing";
 import { phase7FxOutputKey } from "./phase7AggregateReservation";
 import {
   phase7ConsumptionTaxKey, phase7ImportTariffKey, buildPhase7LiveWorldPlanInput,
@@ -790,6 +792,121 @@ describe("M5 #673 live actual-lot FX quotation to atomic dispatch", () => {
     expect(f.world.shipments?.size).toBe(0);
   });
 
+
+  it("settles paid FX against endogenous Phase-6 prices from current Phase-2 intents", () => {
+    const f = fxFixture();
+    const sourceMarket = [...f.world.markets.values()].find(
+      market => market.seed.regionKey === f.origin.seed.key,
+    )!;
+    const destinationMarket = [...f.world.markets.values()].find(
+      market => market.seed.regionKey === f.destination.seed.key,
+    )!;
+    // Persist prior-close prices in the world: never inject a Phase-6 tick
+    // price map from the outside. The canonical price handler owns the result.
+    const markets = new Map(f.world.markets);
+    markets.set(sourceMarket.marketId, {
+      ...sourceMarket, priceByGood: new Map(sourceMarket.priceByGood).set(GOOD, 3),
+    });
+    markets.set(destinationMarket.marketId, {
+      ...destinationMarket, priceByGood: new Map(destinationMarket.priceByGood).set(GOOD, 100),
+    });
+    const world: WorldState = { ...f.world, markets };
+    const seller = f.input.residualIntents.find(entry => entry.intent.side === "SELL")!.intent;
+    const buyer = f.input.residualIntents.find(entry => entry.intent.side === "BUY")!.intent;
+    const priceConfig: Phase6PriceConfig = {
+      shortageSignalWeight: 0.65, inventorySignalWeight: 0.35,
+      basePriceAdjustmentSpeed: 0.12, maxAbsoluteLogPriceMovePerTick: 0.18,
+      targetInventoryCoverageTicks: 1, minimumPrice: 0.001, maximumPrice: 1_000_000,
+    };
+    const handler: PhaseHandler = (_world, context) => {
+      if (context.phase === 1) {
+        return { ...context, effectiveJurisdictionByRegion: f.context.effectiveJurisdictionByRegion };
+      }
+      if (context.phase === 2) {
+        return { ...context, productionMarketIntents: [seller], householdMarketIntents: [buyer] };
+      }
+      if (context.phase === 4) return { ...context, phase4MarketAllocations: [] };
+      // No caller-supplied Phase-6 prices.
+      return context;
+    };
+    const request = () => ({
+      policy: {
+        phase1ImportTariffs: f.context.phase1ImportTariffs,
+        phase1ConsumptionTaxes: f.context.phase1ConsumptionTaxes,
+        transportFeeCostPolicy: f.context.transportFeeCostPolicy,
+      },
+      plan: f.input,
+      dispatch: {
+        remainingCargoWeightByLink: f.state.remainingCargoWeightByLink,
+        autoReserveFx: true as const,
+      },
+    });
+    const execute = (current: WorldState) => executeM5CanonicalIntakeTradeTick(
+      current, 7, handler, (_phase, nextWorld) => nextWorld,
+      request, undefined, undefined, undefined, undefined, priceConfig,
+    );
+    const buyerStart = readActorWallet(world, f.buyerActor).get(f.destCurrency)!;
+    const sellerStart = readActorWallet(world, f.sellerActor).get(f.sourceCurrency)!;
+    const stockStart = readMarketActorInventory(world, f.sellerActor, "GENERAL").get(GOOD)!;
+    const poolStart = resolveCanonicalFxPool(world, f.pairId).pool.cash;
+    const actual = execute(world);
+    const replay = execute(world);
+    expect(actual.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(actual.phaseBoundaryError).toBeUndefined();
+    expect(actual.reconciliationErrors).toBeNull();
+    const sourcePrice = actual.context.marketPrices.get(marketPriceKey(sourceMarket.marketId, GOOD));
+    const destinationPrice = actual.context.marketPrices.get(marketPriceKey(destinationMarket.marketId, GOOD));
+    const epsilon = world.simulationConfig.numeric.quantityEpsilon;
+    expect(sourcePrice).toBeCloseTo(repriceGoodInPhase6(
+      3, 0, 2, 2,
+      sourceMarket.expectationsByGood.get(GOOD) ?? ZERO_EXPECTATION,
+      epsilon, priceConfig,
+    ), 12);
+    expect(destinationPrice).toBeCloseTo(repriceGoodInPhase6(
+      100, computeEffectiveDemand(buyer, 100, epsilon), 0, 0,
+      destinationMarket.expectationsByGood.get(GOOD) ?? ZERO_EXPECTATION,
+      epsilon, priceConfig,
+    ), 12);
+    expect(actual.context.transactions.filter(tx => tx.type === "SHIPMENT_DISPATCH")).toHaveLength(1);
+    expect(actual.context.transactions.filter(tx => tx.type === "FX_INPUT")).toHaveLength(1);
+    expect(actual.context.transactions.filter(tx => tx.type === "FX_OUTPUT")).toHaveLength(1);
+    expect(actual.context.transactions.filter(tx => tx.type === "CONSUMPTION_TAX")).toHaveLength(1);
+    expect(actual.context.transactions.filter(tx => tx.type === "IMPORT_TARIFF")).toHaveLength(1);
+    const shipment = [...actual.world.shipments!.values()][0]!;
+    expect(shipment.quantity).toBeGreaterThan(0);
+    expect(stockStart - readMarketActorInventory(actual.world, f.sellerActor, "GENERAL").get(GOOD)!)
+      .toBeCloseTo(shipment.quantity, 9);
+    const sellerPaid = readActorWallet(actual.world, f.sellerActor).get(f.sourceCurrency)! - sellerStart;
+    const buyerPaid = buyerStart - readActorWallet(actual.world, f.buyerActor).get(f.destCurrency)!;
+    const poolEnd = resolveCanonicalFxPool(actual.world, f.pairId).pool.cash;
+    expect(sellerPaid).toBeGreaterThan(0);
+    expect(poolStart.get(f.sourceCurrency)! - poolEnd.get(f.sourceCurrency)!)
+      .toBeCloseTo(sellerPaid, 9);
+    const chargeTotal = actual.context.transactions
+      .filter(tx => tx.type === "IMPORT_TARIFF" || tx.type === "CONSUMPTION_TAX" ||
+        tx.type === "TRANSPORT_FEE")
+      .reduce((sum, tx) => sum + (tx.moneyAmount ?? tx.amount), 0);
+    expect(buyerPaid).toBeCloseTo(
+      poolEnd.get(f.destCurrency)! - poolStart.get(f.destCurrency)! + chargeTotal, 9,
+    );
+    expect(actual.context.marketPrices).toEqual(replay.context.marketPrices);
+    expect(actual.context.transactions).toEqual(replay.context.transactions);
+    expect(actual.world.shipments).toEqual(replay.world.shipments);
+    expect(world.shipments?.size).toBe(0);
+    expect(readActorWallet(world, f.buyerActor).get(f.destCurrency)).toBe(buyerStart);
+    expect(readMarketActorInventory(world, f.sellerActor, "GENERAL").get(GOOD)).toBe(stockStart);
+    // No prior-close market price means no synthetic fallback and no settlement.
+    const invalidSourcePrice = new Map(sourceMarket.priceByGood);
+    invalidSourcePrice.delete(GOOD);
+    const invalidWorld: WorldState = {
+      ...world,
+      markets: new Map(markets).set(sourceMarket.marketId, {
+        ...sourceMarket, priceByGood: invalidSourcePrice,
+      }),
+    };
+    expect(() => execute(invalidWorld)).toThrow("finite positive prior-close net price");
+    expect(invalidWorld.shipments?.size).toBe(0);
+  });
 
   it("uses current Phase-2/4/5 projected intents for live FX dispatch and Phase-8 fallback", () => {
     const f = fxFixture();
