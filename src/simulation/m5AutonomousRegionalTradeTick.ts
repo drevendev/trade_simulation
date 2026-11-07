@@ -11,10 +11,6 @@
  * with the supplied upstream handler/transition. Cross-border goods still
  * dispatch in Phase 7 only, and M5 is NOT complete merely by using this seam.
  */
-import { actorRefKey } from "../domain/genesisLedger";
-import { stableOrderBy } from "../domain/ordering";
-import type { MarketIntent } from "./marketIntent";
-import { readActorWallet } from "./marketSettlementTransition";
 import type { TransportLinkId } from "../domain/id";
 import type { WorldState } from "./worldState";
 import type { PhaseHandler } from "./tickOrchestrator";
@@ -52,55 +48,6 @@ export interface M5AutonomousRegionalTradeOptions {
 }
 
 /**
- * Phase-8 is after paid Phase-4/7 transfers and Phase-5 wages. Its BUY intents
- * must never spend the opening-tick forecast more than the *live* Phase-8
- * wallet. One actor can submit several BUY intents (including for different
- * goods or local markets), all sharing the same currency balance. Reserve
- * that actual balance once across the stable intent ordering before clearing.
- *
- * No new money or credit is created; surplus projected demand is simply
- * unfilled. Upstream Phase-2/7 intents are preserved as evidence.
- */
-function capPhase8BuyIntentsToLiveWallet(
-  world: WorldState,
-  residualIntents: readonly MarketIntent[],
-): MarketIntent[] {
-  const remainingByWallet = new Map<string, number>();
-  const capByIntentId = new Map<string, number>();
-  const buyers = stableOrderBy(
-    residualIntents.filter(intent => intent.side === "BUY"),
-    intent => JSON.stringify([actorRefKey(intent.actor), intent.regionId, intent.goodId, intent.id]),
-  );
-  for (const buyer of buyers) {
-    if (capByIntentId.has(buyer.id)) {
-      throw new Error(`M5 Phase-8 duplicate BUY intent ${buyer.id}`);
-    }
-    if (buyer.maxSpend === undefined || !Number.isFinite(buyer.maxSpend) || buyer.maxSpend < 0) {
-      throw new Error(`M5 Phase-8 BUY intent ${buyer.id} requires finite nonnegative maxSpend`);
-    }
-    const region = world.regions.get(buyer.regionId);
-    if (region === undefined) {
-      throw new Error(`M5 Phase-8 BUY intent ${buyer.id} references missing Region ${buyer.regionId}`);
-    }
-    const currency = region.settlementCurrencyId;
-    const key = JSON.stringify([actorRefKey(buyer.actor), currency]);
-    let available = remainingByWallet.get(key);
-    if (available === undefined) {
-      available = readActorWallet(world, buyer.actor).get(currency) ?? 0;
-      if (!Number.isFinite(available) || available < 0) {
-        throw new Error(`M5 Phase-8 BUY wallet ${key} must have finite nonnegative funds`);
-      }
-    }
-    const capped = Math.min(available, buyer.maxSpend);
-    capByIntentId.set(buyer.id, capped);
-    remainingByWallet.set(key, Math.max(0, available - capped));
-  }
-  return residualIntents.map(intent =>
-    intent.side === "BUY" ? { ...intent, maxSpend: capByIntentId.get(intent.id)! } : intent,
-  );
-}
-
-/**
  * Complete the existing regional Phase-2 -> paid Phase-4 -> Phase-6 -> Phase-7
  * pipeline without externally supplied production/route/FX/cargo intentions.
  * The only policy inputs are explicit independent authorities. All trade
@@ -133,9 +80,10 @@ export function executeM5AutonomousRegionalTradeTick(
         if (!Array.isArray(context.phase7MainIntents)) {
           throw new Error("M5 autonomous Phase-8 requires committed Phase-7 residual intents");
         }
-        return capPhase8BuyIntentsToLiveWallet(_world, context.phase7MainIntents);
+        return [...context.phase7MainIntents];
       },
       taxPolicy: options.procurement.taxPolicy,
+      enforceLiveWalletBudgets: true,
       ...(options.procurement.collectMarketTelemetry === undefined
         ? {}
         : { collectTelemetry: options.procurement.collectMarketTelemetry }),
