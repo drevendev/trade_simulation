@@ -1,10 +1,10 @@
 /**
- * M5 / #673 — opt-in physically settled Phase-4 bridge for one-region ticks.
+ * M5 / #673 — opt-in physically settled Phase-4 bridge for regional ticks.
  *
  * Reuse the existing M4 canonical pre-production clearing and settlement
  * authorities, instead of treating caller-provided Phase-4 allocations as paid
- * purchases. This narrow bridge does NOT implement multiregion Phase-4 clearing
- * or autonomous Phase-2 planning; both remain future M5 work.
+ * purchases. MULTI_REGION is an explicit opt-in; autonomous Phase-2 planning
+ * and cross-region Phase-4 purchases remain future M5 work.
  *
  * Phase 4 is exclusively owned here. The caller's world-transition function
  * is invoked for every OTHER phase, never for Phase 4, to prevent accidentally
@@ -33,15 +33,17 @@ export interface M5SettledPhase4Bridge {
  * atomically transfer inventory, wallet balances and taxes before Phase 5.
  * Downstream Phase-6/7/8 residuals therefore share paid, real stock evidence.
  *
- * The one-region limit is deliberate: M4's existing phase-4 procurement
- * authority refuses a multiregion world. Do not silently split/clone a world.
+ * MULTI_REGION clears each local market against one shared authoritative world,
+ * with stable region order. It does NOT turn local procurement into cross-border
+ * trade; Phase-7 remains the sole owner of shipments and FX.
  */
 export function createM5SettledPhase4Bridge(
   upstreamHandler: PhaseHandler,
   applyOtherPhaseTransition: PhaseWorldTransition,
   options: M4ClosedEconomyOptions,
+  scope: "SINGLE_REGION" | "MULTI_REGION" = "SINGLE_REGION",
 ): M5SettledPhase4Bridge {
-  const procurement = phase4ProcurementHandler(options);
+  const procurement = phase4ProcurementHandler(options, scope);
   return {
     handler: (world, context, pending) => {
       const next = upstreamHandler(world, context, pending);
