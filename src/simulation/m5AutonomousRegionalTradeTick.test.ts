@@ -667,4 +667,93 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(opening.cohorts.get(funded.cohortId)!.householdInventory.size).toBe(0);
   });
 
+
+  it("plans live household Phase-2 needs without external intents and settles the actual Phase-8 purchase", () => {
+    const f = fixture();
+    const cohort = [...f.world.cohorts.values()].find(
+      item => item.seed.regionKey === f.source.seed.key,
+    )!;
+    const funded = {
+      ...cohort,
+      wallet: new Map(cohort.wallet).set(f.source.settlementCurrencyId, 1_000_000_000),
+      householdInventory: new Map<GoodId, number>(),
+    };
+    const need = (
+      id: string, goodId: GoodId, priority: number, perCapitaTarget: number,
+    ): NeedCategoryDefinition => ({
+      id, perCapitaTarget, priority,
+      substitutionGoods: [{ goodId, basePreference: 1, qualityFactor: 1 }],
+      priceSensitivity: 1, inventoryCarryoverTicks: 0,
+    });
+    const opening: WorldState = {
+      ...f.world,
+      cohorts: new Map([[funded.cohortId, funded]]),
+      definitionRegistry: {
+        ...f.world.definitionRegistry,
+        needCategories: {
+          ESSENTIAL_FOOD: need("ESSENTIAL_FOOD", "good:grain" as GoodId, 4, 0),
+          BASIC_GOODS: need("BASIC_GOODS", IRON, 3, 10),
+          SERVICES: need("SERVICES", "good:tools" as GoodId, 2, 0),
+          COMFORT: need("COMFORT", "good:cloth" as GoodId, 1, 0),
+        },
+      },
+    };
+    // Only Phase-1 jurisdiction is upstream-owned. No external household
+    // plans or intents may be substituted for the canonical Phase-2 owner.
+    const jurisdictionOnly: PhaseHandler = (world, context, pending) =>
+      context.phase === 1 ? households(world, context, pending) : context;
+    const opts: M5AutonomousRegionalTradeOptions = {
+      ...f.options,
+      phase1TradeLawProvider: () => undefined,
+      planHouseholdNeedsInPhase2: true,
+      settleMainMarketInPhase8: true,
+    };
+    const execute = (upstream: PhaseHandler = jurisdictionOnly) =>
+      executeM5AutonomousRegionalTradeTick(
+        opening, 7, upstream, (_phase, world) => world, opts,
+      );
+    const result = execute();
+    expect(result.phaseBoundaryError).toBeUndefined();
+    expect(result.reconciliationErrors).toBeNull();
+    expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+    const plan = result.context.householdConsumptionPlans?.find(
+      item => item.cohortId === funded.cohortId,
+    );
+    expect(plan).toBeDefined();
+    expect(plan!.openingSpendableCash).toBe(1_000_000_000);
+    expect(plan!.expectedCurrentTickIncome).toBe(0);
+    const desires = result.context.householdMarketIntents?.filter(intent =>
+      intent.actor.type === "COHORT" && intent.actor.cohortId === funded.cohortId &&
+      intent.goodId === IRON && intent.side === "BUY");
+    expect(desires?.length).toBe(1);
+    expect(desires![0]!.sourcePlanId).toBe(plan!.planId);
+    expect(desires![0]!.maxSpend).toBeGreaterThan(0);
+    expect(desires![0]!.maxSpend).toBeLessThanOrEqual(plan!.planningCashEnvelope);
+    const fills = result.context.marketAllocations.filter(allocation =>
+      allocation.pass === "MAIN" && allocation.buyer.type === "COHORT" &&
+      allocation.buyer.cohortId === funded.cohortId && allocation.goodId === IRON);
+    expect(fills.length).toBeGreaterThan(0);
+    const bought = fills.reduce((sum, item) => sum + item.quantity, 0);
+    expect(bought).toBeGreaterThan(0);
+    expect(result.world.cohorts.get(funded.cohortId)!.householdInventory.get(IRON))
+      .toBeCloseTo(bought, 8);
+    expect(result.world.cohorts.get(funded.cohortId)!.wallet.get(f.source.settlementCurrencyId))
+      .toBeLessThan(1_000_000_000);
+    expect(execute().context.transactions).toEqual(result.context.transactions);
+    expect(execute().world.cohorts).toEqual(result.world.cohorts);
+    expect(opening.cohorts.get(funded.cohortId)!.householdInventory.size).toBe(0);
+
+    // Negative control: a second household intent authority must fail closed,
+    // including an explicitly empty upstream intent array.
+    const duplicate: PhaseHandler = (world, context, pending) => {
+      const next = jurisdictionOnly(world, context, pending);
+      return context.phase === 2
+        ? { ...next, householdMarketIntents: [] }
+        : next;
+    };
+    expect(() => execute(duplicate)).toThrow(
+      "M5 canonical household Phase-2 forbids externally supplied household plans/intents",
+    );
+  });
+
 });
