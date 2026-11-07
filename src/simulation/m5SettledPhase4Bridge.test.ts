@@ -22,7 +22,9 @@ function fixture() {
     [...initial.markets.values()].some(market => market.seed.regionKey === candidate.seed.key),
   )!;
   const market = [...initial.markets.values()].find(m => m.seed.regionKey === region.seed.key)!;
-  const [seller, buyer] = [...initial.productionUnits.values()];
+  const units = [...initial.productionUnits.values()];
+  const seller = units[0]!;
+  const buyer = units[1]!;
   const currency = region.settlementCurrencyId;
   const world: WorldState = {
     ...initial,
