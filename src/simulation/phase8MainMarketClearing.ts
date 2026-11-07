@@ -27,7 +27,7 @@ import {
   type LocalClearingInput,
 } from "./marketClearing";
 import type { TaxPolicyProvider } from "./marketSettlement";
-import { readMarketActorInventory } from "./marketSettlementTransition";
+import { readActorWallet, readMarketActorInventory } from "./marketSettlementTransition";
 import { marketPriceKey } from "./phase6MarketPriceFormation";
 
 /**
@@ -103,11 +103,16 @@ export const createPhase8Handler = (options?: {
   getFixtureMarketIds?: (world: WorldState) => Map<string, MarketId>;
   collectTelemetry?: boolean;
   taxPolicy?: TaxPolicyProvider;
+  /** Opt-in M5 integration: reserve cash within each clearing group, but only
+   * debit the shared live actor/currency wallet for actual executed fills.
+   * Unused group budgets must be available to later market/good groups. */
+  enforceLiveWalletBudgets?: boolean;
 }): PhaseHandler => {
   const collectTelemetry = options?.collectTelemetry !== false;
   const getFixtureIntents = options?.getFixtureIntents;
   const getFixtureMarketIds = options?.getFixtureMarketIds;
   const taxPolicy = options?.taxPolicy;
+  const enforceLiveWalletBudgets = options?.enforceLiveWalletBudgets === true;
 
   if (getFixtureIntents !== undefined && taxPolicy === undefined) {
     throw new Error(
@@ -139,6 +144,40 @@ export const createPhase8Handler = (options?: {
     const intents = getFixtureIntents(world, context);
     const fixtureMarketIds = getFixtureMarketIds?.(world);
     const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon ?? 1e-9;
+    const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
+
+    // One post-Phase-7 balance per actor and settlement currency. Unlike a
+    // pre-clearing reservation across all intents, this ledger advances ONLY
+    // by realized Phase-8 allocations. A sellerless/underfilled earlier good
+    // must not consume money that a later, executable good could use.
+    const availableByWallet = new Map<string, number>();
+    if (enforceLiveWalletBudgets) {
+      const buyerIds = new Set<string>();
+      for (const buyer of intents) {
+        if (buyer.side !== "BUY") continue;
+        if (buyerIds.has(buyer.id)) {
+          throw new Error(`M5 Phase-8 duplicate BUY intent ${buyer.id}`);
+        }
+        buyerIds.add(buyer.id);
+        if (buyer.maxSpend === undefined || !Number.isFinite(buyer.maxSpend) ||
+            buyer.maxSpend < 0) {
+          throw new Error(`M5 Phase-8 BUY intent ${buyer.id} requires finite nonnegative maxSpend`);
+        }
+        const region = world.regions.get(buyer.regionId);
+        if (region === undefined) {
+          throw new Error(`M5 Phase-8 BUY intent ${buyer.id} references missing Region ${buyer.regionId}`);
+        }
+        const currency = region.settlementCurrencyId;
+        const key = JSON.stringify([actorRefKey(buyer.actor), currency]);
+        if (!availableByWallet.has(key)) {
+          const liveBalance = readActorWallet(world, buyer.actor).get(currency) ?? 0;
+          if (!Number.isFinite(liveBalance) || liveBalance < 0) {
+            throw new Error(`M5 Phase-8 BUY wallet ${key} must have finite nonnegative funds`);
+          }
+          availableByWallet.set(key, liveBalance);
+        }
+      }
+    }
 
     // Group intents by canonical live Region/LocalMarket/good/pass identity. A fixture may
     // name the intended live market explicitly, but it may not invent one: Handoff/04
@@ -357,6 +396,28 @@ export const createPhase8Handler = (options?: {
         (intent) => `${actorRefKey(intent.actor)}|${intent.id}`,
       );
 
+      // Reserve only for this executable market/good group, using the exact
+      // buyer-specific gross price and requested quantity. Never carry an
+      // unused forecast reservation into another market/good group.
+      const unreservedWithinGroup = new Map<string, number>();
+      const budgetedBuyers = enforceLiveWalletBudgets
+        ? orderedBuyers.map(buyer => {
+          const key = JSON.stringify([actorRefKey(buyer.actor), marketCurrencyId]);
+          const available = unreservedWithinGroup.get(key) ?? availableByWallet.get(key);
+          if (available === undefined) {
+            throw new Error(`M5 Phase-8 missing live BUY wallet ${key}`);
+          }
+          const requiredGross = buyer.desiredQuantity *
+            grossUnitPriceForBuyer(buyer, marketPrice);
+          if (!Number.isFinite(requiredGross) || requiredGross < 0) {
+            throw new Error(`M5 Phase-8 BUY intent ${buyer.id} has invalid gross demand`);
+          }
+          const budget = Math.min(available, buyer.maxSpend!, requiredGross);
+          unreservedWithinGroup.set(key, Math.max(0, available - budget));
+          return { ...buyer, maxSpend: budget };
+        })
+        : orderedBuyers;
+
       // Create clearing input with production computations
       const clearingInput: LocalClearingInput = {
         marketId: group.marketId,
@@ -364,7 +425,7 @@ export const createPhase8Handler = (options?: {
         goodId: group.goodId as GoodId,
         pass: "MAIN",
         marketCurrencyId,
-        buyerIntents: orderedBuyers,
+        buyerIntents: budgetedBuyers,
         sellerIntents: orderedSellers,
         computeEffectiveDemand: (intent, grossPrice) => {
           if (intent.side !== "BUY") return 0;
@@ -399,6 +460,26 @@ export const createPhase8Handler = (options?: {
       );
       newAllocations.push(...allocations);
 
+      if (enforceLiveWalletBudgets) {
+        // Release every unused group reservation. Only actual gross debits
+        // carry to the next deterministically ordered group. Sale proceeds
+        // cannot be recycled before the atomic Phase-8 settlement transition.
+        const debitedByWallet = new Map<string, number>();
+        for (const allocation of allocations) {
+          const key = JSON.stringify([actorRefKey(allocation.buyer), marketCurrencyId]);
+          const debit = allocation.quantity * allocation.buyerGrossUnitPrice;
+          debitedByWallet.set(key, (debitedByWallet.get(key) ?? 0) + debit);
+        }
+        for (const [key, debit] of debitedByWallet) {
+          const available = availableByWallet.get(key);
+          if (available === undefined || !Number.isFinite(debit) ||
+              debit < 0 || debit > available + moneyEpsilon) {
+            throw new Error(`M5 Phase-8 buyer wallet ${key} overcommitted by clearing`);
+          }
+          availableByWallet.set(key, Math.max(0, available - debit));
+        }
+      }
+
       // Realized MAIN-pass aggregates (effective demand, offered supply, cleared
       // quantity) are computed unconditionally -- never gated on collectTelemetry --
       // because the authoritative post-tick MarketExpectationState transition
@@ -409,7 +490,7 @@ export const createPhase8Handler = (options?: {
         0,
       );
       let totalBuyerEffective = 0;
-      for (const buyer of orderedBuyers) {
+      for (const buyer of budgetedBuyers) {
         const buyerGrossPrice = grossUnitPriceForBuyer(buyer, marketPrice);
         const buyerMaxSpend =
           buyer.maxSpend ?? (buyer.desiredQuantity * buyerGrossPrice);

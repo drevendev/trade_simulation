@@ -83,6 +83,7 @@ export function executeM5AutonomousRegionalTradeTick(
         return [...context.phase7MainIntents];
       },
       taxPolicy: options.procurement.taxPolicy,
+      enforceLiveWalletBudgets: true,
       ...(options.procurement.collectMarketTelemetry === undefined
         ? {}
         : { collectTelemetry: options.procurement.collectMarketTelemetry }),
