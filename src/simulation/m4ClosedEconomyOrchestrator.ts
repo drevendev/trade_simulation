@@ -351,7 +351,7 @@ function phase8SettlementEvidenceHandler(): PhaseHandler {
 }
 
 /** Phase-9 wrapper for the state-threaded runner: Phase-8 purchases are already authoritative. */
-function phase9HouseholdHandler(): PhaseHandler {
+export function phase9HouseholdHandler(): PhaseHandler {
   return (world, context) => {
     if (context.phase !== 9) return context;
     const result = planHouseholdConsumptionPhase9({

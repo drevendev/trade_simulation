@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createMarketIntentId } from "./marketIntent";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
+import type { NeedCategoryDefinition } from "../config/definitionPack";
+import { createPhase2LaborSupplyPlanningHandler } from "./laborSupplyPlanning";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { GoodId } from "../domain/id";
@@ -546,6 +548,123 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(execute(true).world.cohorts).toEqual(result.world.cohorts);
     expect(opening.cohorts.get(funded.cohortId)!.wallet.get(f.source.settlementCurrencyId))
       .toBe(cash);
+  });
+
+
+  it("optionally consumes already-settled household purchases in Phase 9 exactly once", () => {
+    const f = fixture();
+    const cohort = [...f.world.cohorts.values()].find(
+      item => item.seed.regionKey === f.source.seed.key,
+    )!;
+    const funded = {
+      ...cohort,
+      wallet: new Map(cohort.wallet).set(f.source.settlementCurrencyId, 100_000),
+      householdInventory: new Map<GoodId, number>(),
+    };
+    const categories: Readonly<Record<string, NeedCategoryDefinition>> = {
+      ESSENTIAL_FOOD: {
+        id: "ESSENTIAL_FOOD", perCapitaTarget: 0, priority: 4,
+        substitutionGoods: [{ goodId: "good:grain" as GoodId, basePreference: 1, qualityFactor: 1 }],
+        priceSensitivity: 1, inventoryCarryoverTicks: 1,
+      },
+      BASIC_GOODS: {
+        id: "BASIC_GOODS", perCapitaTarget: 10, priority: 3,
+        // Deliberately synthetic need: the available Phase-8 sale is iron.
+        substitutionGoods: [{ goodId: IRON, basePreference: 1, qualityFactor: 1 }],
+        priceSensitivity: 1, inventoryCarryoverTicks: 0,
+      },
+      SERVICES: {
+        id: "SERVICES", perCapitaTarget: 0, priority: 2,
+        substitutionGoods: [{ goodId: "good:tools" as GoodId, basePreference: 1, qualityFactor: 1 }],
+        priceSensitivity: 1, inventoryCarryoverTicks: 0,
+      },
+      COMFORT: {
+        id: "COMFORT", perCapitaTarget: 0, priority: 1,
+        substitutionGoods: [{ goodId: "good:cloth" as GoodId, basePreference: 1, qualityFactor: 1 }],
+        priceSensitivity: 1, inventoryCarryoverTicks: 0,
+      },
+    };
+    const allowedRegionKeys = new Set([f.source.seed.key, f.destination.seed.key]);
+    const opening: WorldState = {
+      ...f.world,
+      definitionRegistry: { ...f.world.definitionRegistry, needCategories: categories },
+      cohorts: new Map([...f.world.cohorts].filter(
+        ([, item]) => allowedRegionKeys.has(item.seed.regionKey),
+      )).set(funded.cohortId, funded),
+    };
+    const laborSupply = createPhase2LaborSupplyPlanningHandler();
+    const householdDemand: PhaseHandler = (world, context, pending) => {
+      const next = laborSupply(world, households(world, context, pending), pending);
+      if (context.phase !== 2) return next;
+      return {
+        ...next,
+        householdMarketIntents: [{
+          id: createMarketIntentId("mi:m5-phase9-bought-iron"),
+          actor: { type: "COHORT" as const, cohortId: funded.cohortId },
+          regionId: f.source.regionId,
+          goodId: IRON,
+          side: "BUY" as const,
+          purpose: "CONSUMPTION" as const,
+          desiredQuantity: 1,
+          maxSpend: 10_000,
+          inventoryBucket: "GENERAL" as const,
+          sourcePlanId: "plan:m5-phase9-bought-iron",
+        }],
+      };
+    };
+    const baseOptions = { ...f.options, settleMainMarketInPhase8: true as const };
+    const execute = (realize: boolean) => executeM5AutonomousRegionalTradeTick(
+      opening, 7, householdDemand, (_phase, world) => world,
+      realize ? { ...baseOptions, realizeHouseholdConsumptionInPhase9: true } : baseOptions,
+    );
+    const result = execute(true);
+    expect(result.phaseBoundaryError).toBeUndefined();
+    expect(result.reconciliationErrors).toBeNull();
+    expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+    const fills = result.context.marketAllocations.filter(
+      allocation => allocation.pass === "MAIN" &&
+        allocation.buyer.type === "COHORT" && allocation.buyer.cohortId === funded.cohortId,
+    );
+    expect(fills).toHaveLength(1);
+    const boughtIron = fills[0]!.quantity;
+    expect(boughtIron).toBeGreaterThan(0);
+    const execution = result.context.householdConsumptionExecutions?.find(
+      item => item.cohortId === funded.cohortId,
+    );
+    expect(execution).toBeDefined();
+    expect(execution!.postMarketInventoryByGood[IRON]).toBeCloseTo(boughtIron, 8);
+    expect(execution!.consumedByGood[IRON]).toBeCloseTo(boughtIron, 8);
+    expect(execution!.spoiledByGood[IRON] ?? 0).toBe(0);
+    expect(result.world.cohorts.get(funded.cohortId)!.householdInventory.get(IRON) ?? 0).toBe(0);
+    expect(result.world.lastHouseholdConsumptionTransitionTick).toBe(7);
+    const phase9Losses = result.context.transactions.filter(
+      tx => tx.phase === 9 && tx.type === "HOUSEHOLD_CONSUMPTION" &&
+        tx.goodId === IRON && tx.source?.type === "COHORT" &&
+        tx.source.cohortId === funded.cohortId,
+    );
+    expect(phase9Losses).toHaveLength(1);
+    expect(phase9Losses[0]!.quantity).toBeCloseTo(boughtIron, 8);
+    const totalIncludingHouseholds = (world: WorldState) =>
+      totalIron(world) + [...world.cohorts.values()].reduce(
+        (sum, item) => sum + (item.householdInventory.get(IRON) ?? 0), 0,
+      );
+    const lostIron = result.context.householdConsumptionExecutions!.reduce(
+      (sum, item) => sum + (item.consumedByGood[IRON] ?? 0) + (item.spoiledByGood[IRON] ?? 0),
+      0,
+    );
+    expect(totalIncludingHouseholds(result.world) + lostIron)
+      .toBeCloseTo(totalIncludingHouseholds(opening), 8);
+
+    // Negative control: Phase-8 purchases do not disappear unless Phase-9
+    // consumption is explicitly enabled; the upstream handler is unchanged.
+    const without = execute(false);
+    expect(without.context.householdConsumptionExecutions).toBeUndefined();
+    expect(without.world.cohorts.get(funded.cohortId)!.householdInventory.get(IRON))
+      .toBeCloseTo(boughtIron, 8);
+    expect(without.context.transactions.filter(tx => tx.phase === 9)).toHaveLength(0);
+    expect(execute(true).context.transactions).toEqual(result.context.transactions);
+    expect(execute(true).world.cohorts).toEqual(result.world.cohorts);
+    expect(opening.cohorts.get(funded.cohortId)!.householdInventory.size).toBe(0);
   });
 
 });

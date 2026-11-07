@@ -22,7 +22,8 @@ import type { Phase7CandidateScorePolicy } from "./tradeCandidateSelection";
 import type { TransportFeeCostPolicy } from "./transportFeeQuote";
 import type { Phase7Phase1TradeLawProvider } from "./phase7AuthorizedRouteDiscovery";
 import type { Phase7Phase1TariffLawProvider } from "./phase7Phase1TariffCapture";
-import type { M4ClosedEconomyOptions } from "./m4ClosedEconomyOrchestrator";
+import { phase9HouseholdHandler, type M4ClosedEconomyOptions } from "./m4ClosedEconomyOrchestrator";
+import { applyHouseholdConsumptionTransition } from "./householdConsumptionExecution";
 import { createM5CanonicalRegionalPhase2Bridge } from "./m5SettledPhase4Bridge";
 import { executeM5CanonicalIntakeTradeTick } from "./m5LiveQuotedTradeTick";
 import { createPhase8Handler } from "./phase8MainMarketClearing";
@@ -45,6 +46,11 @@ export interface M5AutonomousRegionalTradeOptions {
    * from Phase-7 committed residuals, replacing caller-owned Phase-8 hooks.
    * Omit to retain backward-compatible upstream Phase-8 authority. */
   readonly settleMainMarketInPhase8?: true;
+  /** Explicit opt-in: realize the already-settled Phase-8 household inventories
+   * at Phase 9, including physical consumption/spoilage and loss receipts.
+   * Replaces upstream Phase-9 handler/transition to prevent double realization.
+   * Requires canonical need categories; no fallback needs are invented. */
+  readonly realizeHouseholdConsumptionInPhase9?: true;
 }
 
 /**
@@ -89,7 +95,13 @@ export function executeM5AutonomousRegionalTradeTick(
         : { collectTelemetry: options.procurement.collectMarketTelemetry }),
     })
     : null;
+  const phase9 = options.realizeHouseholdConsumptionInPhase9 === true
+    ? phase9HouseholdHandler()
+    : null;
   const handler: PhaseHandler = (world, context, pending) => {
+    // Phase-9 reads stocks *after* the Phase-8 transition. The shared M4
+    // handler intentionally projects no second purchase from allocations.
+    if (context.phase === 9 && phase9 !== null) return phase9(world, context, pending);
     if (context.phase !== 8 || phase8 === null) return bridge.handler(world, context, pending);
     // Opt-in Phase 8 is single-owned. Do not invoke upstream clearing/receipts.
     const cleared = phase8(world, context, pending);
@@ -104,6 +116,12 @@ export function executeM5AutonomousRegionalTradeTick(
     return { ...cleared, transactions: [...cleared.transactions, ...postings] };
   };
   const applyTransition: PhaseWorldTransition = (phase, world, context) => {
+    if (phase === 9 && phase9 !== null) {
+      if (!Array.isArray(context.householdConsumptionExecutions)) {
+        throw new Error("M5 autonomous Phase-9 requires canonical household execution evidence");
+      }
+      return applyHouseholdConsumptionTransition(world, context.householdConsumptionExecutions, context.tick);
+    }
     if (phase !== 8 || phase8 === null) return bridge.applyPhaseTransition(phase, world, context);
     // Publish the same Phase-8 physical purchase and market state exactly once.
     return applyMarketStateTransition(applyMarketSettlementTransition(world, context), context);
