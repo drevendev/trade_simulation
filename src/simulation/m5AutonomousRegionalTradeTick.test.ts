@@ -667,4 +667,64 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(opening.cohorts.get(funded.cohortId)!.householdInventory.size).toBe(0);
   });
 
+  it("optionally allocates multi-region labor, pays wages and executes Phase-5 production once", () => {
+    const f = fixture();
+    const regionKeys = new Set([f.source.seed.key, f.destination.seed.key]);
+    const recipe = f.world.definitionRegistry.recipes["recipe:tools-craft"]!;
+    const cohorts = new Map([...f.world.cohorts].filter(
+      ([, item]) => regionKeys.has(item.seed.regionKey),
+    ));
+    const working = [...cohorts.values()].find(
+      item => item.seed.regionKey === f.source.seed.key && item.seed.ageBand === "WORKING",
+    )!;
+    expect(working).toBeDefined();
+    cohorts.set(working.cohortId, {
+      ...working,
+      seed: { ...working.seed, laborCategory: recipe.laborCategory,
+        population: 1000, healthIndex: 1, employmentRateEma: 1 },
+    });
+    const opening: WorldState = { ...f.world, cohorts };
+    const options: M5AutonomousRegionalTradeOptions = {
+      ...f.options, settleLaborAndProductionInPhase5: true,
+    };
+    const execute = (upstream: PhaseHandler = households, labor = true) =>
+      executeM5AutonomousRegionalTradeTick(
+        opening, 7, upstream, (_phase, world) => world,
+        labor ? options : f.options,
+      );
+    const result = execute();
+    expect(result.phaseBoundaryError).toBeUndefined();
+    expect(result.reconciliationErrors).toBeNull();
+    expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(result.context.laborSupplyPlans?.length).toBeGreaterThan(0);
+    expect(result.context.laborDemandPlans?.length).toBe(opening.productionUnits.size);
+    expect(result.context.laborAllocations?.some(a => a.workerEquivalents > 0)).toBe(true);
+    expect(result.context.wageSettlements?.some(s => s.grossWage > 0)).toBe(true);
+    expect(result.context.productionExecutions?.length).toBe(opening.productionUnits.size);
+    expect(result.world.lastWageSettlementTransitionTick).toBe(7);
+    expect(result.world.lastProductionExecutionTransitionTick).toBe(7);
+    const wages = result.context.transactions.filter(tx => tx.phase === 5 && tx.type === "WAGE_PAYMENT");
+    expect(wages.length).toBeGreaterThan(0);
+    const totalGross = result.context.wageSettlements!.reduce((sum, w) => sum + w.grossWage, 0);
+    const totalNet = result.context.wageSettlements!.reduce((sum, w) => sum + w.netWage, 0);
+    const totalCollected = result.context.wageSettlements!.reduce((sum, w) => sum + w.collectedTax, 0);
+    expect(totalGross).toBeCloseTo(totalNet + totalCollected, 8);
+    expect(execute().context.transactions).toEqual(result.context.transactions);
+    expect(execute().world.cohorts).toEqual(result.world.cohorts);
+    expect(opening.lastWageSettlementTransitionTick ?? -1).not.toBe(7);
+
+    const legacy = execute(households, false);
+    expect(legacy.context.wageSettlements).toBeUndefined();
+    expect(legacy.world.lastWageSettlementTransitionTick ?? -1).not.toBe(7);
+
+    // A second Phase-3 allocation authority must be refused before settlement.
+    const duplicate: PhaseHandler = (world, context, pending) => {
+      const next = households(world, context, pending);
+      return context.phase === 3 ? { ...next, laborAllocations: [] } : next;
+    };
+    expect(() => execute(duplicate)).toThrow(
+      "M5 autonomous labor forbids externally supplied Phase-3 labor allocations",
+    );
+  });
+
 });
