@@ -13,8 +13,19 @@ import {
 } from "./worldState";
 
 const IRON = "good:iron" as GoodId;
-const households: PhaseHandler = (_world, context) =>
-  context.phase === 2 ? { ...context, householdMarketIntents: [] } : context;
+// The fixture upstream represents the real Phase-1 jurisdiction activator.
+// Frozen trade/tax law must never infer it from WorldState at Phase 7.
+const households: PhaseHandler = (world, context) => {
+  if (context.phase === 1) {
+    return {
+      ...context,
+      effectiveJurisdictionByRegion: new Map([...world.regions].map(
+        ([id, region]) => [id, region.controllerStateId] as const,
+      )),
+    };
+  }
+  return context.phase === 2 ? { ...context, householdMarketIntents: [] } : context;
+};
 
 /** Two genuinely linked border markets, two legal currencies and real actors.
  * No caller-provided Phase-2 orders, Phase-4 fills, Phase-7 quotes, FX or cargo. */
