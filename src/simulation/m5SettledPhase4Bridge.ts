@@ -14,6 +14,7 @@ import {
   phase4ProcurementHandler,
   type M4ClosedEconomyOptions,
 } from "./m4ClosedEconomyOrchestrator";
+import { createCanonicalPhase2ProductionPlanningHandler } from "./productionPlanning";
 import { executeAllocation } from "./marketSettlementTransition";
 import type { PhaseWorldTransition } from "./statefulTickOrchestrator";
 import type { PhaseHandler } from "./tickOrchestrator";
@@ -67,4 +68,39 @@ export function createM5SettledPhase4Bridge(
       return candidate;
     },
   };
+}
+
+/**
+ * M5/#673 opt-in regional Phase-2 production procurement from the live
+ * opening WorldState. The existing canonical planner alone computes INPUT
+ * quantities, gross prior-close budgets, and payroll authority for every
+ * ProductionUnit, independently of Region traversal/insertion order.
+ *
+ * The upstream handler may still provide household plans, labor supply and
+ * Phase-5 offers, but cannot replace production Phase-2 decisions. Local
+ * settlements remain Phase-4-owned; FX and cross-border cargo stay Phase 7.
+ * This deliberately does not enable any later-milestone policy behavior.
+ */
+export function createM5CanonicalRegionalPhase2Bridge(
+  upstreamHandler: PhaseHandler,
+  applyOtherPhaseTransition: PhaseWorldTransition,
+  options: M4ClosedEconomyOptions,
+): M5SettledPhase4Bridge {
+  const canonicalPhase2 = createCanonicalPhase2ProductionPlanningHandler();
+  const phase2Owner: PhaseHandler = (world, context, pending) => {
+    const upstream = upstreamHandler(world, context, pending);
+    if (context.phase !== 2) return upstream;
+    if (context.productionPlans !== undefined ||
+        context.laborDemandPlans !== undefined ||
+        context.productionMarketIntents !== undefined ||
+        upstream.productionPlans !== undefined ||
+        upstream.laborDemandPlans !== undefined ||
+        upstream.productionMarketIntents !== undefined) {
+      throw new Error("M5 canonical regional Phase-2 forbids externally supplied production plans/intents");
+    }
+    return canonicalPhase2(world, upstream, pending);
+  };
+  return createM5SettledPhase4Bridge(
+    phase2Owner, applyOtherPhaseTransition, options, "MULTI_REGION",
+  );
 }
