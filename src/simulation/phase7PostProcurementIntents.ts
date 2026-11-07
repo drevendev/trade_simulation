@@ -140,12 +140,16 @@ function validateCommittedAllocation(
 export function derivePhase7PostProcurementIntents(
   world: WorldState,
   context: TickContext,
+  expectedPhase: 6 | 7 = 7,
 ): Phase7PostProcurementIntentProjection {
-  if (context.phase !== 7 || !Number.isSafeInteger(context.tick) || context.tick < 0 ||
+  // The post-Phase-5 evidence is complete at Phase 6 and stays authoritative
+  // into Phase 7. An explicit Phase-6 caller may use the SAME projection for
+  // endogenous repricing, before the Phase-7 route planner consumes it.
+  if (context.phase !== expectedPhase || !Number.isSafeInteger(context.tick) || context.tick < 0 ||
       !Array.isArray(context.productionMarketIntents) ||
       !Array.isArray(context.householdMarketIntents) ||
       !Array.isArray(context.phase4MarketAllocations)) {
-    throw new Error("Phase-7 intake requires complete same-tick Phase-2/4/5 evidence at Phase 7");
+    throw new Error(`Phase-${expectedPhase} intake requires complete same-tick Phase-2/4/5 evidence at Phase ${expectedPhase}`);
   }
   const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon;
   const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon;
