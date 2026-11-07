@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createMarketIntentId } from "./marketIntent";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
@@ -298,6 +299,90 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       ?.moneyAmount).toBeUndefined();
     expect(departed.world.shipments?.has(shipment.id)).toBe(true);
     expect(enRoute.world.shipments?.has(shipment.id)).toBe(true);
+  });
+
+  it("optionally clears real Phase-7 MAIN residuals in Phase 8 exactly once", () => {
+    const f = fixture();
+    const sourceCohort = [...f.world.cohorts.values()].find(
+      cohort => cohort.seed.regionKey === f.source.seed.key,
+    );
+    expect(sourceCohort).toBeDefined();
+    const funded = {
+      ...sourceCohort!,
+      wallet: new Map(sourceCohort!.wallet).set(f.source.settlementCurrencyId, 100_000),
+    };
+    const opening: WorldState = {
+      ...f.world,
+      cohorts: new Map(f.world.cohorts).set(funded.cohortId, funded),
+    };
+    // Real household Phase-2 demand cannot be spent during input-only
+    // procurement; its explicit GENERAL inventory must be credited in MAIN.
+    const householdWithIronDemand: PhaseHandler = (world, context, pending) => {
+      const next = households(world, context, pending);
+      if (context.phase !== 2) return next;
+      return {
+        ...next,
+        householdMarketIntents: [{
+          id: createMarketIntentId("mi:m5-main-real-household-iron"),
+          actor: { type: "COHORT" as const, cohortId: funded.cohortId },
+          regionId: f.source.regionId,
+          goodId: IRON,
+          side: "BUY" as const,
+          purpose: "CONSUMPTION" as const,
+          desiredQuantity: 1,
+          maxSpend: 10_000,
+          inventoryBucket: "GENERAL" as const,
+          sourcePlanId: "plan:m5-main-household",
+        }],
+      };
+    };
+    const opts = { ...f.options, settleMainMarketInPhase8: true as const };
+    const execute = () => executeM5AutonomousRegionalTradeTick(
+      opening, 7, householdWithIronDemand, (_phase, world) => world, opts,
+    );
+    const result = execute();
+    expect(result.phaseBoundaryError).toBeUndefined();
+    expect(result.reconciliationErrors).toBeNull();
+    expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(result.context.transactions.some(tx => tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH"))
+      .toBe(true);
+    const localMain = result.context.marketAllocations.filter(
+      allocation => allocation.pass === "MAIN" &&
+        allocation.buyer.type === "COHORT" &&
+        allocation.buyer.cohortId === funded.cohortId,
+    );
+    expect(localMain).toHaveLength(1);
+    expect(localMain[0]!.quantity).toBeGreaterThan(0);
+    expect(localMain[0]!.quantity).toBeLessThanOrEqual(1);
+    expect(result.context.transactions.filter(tx =>
+      tx.phase === 8 && tx.type === "MARKET_SALE")).toHaveLength(localMain.length);
+    expect(result.context.transactions.filter(tx =>
+      tx.phase === 8 && tx.type === "CONSUMPTION_TAX")).toHaveLength(localMain.length);
+
+    const closingCohort = result.world.cohorts.get(funded.cohortId)!;
+    const gained = (closingCohort.householdInventory.get(IRON) ?? 0) -
+      (funded.householdInventory.get(IRON) ?? 0);
+    expect(gained).toBeCloseTo(localMain[0]!.quantity, 8);
+    expect(closingCohort.wallet.get(f.source.settlementCurrencyId))
+      .toBeLessThan(funded.wallet.get(f.source.settlementCurrencyId)!);
+    const totalWithHouseholdIron = (world: WorldState) =>
+      totalIron(world) + [...world.cohorts.values()].reduce(
+        (sum, cohort) => sum + (cohort.householdInventory.get(IRON) ?? 0), 0,
+      );
+    expect(totalWithHouseholdIron(result.world)).toBeCloseTo(totalWithHouseholdIron(opening), 8);
+    expect(opening.cohorts.get(funded.cohortId)!.householdInventory)
+      .toEqual(funded.householdInventory);
+    expect(execute().context.transactions).toEqual(result.context.transactions);
+    expect(execute().world.cohorts).toEqual(result.world.cohorts);
+
+    // Without opt-in, the existing upstream-owned Phase-8 path remains inert.
+    const legacy = executeM5AutonomousRegionalTradeTick(
+      opening, 7, householdWithIronDemand, (_phase, world) => world, f.options,
+    );
+    expect(legacy.context.marketAllocations).toHaveLength(0);
+    expect(legacy.context.transactions.filter(tx => tx.phase === 8)).toHaveLength(0);
+    expect(legacy.world.cohorts.get(funded.cohortId)!.householdInventory)
+      .toEqual(funded.householdInventory);
   });
 
 });
