@@ -83,7 +83,9 @@ export function executeM5AutonomousRegionalTradeTick(
         return [...context.phase7MainIntents];
       },
       taxPolicy: options.procurement.taxPolicy,
-      collectTelemetry: options.procurement.collectMarketTelemetry,
+      ...(options.procurement.collectMarketTelemetry === undefined
+        ? {}
+        : { collectTelemetry: options.procurement.collectMarketTelemetry }),
     })
     : null;
   const handler: PhaseHandler = (world, context, pending) => {
