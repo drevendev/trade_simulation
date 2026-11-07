@@ -515,6 +515,12 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(result.phaseBoundaryError).toBeUndefined();
     expect(result.reconciliationErrors).toBeNull();
     expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+    // Negative control: the no-seller BUY really survived Phase 7. Otherwise
+    // the test could pass without exercising unused-budget release at all.
+    expect(result.context.phase7MainIntents?.some(intent =>
+      intent.side === "BUY" && intent.goodId === GRAIN &&
+      intent.actor.type === "COHORT" && intent.actor.cohortId === funded.cohortId,
+    )).toBe(true);
     const cohortFills = result.context.marketAllocations.filter(allocation =>
       allocation.pass === "MAIN" && allocation.buyer.type === "COHORT" &&
       allocation.buyer.cohortId === funded.cohortId,
