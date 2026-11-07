@@ -18,7 +18,7 @@ import {
   type LocalClearingInput,
   type MarketAllocation,
 } from "./marketClearing";
-import type { MarketIntent } from "./marketIntent";
+import { validateMarketIntent, type MarketIntent } from "./marketIntent";
 import { executeMarketSettlement, type TaxPolicyProvider } from "./marketSettlement";
 import {
   applyMarketSettlementTransition,
@@ -165,74 +165,107 @@ function taxFacts(
 }
 
 /** Exposed for real-WorldState Phase-4 boundary regressions without running unrelated phases. */
-export function phase4ProcurementHandler(options: M4ClosedEconomyOptions): PhaseHandler {
+export function phase4ProcurementHandler(
+  options: M4ClosedEconomyOptions,
+  scope: "SINGLE_REGION" | "MULTI_REGION" = "SINGLE_REGION",
+): PhaseHandler {
   return (world, context) => {
     if (context.phase !== 4) return context;
-    const region = requireSingleRegion(world);
-    const market = requireSingleLocalMarket(world, region);
+    // M4 keeps its single-region boundary. M5 explicitly selects multiple
+    // independently cleared local markets on the SAME authoritative world.
+    const regions = scope === "MULTI_REGION"
+      ? stableOrderBy(world.regions.values(), region => String(region.regionId))
+      : [requireSingleRegion(world)];
     const intents = context.productionMarketIntents ?? [];
-    const buyers = intents.filter(
-      (intent) => intent.side === "BUY" && intent.purpose === "INPUT" && intent.regionId === region.regionId,
-    );
-    const sellers = intents.filter(
-      (intent) => intent.side === "SELL" && intent.regionId === region.regionId,
-    );
-    const goods = stableOrderBy(
-      [...new Set([...buyers.map((intent) => intent.goodId), ...sellers.map((intent) => intent.goodId)])],
-      String,
-    );
+    if (scope === "MULTI_REGION") {
+      const ids = new Set<string>();
+      for (const intent of intents) {
+        validateMarketIntent(intent);
+        if (ids.has(intent.id)) throw new Error("M5 Phase-4 duplicate MarketIntent ID");
+        ids.add(intent.id);
+        const region = world.regions.get(intent.regionId);
+        if (!region) throw new Error("M5 Phase-4 intent references missing Region");
+        if (intent.actor.type === "PRODUCTION_UNIT") {
+          const unit = world.productionUnits.get(intent.actor.productionUnitId);
+          if (!unit || unit.seed.regionKey !== region.seed.key) {
+            throw new Error("M5 Phase-4 ProductionUnit ownership/Region mismatch");
+          }
+        }
+        if (intent.actor.type === "COHORT") {
+          const cohort = world.cohorts.get(intent.actor.cohortId);
+          if (!cohort || cohort.seed.regionKey !== region.seed.key) {
+            throw new Error("M5 Phase-4 Cohort ownership/Region mismatch");
+          }
+        }
+      }
+    }
     const allocations: MarketAllocation[] = [];
+    // Share commitments and IDs across markets. No invented per-region
+    // clones of physical inventories, wallet balances or transaction journals.
     const allocationIdCounter = { value: 0 };
     const commitmentLedger = new Map<string, number>();
     const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon ?? 1e-9;
     const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
-
-    for (const goodId of goods) {
-      const goodBuyers = buyers.filter((intent) => intent.goodId === goodId);
-      const goodSellers = sellers.filter((intent) => intent.goodId === goodId);
-      if (goodBuyers.length === 0 || goodSellers.length === 0) continue;
-      const price = market.priceByGood.get(goodId);
-      if (price === undefined || !Number.isFinite(price) || price <= 0) {
-        throw new Error(`Phase-4 prior-close price for ${String(goodId)} must be finite and > 0`);
-      }
-      const facts = taxFacts(region, goodId, options.taxPolicy);
-      const grossFactor = 1 + facts.assessedTaxRate * facts.collectionEfficiency;
-      const input: LocalClearingInput = {
-        marketId: market.marketId,
-        regionId: region.regionId,
-        goodId,
-        pass: "PRE_PRODUCTION",
-        marketCurrencyId: region.settlementCurrencyId,
-        buyerIntents: goodBuyers,
-        sellerIntents: goodSellers,
-        computeEffectiveDemand: (intent, grossUnitPrice) =>
-          computeEffectiveDemand(intent, grossUnitPrice, moneyEpsilon),
-        computeSellableQuantity: (intent, committed) => {
-          // Two offers from one owner/Good/bucket draw on the same physical stock.
-          // The market primitive already visits actor+intent keys in stable order.
-          const key = `${actorRefKey(intent.actor)}|${String(intent.goodId)}|${intent.inventoryBucket ?? "GENERAL"}`;
-          const alreadyCommitted = committed.get(key) ?? 0;
-          const sellable = computeSellableQuantity(
-            intent,
-            readIntentInventory(world, intent),
-            intent.minimumReserveQuantity ?? 0,
-            alreadyCommitted,
-          );
-          committed.set(key, alreadyCommitted + sellable);
-          return sellable;
-        },
-        computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice * grossFactor,
-        getTaxationInfo: () => facts,
-      };
-      allocations.push(
-        ...computeLocalClearing(
-          input,
-          commitmentLedger,
-          price,
-          quantityEpsilon,
-          allocationIdCounter,
-        ),
+    for (const region of regions) {
+      const buyers = intents.filter(intent =>
+        intent.side === "BUY" && intent.purpose === "INPUT" && intent.regionId === region.regionId,
       );
+      const sellers = intents.filter(intent =>
+        intent.side === "SELL" && intent.regionId === region.regionId,
+      );
+      if (buyers.length === 0 && sellers.length === 0) continue;
+      const market = requireSingleLocalMarket(world, region);
+      const goods = stableOrderBy(
+        [...new Set([...buyers.map(intent => intent.goodId), ...sellers.map(intent => intent.goodId)])],
+        String,
+      );
+      for (const goodId of goods) {
+        const goodBuyers = buyers.filter((intent) => intent.goodId === goodId);
+        const goodSellers = sellers.filter((intent) => intent.goodId === goodId);
+        if (goodBuyers.length === 0 || goodSellers.length === 0) continue;
+        const price = market.priceByGood.get(goodId);
+        if (price === undefined || !Number.isFinite(price) || price <= 0) {
+          throw new Error(`Phase-4 prior-close price for ${String(goodId)} must be finite and > 0`);
+        }
+        const facts = taxFacts(region, goodId, options.taxPolicy);
+        const grossFactor = 1 + facts.assessedTaxRate * facts.collectionEfficiency;
+        const input: LocalClearingInput = {
+          marketId: market.marketId,
+          regionId: region.regionId,
+          goodId,
+          pass: "PRE_PRODUCTION",
+          marketCurrencyId: region.settlementCurrencyId,
+          buyerIntents: goodBuyers,
+          sellerIntents: goodSellers,
+          computeEffectiveDemand: (intent, grossUnitPrice) =>
+            computeEffectiveDemand(intent, grossUnitPrice, moneyEpsilon),
+          computeSellableQuantity: (intent, committed) => {
+            // Two offers from one owner/Good/bucket draw on the same physical stock.
+            // The market primitive already visits actor+intent keys in stable order.
+            const key = `${actorRefKey(intent.actor)}|${String(intent.goodId)}|${intent.inventoryBucket ?? "GENERAL"}`;
+            const alreadyCommitted = committed.get(key) ?? 0;
+            const sellable = computeSellableQuantity(
+              intent,
+              readIntentInventory(world, intent),
+              intent.minimumReserveQuantity ?? 0,
+              alreadyCommitted,
+            );
+            committed.set(key, alreadyCommitted + sellable);
+            return sellable;
+          },
+          computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice * grossFactor,
+          getTaxationInfo: () => facts,
+        };
+        allocations.push(
+          ...computeLocalClearing(
+            input,
+            commitmentLedger,
+            price,
+            quantityEpsilon,
+            allocationIdCounter,
+          ),
+        );
+      }
     }
 
     const transactionCounter = { value: 0 };
