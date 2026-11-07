@@ -72,14 +72,16 @@ describe("M5 #673 Phase-6 owner-authoritative post-procurement price formation",
   it("reprices from the same current-tick Phase-2/4/5 residuals used by Phase-7", () => {
     const f = fixture();
     const originalPrice = f.market.priceByGood.get(f.goodId)!;
+    const epsilon = f.world.simulationConfig.numeric.quantityEpsilon;
+    if (epsilon === undefined) throw new Error("Canonical numeric epsilon missing");
     const expected = repriceGoodInPhase6(
       originalPrice,
       computeEffectiveDemand(
-        f.buyer, originalPrice, f.world.simulationConfig.numeric.quantityEpsilon,
+        f.buyer, originalPrice, epsilon,
       ),
       f.seller.desiredQuantity, f.seller.desiredQuantity,
       f.market.expectationsByGood.get(f.goodId) ?? ZERO_EXPECTATION,
-      f.world.simulationConfig.numeric.quantityEpsilon, priceConfig,
+      epsilon, priceConfig,
     );
     const run = () => executeM5CanonicalIntakeTradeTick(
       f.world, 7,
