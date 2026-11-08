@@ -380,4 +380,75 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     expect(exhaustedOpening.monetaryAuthorities.get(f.chosen.authorityId)!
       .fxPools.get(f.chosen.poolId)!.cash.get(f.currencies[0]!)).toBe(f.reserveFloor);
   });
+  it("normalizes unordered registry insertion order before shared FX allocation", () => {
+    const f = fixture();
+    const unconstrained = run(f, f.world);
+    expect(unconstrained.phaseBoundaryError).toBeUndefined();
+    const fullPaid = assertPaidCargoReceipts(unconstrained, f.links).paid;
+    expect(fullPaid).toBeGreaterThan(0);
+    const opening = withOutputStock(f, fullPaid * 0.60);
+
+    // Do not reorder the route arrays: they are ordered evidence, unlike the
+    // keyed registries below. The same opening stocks/policies must produce
+    // identical realized receipts even when their Map insertion order differs.
+    const shuffled: WorldState = {
+      ...opening,
+      states: new Map([...opening.states].reverse()),
+      regions: new Map([...opening.regions].reverse()),
+      markets: new Map([...opening.markets].reverse()),
+      cohorts: new Map([...opening.cohorts].reverse()),
+      clans: new Map([...opening.clans].reverse()),
+      productionUnits: new Map([...opening.productionUnits].reverse()),
+      transportLinks: new Map([...opening.transportLinks].reverse()),
+      monetaryAuthorities: new Map(
+        [...opening.monetaryAuthorities].reverse().map(([id, authority]) => [
+          id,
+          {
+            ...authority,
+            fxPools: new Map([...authority.fxPools].reverse().map(([poolId, pool]) => [
+              poolId, { ...pool, cash: new Map([...pool.cash].reverse()) },
+            ] as const)),
+          },
+        ] as const),
+      ),
+    };
+    expect([...shuffled.regions.keys()]).not.toEqual([...opening.regions.keys()]);
+    expect([...shuffled.transportLinks.keys()])
+      .not.toEqual([...opening.transportLinks.keys()]);
+
+    const normal = run(f, opening);
+    const reversed = run(f, shuffled);
+    for (const result of [normal, reversed]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(assertPaidCargoReceipts(result).paid).toBeGreaterThan(0);
+      expect(result.world.monetaryAuthorities.get(f.chosen.authorityId)!
+        .fxPools.get(f.chosen.poolId)!.cash.get(f.currencies[0]!)!)
+        .toBeGreaterThanOrEqual(f.reserveFloor);
+      expect(totalIron(result.world)).toBeCloseTo(totalIron(opening), 7);
+      for (const currency of f.currencies) {
+        expect(totalCash(result.world, currency)).toBeCloseTo(totalCash(opening, currency), 6);
+      }
+    }
+
+    // These comparisons retain the actual transaction sequence/IDs, actor
+    // balances, FX reserve balances, in-transit owners and market prices.
+    // Aggregate totals alone could miss a recipient swap or second payout.
+    expect(reversed.context.transactions).toEqual(normal.context.transactions);
+    expect(reversed.world.shipments).toEqual(normal.world.shipments);
+    expect(reversed.world.productionUnits).toEqual(normal.world.productionUnits);
+    expect(reversed.world.monetaryAuthorities).toEqual(normal.world.monetaryAuthorities);
+    expect(reversed.world.markets).toEqual(normal.world.markets);
+
+    // Sensitivity control: a one-unit forged FX payout must be visible to the
+    // exact receipt comparison, even though shipment counts are unchanged.
+    const forged = [...reversed.context.transactions];
+    const index = forged.findIndex(tx => tx.type === "FX_OUTPUT");
+    expect(index).toBeGreaterThanOrEqual(0);
+    forged[index] = { ...forged[index]!, moneyAmount: forged[index]!.moneyAmount! + 1 };
+    expect(forged).not.toEqual(normal.context.transactions);
+    expect(opening.monetaryAuthorities).toEqual(shuffled.monetaryAuthorities);
+  });
+
 });
