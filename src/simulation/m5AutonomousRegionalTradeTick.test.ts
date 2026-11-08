@@ -1389,4 +1389,130 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(opening.shipments?.size ?? 0).toBe(0);
   });
 
+
+  it("caps scarce issuer-owned FX output and never partially posts an exhausted route", () => {
+    const f = fixture();
+    const sourceCurrency = f.source.settlementCurrencyId;
+    const destinationCurrency = f.destination.settlementCurrencyId;
+    const eligible = [...f.world.monetaryAuthorities].flatMap(([authorityId, authority]) =>
+      [...authority.fxPools].filter(([, pool]) =>
+        (pool.baseCurrencyId === sourceCurrency && pool.quoteCurrencyId === destinationCurrency) ||
+        (pool.quoteCurrencyId === sourceCurrency && pool.baseCurrencyId === destinationCurrency),
+      ).map(([poolId, pool]) => ({ authorityId, poolId, pool })),
+    );
+    expect(eligible).toHaveLength(1);
+    const selected = eligible[0]!;
+    const floor = selected.pool.baseCurrencyId === sourceCurrency
+      ? selected.pool.minOperationalReserveBase
+      : selected.pool.minOperationalReserveQuote;
+
+    // Preserve every real owner, pair, input reserve and actor wallet. Only
+    // reduce the *seller-invoice* output currency in the unique issuer pool.
+    const withOutputBudget = (outputBudget: number): WorldState => ({
+      ...f.world,
+      monetaryAuthorities: new Map([...f.world.monetaryAuthorities].map(([id, authority]) =>
+        [id, id === selected.authorityId
+          ? {
+            ...authority,
+            fxPools: new Map(authority.fxPools).set(selected.poolId, {
+              ...selected.pool,
+              cash: new Map(selected.pool.cash).set(sourceCurrency, floor + outputBudget),
+            }),
+          }
+          : authority] as const,
+      )),
+    });
+
+    const ordinary = run(f);
+    expect(ordinary.reconciliationErrors).toBeNull();
+    const ordinaryCargo = [...(ordinary.world.shipments?.values() ?? [])];
+    expect(ordinaryCargo).toHaveLength(1);
+    const ordinaryOutput = ordinary.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_OUTPUT");
+    expect(ordinaryOutput).toHaveLength(1);
+    const originallyPaidOutput = ordinaryOutput[0]!.moneyAmount!;
+    expect(originallyPaidOutput).toBeGreaterThan(0);
+
+    // A strictly smaller available pool reserve must cause a smaller
+    // re-quoted, fully paid physical lot, not the original unfunded cargo.
+    const scarceOpening = withOutputBudget(originallyPaidOutput / 4);
+    const scarce = run({ ...f, world: scarceOpening });
+    expect(scarce.phaseBoundaryError).toBeUndefined();
+    expect(scarce.reconciliationErrors).toBeNull();
+    expect(scarce.phaseTrace).toEqual([...Array(16).keys()]);
+    const scarceCargo = [...(scarce.world.shipments?.values() ?? [])];
+    expect(scarceCargo).toHaveLength(1);
+    expect(scarceCargo[0]!.quantity).toBeGreaterThan(0);
+    expect(scarceCargo[0]!.quantity).toBeLessThan(ordinaryCargo[0]!.quantity);
+    const scarceFxInput = scarce.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_INPUT");
+    const scarceFxOutput = scarce.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_OUTPUT");
+    expect(scarceFxInput).toHaveLength(1);
+    expect(scarceFxOutput).toHaveLength(1);
+    expect(scarceFxOutput[0]!.moneyAmount).toBeGreaterThan(0);
+    expect(scarceFxOutput[0]!.moneyAmount).toBeLessThan(originallyPaidOutput);
+    const startingPool = scarceOpening.monetaryAuthorities.get(selected.authorityId)!
+      .fxPools.get(selected.poolId)!;
+    expect(scarceFxOutput[0]!.currencyId).toBe(sourceCurrency);
+    expect(scarceFxInput[0]!.currencyId).toBe(destinationCurrency);
+    expect(scarce.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH")).toHaveLength(1);
+    const scarcePool = scarce.world.monetaryAuthorities.get(selected.authorityId)!
+      .fxPools.get(selected.poolId)!;
+    expect(scarcePool.cash.get(sourceCurrency)! - startingPool.cash.get(sourceCurrency)!)
+      .toBeCloseTo(-scarceFxOutput[0]!.moneyAmount!, 7);
+    expect(scarcePool.cash.get(destinationCurrency)! - startingPool.cash.get(destinationCurrency)!)
+      .toBeCloseTo(scarceFxInput[0]!.moneyAmount!, 7);
+    expect(scarcePool.cash.get(sourceCurrency)!).toBeGreaterThanOrEqual(floor);
+    expect(totalIron(scarce.world)).toBeCloseTo(totalIron(scarceOpening), 8);
+    expect(run({ ...f, world: scarceOpening }).context.transactions)
+      .toEqual(scarce.context.transactions);
+
+    // At the exact reserve floor, no invoice can be funded. Phase-4 local
+    // purchases remain live, but Phase-7 must publish zero dispatch, FX,
+    // import tariff or tax and must not touch any cross-border ledger owner.
+    const exhaustedOpening = withOutputBudget(0);
+    const exhausted = run({ ...f, world: exhaustedOpening });
+    const legallyClosed = run({
+      ...f, world: exhaustedOpening,
+      options: { ...f.options, phase1TradeLawProvider: () => undefined },
+    });
+    expect(exhausted.phaseBoundaryError).toBeUndefined();
+    expect(exhausted.reconciliationErrors).toBeNull();
+    expect(exhausted.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(exhausted.context.phase4MarketAllocations).toHaveLength(2);
+    // Allocations alone are intentions: prove that local Phase-4 purchases
+    // still paid and transferred goods despite the exhausted FX reserve.
+    const paidLocalSales = exhausted.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE");
+    expect(paidLocalSales).toHaveLength(2);
+    for (const sale of paidLocalSales) {
+      expect(sale.moneyAmount).toBeGreaterThan(0);
+      expect(sale.quantity).toBeGreaterThan(0);
+    }
+    expect(paidLocalSales).toEqual(legallyClosed.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE"));
+    // The *entire* potential route journal must be absent, including invoice
+    // annotations and transport charges, not merely FX/tax/dispatch legs.
+    expect(exhausted.context.transactions.filter(tx =>
+      tx.phase === 7 && [
+        "SHIPMENT_DISPATCH", "TRADE_GOODS_SALE", "TRANSPORT_FEE",
+        "FX_INPUT", "FX_OUTPUT", "IMPORT_TARIFF", "CONSUMPTION_TAX",
+      ].includes(tx.type))).toHaveLength(0);
+    expect(exhausted.world.shipments?.size ?? 0).toBe(0);
+    expect(exhausted.world.productionUnits).toEqual(legallyClosed.world.productionUnits);
+    expect(exhausted.world.states).toEqual(legallyClosed.world.states);
+    expect(exhausted.world.monetaryAuthorities).toEqual(exhaustedOpening.monetaryAuthorities);
+    expect(totalIron(exhausted.world)).toBeCloseTo(totalIron(exhaustedOpening), 8);
+    expect(exhaustedOpening.monetaryAuthorities.get(selected.authorityId)!
+      .fxPools.get(selected.poolId)!.cash.get(sourceCurrency)).toBe(floor);
+    // Running either scenario must not mutate the shared caller-owned fixture.
+    expect(exhaustedOpening.productionUnits).toEqual(f.world.productionUnits);
+    expect(f.world.monetaryAuthorities.get(selected.authorityId)!
+      .fxPools.get(selected.poolId)).toEqual(selected.pool);
+    expect(run({ ...f, world: exhaustedOpening }).context.transactions)
+      .toEqual(exhausted.context.transactions);
+  });
+
 });
