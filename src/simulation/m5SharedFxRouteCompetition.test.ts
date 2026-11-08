@@ -566,4 +566,129 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     expect(replay.world.markets).toEqual(resumed.world.markets);
   });
 
+  it("credits paid two-route cargo on its scheduled later tick exactly once", () => {
+    const f = fixture();
+    // This exercises real Phase-7 quote/FX/dispatch followed by Phase-1
+    // delivery, rather than injecting an already-paid synthetic shipment.
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
+        [id, { ...link, travelTicks: 2 }] as const)),
+    };
+    const dispatched = run(f, opening, true, 7);
+    expect(dispatched.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(dispatched.phaseBoundaryError).toBeUndefined();
+    expect(dispatched.reconciliationErrors).toBeNull();
+    const paid = assertPaidCargoReceipts(dispatched, f.links);
+    expect(paid.cargos).toHaveLength(2);
+    for (const cargo of paid.cargos) {
+      expect(cargo.departureTick).toBe(7);
+      expect(cargo.arrivalTick).toBe(9);
+      expect(cargo.travelTicksAtDispatch).toBe(2);
+      expect(cargo.status).toBe("IN_TRANSIT");
+      expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+      expect(cargo.destinationInventoryBucket).toBe("INPUT");
+    }
+    const inTransitIron = paid.cargos.reduce((sum, cargo) => sum + cargo.quantity, 0);
+    expect(inTransitIron).toBeGreaterThan(0);
+    const openingIron = totalIron(dispatched.world);
+    const cashAfterPayment = f.currencies.map(currency =>
+      totalCash(dispatched.world, currency));
+
+    // Close future cross-border trading only; due physical deliveries must
+    // remain independent of fresh trade permissions and FX availability.
+    const waiting = run(f, dispatched.world, false, 8);
+    expect(waiting.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(waiting.phaseBoundaryError).toBeUndefined();
+    expect(waiting.reconciliationErrors).toBeNull();
+    expect(waiting.world.shipments).toEqual(dispatched.world.shipments);
+    expect(waiting.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
+    expect(waiting.context.transactions.filter(tx => tx.phase === 7 &&
+      ["FX_INPUT", "FX_OUTPUT", "TRADE_GOODS_SALE", "SHIPMENT_DISPATCH",
+        "IMPORT_TARIFF", "TRANSPORT_FEE"].includes(tx.type))).toHaveLength(0);
+    expect(totalIron(waiting.world)).toBeCloseTo(openingIron, 7);
+    for (const [index, currency] of f.currencies.entries()) {
+      expect(totalCash(waiting.world, currency)).toBeCloseTo(cashAfterPayment[index]!, 6);
+    }
+
+    let observedPhase1 = 0;
+    const arrived = executeM5AutonomousRegionalTradeTick(
+      waiting.world, 9, households, (_phase, current) => current,
+      { ...f.options, phase1TradeLawProvider: () => undefined },
+      (phase, beforeWorld, afterWorld, context) => {
+        if (phase !== 1) return;
+        observedPhase1++;
+        expect(beforeWorld.shipments).toEqual(waiting.world.shipments);
+        expect(afterWorld.shipments?.size).toBe(0);
+        const receipts = context.transactions.filter(tx =>
+          tx.type === "SHIPMENT_DELIVERY");
+        expect(receipts).toHaveLength(paid.cargos.length);
+        expect(new Set(receipts.map(tx => tx.transactionId)).size).toBe(paid.cargos.length);
+        for (const cargo of paid.cargos) {
+          const receipt = receipts.find(tx =>
+            tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id);
+          expect(receipt).toMatchObject({
+            tick: 9, phase: 1, quantity: cargo.quantity,
+            goodId: cargo.goodId, destination: cargo.beneficialOwner,
+            sourceRegionId: cargo.originRegionId,
+            destinationRegionId: cargo.destinationRegionId,
+          });
+          expect(receipt?.moneyAmount).toBeUndefined();
+        }
+        // Phase 1 moves in-transit goods to the dispatch-frozen beneficial
+        // owner, without paying seller/tax/FX a second time.
+        for (const [id, unit] of beforeWorld.productionUnits) {
+          const due = paid.cargos.filter(cargo =>
+            cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+            cargo.beneficialOwner.productionUnitId === id)
+            .reduce((sum, cargo) => sum + cargo.quantity, 0);
+          const afterUnit = afterWorld.productionUnits.get(id)!;
+          expect(afterUnit.inputInventory.get(IRON) ?? 0)
+            .toBeCloseTo((unit.inputInventory.get(IRON) ?? 0) + due, 7);
+          expect(afterUnit.outputInventory).toEqual(unit.outputInventory);
+          expect(afterUnit.wallet).toEqual(unit.wallet);
+        }
+        expect(afterWorld.monetaryAuthorities).toEqual(beforeWorld.monetaryAuthorities);
+        expect(afterWorld.states).toEqual(beforeWorld.states);
+        expect(afterWorld.clans).toEqual(beforeWorld.clans);
+      },
+    );
+    expect(observedPhase1).toBe(1);
+    expect(arrived.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(arrived.phaseBoundaryError).toBeUndefined();
+    expect(arrived.reconciliationErrors).toBeNull();
+    expect(arrived.world.shipments?.size).toBe(0);
+    const actualReceipts = arrived.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY");
+    expect(actualReceipts).toHaveLength(2);
+    expect(actualReceipts.reduce((sum, tx) => sum + (tx.quantity ?? 0), 0))
+      .toBeCloseTo(inTransitIron, 7);
+    expect(arrived.context.transactions.filter(tx =>
+      ["FX_INPUT", "FX_OUTPUT", "TRADE_GOODS_SALE", "SHIPMENT_DISPATCH",
+        "IMPORT_TARIFF", "TRANSPORT_FEE"].includes(tx.type))).toHaveLength(0);
+    expect(totalIron(arrived.world)).toBeCloseTo(openingIron, 7);
+    for (const [index, currency] of f.currencies.entries()) {
+      expect(totalCash(arrived.world, currency)).toBeCloseTo(cashAfterPayment[index]!, 6);
+    }
+
+    const replay = run(f, waiting.world, false, 9);
+    expect(replay.phaseBoundaryError).toBeUndefined();
+    expect(replay.reconciliationErrors).toBeNull();
+    expect(replay.context.transactions).toEqual(arrived.context.transactions);
+    expect(replay.world.shipments).toEqual(arrived.world.shipments);
+    expect(replay.world.productionUnits).toEqual(arrived.world.productionUnits);
+    expect(replay.world.monetaryAuthorities).toEqual(arrived.world.monetaryAuthorities);
+
+    // After the authoritative due-date credit, there is no second arrival
+    // and no duplicated goods (or repeat payment) in the subsequent tick.
+    const following = run(f, arrived.world, false, 10);
+    expect(following.phaseBoundaryError).toBeUndefined();
+    expect(following.reconciliationErrors).toBeNull();
+    expect(following.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
+    expect(following.world.shipments?.size).toBe(0);
+    expect(totalIron(following.world)).toBeCloseTo(openingIron, 7);
+  });
+
 });
