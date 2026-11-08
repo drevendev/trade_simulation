@@ -1168,7 +1168,7 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     ));
     const opening: WorldState = {
       ...first.world,
-      regions: new Map([...first.world.regions, [gamma.regionId, gamma], [delta.regionId, delta]]),
+      regions: new Map([...first.world.regions, [gamma.regionId, gamma] as const, [delta.regionId, delta] as const]),
       productionUnits: new Map([
         ...first.world.productionUnits,
         ...additionalUnits.map(item => [item.productionUnitId, item] as const),
