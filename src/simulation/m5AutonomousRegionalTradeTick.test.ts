@@ -930,6 +930,15 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       });
     const opening: WorldState = {
       ...f.world,
+      // The two-input tool recipe otherwise cannot produce anything: Phase-4
+      // buys iron, while wood has no fixture seller. Supply opening wood stock
+      // to exercise positive Phase-5 output and its physical input sink.
+      productionUnits: new Map(f.world.productionUnits).set(
+        f.buyerA.productionUnitId, {
+          ...f.buyerA,
+          inputInventory: new Map(f.buyerA.inputInventory).set("good:wood" as GoodId, 100),
+        },
+      ),
       cohorts: new Map([[wageEarner.cohortId, wageEarner]]),
       // Isolate earned-income funding: no precautionary floor in this explicit
       // test scenario, and no credit or same-tick wage forecasts.
