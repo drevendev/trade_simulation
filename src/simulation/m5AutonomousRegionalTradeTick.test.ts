@@ -263,10 +263,18 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
           ), 0,
         ), 0,
       );
-    const fxInput = departed.context.transactions.find(tx => tx.type === "FX_INPUT")!;
-    const fxOutput = departed.context.transactions.find(tx => tx.type === "FX_OUTPUT")!;
-    expect(fxInput).toBeDefined();
-    expect(fxOutput).toBeDefined();
+    const fxInputs = departed.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_INPUT");
+    const fxOutputs = departed.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_OUTPUT");
+    expect(fxInputs).toHaveLength(1);
+    expect(fxOutputs).toHaveLength(1);
+    const fxInput = fxInputs[0]!;
+    const fxOutput = fxOutputs[0]!;
+    expect(Number.isFinite(fxInput.moneyAmount)).toBe(true);
+    expect(Number.isFinite(fxOutput.moneyAmount)).toBe(true);
+    expect(fxInput.moneyAmount).toBeGreaterThan(0);
+    expect(fxOutput.moneyAmount).toBeGreaterThan(0);
     expect(fxInput.currencyId).not.toBe(fxOutput.currencyId);
     expect(fxPoolCash(departed.world, fxInput.currencyId!) -
       fxPoolCash(opening, fxInput.currencyId!)).toBeCloseTo(fxInput.moneyAmount!, 8);
@@ -295,6 +303,11 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(enRoute.world.shipments?.has(shipment.id)).toBe(true);
     expect(enRoute.context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY"))
       .toHaveLength(0);
+    // Transit may not re-dispatch cargo, settle FX or collect the tariff again.
+    expect(enRoute.context.transactions.filter(tx =>
+      tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT" ||
+      tx.type === "IMPORT_TARIFF" || tx.type === "SHIPMENT_DISPATCH",
+    )).toHaveLength(0);
     expect(observedPhase2).toContainEqual({ tick: 8, stock: stockAtDispatch });
     expect(totalIron(enRoute.world)).toBeCloseTo(originalGoods, 8);
     expect(fxPoolCash(enRoute.world, fxInput.currencyId!)).toBeCloseTo(paidInputReserve, 8);
@@ -337,7 +350,8 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(afterArrival.world.shipments?.has(shipment.id)).toBe(false);
     expect(afterArrival.context.transactions.filter(tx =>
       tx.type === "SHIPMENT_DELIVERY" || tx.type === "FX_INPUT" ||
-      tx.type === "FX_OUTPUT" || tx.type === "IMPORT_TARIFF",
+      tx.type === "FX_OUTPUT" || tx.type === "IMPORT_TARIFF" ||
+      tx.type === "SHIPMENT_DISPATCH",
     )).toHaveLength(0);
     expect(observedPhase2).toContainEqual({
       tick: 10, stock: destinationStock(arrived.world),
