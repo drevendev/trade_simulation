@@ -1099,4 +1099,204 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       .get(f.source.settlementCurrencyId)).toBe(0);
   });
 
+  it("settles two independent currency pairs and delivers both paid cargos without recharging", () => {
+    const first = fixture();
+    const initial = buildInitialWorld(
+      baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 42,
+    );
+    const gamma = [...initial.regions.values()].find(
+      region => region.seed.key === "region:c4-trade",
+    )!;
+    const delta = [...initial.regions.values()].find(
+      region => region.seed.key === "region:d1-capital",
+    )!;
+    const secondLink = [...initial.transportLinks.values()].find(
+      link => link.fromRegionId === gamma.regionId && link.toRegionId === delta.regionId,
+    )!;
+    expect(secondLink).toBeDefined();
+
+    const templates = [...initial.productionUnits.values()].slice(4, 8);
+    expect(templates).toHaveLength(4);
+    const unit = (
+      template: ProductionUnitState, region: RegionState,
+      status: "ACTIVE" | "CLOSING", cash: number, iron: number,
+    ): ProductionUnitState => ({
+      ...template,
+      seed: { ...template.seed, regionKey: region.seed.key, recipeId: "recipe:tools-craft" },
+      status,
+      installedCapital: status === "ACTIVE" ? 5 : 0,
+      wallet: new Map([[region.settlementCurrencyId, cash]]),
+      inputInventory: iron === 0 ? new Map() : new Map([[IRON, iron]]),
+      outputInventory: new Map(),
+      investmentInventory: new Map(),
+    });
+    const additionalUnits = [
+      unit(templates[0]!, gamma, "ACTIVE", 1_000_000, 0),
+      unit(templates[1]!, gamma, "CLOSING", 5, 500),
+      unit(templates[2]!, delta, "ACTIVE", 1_000_000, 0),
+      unit(templates[3]!, delta, "CLOSING", 5, 2),
+    ];
+    const secondMarkets = [...initial.markets].filter(([, market]) =>
+      market.seed.regionKey === gamma.seed.key ||
+      market.seed.regionKey === delta.seed.key,
+    ).map(([id, market]) => [id, {
+      ...market,
+      priceByGood: new Map(market.priceByGood).set(
+        IRON, market.seed.regionKey === gamma.seed.key ? 1 : 100,
+      ),
+    }] as const);
+
+    // Preserve the existing alpha/beta pool, but choose exactly one live
+    // gamma/delta pool: the baseline seeds multiple candidate pools.
+    const isSecondPair = (base: string, quote: string) =>
+      (base === gamma.settlementCurrencyId && quote === delta.settlementCurrencyId) ||
+      (quote === gamma.settlementCurrencyId && base === delta.settlementCurrencyId);
+    const possiblePools = [...first.world.monetaryAuthorities.values()].flatMap(
+      authority => [...authority.fxPools].filter(([, pool]) =>
+        isSecondPair(pool.baseCurrencyId, pool.quoteCurrencyId)).map(([id]) => id),
+    );
+    expect(possiblePools.length).toBeGreaterThan(1);
+    const selectedPool = possiblePools[0]!;
+    const monetaryAuthorities = new Map([...first.world.monetaryAuthorities].map(
+      ([id, authority]) => [id, {
+        ...authority,
+        fxPools: new Map([...authority.fxPools].filter(([poolId, pool]) =>
+          !isSecondPair(pool.baseCurrencyId, pool.quoteCurrencyId) ||
+          poolId === selectedPool,
+        )),
+      }] as const,
+    ));
+    const opening: WorldState = {
+      ...first.world,
+      regions: new Map([...first.world.regions, [gamma.regionId, gamma], [delta.regionId, delta]]),
+      productionUnits: new Map([
+        ...first.world.productionUnits,
+        ...additionalUnits.map(item => [item.productionUnitId, item] as const),
+      ]),
+      markets: new Map([...first.world.markets, ...secondMarkets]),
+      transportLinks: new Map([
+        [first.link.linkId, { ...first.link, travelTicks: 2 }],
+        [secondLink.linkId, { ...secondLink, travelTicks: 2 }],
+      ]),
+      monetaryAuthorities,
+    };
+    const currencies = [
+      first.source.settlementCurrencyId, first.destination.settlementCurrencyId,
+      gamma.settlementCurrencyId, delta.settlementCurrencyId,
+    ];
+    expect(new Set(currencies).size).toBe(4);
+    const cashStocks = (world: WorldState): ReadonlyMap<string, number> => {
+      const totals = new Map<string, number>();
+      const wallets = [
+        ...[...world.states.values()].map(state => state.treasury),
+        ...[...world.clans.values()].map(clan => clan.treasury),
+        ...[...world.cohorts.values()].map(cohort => cohort.wallet),
+        ...[...world.productionUnits.values()].map(item => item.wallet),
+        ...[...world.monetaryAuthorities.values()].flatMap(authority =>
+          [...authority.fxPools.values()].map(pool => pool.cash)),
+      ];
+      for (const wallet of wallets) for (const [currency, amount] of wallet) {
+        totals.set(currency, (totals.get(currency) ?? 0) + amount);
+      }
+      return totals;
+    };
+    const poolStocks = (world: WorldState): ReadonlyMap<string, number> => {
+      const totals = new Map<string, number>();
+      for (const authority of world.monetaryAuthorities.values()) {
+        for (const pool of authority.fxPools.values()) {
+          for (const [currency, amount] of pool.cash) {
+            totals.set(currency, (totals.get(currency) ?? 0) + amount);
+          }
+        }
+      }
+      return totals;
+    };
+    const openingCash = cashStocks(opening);
+    const openingPoolCash = poolStocks(opening);
+    const openingIron = totalIron(opening);
+    const options: M5AutonomousRegionalTradeOptions = {
+      ...first.options,
+      infrastructureFactors: new Map([
+        [first.link.linkId, 1], [secondLink.linkId, 1],
+      ]),
+      phase1TradeLawProvider: query =>
+        query.goodId === IRON &&
+        (query.linkId === first.link.linkId || query.linkId === secondLink.linkId)
+          ? null : undefined,
+    };
+    const tick = (world: WorldState, tickNumber: number, allowTrade: boolean) =>
+      executeM5AutonomousRegionalTradeTick(
+        world, tickNumber, households, (_phase, current) => current,
+        allowTrade ? options : { ...options, phase1TradeLawProvider: () => undefined },
+      );
+    const assertConserved = (world: WorldState) => {
+      expect(totalIron(world)).toBeCloseTo(openingIron, 7);
+      const current = cashStocks(world);
+      for (const currency of currencies) {
+        expect(current.get(currency)).toBeCloseTo(openingCash.get(currency)!, 6);
+      }
+    };
+    const departed = tick(opening, 7, true);
+    expect(departed.phaseBoundaryError).toBeUndefined();
+    expect(departed.reconciliationErrors).toBeNull();
+    expect(departed.phaseTrace).toEqual([...Array(16).keys()]);
+    const cargos = [...(departed.world.shipments?.values() ?? [])];
+    expect(cargos).toHaveLength(2);
+    expect(new Set(cargos.map(cargo => cargo.transportLinkId))).toEqual(
+      new Set([first.link.linkId, secondLink.linkId]),
+    );
+    expect(cargos.every(cargo => cargo.quantity > 0 && cargo.arrivalTick === 9))
+      .toBe(true);
+    const dispatchTypes = departed.context.transactions.filter(
+      tx => tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH",
+    );
+    expect(dispatchTypes).toHaveLength(2);
+    expect(departed.context.transactions.filter(tx => tx.type === "IMPORT_TARIFF"))
+      .toHaveLength(2);
+    const fxInputs = departed.context.transactions.filter(
+      tx => tx.phase === 7 && tx.type === "FX_INPUT",
+    );
+    const fxOutputs = departed.context.transactions.filter(
+      tx => tx.phase === 7 && tx.type === "FX_OUTPUT",
+    );
+    expect(fxInputs).toHaveLength(2);
+    expect(fxOutputs).toHaveLength(2);
+    const afterDispatchPool = poolStocks(departed.world);
+    for (const currency of currencies) {
+      const posted = fxInputs.filter(tx => tx.currencyId === currency).reduce(
+        (sum, tx) => sum + tx.moneyAmount!, 0,
+      ) - fxOutputs.filter(tx => tx.currencyId === currency).reduce(
+        (sum, tx) => sum + tx.moneyAmount!, 0,
+      );
+      expect(afterDispatchPool.get(currency)! - openingPoolCash.get(currency)!)
+        .toBeCloseTo(posted, 7);
+    }
+    assertConserved(departed.world);
+    expect(tick(opening, 7, true).context.transactions).toEqual(
+      departed.context.transactions,
+    );
+
+    // New routes are forbidden after departure. Already-paid independent
+    // cargos must arrive once, with no later FX, tax or dispatch legs.
+    const forbidden = ["FX_INPUT", "FX_OUTPUT", "IMPORT_TARIFF", "SHIPMENT_DISPATCH"];
+    let previous = departed.world;
+    for (const nextTick of [8, 9, 10]) {
+      const result = tick(previous, nextTick, false);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(result.context.transactions.filter(tx => forbidden.includes(tx.type)))
+        .toHaveLength(0);
+      expect(result.context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY"))
+        .toHaveLength(nextTick === 9 ? 2 : 0);
+      expect(result.world.shipments?.size ?? 0).toBe(nextTick < 9 ? 2 : 0);
+      for (const currency of currencies) {
+        expect(poolStocks(result.world).get(currency))
+          .toBeCloseTo(afterDispatchPool.get(currency)!, 7);
+      }
+      assertConserved(result.world);
+      previous = result.world;
+    }
+    expect(opening.shipments?.size ?? 0).toBe(0);
+  });
+
 });
