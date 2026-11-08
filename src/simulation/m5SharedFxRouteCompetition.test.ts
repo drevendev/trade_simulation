@@ -469,6 +469,29 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
       (tx.moneyAmount ?? 0) > 0 && (tx.quantity ?? 0) > 0).length)
       .toBeGreaterThan(0);
 
+    // Counterfactual at the SAME tick as the funded positive control:
+    // an elapsed tick alone must never make a floor-only FX pool payable.
+    // Both branches begin with the identical post-tick-7 canonical world.
+    const stillUnfunded = run(f, noFx.world, true, 8);
+    expect(stillUnfunded.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(stillUnfunded.phaseBoundaryError).toBeUndefined();
+    expect(stillUnfunded.reconciliationErrors).toBeNull();
+    expect(stillUnfunded.context.transactions.filter(tx => tx.phase === 7 &&
+      ["FX_INPUT", "FX_OUTPUT", "SHIPMENT_DISPATCH", "TRADE_GOODS_SALE",
+        "TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"].includes(tx.type)))
+      .toHaveLength(0);
+    expect(stillUnfunded.world.shipments?.size ?? 0).toBe(0);
+    const unfundedPool = stillUnfunded.world.monetaryAuthorities
+      .get(f.chosen.authorityId)!.fxPools.get(f.chosen.poolId)!;
+    expect(unfundedPool.cash.get(f.currencies[0]!)).toBe(f.reserveFloor);
+    expect(unfundedPool.cash).toEqual(noFx.world.monetaryAuthorities
+      .get(f.chosen.authorityId)!.fxPools.get(f.chosen.poolId)!.cash);
+    for (const id of f.currencies) {
+      expect(totalCash(stillUnfunded.world, id))
+        .toBeCloseTo(totalCash(noFx.world, id), 6);
+    }
+    expect(totalIron(stillUnfunded.world)).toBeCloseTo(totalIron(noFx.world), 7);
+
     const currency = f.currencies[0]!;
     const refill = 20_000;
     const authority = noFx.world.monetaryAuthorities.get(f.chosen.authorityId)!;
