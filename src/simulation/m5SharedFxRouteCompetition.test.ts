@@ -424,7 +424,7 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
       expect(result.reconciliationErrors).toBeNull();
       expect(assertPaidCargoReceipts(result).paid).toBeGreaterThan(0);
       expect(result.world.monetaryAuthorities.get(f.chosen.authorityId)!
-        .fxPools.get(f.chosen.poolId)!.cash.get(f.currencies[0])!)
+        .fxPools.get(f.chosen.poolId)!.cash.get(f.currencies[0]!)!)
         .toBeGreaterThanOrEqual(f.reserveFloor);
       expect(totalIron(result.world)).toBeCloseTo(totalIron(opening), 7);
       for (const currency of f.currencies) {
