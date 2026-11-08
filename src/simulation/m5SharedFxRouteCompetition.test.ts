@@ -203,19 +203,93 @@ function totalIron(world: WorldState): number {
     sum + (shipment.goodId === IRON ? shipment.quantity : 0), 0);
 }
 
+
+/** Require one unique, positive FX input/output pair for each physical dispatch. */
+function assertPaidCargoReceipts(
+  result: ReturnType<typeof run>,
+  expectedLinks?: readonly TransportLinkId[],
+) {
+  const cargos = [...(result.world.shipments?.values() ?? [])];
+  const phase7 = result.context.transactions.filter(tx => tx.phase === 7);
+  const outputs = phase7.filter(tx => tx.type === "FX_OUTPUT");
+  const inputs = phase7.filter(tx => tx.type === "FX_INPUT");
+  const dispatches = phase7.filter(tx => tx.type === "SHIPMENT_DISPATCH");
+  expect(outputs).toHaveLength(cargos.length);
+  expect(inputs).toHaveLength(cargos.length);
+  expect(dispatches).toHaveLength(cargos.length);
+  if (expectedLinks !== undefined) {
+    expect(new Set(cargos.map(cargo => cargo.transportLinkId)))
+      .toEqual(new Set(expectedLinks));
+  }
+  const bundles = new Set<string>();
+  const settlementIds = new Set<string>();
+  const paidByLink = new Map<TransportLinkId, number>();
+  for (const cargo of cargos) {
+    expect(cargo.quantity).toBeGreaterThan(0);
+    expect(cargo.fxSettlementId).toMatch(/^fxs:/);
+    const matchingDispatch = dispatches.filter(tx =>
+      tx.goodId === cargo.goodId &&
+      tx.sourceRegionId === cargo.originRegionId &&
+      tx.destinationRegionId === cargo.destinationRegionId &&
+      tx.quantity === cargo.quantity &&
+      tx.source?.type === "PRODUCTION_UNIT" &&
+      cargo.seller.type === "PRODUCTION_UNIT" &&
+      tx.source.productionUnitId === cargo.seller.productionUnitId &&
+      tx.destination?.type === "PRODUCTION_UNIT" &&
+      cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+      tx.destination.productionUnitId === cargo.beneficialOwner.productionUnitId);
+    expect(matchingDispatch).toHaveLength(1);
+    const bundleId = matchingDispatch[0]!.bundleId;
+    expect(bundleId).toBeDefined();
+    bundles.add(bundleId!);
+    settlementIds.add(cargo.fxSettlementId!);
+    const matchingInputs = inputs.filter(tx =>
+      tx.fxSettlementId === cargo.fxSettlementId && tx.bundleId === bundleId);
+    const matchingOutputs = outputs.filter(tx =>
+      tx.fxSettlementId === cargo.fxSettlementId && tx.bundleId === bundleId);
+    expect(matchingInputs).toHaveLength(1);
+    expect(matchingOutputs).toHaveLength(1);
+    const input = matchingInputs[0]!;
+    const output = matchingOutputs[0]!;
+    expect(input.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+    expect(output.currencyId).toBe(cargo.invoiceCurrencyId);
+    expect(input.source).toEqual(cargo.beneficialOwner);
+    expect(output.destination).toEqual(cargo.seller);
+    for (const leg of [input, output]) {
+      expect(Number.isFinite(leg.moneyAmount)).toBe(true);
+      expect(leg.moneyAmount).toBeGreaterThan(0);
+    }
+    paidByLink.set(cargo.transportLinkId, output.moneyAmount!);
+  }
+  expect(bundles.size).toBe(cargos.length);
+  expect(settlementIds.size).toBe(cargos.length);
+  return {
+    cargos, outputs, inputs, dispatches, paidByLink,
+    paid: outputs.reduce((sum, tx) => sum + tx.moneyAmount!, 0),
+  };
+}
+
+function runOnlyLink(
+  f: ReturnType<typeof fixture>, opening: WorldState, linkId: TransportLinkId,
+) {
+  return executeM5AutonomousRegionalTradeTick(
+    opening, 7, households, (_phase, current) => current, {
+      ...f.options,
+      phase1TradeLawProvider: query =>
+        query.goodId === IRON && query.linkId === linkId ? null : undefined,
+    },
+  );
+}
+
 describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () => {
   it("caps aggregate paid dispatch at the common pool floor, not per-route stale quotes", () => {
     const f = fixture();
     const full = run(f, f.world);
     expect(full.phaseBoundaryError).toBeUndefined();
     expect(full.reconciliationErrors).toBeNull();
-    const fullCargo = [...(full.world.shipments?.values() ?? [])];
-    expect(new Set(fullCargo.map(cargo => cargo.transportLinkId)))
-      .toEqual(new Set(f.links));
-    const fullPaid = full.context.transactions.filter(tx =>
-      tx.phase === 7 && tx.type === "FX_OUTPUT");
-    expect(fullPaid).toHaveLength(2);
-    const normalTotal = fullPaid.reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+    const fullReceipts = assertPaidCargoReceipts(full, f.links);
+    expect(fullReceipts.cargos).toHaveLength(2);
+    const normalTotal = fullReceipts.paid;
     expect(normalTotal).toBeGreaterThan(0);
 
     // Each route could be settled with full output stock, but together they
@@ -224,33 +298,48 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     const opening = withOutputStock(f, cap);
     const startingPool = opening.monetaryAuthorities.get(f.chosen.authorityId)!
       .fxPools.get(f.chosen.poolId)!;
+
+    // Phase-1 legally permits exactly one link in each counterfactual.
+    // Each route must move a paid cargo on its own against this SAME pool and
+    // opening stock; summed standalone demand must exceed that common budget.
+    const standalonePaid = f.links.map(linkId => {
+      const alone = runOnlyLink(f, opening, linkId);
+      expect(alone.phaseBoundaryError).toBeUndefined();
+      expect(alone.reconciliationErrors).toBeNull();
+      const receipts = assertPaidCargoReceipts(alone, [linkId]);
+      expect(receipts.cargos).toHaveLength(1);
+      expect(receipts.paid).toBeGreaterThan(0);
+      const soloPool = alone.world.monetaryAuthorities.get(f.chosen.authorityId)!
+        .fxPools.get(f.chosen.poolId)!;
+      expect(soloPool.cash.get(f.currencies[0]!)! - startingPool.cash.get(f.currencies[0]!)!)
+        .toBeCloseTo(-receipts.paid, 7);
+      expect(soloPool.cash.get(f.currencies[1]!)! - startingPool.cash.get(f.currencies[1]!)!)
+        .toBeCloseTo(receipts.inputs[0]!.moneyAmount!, 7);
+      return receipts.paid;
+    });
+    const standaloneTotal = standalonePaid.reduce((sum, value) => sum + value, 0);
+    expect(standaloneTotal).toBeGreaterThan(cap + 1e-8);
+
     const constrained = run(f, opening);
     expect(constrained.phaseBoundaryError).toBeUndefined();
     expect(constrained.reconciliationErrors).toBeNull();
-    const outputs = constrained.context.transactions.filter(tx =>
-      tx.phase === 7 && tx.type === "FX_OUTPUT");
-    const inputs = constrained.context.transactions.filter(tx =>
-      tx.phase === 7 && tx.type === "FX_INPUT");
-    const dispatch = constrained.context.transactions.filter(tx =>
-      tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
-    const cargos = [...(constrained.world.shipments?.values() ?? [])];
-    expect(outputs.length).toBeGreaterThan(0);
-    expect(outputs).toHaveLength(inputs.length);
-    expect(dispatch).toHaveLength(outputs.length);
-    expect(cargos).toHaveLength(outputs.length);
-    const paid = outputs.reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+    const { cargos, outputs, inputs, dispatches, paidByLink, paid } =
+      assertPaidCargoReceipts(constrained);
+    expect(cargos.length).toBeGreaterThan(0);
     expect(paid).toBeGreaterThan(0);
     expect(paid).toBeLessThanOrEqual(cap + 1e-8);
     expect(paid).toBeLessThan(normalTotal);
-    expect(new Set(dispatch.map(tx => tx.bundleId)).size).toBe(dispatch.length);
+    expect(paid).toBeLessThan(standaloneTotal);
+    expect(f.links.some((linkId, index) =>
+      (paidByLink.get(linkId) ?? 0) < standalonePaid[index]! - 1e-8,
+    )).toBe(true);
     for (const cargo of cargos) {
       expect(f.links).toContain(cargo.transportLinkId);
-      expect(cargo.quantity).toBeGreaterThan(0);
-      expect(cargo.fxSettlementId).toMatch(/^fxs:/);
-      const paidLegs = outputs.filter(tx => tx.fxSettlementId === cargo.fxSettlementId);
-      expect(paidLegs).toHaveLength(1);
-      expect(paidLegs[0]!.currencyId).toBe(f.currencies[0]);
+      expect(cargo.invoiceCurrencyId).toBe(f.currencies[0]);
+      expect(cargo.buyerPaymentCurrencyId).toBe(f.currencies[1]);
     }
+    expect(dispatches).toHaveLength(cargos.length);
+    expect(outputs).toHaveLength(cargos.length);
     const finalPool = constrained.world.monetaryAuthorities.get(f.chosen.authorityId)!
       .fxPools.get(f.chosen.poolId)!;
     expect(finalPool.cash.get(f.currencies[0]!)! - startingPool.cash.get(f.currencies[0]!)!)
@@ -274,8 +363,16 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
       "FX_INPUT", "FX_OUTPUT", "SHIPMENT_DISPATCH", "IMPORT_TARIFF",
       "TRADE_GOODS_SALE", "TRANSPORT_FEE", "CONSUMPTION_TAX",
     ].includes(tx.type))).toHaveLength(0);
-    expect(exhausted.context.transactions.filter(tx =>
-      tx.phase === 4 && tx.type === "MARKET_SALE")).toEqual(
+    // This must not pass when both local-sale arrays are empty.
+    const paidLocalSales = exhausted.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE");
+    expect(paidLocalSales).toHaveLength(3);
+    for (const sale of paidLocalSales) {
+      expect(Number.isFinite(sale.moneyAmount)).toBe(true);
+      expect(sale.moneyAmount).toBeGreaterThan(0);
+      expect(sale.quantity).toBeGreaterThan(0);
+    }
+    expect(paidLocalSales).toEqual(
       closed.context.transactions.filter(tx => tx.phase === 4 && tx.type === "MARKET_SALE"),
     );
     expect(exhausted.world.productionUnits).toEqual(closed.world.productionUnits);
