@@ -158,9 +158,9 @@ function fixture() {
   return { world, options, chosen, reserveFloor, currencies, links };
 }
 
-function run(f: ReturnType<typeof fixture>, world: WorldState, allowed = true) {
+function run(f: ReturnType<typeof fixture>, world: WorldState, allowed = true, tick = 7) {
   return executeM5AutonomousRegionalTradeTick(
-    world, 7, households, (_phase, current) => current,
+    world, tick, households, (_phase, current) => current,
     allowed ? f.options : { ...f.options, phase1TradeLawProvider: () => undefined },
   );
 }
@@ -449,6 +449,121 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     forged[index] = { ...forged[index]!, moneyAmount: forged[index]!.moneyAmount! + 1 };
     expect(forged).not.toEqual(normal.context.transactions);
     expect(opening.monetaryAuthorities).toEqual(shuffled.monetaryAuthorities);
+  });
+
+
+  it("allows trade on the next tick only after a cash-conserving FX refill", () => {
+    const f = fixture();
+    const depletedOpening = withOutputStock(f, 0);
+    const noFx = run(f, depletedOpening, true, 7);
+    expect(noFx.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(noFx.phaseBoundaryError).toBeUndefined();
+    expect(noFx.reconciliationErrors).toBeNull();
+    expect(noFx.context.transactions.filter(tx => tx.phase === 7 &&
+      ["FX_INPUT", "FX_OUTPUT", "SHIPMENT_DISPATCH", "TRADE_GOODS_SALE",
+        "TRANSPORT_FEE", "IMPORT_TARIFF"].includes(tx.type))).toHaveLength(0);
+    expect(noFx.world.shipments?.size ?? 0).toBe(0);
+    // No-FX must not suppress genuinely paid domestic procurement.
+    expect(noFx.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE" &&
+      (tx.moneyAmount ?? 0) > 0 && (tx.quantity ?? 0) > 0).length)
+      .toBeGreaterThan(0);
+
+    // Counterfactual at the SAME tick as the funded positive control:
+    // an elapsed tick alone must never make a floor-only FX pool payable.
+    // Both branches begin with the identical post-tick-7 canonical world.
+    const stillUnfunded = run(f, noFx.world, true, 8);
+    expect(stillUnfunded.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(stillUnfunded.phaseBoundaryError).toBeUndefined();
+    expect(stillUnfunded.reconciliationErrors).toBeNull();
+    expect(stillUnfunded.context.transactions.filter(tx => tx.phase === 7 &&
+      ["FX_INPUT", "FX_OUTPUT", "SHIPMENT_DISPATCH", "TRADE_GOODS_SALE",
+        "TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"].includes(tx.type)))
+      .toHaveLength(0);
+    expect(stillUnfunded.world.shipments?.size ?? 0).toBe(0);
+    const unfundedPool = stillUnfunded.world.monetaryAuthorities
+      .get(f.chosen.authorityId)!.fxPools.get(f.chosen.poolId)!;
+    expect(unfundedPool.cash.get(f.currencies[0]!)).toBe(f.reserveFloor);
+    expect(unfundedPool.cash).toEqual(noFx.world.monetaryAuthorities
+      .get(f.chosen.authorityId)!.fxPools.get(f.chosen.poolId)!.cash);
+    for (const id of f.currencies) {
+      expect(totalCash(stillUnfunded.world, id))
+        .toBeCloseTo(totalCash(noFx.world, id), 6);
+    }
+    expect(totalIron(stillUnfunded.world)).toBeCloseTo(totalIron(noFx.world), 7);
+
+    const currency = f.currencies[0]!;
+    const refill = 20_000;
+    const authority = noFx.world.monetaryAuthorities.get(f.chosen.authorityId)!;
+    const pool = authority.fxPools.get(f.chosen.poolId)!;
+    expect(pool.cash.get(currency)).toBe(f.reserveFloor);
+    const funder = [...noFx.world.productionUnits.values()].find(unit =>
+      (unit.wallet.get(currency) ?? 0) > refill * 2);
+    expect(funder).toBeDefined();
+    const initialFunderCash = funder!.wallet.get(currency)!;
+    // Explicit test-only funding transfer: no newly minted money. This is NOT
+    // claimed to be an autonomous monetary-policy/FX-replenishment mechanic.
+    const refilled: WorldState = {
+      ...noFx.world,
+      productionUnits: new Map(noFx.world.productionUnits).set(
+        funder!.productionUnitId, {
+          ...funder!,
+          wallet: new Map(funder!.wallet).set(currency, initialFunderCash - refill),
+        },
+      ),
+      monetaryAuthorities: new Map(noFx.world.monetaryAuthorities).set(
+        f.chosen.authorityId, {
+          ...authority,
+          fxPools: new Map(authority.fxPools).set(f.chosen.poolId, {
+            ...pool,
+            cash: new Map(pool.cash).set(currency, f.reserveFloor + refill),
+          }),
+        },
+      ),
+    };
+    expect(totalCash(refilled, currency)).toBeCloseTo(totalCash(noFx.world, currency), 6);
+    expect(totalIron(refilled)).toBeCloseTo(totalIron(noFx.world), 7);
+    expect(refilled.productionUnits.get(funder!.productionUnitId)!.wallet.get(currency))
+      .toBeCloseTo(initialFunderCash - refill, 7);
+    expect(noFx.world.monetaryAuthorities.get(f.chosen.authorityId)!
+      .fxPools.get(f.chosen.poolId)!.cash.get(currency)).toBe(f.reserveFloor);
+
+    // The next *full* canonical tick must re-evaluate Phase-1 law, Phase-2/4
+    // procurement, Phase-6 prices and Phase-7 finite-pool FX against live stocks.
+    const resumed = run(f, refilled, true, 8);
+    expect(resumed.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(resumed.phaseBoundaryError).toBeUndefined();
+    expect(resumed.reconciliationErrors).toBeNull();
+    const receipts = assertPaidCargoReceipts(resumed);
+    expect(receipts.cargos.length).toBeGreaterThan(0);
+    expect(receipts.paid).toBeGreaterThan(0);
+    expect(receipts.paid).toBeLessThanOrEqual(refill + 1e-8);
+    for (const cargo of receipts.cargos) {
+      expect(f.links).toContain(cargo.transportLinkId);
+      expect(cargo.departureTick).toBe(8);
+      expect(cargo.buyerPaymentCurrencyId).toBe(f.currencies[1]);
+      expect(cargo.invoiceCurrencyId).toBe(currency);
+    }
+    const finalPool = resumed.world.monetaryAuthorities.get(f.chosen.authorityId)!
+      .fxPools.get(f.chosen.poolId)!;
+    expect(finalPool.cash.get(currency)! - (f.reserveFloor + refill))
+      .toBeCloseTo(-receipts.paid, 7);
+    expect(finalPool.cash.get(currency)!).toBeGreaterThanOrEqual(f.reserveFloor);
+    expect(finalPool.cash.get(f.currencies[1]!)! - pool.cash.get(f.currencies[1]!)!)
+      .toBeCloseTo(receipts.inputs.reduce((sum, leg) => sum + leg.moneyAmount!, 0), 7);
+    for (const id of f.currencies) {
+      expect(totalCash(resumed.world, id)).toBeCloseTo(totalCash(refilled, id), 6);
+    }
+    expect(totalIron(resumed.world)).toBeCloseTo(totalIron(refilled), 7);
+
+    const replay = run(f, refilled, true, 8);
+    expect(replay.phaseBoundaryError).toBeUndefined();
+    expect(replay.reconciliationErrors).toBeNull();
+    expect(replay.context.transactions).toEqual(resumed.context.transactions);
+    expect(replay.world.shipments).toEqual(resumed.world.shipments);
+    expect(replay.world.productionUnits).toEqual(resumed.world.productionUnits);
+    expect(replay.world.monetaryAuthorities).toEqual(resumed.world.monetaryAuthorities);
+    expect(replay.world.markets).toEqual(resumed.world.markets);
   });
 
 });
