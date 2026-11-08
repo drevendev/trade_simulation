@@ -1224,9 +1224,23 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
         (query.linkId === first.link.linkId || query.linkId === secondLink.linkId)
           ? null : undefined,
     };
+    // Phase-1 delivers cargo before Phase-2 planning and later production
+    // may consume input stock. Observe the actual recipient's INPUT inventory
+    // at Phase 2 to prove physical credit, not only a global goods total.
+    const phase2InputByTick = new Map<number, ReadonlyMap<string, number>>();
+    const observeHouseholds: PhaseHandler = (world, context, pending) => {
+      if (context.phase === 2) {
+        phase2InputByTick.set(context.tick, new Map(
+          [first.buyerB.productionUnitId, additionalUnits[2]!.productionUnitId].map(
+            id => [id, world.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0] as const,
+          ),
+        ));
+      }
+      return households(world, context, pending);
+    };
     const tick = (world: WorldState, tickNumber: number, allowTrade: boolean) =>
       executeM5AutonomousRegionalTradeTick(
-        world, tickNumber, households, (_phase, current) => current,
+        world, tickNumber, observeHouseholds, (_phase, current) => current,
         allowTrade ? options : { ...options, phase1TradeLawProvider: () => undefined },
       );
     const assertConserved = (world: WorldState) => {
@@ -1261,6 +1275,54 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     );
     expect(fxInputs).toHaveLength(2);
     expect(fxOutputs).toHaveLength(2);
+    // Each paid cargo must have its *own* dispatch bundle and FX receipt.
+    // Global counts and aggregated pool deltas alone let zero-value legs or
+    // both conversions on one route masquerade as two funded settlements.
+    const shipmentBundles = new Set<string>();
+    const settlementIds = new Set<string>();
+    const coveredBuyers = new Set<string>();
+    for (const cargo of cargos) {
+      expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+      if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") {
+        throw new Error("The test fixture must deliver to a production unit");
+      }
+      expect(cargo.destinationInventoryBucket).toBe("INPUT");
+      coveredBuyers.add(cargo.beneficialOwner.productionUnitId);
+      const associated = dispatchTypes.filter(tx =>
+        tx.goodId === cargo.goodId &&
+        tx.sourceRegionId === cargo.originRegionId &&
+        tx.destinationRegionId === cargo.destinationRegionId &&
+        tx.quantity === cargo.quantity &&
+        JSON.stringify(tx.source) === JSON.stringify(cargo.seller) &&
+        JSON.stringify(tx.destination) === JSON.stringify(cargo.beneficialOwner));
+      expect(associated).toHaveLength(1);
+      const dispatch = associated[0]!;
+      expect(dispatch.bundleId).toBeDefined();
+      expect(cargo.fxSettlementId).toMatch(/^fxs:/);
+      shipmentBundles.add(dispatch.bundleId!);
+      settlementIds.add(cargo.fxSettlementId!);
+      const inputs = fxInputs.filter(tx =>
+        tx.bundleId === dispatch.bundleId && tx.fxSettlementId === cargo.fxSettlementId);
+      const outputs = fxOutputs.filter(tx =>
+        tx.bundleId === dispatch.bundleId && tx.fxSettlementId === cargo.fxSettlementId);
+      expect(inputs).toHaveLength(1);
+      expect(outputs).toHaveLength(1);
+      expect(inputs[0]!.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+      expect(outputs[0]!.currencyId).toBe(cargo.invoiceCurrencyId);
+      expect(inputs[0]!.source).toEqual(cargo.beneficialOwner);
+      expect(outputs[0]!.destination).toEqual(cargo.seller);
+      for (const leg of [inputs[0]!, outputs[0]!]) {
+        expect(Number.isFinite(leg.moneyAmount)).toBe(true);
+        expect(leg.moneyAmount).toBeGreaterThan(0);
+      }
+    }
+    expect(shipmentBundles.size).toBe(2);
+    expect(settlementIds.size).toBe(2);
+    expect(coveredBuyers).toEqual(new Set([
+      first.buyerB.productionUnitId, additionalUnits[2]!.productionUnitId,
+    ]));
+    expect(new Set([...fxInputs, ...fxOutputs].map(tx => tx.currencyId)))
+      .toEqual(new Set(currencies));
     const afterDispatchPool = poolStocks(departed.world);
     for (const currency of currencies) {
       const posted = fxInputs.filter(tx => tx.currencyId === currency).reduce(
@@ -1286,9 +1348,37 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       expect(result.reconciliationErrors).toBeNull();
       expect(result.context.transactions.filter(tx => forbidden.includes(tx.type)))
         .toHaveLength(0);
-      expect(result.context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY"))
-        .toHaveLength(nextTick === 9 ? 2 : 0);
+      const arrivals = result.context.transactions.filter(
+        tx => tx.type === "SHIPMENT_DELIVERY",
+      );
+      expect(arrivals).toHaveLength(nextTick === 9 ? 2 : 0);
       expect(result.world.shipments?.size ?? 0).toBe(nextTick < 9 ? 2 : 0);
+      if (nextTick === 9) {
+        // Match each immutable cargo ID to *its* receipt and beneficiary.
+        // A duplicate receipt for one route or two wrong recipients must fail.
+        const deliveryIds = new Set<string>();
+        for (const cargo of cargos) {
+          if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") {
+            throw new Error("The test fixture must deliver to a production unit");
+          }
+          const receipts = arrivals.filter(tx =>
+            tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id);
+          expect(receipts).toHaveLength(1);
+          const receipt = receipts[0]!;
+          deliveryIds.add(receipt.transactionId);
+          expect(receipt.transactionId).toBe("tx:delivery:" + cargo.id);
+          expect(receipt.destination).toEqual(cargo.beneficialOwner);
+          expect(receipt.sourceRegionId).toBe(cargo.originRegionId);
+          expect(receipt.destinationRegionId).toBe(cargo.destinationRegionId);
+          expect(receipt.goodId).toBe(IRON);
+          expect(receipt.quantity).toBeCloseTo(cargo.quantity, 8);
+          const buyerId = cargo.beneficialOwner.productionUnitId;
+          const before = previous.productionUnits.get(buyerId)!.inputInventory.get(IRON) ?? 0;
+          expect(phase2InputByTick.get(9)?.get(buyerId))
+            .toBeCloseTo(before + cargo.quantity, 8);
+        }
+        expect(deliveryIds.size).toBe(2);
+      }
       for (const currency of currencies) {
         expect(poolStocks(result.world).get(currency))
           .toBeCloseTo(afterDispatchPool.get(currency)!, 7);
