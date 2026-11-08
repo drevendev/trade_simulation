@@ -253,6 +253,35 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       world.productionUnits.get(f.buyerB.productionUnitId)!.inputInventory.get(IRON) ?? 0;
     const originalGoods = totalIron(opening);
     const stockAtDispatch = destinationStock(departed.world);
+    // FX reserves are separately owned money stocks. The two Phase-7 legs
+    // must fund their exact reserve deltas; arrival never settles FX again.
+    const fxPoolCash = (world: WorldState, currencyId: string) =>
+      [...world.monetaryAuthorities.values()].reduce(
+        (total, authority) => total + [...authority.fxPools.values()].reduce(
+          (sum, pool) => sum + [...pool.cash].reduce(
+            (cash, [currency, amount]) => cash + (currency === currencyId ? amount : 0), 0,
+          ), 0,
+        ), 0,
+      );
+    const fxInputs = departed.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_INPUT");
+    const fxOutputs = departed.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_OUTPUT");
+    expect(fxInputs).toHaveLength(1);
+    expect(fxOutputs).toHaveLength(1);
+    const fxInput = fxInputs[0]!;
+    const fxOutput = fxOutputs[0]!;
+    expect(Number.isFinite(fxInput.moneyAmount)).toBe(true);
+    expect(Number.isFinite(fxOutput.moneyAmount)).toBe(true);
+    expect(fxInput.moneyAmount).toBeGreaterThan(0);
+    expect(fxOutput.moneyAmount).toBeGreaterThan(0);
+    expect(fxInput.currencyId).not.toBe(fxOutput.currencyId);
+    expect(fxPoolCash(departed.world, fxInput.currencyId!) -
+      fxPoolCash(opening, fxInput.currencyId!)).toBeCloseTo(fxInput.moneyAmount!, 8);
+    expect(fxPoolCash(departed.world, fxOutput.currencyId!) -
+      fxPoolCash(opening, fxOutput.currencyId!)).toBeCloseTo(-fxOutput.moneyAmount!, 8);
+    const paidInputReserve = fxPoolCash(departed.world, fxInput.currencyId!);
+    const paidOutputReserve = fxPoolCash(departed.world, fxOutput.currencyId!);
     expect(totalIron(departed.world)).toBeCloseTo(originalGoods, 8);
 
     // New trade can be prohibited by a later Phase-1 law change. That does
@@ -274,8 +303,15 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(enRoute.world.shipments?.has(shipment.id)).toBe(true);
     expect(enRoute.context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY"))
       .toHaveLength(0);
+    // Transit may not re-dispatch cargo, settle FX or collect the tariff again.
+    expect(enRoute.context.transactions.filter(tx =>
+      tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT" ||
+      tx.type === "IMPORT_TARIFF" || tx.type === "SHIPMENT_DISPATCH",
+    )).toHaveLength(0);
     expect(observedPhase2).toContainEqual({ tick: 8, stock: stockAtDispatch });
     expect(totalIron(enRoute.world)).toBeCloseTo(originalGoods, 8);
+    expect(fxPoolCash(enRoute.world, fxInput.currencyId!)).toBeCloseTo(paidInputReserve, 8);
+    expect(fxPoolCash(enRoute.world, fxOutput.currencyId!)).toBeCloseTo(paidOutputReserve, 8);
 
     const stockBeforeArrival = destinationStock(enRoute.world);
     const arrived = executeM5AutonomousRegionalTradeTick(
@@ -293,6 +329,8 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       tick: 9, stock: stockBeforeArrival + shipment.quantity,
     });
     expect(totalIron(arrived.world)).toBeCloseTo(originalGoods, 8);
+    expect(fxPoolCash(arrived.world, fxInput.currencyId!)).toBeCloseTo(paidInputReserve, 8);
+    expect(fxPoolCash(arrived.world, fxOutput.currencyId!)).toBeCloseTo(paidOutputReserve, 8);
     expect(arrived.context.transactions.filter(tx =>
       tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT" ||
       tx.type === "IMPORT_TARIFF" || tx.type === "SHIPMENT_DISPATCH",
@@ -301,6 +339,28 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       ?.moneyAmount).toBeUndefined();
     expect(departed.world.shipments?.has(shipment.id)).toBe(true);
     expect(enRoute.world.shipments?.has(shipment.id)).toBe(true);
+
+    // A further complete tick must not resurrect or re-deliver the cargo,
+    // collect the import tariff a second time, or rebalance the FX pool.
+    const afterArrival = executeM5AutonomousRegionalTradeTick(
+      arrived.world, 10, observeArrival, noTransition, noNewCrossBorder,
+    );
+    expect(afterArrival.phaseBoundaryError).toBeUndefined();
+    expect(afterArrival.reconciliationErrors).toBeNull();
+    expect(afterArrival.world.shipments?.has(shipment.id)).toBe(false);
+    expect(afterArrival.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY" || tx.type === "FX_INPUT" ||
+      tx.type === "FX_OUTPUT" || tx.type === "IMPORT_TARIFF" ||
+      tx.type === "SHIPMENT_DISPATCH",
+    )).toHaveLength(0);
+    expect(observedPhase2).toContainEqual({
+      tick: 10, stock: destinationStock(arrived.world),
+    });
+    expect(totalIron(afterArrival.world)).toBeCloseTo(originalGoods, 8);
+    expect(fxPoolCash(afterArrival.world, fxInput.currencyId!))
+      .toBeCloseTo(paidInputReserve, 8);
+    expect(fxPoolCash(afterArrival.world, fxOutput.currencyId!))
+      .toBeCloseTo(paidOutputReserve, 8);
   });
 
   it("optionally clears real Phase-7 MAIN residuals in Phase 8 exactly once", () => {
