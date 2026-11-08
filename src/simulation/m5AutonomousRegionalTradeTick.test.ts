@@ -1482,10 +1482,23 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(exhausted.reconciliationErrors).toBeNull();
     expect(exhausted.phaseTrace).toEqual([...Array(16).keys()]);
     expect(exhausted.context.phase4MarketAllocations).toHaveLength(2);
+    // Allocations alone are intentions: prove that local Phase-4 purchases
+    // still paid and transferred goods despite the exhausted FX reserve.
+    const paidLocalSales = exhausted.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE");
+    expect(paidLocalSales).toHaveLength(2);
+    for (const sale of paidLocalSales) {
+      expect(sale.moneyAmount).toBeGreaterThan(0);
+      expect(sale.quantity).toBeGreaterThan(0);
+    }
+    expect(paidLocalSales).toEqual(legallyClosed.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE"));
+    // The *entire* potential route journal must be absent, including invoice
+    // annotations and transport charges, not merely FX/tax/dispatch legs.
     expect(exhausted.context.transactions.filter(tx =>
       tx.phase === 7 && [
-        "SHIPMENT_DISPATCH", "FX_INPUT", "FX_OUTPUT",
-        "IMPORT_TARIFF", "CONSUMPTION_TAX",
+        "SHIPMENT_DISPATCH", "TRADE_GOODS_SALE", "TRANSPORT_FEE",
+        "FX_INPUT", "FX_OUTPUT", "IMPORT_TARIFF", "CONSUMPTION_TAX",
       ].includes(tx.type))).toHaveLength(0);
     expect(exhausted.world.shipments?.size ?? 0).toBe(0);
     expect(exhausted.world.productionUnits).toEqual(legallyClosed.world.productionUnits);
@@ -1494,6 +1507,10 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(totalIron(exhausted.world)).toBeCloseTo(totalIron(exhaustedOpening), 8);
     expect(exhaustedOpening.monetaryAuthorities.get(selected.authorityId)!
       .fxPools.get(selected.poolId)!.cash.get(sourceCurrency)).toBe(floor);
+    // Running either scenario must not mutate the shared caller-owned fixture.
+    expect(exhaustedOpening.productionUnits).toEqual(f.world.productionUnits);
+    expect(f.world.monetaryAuthorities.get(selected.authorityId)!
+      .fxPools.get(selected.poolId)).toEqual(selected.pool);
     expect(run({ ...f, world: exhaustedOpening }).context.transactions)
       .toEqual(exhausted.context.transactions);
   });
