@@ -756,4 +756,156 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     );
   });
 
+
+  it("optionally allocates multi-region labor, pays wages and executes Phase-5 production once", () => {
+    const f = fixture();
+    const regionKeys = new Set([f.source.seed.key, f.destination.seed.key]);
+    const recipe = f.world.definitionRegistry.recipes["recipe:tools-craft"]!;
+    const cohorts = new Map([...f.world.cohorts].filter(
+      ([, item]) => regionKeys.has(item.seed.regionKey),
+    ));
+    const working = [...cohorts.values()].find(
+      item => item.seed.regionKey === f.source.seed.key && item.seed.ageBand === "WORKING",
+    )!;
+    expect(working).toBeDefined();
+    cohorts.set(working.cohortId, {
+      ...working,
+      seed: { ...working.seed, laborCategory: recipe.laborCategory,
+        population: 1000, healthIndex: 1, employmentRateEma: 1 },
+    });
+    const opening: WorldState = { ...f.world, cohorts };
+    const options: M5AutonomousRegionalTradeOptions = {
+      ...f.options, settleLaborAndProductionInPhase5: true,
+    };
+    const execute = (upstream: PhaseHandler = households, labor = true) =>
+      executeM5AutonomousRegionalTradeTick(
+        opening, 7, upstream, (_phase, world) => world,
+        labor ? options : f.options,
+      );
+    const result = execute();
+    expect(result.phaseBoundaryError).toBeUndefined();
+    expect(result.reconciliationErrors).toBeNull();
+    expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(result.context.laborSupplyPlans?.length).toBeGreaterThan(0);
+    expect(result.context.laborDemandPlans?.length).toBe(opening.productionUnits.size);
+    expect(result.context.laborAllocations?.some(a => a.workerEquivalents > 0)).toBe(true);
+    expect(result.context.wageSettlements?.some(s => s.grossWage > 0)).toBe(true);
+    expect(result.context.productionExecutions?.length).toBe(opening.productionUnits.size);
+    expect(result.world.lastWageSettlementTransitionTick).toBe(7);
+    expect(result.world.lastProductionExecutionTransitionTick).toBe(7);
+    const wages = result.context.transactions.filter(tx => tx.phase === 5 && tx.type === "WAGE_PAYMENT");
+    expect(wages.length).toBeGreaterThan(0);
+    const totalGross = result.context.wageSettlements!.reduce((sum, w) => sum + w.grossWage, 0);
+    const totalNet = result.context.wageSettlements!.reduce((sum, w) => sum + w.netWage, 0);
+    const totalCollected = result.context.wageSettlements!.reduce((sum, w) => sum + w.collectedTax, 0);
+    expect(totalGross).toBeCloseTo(totalNet + totalCollected, 8);
+    expect(execute().context.transactions).toEqual(result.context.transactions);
+    expect(execute().world.cohorts).toEqual(result.world.cohorts);
+    expect(opening.lastWageSettlementTransitionTick ?? -1).not.toBe(7);
+
+    const legacy = execute(households, false);
+    expect(legacy.context.wageSettlements).toBeUndefined();
+    expect(legacy.world.lastWageSettlementTransitionTick ?? -1).not.toBe(7);
+
+    // A second Phase-3 allocation authority must be refused before settlement.
+    const duplicate: PhaseHandler = (world, context, pending) => {
+      const next = households(world, context, pending);
+      return context.phase === 3 ? { ...next, laborAllocations: [] } : next;
+    };
+    expect(() => execute(duplicate)).toThrow(
+      "M5 autonomous labor forbids externally supplied Phase-3 labor allocations",
+    );
+    const duplicatePhase2: PhaseHandler = (world, context, pending) => {
+      const next = households(world, context, pending);
+      return context.phase === 2 ? { ...next, laborSupplyPlans: [] } : next;
+    };
+    expect(() => execute(duplicatePhase2)).toThrow(
+      "M5 autonomous labor forbids externally supplied Phase-2 labor supply",
+    );
+    const duplicatePhase5: PhaseHandler = (world, context, pending) => {
+      const next = households(world, context, pending);
+      return context.phase === 5 ? { ...next, wageSettlements: [] } : next;
+    };
+    expect(() => execute(duplicatePhase5)).toThrow(
+      "M5 autonomous labor forbids externally supplied Phase-5 settlement/production",
+    );
+  });
+
+  it("composes household Phase-2 demand and regional Phase-3/5 labor on the same tick", () => {
+    const f = fixture();
+    const recipe = f.world.definitionRegistry.recipes["recipe:tools-craft"]!;
+    const regionKeys = new Set([f.source.seed.key, f.destination.seed.key]);
+    const cohorts = new Map([...f.world.cohorts].filter(
+      ([, item]) => regionKeys.has(item.seed.regionKey),
+    ));
+    const worker = [...cohorts.values()].find(
+      item => item.seed.regionKey === f.source.seed.key && item.seed.ageBand === "WORKING",
+    )!;
+    expect(worker).toBeDefined();
+    const funded = {
+      ...worker,
+      seed: { ...worker.seed, laborCategory: recipe.laborCategory,
+        population: 1000, healthIndex: 1, employmentRateEma: 1 },
+      wallet: new Map(worker.wallet).set(f.source.settlementCurrencyId, 100_000),
+      householdInventory: new Map<GoodId, number>(),
+    };
+    cohorts.set(funded.cohortId, funded);
+    const need = (id: string, goodId: GoodId, priority: number, target: number):
+      NeedCategoryDefinition => ({
+        id, perCapitaTarget: target, priority,
+        substitutionGoods: [{ goodId, basePreference: 1, qualityFactor: 1 }],
+        priceSensitivity: 1, inventoryCarryoverTicks: 0,
+      });
+    const opening: WorldState = {
+      ...f.world,
+      cohorts,
+      definitionRegistry: { ...f.world.definitionRegistry, needCategories: {
+        ESSENTIAL_FOOD: need("ESSENTIAL_FOOD", "good:grain" as GoodId, 4, 0),
+        BASIC_GOODS: need("BASIC_GOODS", IRON, 3, 10),
+        SERVICES: need("SERVICES", "good:tools" as GoodId, 2, 0),
+        COMFORT: need("COMFORT", "good:cloth" as GoodId, 1, 0),
+      } },
+    };
+    const jurisdictionOnly: PhaseHandler = (world, context, pending) =>
+      context.phase === 1 ? households(world, context, pending) : context;
+    const options: M5AutonomousRegionalTradeOptions = {
+      ...f.options,
+      phase1TradeLawProvider: () => undefined,
+      planHouseholdNeedsInPhase2: true,
+      settleLaborAndProductionInPhase5: true,
+      settleMainMarketInPhase8: true,
+    };
+    const execute = () => executeM5AutonomousRegionalTradeTick(
+      opening, 7, jurisdictionOnly, (_phase, world) => world, options,
+    );
+    const result = execute();
+    expect(result.phaseBoundaryError).toBeUndefined();
+    expect(result.reconciliationErrors).toBeNull();
+    expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+    const plan = result.context.householdConsumptionPlans?.find(
+      item => item.cohortId === funded.cohortId,
+    );
+    expect(plan).toBeDefined();
+    expect(result.context.householdMarketIntents?.some(
+      intent => intent.actor.type === "COHORT" && intent.actor.cohortId === funded.cohortId &&
+        intent.goodId === IRON && intent.side === "BUY",
+    )).toBe(true);
+    expect(result.context.laborSupplyPlans?.length).toBeGreaterThan(0);
+    expect(result.context.laborAllocations?.some(a => a.workerEquivalents > 0)).toBe(true);
+    expect(result.context.wageSettlements?.some(w => w.grossWage > 0)).toBe(true);
+    expect(result.world.lastWageSettlementTransitionTick).toBe(7);
+    expect(result.world.lastProductionExecutionTransitionTick).toBe(7);
+    expect(result.context.marketAllocations.some(
+      allocation => allocation.pass === "MAIN" &&
+        allocation.buyer.type === "COHORT" && allocation.buyer.cohortId === funded.cohortId &&
+        allocation.goodId === IRON && allocation.quantity > 0,
+    )).toBe(true);
+    expect(result.context.transactions.some(
+      tx => tx.phase === 5 && tx.type === "WAGE_PAYMENT",
+    )).toBe(true);
+    expect(execute().context.transactions).toEqual(result.context.transactions);
+    expect(execute().world.cohorts).toEqual(result.world.cohorts);
+    expect(opening.lastProductionExecutionTransitionTick ?? -1).not.toBe(7);
+  });
+
 });
