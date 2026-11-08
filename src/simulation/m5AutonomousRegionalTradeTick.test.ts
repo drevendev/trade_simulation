@@ -908,4 +908,126 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(opening.lastProductionExecutionTransitionTick ?? -1).not.toBe(7);
   });
 
+  it("spends a prior tick's actual wages on the next tick without duplicating money or goods", () => {
+    const f = fixture();
+    const recipe = f.world.definitionRegistry.recipes["recipe:tools-craft"]!;
+    const worker = [...f.world.cohorts.values()].find(
+      cohort => cohort.seed.regionKey === f.source.seed.key &&
+        cohort.seed.ageBand === "WORKING",
+    )!;
+    const wageEarner = {
+      ...worker,
+      seed: { ...worker.seed, laborCategory: recipe.laborCategory,
+        population: 1000, healthIndex: 1, employmentRateEma: 1 },
+      wallet: new Map([[f.source.settlementCurrencyId, 0]]),
+      householdInventory: new Map<GoodId, number>(),
+    };
+    const need = (id: string, goodId: GoodId, priority: number, target: number):
+      NeedCategoryDefinition => ({
+        id, perCapitaTarget: target, priority,
+        substitutionGoods: [{ goodId, basePreference: 1, qualityFactor: 1 }],
+        priceSensitivity: 1, inventoryCarryoverTicks: 0,
+      });
+    const opening: WorldState = {
+      ...f.world,
+      cohorts: new Map([[wageEarner.cohortId, wageEarner]]),
+      // Isolate earned-income funding: no precautionary floor in this explicit
+      // test scenario, and no credit or same-tick wage forecasts.
+      simulationConfig: {
+        ...f.world.simulationConfig,
+        population: { ...f.world.simulationConfig.population,
+          minHouseholdCashPerCapita: 0, liquidityFloorShare: 0 },
+      },
+      definitionRegistry: { ...f.world.definitionRegistry, needCategories: {
+        ESSENTIAL_FOOD: need("ESSENTIAL_FOOD", "good:grain" as GoodId, 4, 0),
+        BASIC_GOODS: need("BASIC_GOODS", IRON, 3, 10),
+        SERVICES: need("SERVICES", "good:tools" as GoodId, 2, 0),
+        COMFORT: need("COMFORT", "good:cloth" as GoodId, 1, 0),
+      } },
+    };
+    const jurisdictionOnly: PhaseHandler = (world, context, pending) =>
+      context.phase === 1 ? households(world, context, pending) : context;
+    const options: M5AutonomousRegionalTradeOptions = {
+      ...f.options,
+      phase1TradeLawProvider: () => undefined,
+      planHouseholdNeedsInPhase2: true,
+      settleLaborAndProductionInPhase5: true,
+      settleMainMarketInPhase8: true,
+      realizeHouseholdConsumptionInPhase9: true,
+    };
+    const tick = (world: WorldState, number: number) =>
+      executeM5AutonomousRegionalTradeTick(
+        world, number, jurisdictionOnly, (_phase, current) => current, options,
+      );
+    const first = tick(opening, 7);
+    expect(first.phaseBoundaryError).toBeUndefined();
+    expect(first.reconciliationErrors).toBeNull();
+    expect(first.phaseTrace).toEqual([...Array(16).keys()]);
+    const plannedFirst = first.context.householdConsumptionPlans!.find(
+      plan => plan.cohortId === wageEarner.cohortId,
+    )!;
+    expect(plannedFirst.openingSpendableCash).toBe(0);
+    expect(plannedFirst.expectedCurrentTickIncome).toBe(0);
+    expect(plannedFirst.planningCashEnvelope).toBe(0);
+    const householdFills = (result: typeof first) =>
+      result.context.marketAllocations.filter(allocation =>
+        allocation.pass === "MAIN" && allocation.buyer.type === "COHORT" &&
+          allocation.buyer.cohortId === wageEarner.cohortId && allocation.goodId === IRON,
+      );
+    expect(householdFills(first)).toHaveLength(0);
+    const netWages = (result: typeof first) =>
+      result.context.wageSettlements!.filter(
+        item => item.cohortId === wageEarner.cohortId,
+      ).reduce((sum, item) => sum + item.netWage, 0);
+    expect(netWages(first)).toBeGreaterThan(0);
+    expect(first.context.productionExecutions!.some(
+      item => item.realizedBatches > 0 && item.outputProducedQuantity > 0,
+    )).toBe(true);
+    const cashAfterFirst = first.world.cohorts.get(wageEarner.cohortId)!.wallet
+      .get(f.source.settlementCurrencyId)!;
+    expect(cashAfterFirst).toBeCloseTo(netWages(first), 8);
+
+    const second = tick(first.world, 8);
+    expect(second.phaseBoundaryError).toBeUndefined();
+    expect(second.reconciliationErrors).toBeNull();
+    expect(second.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(second.context.householdConsumptionPlans!.find(
+      plan => plan.cohortId === wageEarner.cohortId,
+    )!.openingSpendableCash).toBeCloseTo(cashAfterFirst, 8);
+    const paidFills = householdFills(second);
+    expect(paidFills.length).toBeGreaterThan(0);
+    const spent = paidFills.reduce(
+      (sum, allocation) => sum + allocation.quantity * allocation.buyerGrossUnitPrice, 0,
+    );
+    expect(spent).toBeGreaterThan(0);
+    const cashAfterSecond = second.world.cohorts.get(wageEarner.cohortId)!.wallet
+      .get(f.source.settlementCurrencyId)!;
+    expect(cashAfterSecond).toBeGreaterThanOrEqual(0);
+    expect(cashAfterSecond).toBeCloseTo(cashAfterFirst + netWages(second) - spent, 7);
+    const householdLoss = second.context.householdConsumptionExecutions!.reduce(
+      (sum, item) => sum + (item.consumedByGood[IRON] ?? 0) +
+        (item.spoiledByGood[IRON] ?? 0), 0,
+    );
+    expect(householdLoss).toBeGreaterThan(0);
+    const totalPhysicalIron = (world: WorldState) =>
+      totalIron(world) + [...world.cohorts.values()].reduce(
+        (sum, item) => sum + (item.householdInventory.get(IRON) ?? 0), 0,
+      );
+    const industrialInputLoss = second.context.productionExecutions!.reduce(
+      (sum, item) => sum + (item.inputConsumedByGood[IRON] ?? 0), 0,
+    );
+    expect(totalPhysicalIron(second.world) + industrialInputLoss + householdLoss)
+      .toBeCloseTo(totalPhysicalIron(first.world), 7);
+
+    // Full two-tick replay produces the same physical state and postings.
+    const replayFirst = tick(opening, 7);
+    const replaySecond = tick(replayFirst.world, 8);
+    expect(replaySecond.context.transactions).toEqual(second.context.transactions);
+    expect(replaySecond.world.cohorts).toEqual(second.world.cohorts);
+    expect(replaySecond.world.productionUnits).toEqual(second.world.productionUnits);
+    expect(replaySecond.world.markets).toEqual(second.world.markets);
+    expect(opening.cohorts.get(wageEarner.cohortId)!.wallet
+      .get(f.source.settlementCurrencyId)).toBe(0);
+  });
+
 });
