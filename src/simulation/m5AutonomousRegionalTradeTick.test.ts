@@ -1452,11 +1452,12 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(scarceFxOutput).toHaveLength(1);
     expect(scarceFxOutput[0]!.moneyAmount).toBeGreaterThan(0);
     expect(scarceFxOutput[0]!.moneyAmount).toBeLessThan(originallyPaidOutput);
-    expect(scarceFxOutput[0]!.moneyAmount).toBeCloseTo(
-      scarceCargo[0]!.quantity * (
-        scarceFxOutput[0]!.moneyAmount! / scarceCargo[0]!.quantity
-      ), 8,
-    );
+    const startingPool = scarceOpening.monetaryAuthorities.get(selected.authorityId)!
+      .fxPools.get(selected.poolId)!;
+    expect(scarceFxOutput[0]!.currencyId).toBe(sourceCurrency);
+    expect(scarceFxInput[0]!.currencyId).toBe(destinationCurrency);
+    expect(scarce.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH")).toHaveLength(1);
     const scarcePool = scarce.world.monetaryAuthorities.get(selected.authorityId)!
       .fxPools.get(selected.poolId)!;
     expect(scarcePool.cash.get(sourceCurrency)!).toBeGreaterThanOrEqual(floor);
