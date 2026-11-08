@@ -1460,6 +1460,10 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH")).toHaveLength(1);
     const scarcePool = scarce.world.monetaryAuthorities.get(selected.authorityId)!
       .fxPools.get(selected.poolId)!;
+    expect(scarcePool.cash.get(sourceCurrency)! - startingPool.cash.get(sourceCurrency)!)
+      .toBeCloseTo(-scarceFxOutput[0]!.moneyAmount!, 7);
+    expect(scarcePool.cash.get(destinationCurrency)! - startingPool.cash.get(destinationCurrency)!)
+      .toBeCloseTo(scarceFxInput[0]!.moneyAmount!, 7);
     expect(scarcePool.cash.get(sourceCurrency)!).toBeGreaterThanOrEqual(floor);
     expect(totalIron(scarce.world)).toBeCloseTo(totalIron(scarceOpening), 8);
     expect(run({ ...f, world: scarceOpening }).context.transactions)
