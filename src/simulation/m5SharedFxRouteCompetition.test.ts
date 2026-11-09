@@ -1124,7 +1124,15 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
 
   it("delivers already-paid cargo after spendable FX liquidity vanishes, without repaying it", () => {
     const f = fixture();
-    const dispatched = run(f, f.world, true, 7);
+    // Both border routes must have the same two-tick transit maturity here.
+    // The baseline topology deliberately has different default travel times.
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) => [
+        id, { ...link, travelTicks: 2 },
+      ] as const)),
+    };
+    const dispatched = run(f, opening, true, 7);
     expect(dispatched.phaseTrace).toEqual([...Array(16).keys()]);
     expect(dispatched.phaseBoundaryError).toBeUndefined();
     expect(dispatched.reconciliationErrors).toBeNull();
