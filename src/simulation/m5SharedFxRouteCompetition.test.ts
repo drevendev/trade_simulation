@@ -973,6 +973,20 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
       }),
     };
     const scarce = run(f, scarceWorld);
+    const aloneSecond = runOnlyLink(f, scarceWorld, f.links[1]!);
+    const diagCargo = (x: ReturnType<typeof run>) => [...(x.world.shipments?.values() ?? [])].map(c => ({
+      link: c.transportLinkId, quantity: c.quantity, seller: c.seller,
+    }));
+    throw new Error("SCARCE_DIAG " + JSON.stringify({
+      baseline: diagCargo(baseline),
+      constrained: diagCargo(scarce), secondAlone: diagCargo(aloneSecond),
+      budget: sharedExportBudget, firstLimitQuantity, secondNormal: secondNormal.quantity,
+      sourceSellerId, initialSellerStock: seller.inputInventory.get(IRON),
+      remainingSellerStock: scarce.world.productionUnits.get(sourceSellerId!)?.inputInventory.get(IRON),
+      phase7: scarce.context.transactions.filter(tx => tx.phase === 7).map(tx => ({
+        type: tx.type, quantity: tx.quantity, moneyAmount: tx.moneyAmount,
+      })).slice(0, 15),
+    }));
     expect(scarce.phaseTrace).toEqual([...Array(16).keys()]);
     expect(scarce.phaseBoundaryError).toBeUndefined();
     expect(scarce.reconciliationErrors).toBeNull();
