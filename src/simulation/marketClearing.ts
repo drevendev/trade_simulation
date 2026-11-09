@@ -118,7 +118,22 @@ export function computeEffectiveDemand(
   }
 
   const effectivePrice = Math.max(grossUnitPrice, moneyEpsilon);
-  return Math.min(intent.desiredQuantity, intent.maxSpend / effectivePrice);
+  const quantity = Math.min(intent.desiredQuantity, intent.maxSpend / effectivePrice);
+  // A correctly rounded division can round UP so that multiplying the
+  // resulting binary64 quantity by the exact same gross price exceeds the
+  // buyer's budget by one ULP. Never interpret moneyEpsilon as permission
+  // to overspend (Phase-6/7's strict committed-envelope ledger rejects it).
+  if (!(quantity > 0) || !(quantity * effectivePrice > intent.maxSpend)) {
+    return quantity;
+  }
+  const bits = new DataView(new ArrayBuffer(8));
+  bits.setFloat64(0, quantity);
+  bits.setBigUint64(0, bits.getBigUint64(0) - 1n);
+  const affordable = bits.getFloat64(0);
+  if (affordable < 0 || affordable * effectivePrice > intent.maxSpend) {
+    throw new Error("Local effective demand cannot represent an affordable quantity");
+  }
+  return affordable;
 }
 
 /**
