@@ -549,6 +549,57 @@ describe("Local clearing algorithm", () => {
     }
   });
 
+  it("rolls back the allocation counter when a later tax callback fails", () => {
+    // A late rejection must not leak IDs allocated for earlier seller matches.
+    // A retry from the same tick counter must emit the canonical contiguous IDs.
+    const buyer: MarketIntent = {
+      id: createMarketIntentId("mi:atomic-buyer"),
+      actor: { type: "CLAN", clanId: testClanId },
+      regionId: testRegionId,
+      goodId: testGoodId,
+      side: "BUY",
+      purpose: "CONSUMPTION",
+      desiredQuantity: 10,
+      maxSpend: 150,
+      sourcePlanId: "plan:atomic-buyer",
+    };
+    const sellers: MarketIntent[] = [1, 2].map((index) => ({
+      id: createMarketIntentId(`mi:atomic-seller-${index}`),
+      actor: { type: "PRODUCTION_UNIT", productionUnitId: (`pu:atomic-${index}` as ProductionUnitId) },
+      regionId: testRegionId,
+      goodId: testGoodId,
+      side: "SELL",
+      purpose: "INVENTORY_REBALANCE",
+      desiredQuantity: 5,
+      sourcePlanId: "plan:atomic-seller",
+    }));
+    const input = createTestInput([buyer], sellers);
+    let taxCalls = 0;
+    const rejecting: LocalClearingInput = {
+      ...input,
+      getTaxationInfo: (...args) => {
+        taxCalls++;
+        if (taxCalls === 2) throw new Error("late-tax-rejection");
+        return input.getTaxationInfo(...args);
+      },
+    };
+    const counter = { value: 20 };
+    expect(() => computeLocalClearing(rejecting, new Map(), 10, 1e-8, counter))
+      .toThrow("late-tax-rejection");
+    expect(taxCalls).toBe(2);
+    expect(counter.value).toBe(20);
+
+    const retried = computeLocalClearing(input, new Map(), 10, 1e-8, counter);
+    expect(retried).toHaveLength(2);
+    expect(retried.map((allocation) => allocation.quantity)).toEqual([5, 5]);
+    expect(retried.map((allocation) => allocation.id)).toEqual([
+      "ma:m:central/good:wheat/MAIN/21",
+      "ma:m:central/good:wheat/MAIN/22",
+    ]);
+    expect(counter.value).toBe(22);
+    expect(retried).toEqual(computeLocalClearing(input, new Map(), 10, 1e-8, { value: 20 }));
+  });
+
   it("clears when supply equals demand", () => {
     const buyerIntent: MarketIntent = {
       id: createMarketIntentId("mi:buyer-eq"),
