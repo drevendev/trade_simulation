@@ -1355,6 +1355,12 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     const newDispatches = resumed.context.transactions.filter(tx =>
       tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
     expect(newDispatches.length).toBeGreaterThan(0);
+    // Recovery must restore paid FX settlement, not merely create cargo IDs.
+    // This checks positive, paired currency legs and each cargo's FX/bundle
+    // settlement identity against its actual Phase-7 dispatch receipt.
+    const paidRecovery = assertPaidCargoReceipts(resumed);
+    expect(paidRecovery.cargos).toHaveLength(newDispatches.length);
+    expect(paidRecovery.paid).toBeGreaterThan(0);
     const newCargo = [...(resumed.world.shipments?.values() ?? [])];
     expect(newCargo).toHaveLength(newDispatches.length);
     expect(newCargo.every(cargo => cargo.departureTick === 10 && !ids.has(cargo.id))).toBe(true);
