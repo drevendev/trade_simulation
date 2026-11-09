@@ -1286,26 +1286,38 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
       tx.phase === 4 && tx.type === "MARKET_SALE" &&
       (tx.quantity ?? 0) > 0 && (tx.moneyAmount ?? 0) > 0)).toBe(true);
 
-    const arrived = run(f, blocked.world, true, 9);
+    // Inspect exact delivery mutation at Phase 1, before later market or
+    // production phases are allowed to spend the newly arrived input stock.
+    let phase1Observations = 0;
+    const arrived = executeM5AutonomousRegionalTradeTick(
+      blocked.world, 9, households, (_phase, current) => current, f.options,
+      (phase, before, after, context) => {
+        if (phase !== 1) return;
+        phase1Observations++;
+        const deliveries = context.transactions.filter(tx =>
+          tx.type === "SHIPMENT_DELIVERY");
+        expect(deliveries).toHaveLength(cargos.length);
+        expect(after.shipments?.size).toBe(0);
+        for (const cargo of cargos) {
+          expect(deliveries.filter(tx =>
+            tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id &&
+            tx.quantity === cargo.quantity)).toHaveLength(1);
+          expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+          if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") continue;
+          const id = cargo.beneficialOwner.productionUnitId;
+          expect(after.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0)
+            .toBeCloseTo(
+              (before.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0) +
+              cargo.quantity, 7,
+            );
+        }
+        expect(after.monetaryAuthorities).toEqual(before.monetaryAuthorities);
+      },
+    );
+    expect(phase1Observations).toBe(1);
     expect(arrived.phaseBoundaryError).toBeUndefined();
     expect(arrived.reconciliationErrors).toBeNull();
-    const deliveries = arrived.context.transactions.filter(tx =>
-      tx.type === "SHIPMENT_DELIVERY");
-    expect(deliveries).toHaveLength(cargos.length);
     expect(arrived.world.shipments?.size).toBe(0);
-    for (const cargo of cargos) {
-      expect(deliveries.filter(tx =>
-        tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id &&
-        tx.quantity === cargo.quantity)).toHaveLength(1);
-      expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
-      if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") continue;
-      const id = cargo.beneficialOwner.productionUnitId;
-      expect(arrived.world.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0)
-        .toBeCloseTo(
-          (blocked.world.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0) +
-          cargo.quantity, 7,
-        );
-    }
     expect(arrived.context.transactions.filter(tx =>
       ["FX_INPUT", "FX_OUTPUT", "TRADE_GOODS_SALE", "SHIPMENT_DISPATCH",
         "IMPORT_TARIFF", "TRANSPORT_FEE"].includes(tx.type))).toHaveLength(0);
