@@ -264,7 +264,7 @@ describe("Effective demand computation", () => {
     // An exact division is unaffected; an actor with unconstrained demand
     // is not subjected to an arbitrary universal percentage haircut.
     expect(computeEffectiveDemand({ ...intent, maxSpend: 500 }, 10)).toBe(50);
-    expect(computeEffectiveDemand({ ...intent, desiredQuantity: 1 }, 10)).toBe(1);
+    expect(computeEffectiveDemand({ ...intent, desiredQuantity: 1, maxSpend: 500 }, 10)).toBe(1);
   });
 
   it("handles zero quantity", () => {
