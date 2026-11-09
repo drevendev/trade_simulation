@@ -374,6 +374,28 @@ describe("Local clearing algorithm", () => {
     expect(computeLocalClearing(tinyInput, new Map(), 0.1, 1e-8, tinyCounter)).toEqual([]);
     expect(tinyCounter.value).toBe(9);
 
+    // Funding must not turn a mathematically priced subnormal lot into a
+    // zero-transfer delivery or a late exception. No allocation ID is spent.
+    const fundedTinyCounter = { value: 9 };
+    expect(computeLocalClearing(
+      { ...tinyInput, buyerIntents: [{ ...buyer, desiredQuantity: subnormal, maxSpend: 1 }] },
+      new Map(), 0.1, 1e-8, fundedTinyCounter,
+    )).toEqual([]);
+    expect(fundedTinyCounter.value).toBe(9);
+
+    // A tiny physical lot whose monetary transfers ARE representable remains
+    // tradable; quantityEpsilon is a reconciliation bound, not a minimum lot.
+    const paidTinyCounter = { value: 9 };
+    const paidTiny = computeLocalClearing(
+      { ...tinyInput, buyerIntents: [{ ...buyer, desiredQuantity: subnormal, maxSpend: 1 }] },
+      new Map(), 2, 1e-8, paidTinyCounter,
+    );
+    expect(paidTiny).toHaveLength(1);
+    expect(paidTiny[0]!.quantity).toBe(subnormal);
+    expect(paidTiny[0]!.quantity * paidTiny[0]!.sellerNetUnitPrice).toBeGreaterThan(0);
+    expect(paidTiny[0]!.quantity * paidTiny[0]!.buyerGrossUnitPrice).toBeGreaterThan(0);
+    expect(paidTinyCounter.value).toBe(10);
+
     // Positive control: the same physically feasible match does settle
     // at the same sub-unit price when the buyer has real funds.
     const funded = computeLocalClearing(
