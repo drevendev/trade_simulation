@@ -435,6 +435,15 @@ function materializeMatchPlan(
         quantity = affordableMatchQuantity(quantity, grossUnitPrice, previouslyCommitted, maxSpend);
       }
     }
+    // A positive physical lot cannot be transferred as a paid trade when its
+    // own seller receipt or buyer debit underflows to zero in binary64. Leave
+    // that unrepresentable lot with the seller instead of aborting the whole
+    // tick. This is not a minimum-lot cutoff or a ban on nonzero tiny payments.
+    if (quantity > 0 &&
+        ((marketPrice > 0 && quantity * marketPrice === 0) ||
+         (grossUnitPrice > 0 && quantity * grossUnitPrice === 0))) {
+      quantity = 0;
+    }
     if (quantity === 0) return null;
     const affordableMatch = quantity === match.quantity ? match : { ...match, quantity };
     const consumptionTaxAmount = quantity * collectedTaxPerUnit;
