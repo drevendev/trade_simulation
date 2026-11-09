@@ -838,4 +838,133 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     expect(totalIron(intact.world)).toBeCloseTo(initialGoods, 7);
   });
 
+
+  it("enforces live per-link cargo weight capacity without suppressing another paid route", () => {
+    const f = fixture();
+    const opening = f.world;
+    const baseline = run(f, opening);
+    expect(baseline.phaseBoundaryError).toBeUndefined();
+    expect(baseline.reconciliationErrors).toBeNull();
+    const normal = assertPaidCargoReceipts(baseline, f.links);
+    const chosenId = f.links[0]!;
+    const otherId = f.links[1]!;
+    const normalCargo = normal.cargos.find(cargo => cargo.transportLinkId === chosenId)!;
+    expect(normalCargo).toBeDefined();
+    const weight = baselineDefinitionPack.goods[IRON]!.cargoWeightPerUnit;
+    expect(weight).toBeGreaterThan(0);
+    const link = opening.transportLinks.get(chosenId)!;
+    expect(link.seed.condition).toBeGreaterThan(0);
+
+    // The physical budget is weight, NOT item count. Keep condition unchanged
+    // so tariffs and transport-cost policy are the same as the full-capacity run.
+    const limitedCapacity = normalCargo.quantity * weight * 0.5;
+    const limitedWorld: WorldState = {
+      ...opening,
+      transportLinks: new Map(opening.transportLinks).set(chosenId, {
+        ...link,
+        seed: { ...link.seed, baseCapacity: limitedCapacity / link.seed.condition },
+      }),
+    };
+    const constrained = run(f, limitedWorld);
+    expect(constrained.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(constrained.phaseBoundaryError).toBeUndefined();
+    expect(constrained.reconciliationErrors).toBeNull();
+    const paid = assertPaidCargoReceipts(constrained);
+    const used = paid.cargos.filter(cargo => cargo.transportLinkId === chosenId)
+      .reduce((sum, cargo) => sum + cargo.quantity * weight, 0);
+    expect(used).toBeGreaterThan(0); // A zero-dispatch test is not a bottleneck proof.
+    expect(used).toBeLessThanOrEqual(limitedCapacity + 1e-8);
+    expect(used).toBeLessThan(normalCargo.quantity * weight);
+    expect(paid.cargos.some(cargo => cargo.transportLinkId === otherId)).toBe(true);
+    for (const currency of f.currencies) {
+      expect(totalCash(constrained.world, currency)).toBeCloseTo(totalCash(opening, currency), 6);
+    }
+    expect(totalIron(constrained.world)).toBeCloseTo(totalIron(opening), 7);
+
+    // Physically unavailable route: no FX debit or goods mutation may be
+    // attributed to this link. Domestic purchases still settle identically.
+    const noCapacity: WorldState = {
+      ...opening,
+      transportLinks: new Map(opening.transportLinks).set(chosenId, {
+        ...link, seed: { ...link.seed, baseCapacity: 0 },
+      }),
+    };
+    const blocked = run(f, noCapacity);
+    expect(blocked.phaseBoundaryError).toBeUndefined();
+    expect(blocked.reconciliationErrors).toBeNull();
+    expect(blocked.world.shipments?.size).toBeGreaterThan(0);
+    expect([...(blocked.world.shipments?.values() ?? [])].every(
+      cargo => cargo.transportLinkId === otherId,
+    )).toBe(true);
+    const locals = (result: ReturnType<typeof run>) =>
+      result.context.transactions.filter(tx => tx.phase === 4 && tx.type === "MARKET_SALE");
+    expect(locals(blocked)).toEqual(locals(baseline));
+    expect(totalIron(blocked.world)).toBeCloseTo(totalIron(opening), 7);
+    for (const currency of f.currencies) {
+      expect(totalCash(blocked.world, currency)).toBeCloseTo(totalCash(opening, currency), 6);
+    }
+    const replay = run(f, limitedWorld);
+    expect(replay.context.transactions).toEqual(constrained.context.transactions);
+    expect(replay.world.shipments).toEqual(constrained.world.shipments);
+    expect(replay.world.productionUnits).toEqual(constrained.world.productionUnits);
+  });
+
+  it("reserves shared origin seller stock once across both paid border routes", () => {
+    const f = fixture();
+    const baseline = run(f, f.world);
+    expect(baseline.phaseBoundaryError).toBeUndefined();
+    expect(baseline.reconciliationErrors).toBeNull();
+    const normal = assertPaidCargoReceipts(baseline, f.links);
+    const totalNormal = normal.cargos.reduce((sum, cargo) => sum + cargo.quantity, 0);
+    const largestNormal = Math.max(...normal.cargos.map(cargo => cargo.quantity));
+    expect(totalNormal).toBeGreaterThan(largestNormal);
+    const sourceSellerId = normal.cargos[0]!.seller.type === "PRODUCTION_UNIT"
+      ? normal.cargos[0]!.seller.productionUnitId : null;
+    expect(sourceSellerId).not.toBeNull();
+    const seller = f.world.productionUnits.get(sourceSellerId!)!;
+    const localSaleQuantity = baseline.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE" &&
+      tx.source?.type === "PRODUCTION_UNIT" &&
+      tx.source.productionUnitId === sourceSellerId)
+      .reduce((sum, tx) => sum + (tx.quantity ?? 0), 0);
+    expect(localSaleQuantity).toBeGreaterThan(0);
+
+    // Leave enough stock to serve either route alone after local clearing,
+    // but not the sum of both independent route offers.
+    const sharedExportBudget = (largestNormal + totalNormal) / 2;
+    const reducedSellerStock = localSaleQuantity + sharedExportBudget;
+    expect(reducedSellerStock).toBeLessThan(seller.inputInventory.get(IRON)!);
+    const scarceWorld: WorldState = {
+      ...f.world,
+      productionUnits: new Map(f.world.productionUnits).set(sourceSellerId!, {
+        ...seller,
+        inputInventory: new Map(seller.inputInventory).set(IRON, reducedSellerStock),
+      }),
+    };
+    const scarce = run(f, scarceWorld);
+    expect(scarce.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(scarce.phaseBoundaryError).toBeUndefined();
+    expect(scarce.reconciliationErrors).toBeNull();
+    const scarceCargos = assertPaidCargoReceipts(scarce).cargos;
+    const totalScarce = scarceCargos.reduce((sum, cargo) => sum + cargo.quantity, 0);
+    expect(totalScarce).toBeGreaterThan(0);
+    expect(totalScarce).toBeLessThan(totalNormal);
+    expect(totalScarce).toBeLessThanOrEqual(sharedExportBudget + 1e-8);
+    const localScarce = scarce.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE" &&
+      tx.source?.type === "PRODUCTION_UNIT" &&
+      tx.source.productionUnitId === sourceSellerId)
+      .reduce((sum, tx) => sum + (tx.quantity ?? 0), 0);
+    expect(localScarce).toBeCloseTo(localSaleQuantity, 7);
+    expect(localScarce + totalScarce).toBeLessThanOrEqual(reducedSellerStock + 1e-8);
+    expect(totalIron(scarce.world)).toBeCloseTo(totalIron(scarceWorld), 7);
+    for (const currency of f.currencies) {
+      expect(totalCash(scarce.world, currency)).toBeCloseTo(totalCash(scarceWorld, currency), 6);
+    }
+    const replay = run(f, scarceWorld);
+    expect(replay.context.transactions).toEqual(scarce.context.transactions);
+    expect(replay.world.shipments).toEqual(scarce.world.shipments);
+    expect(replay.world.productionUnits).toEqual(scarce.world.productionUnits);
+  });
+
 });
