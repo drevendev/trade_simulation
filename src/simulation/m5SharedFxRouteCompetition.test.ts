@@ -1024,4 +1024,101 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     expect(replay.world.productionUnits).toEqual(scarce.world.productionUnits);
   });
 
+  it("freezes border permissions independently per tick and reopens paid trade without replaying prior FX", () => {
+    const f = fixture();
+    const firstLinkId = f.links[0]!;
+    const secondLinkId = f.links[1]!;
+    const first = f.world.transportLinks.get(firstLinkId)!;
+    const second = f.world.transportLinks.get(secondLinkId)!;
+    // Every dispatch has an observable later arrival: only newly departing
+    // cargo is compared when the next tick inherits prior in-transit goods.
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) => [
+        id, { ...link, travelTicks: 2 },
+      ] as const)),
+    };
+    const tick = (world: WorldState, number: number, firstBorderOpen: boolean) =>
+      executeM5AutonomousRegionalTradeTick(
+        world, number, households, (_phase, current) => current, {
+          ...f.options,
+          phase1TradeLawProvider: query =>
+            query.goodId === IRON &&
+            (query.linkId === secondLinkId ||
+              (firstBorderOpen && query.linkId === firstLinkId))
+              ? null : undefined,
+        },
+      );
+    const departures = (result: ReturnType<typeof tick>, number: number) =>
+      [...(result.world.shipments?.values() ?? [])].filter(
+        cargo => cargo.departureTick === number,
+      );
+    const phase7 = (result: ReturnType<typeof tick>, types: string[]) =>
+      result.context.transactions.filter(tx => tx.phase === 7 && types.includes(tx.type));
+    const localSales = (result: ReturnType<typeof tick>) =>
+      result.context.transactions.filter(tx => tx.phase === 4 && tx.type === "MARKET_SALE");
+    const checkBalance = (result: ReturnType<typeof tick>, prior: WorldState) => {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(totalIron(result.world)).toBeCloseTo(totalIron(prior), 7);
+      for (const currency of f.currencies) {
+        expect(totalCash(result.world, currency)).toBeCloseTo(totalCash(prior, currency), 6);
+      }
+    };
+    // Both routes MUST work in the opening counterfactual: otherwise a
+    // subsequent "reopen" assertion could pass without proving any recovery.
+    const bothOpen = tick(opening, 7, true);
+    checkBalance(bothOpen, opening);
+    expect(assertPaidCargoReceipts(bothOpen, f.links).cargos).toHaveLength(2);
+
+    // One border closes while the other still pays for real cargo, and local
+    // purchases are unaffected by the cross-border permission snapshot.
+    const restricted = tick(opening, 7, false);
+    checkBalance(restricted, opening);
+    expect(assertPaidCargoReceipts(restricted, [secondLinkId]).cargos).toHaveLength(1);
+    expect(localSales(restricted)).toEqual(localSales(bothOpen));
+    expect(phase7(restricted, ["FX_INPUT", "FX_OUTPUT", "SHIPMENT_DISPATCH"]))
+      .toHaveLength(3);
+    expect(restricted.world.transportLinks.get(firstLinkId)).toEqual(opening.transportLinks.get(firstLinkId));
+    expect(restricted.world.transportLinks.get(secondLinkId)).toEqual(opening.transportLinks.get(secondLinkId));
+
+    // Branch from the SAME completed tick-7 WorldState. Reopening must be a
+    // current Phase-1 decision, not leaked authorization from tick 7.
+    const stillClosed = tick(restricted.world, 8, false);
+    const reopened = tick(restricted.world, 8, true);
+    checkBalance(stillClosed, restricted.world);
+    checkBalance(reopened, restricted.world);
+    const closedNew = departures(stillClosed, 8);
+    const reopenedNew = departures(reopened, 8);
+    expect(closedNew.length).toBeGreaterThan(0);
+    expect(closedNew.every(cargo => cargo.transportLinkId === secondLinkId)).toBe(true);
+    expect(reopenedNew.some(cargo => cargo.transportLinkId === firstLinkId)).toBe(true);
+    expect(reopenedNew.some(cargo => cargo.transportLinkId === secondLinkId)).toBe(true);
+    expect(localSales(reopened)).toEqual(localSales(stillClosed));
+
+    // Previously dispatched cargo is retained once and must not be re-paid.
+    const priorIds = new Set(departures(restricted, 7).map(cargo => cargo.id));
+    expect(priorIds.size).toBe(1);
+    for (const result of [stillClosed, reopened]) {
+      for (const id of priorIds) expect(result.world.shipments?.has(id)).toBe(true);
+      const nowDispatch = phase7(result, ["SHIPMENT_DISPATCH"]);
+      const nowFxInput = phase7(result, ["FX_INPUT"]);
+      const nowFxOutput = phase7(result, ["FX_OUTPUT"]);
+      expect(nowDispatch).toHaveLength(departures(result, 8).length);
+      expect(nowFxInput).toHaveLength(nowDispatch.length);
+      expect(nowFxOutput).toHaveLength(nowDispatch.length);
+      const currentBundles = new Set(nowDispatch.map(tx => tx.bundleId));
+      expect(currentBundles.size).toBe(nowDispatch.length);
+      for (const tx of [...nowFxInput, ...nowFxOutput]) {
+        expect(currentBundles.has(tx.bundleId)).toBe(true);
+      }
+    }
+    const replay = tick(restricted.world, 8, true);
+    expect(replay.context.transactions).toEqual(reopened.context.transactions);
+    expect(replay.world.shipments).toEqual(reopened.world.shipments);
+    expect(replay.world.productionUnits).toEqual(reopened.world.productionUnits);
+    expect(replay.world.monetaryAuthorities).toEqual(reopened.world.monetaryAuthorities);
+  });
+
 });
