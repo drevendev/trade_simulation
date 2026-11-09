@@ -240,6 +240,33 @@ describe("Effective demand computation", () => {
     expect(demand).toBe(50); // min(100, 500 / 10) = 50
   });
 
+  it("never spends one binary64 ULP above a real buyer budget", () => {
+    // Exact long-run M5 Phase-4 bug: tick 11 BUY maximum is below the
+    // money value of the rounded-up affordable quantity.
+    const maxSpend = 0.8082225516890139;
+    const grossPrice = 1.05;
+    const intent: MarketIntent = {
+      id: createMarketIntentId("mi:buy-ulp"),
+      actor: { type: "CLAN", clanId: testClanId },
+      regionId: testRegionId,
+      goodId: testGoodId,
+      side: "BUY",
+      purpose: "CONSUMPTION",
+      desiredQuantity: 100,
+      maxSpend,
+      sourcePlanId: "plan:ulp",
+    };
+    expect((maxSpend / grossPrice) * grossPrice).toBeGreaterThan(maxSpend);
+    const quantity = computeEffectiveDemand(intent, grossPrice);
+    expect(quantity).toBeGreaterThan(0);
+    expect(quantity).toBeLessThan(maxSpend / grossPrice);
+    expect(quantity * grossPrice).toBeLessThanOrEqual(maxSpend);
+    // An exact division is unaffected; an actor with unconstrained demand
+    // is not subjected to an arbitrary universal percentage haircut.
+    expect(computeEffectiveDemand({ ...intent, maxSpend: 500 }, 10)).toBe(50);
+    expect(computeEffectiveDemand({ ...intent, desiredQuantity: 1 }, 10)).toBe(1);
+  });
+
   it("handles zero quantity", () => {
     const intent: MarketIntent = {
       id: createMarketIntentId("mi:buy-3"),
