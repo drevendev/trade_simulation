@@ -691,4 +691,151 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     expect(totalIron(following.world)).toBeCloseTo(openingIron, 7);
   });
 
+
+  it("accounts for two different real-route transit loss rates exactly once", () => {
+    const f = fixture();
+    const rates = new Map<TransportLinkId, number>([
+      [f.links[0]!, 0.125], [f.links[1]!, 0.25],
+    ]);
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) => [
+        id, {
+          ...link,
+          travelTicks: 2,
+          seed: { ...link.seed, routinePhysicalLossRate: rates.get(id) ?? 0 },
+        },
+      ] as const)),
+    };
+    const initialGoods = totalIron(opening);
+    const dispatched = run(f, opening, true, 7);
+    expect(dispatched.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(dispatched.phaseBoundaryError).toBeUndefined();
+    expect(dispatched.reconciliationErrors).toBeNull();
+    const { cargos, dispatches } = assertPaidCargoReceipts(dispatched, f.links);
+    expect(cargos).toHaveLength(2);
+    const sales = dispatched.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "TRADE_GOODS_SALE");
+    const losses = dispatched.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "GOODS_TRANSPORT_LOSS");
+    expect(sales).toHaveLength(2);
+    expect(losses).toHaveLength(2);
+    expect(new Set(losses.map(tx => tx.transactionId)).size).toBe(2);
+    let totalDestroyed = 0;
+    for (const cargo of cargos) {
+      const dispatch = dispatches.find(tx =>
+        tx.destinationRegionId === cargo.destinationRegionId);
+      expect(dispatch).toBeDefined();
+      const invoice = sales.find(tx => tx.bundleId === dispatch!.bundleId);
+      const loss = losses.find(tx => tx.bundleId === dispatch!.bundleId);
+      expect(invoice).toBeDefined();
+      expect(loss).toBeDefined();
+      expect(dispatch!.quantity).toBe(cargo.quantity);
+      expect(invoice!.quantity).toBeGreaterThan(cargo.quantity);
+      expect(loss!.quantity).toBeGreaterThan(0);
+      expect(invoice!.quantity!).toBeCloseTo(cargo.quantity + loss!.quantity!, 8);
+      expect(loss!.quantity!).toBeCloseTo(
+        invoice!.quantity! * rates.get(cargo.transportLinkId)!, 8,
+      );
+      expect(loss).toMatchObject({
+        tick: 7, phase: 7, goodId: IRON,
+        source: cargo.beneficialOwner,
+        sourceRegionId: cargo.originRegionId,
+        destinationRegionId: cargo.destinationRegionId,
+        reason: "DISPATCH_ROUTINE_PHYSICAL_LOSS:" + cargo.id,
+      });
+      expect(loss!.moneyAmount).toBeUndefined();
+      expect(cargo.arrivalTick).toBe(9);
+      totalDestroyed += loss!.quantity!;
+    }
+    expect(totalDestroyed).toBeGreaterThan(0);
+    // Seller loses invoiced gross goods; only the surviving paid quantity is
+    // owned in transit. The missing stock must be an attributed physical loss.
+    expect(totalIron(dispatched.world))
+      .toBeCloseTo(initialGoods - totalDestroyed, 7);
+    const paidCash = f.currencies.map(currency => totalCash(dispatched.world, currency));
+    for (const currency of f.currencies) {
+      expect(totalCash(dispatched.world, currency))
+        .toBeCloseTo(totalCash(opening, currency), 6);
+    }
+
+    const waiting = run(f, dispatched.world, false, 8);
+    expect(waiting.phaseBoundaryError).toBeUndefined();
+    expect(waiting.reconciliationErrors).toBeNull();
+    expect(waiting.world.shipments).toEqual(dispatched.world.shipments);
+    expect(waiting.context.transactions.filter(tx =>
+      tx.type === "GOODS_TRANSPORT_LOSS" || tx.type === "SHIPMENT_DELIVERY"))
+      .toHaveLength(0);
+    expect(totalIron(waiting.world)).toBeCloseTo(initialGoods - totalDestroyed, 7);
+
+    let phase1Visits = 0;
+    const arrived = executeM5AutonomousRegionalTradeTick(
+      waiting.world, 9, households, (_phase, current) => current,
+      { ...f.options, phase1TradeLawProvider: () => undefined },
+      (phase, before, after, context) => {
+        if (phase !== 1) return;
+        phase1Visits++;
+        expect(after.shipments?.size).toBe(0);
+        const receipts = context.transactions.filter(tx =>
+          tx.type === "SHIPMENT_DELIVERY");
+        expect(receipts).toHaveLength(2);
+        for (const cargo of cargos) {
+          expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+          if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") {
+            throw new Error("golden fixture requires real production-unit buyers");
+          }
+          const id = cargo.beneficialOwner.productionUnitId;
+          expect(after.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0)
+            .toBeCloseTo(
+              (before.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0) +
+                cargo.quantity, 7,
+            );
+          expect(receipts.filter(tx =>
+            tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id))
+            .toHaveLength(1);
+        }
+        expect(after.monetaryAuthorities).toEqual(before.monetaryAuthorities);
+      },
+    );
+    expect(phase1Visits).toBe(1);
+    expect(arrived.phaseBoundaryError).toBeUndefined();
+    expect(arrived.reconciliationErrors).toBeNull();
+    expect(arrived.world.shipments?.size).toBe(0);
+    expect(arrived.context.transactions.filter(tx =>
+      tx.type === "GOODS_TRANSPORT_LOSS" || tx.type === "FX_INPUT" ||
+      tx.type === "FX_OUTPUT" || tx.type === "TRANSPORT_FEE" ||
+      tx.type === "IMPORT_TARIFF")).toHaveLength(0);
+    expect(totalIron(arrived.world)).toBeCloseTo(initialGoods - totalDestroyed, 7);
+    for (const [index, currency] of f.currencies.entries()) {
+      expect(totalCash(arrived.world, currency)).toBeCloseTo(paidCash[index]!, 6);
+    }
+    const replay = run(f, waiting.world, false, 9);
+    expect(replay.context.transactions).toEqual(arrived.context.transactions);
+    expect(replay.world.productionUnits).toEqual(arrived.world.productionUnits);
+    expect(replay.world.shipments).toEqual(arrived.world.shipments);
+    const next = run(f, arrived.world, false, 10);
+    expect(next.phaseBoundaryError).toBeUndefined();
+    expect(next.reconciliationErrors).toBeNull();
+    expect(next.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY" || tx.type === "GOODS_TRANSPORT_LOSS"))
+      .toHaveLength(0);
+    expect(totalIron(next.world)).toBeCloseTo(initialGoods - totalDestroyed, 7);
+
+    // Non-vacuity control: an otherwise identical zero-attrition run must
+    // dispatch without any loss receipt or real-goods destruction.
+    const zeroLoss: WorldState = {
+      ...opening,
+      transportLinks: new Map([...opening.transportLinks].map(([id, link]) => [
+        id, { ...link, seed: { ...link.seed, routinePhysicalLossRate: 0 } },
+      ] as const)),
+    };
+    const intact = run(f, zeroLoss, true, 7);
+    expect(intact.phaseBoundaryError).toBeUndefined();
+    expect(intact.reconciliationErrors).toBeNull();
+    expect(assertPaidCargoReceipts(intact, f.links).cargos).toHaveLength(2);
+    expect(intact.context.transactions.filter(tx =>
+      tx.type === "GOODS_TRANSPORT_LOSS")).toHaveLength(0);
+    expect(totalIron(intact.world)).toBeCloseTo(initialGoods, 7);
+  });
+
 });
