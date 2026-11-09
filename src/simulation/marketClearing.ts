@@ -340,6 +340,36 @@ function selectStableMatchPlan(
 }
 
 /**
+ * Find the largest representable nonnegative match quantity whose emitted
+ * binary64 debit fits the BUY intent's remaining budget. Testing the actual
+ * running sum matters: independently rounded seller fills can overdraw by
+ * one ULP even when aggregate demand * grossPrice fits exactly.
+ *
+ * Positive finite float64 bit patterns are monotonically ordered. Search
+ * their 64-bit space rather than repeatedly subtracting an arbitrary haircut.
+ */
+function affordableMatchQuantity(
+  requested: number,
+  grossPrice: number,
+  priorDebit: number,
+  maxSpend: number,
+): number {
+  const bits = new DataView(new ArrayBuffer(8));
+  bits.setFloat64(0, requested);
+  let low = 0n;
+  let high = bits.getBigUint64(0);
+  while (low < high) {
+    const mid = (low + high + 1n) / 2n;
+    bits.setBigUint64(0, mid);
+    const candidate = bits.getFloat64(0);
+    if (priorDebit + candidate * grossPrice <= maxSpend) low = mid;
+    else high = mid - 1n;
+  }
+  bits.setBigUint64(0, low);
+  return bits.getFloat64(0);
+}
+
+/**
  * Materialize exactly one already-selected plan. This is the only stage allowed to invoke
  * taxation callbacks or consume allocation IDs, so rejected numerical trials cannot leak
  * externally observable effects.
@@ -363,6 +393,11 @@ function materializeMatchPlan(
     throw new Error("Local clearing marketPrice must be >= 0");
   }
 
+  // Enforce each BUY envelope at the actual per-seller allocation boundary.
+  // The plan is physically valid already; only an unaffordable rounding tail
+  // may be reduced. Unfilled stock stays with the seller; no extra transfer or
+  // allocation ID is generated for an unrepresentable positive tail.
+  const buyerDebitByIntent = new Map<MarketIntentId, number>();
   const prepared = plan.map((match) => {
     const taxInfo = input.getTaxationInfo(match.buyer, match.buyer.regionId, input.goodId);
     assertFiniteCanonicalNumber(taxInfo.assessedTaxRate, "assessedTaxRate for local allocation");
@@ -374,9 +409,24 @@ function materializeMatchPlan(
 
     const collectedTaxPerUnit = marketPrice * taxInfo.assessedTaxRate * taxInfo.collectionEfficiency;
     const grossUnitPrice = marketPrice + collectedTaxPerUnit;
-    const consumptionTaxAmount = match.quantity * collectedTaxPerUnit;
-    const sellerReceipt = match.quantity * marketPrice;
-    const buyerDebit = match.quantity * grossUnitPrice;
+    assertFiniteCanonicalNumber(grossUnitPrice, "grossUnitPrice for local allocation");
+    if (grossUnitPrice < 0) {
+      throw new Error("Local clearing grossUnitPrice must be >= 0");
+    }
+    const maxSpend = match.buyer.maxSpend;
+    if (typeof maxSpend !== "number" || !Number.isFinite(maxSpend) || maxSpend < 0) {
+      throw new Error("Local clearing BUY intent must have finite nonnegative maxSpend");
+    }
+    const previouslyCommitted = buyerDebitByIntent.get(match.buyer.id) ?? 0;
+    const quantity = grossUnitPrice > 0 &&
+      previouslyCommitted + match.quantity * grossUnitPrice > maxSpend
+      ? affordableMatchQuantity(match.quantity, grossUnitPrice, previouslyCommitted, maxSpend)
+      : match.quantity;
+    if (quantity === 0) return null;
+    const affordableMatch = quantity === match.quantity ? match : { ...match, quantity };
+    const consumptionTaxAmount = quantity * collectedTaxPerUnit;
+    const sellerReceipt = quantity * marketPrice;
+    const buyerDebit = quantity * grossUnitPrice;
     if (![collectedTaxPerUnit, grossUnitPrice, consumptionTaxAmount, sellerReceipt, buyerDebit]
       .every(Number.isFinite)) {
       throw new Error("Local clearing taxation/money products must be finite before allocation");
@@ -390,8 +440,13 @@ function materializeMatchPlan(
         (typeof taxInfo.destinationStateId !== "string" || taxInfo.destinationStateId.trim() === "")) {
       throw new Error("Local clearing collected consumption tax has no State treasury destination");
     }
-    return { match, grossUnitPrice, consumptionTaxAmount, destinationStateId: taxInfo.destinationStateId };
-  });
+    const nextCommitted = previouslyCommitted + buyerDebit;
+    if (nextCommitted > maxSpend) {
+      throw new Error("Local clearing emitted buyer debit exceeds maxSpend");
+    }
+    buyerDebitByIntent.set(match.buyer.id, nextCommitted);
+    return { match: affordableMatch, grossUnitPrice, consumptionTaxAmount, destinationStateId: taxInfo.destinationStateId };
+  }).filter((entry) => entry !== null);
 
   // All callback/numeric checks succeeded. Build the deterministic contiguous ID
   // sequence locally; publish the caller counter only after every record exists.
