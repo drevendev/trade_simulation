@@ -396,6 +396,76 @@ describe("Local clearing algorithm", () => {
     )).toEqual(allocations);
   });
 
+  it("bounds three separately rounded seller debits across deterministic taxed price sweeps", () => {
+    // Exercise materialized seller-match debits, not only aggregate Q * gross.
+    // The earlier fixed two-seller ULP counterexample remains an exact witness;
+    // this sweep protects its per-BUY-intent commitment rule across price scales.
+    for (let caseIndex = 0; caseIndex < 48; caseIndex++) {
+      const rate = [0, 0.05, 0.2, 0.37][caseIndex % 4]!;
+      const netPrice = 0.01 + (caseIndex + 1) * 0.000987654321;
+      const budget = 0.12 + caseIndex * 0.001013;
+      const grossPrice = netPrice + netPrice * rate;
+      const affordable = budget / grossPrice;
+      const caps = [affordable * 0.17, affordable * 0.31, affordable * 0.71];
+      const buyer: MarketIntent = {
+        id: createMarketIntentId("mi:sweep-buyer"),
+        actor: { type: "CLAN", clanId: testClanId },
+        regionId: testRegionId,
+        goodId: testGoodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: affordable * 2,
+        maxSpend: budget,
+        sourcePlanId: "plan:sweep-buyer",
+      };
+      const sellers: MarketIntent[] = caps.map((cap, index) => ({
+        id: createMarketIntentId(`mi:sweep-seller-${index}`),
+        actor: {
+          type: "PRODUCTION_UNIT",
+          productionUnitId: (`pu:sweep-${index}` as ProductionUnitId),
+        },
+        regionId: testRegionId,
+        goodId: testGoodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: cap,
+        sourcePlanId: "plan:sweep-seller",
+      }));
+      const input: LocalClearingInput = {
+        ...createTestInput([buyer], sellers),
+        computeGrossUnitPrice: (_intent, price) => price + price * rate,
+        computeEffectiveDemand,
+        getTaxationInfo: () => ({
+          destinationStateId: testStateId,
+          assessedTaxRate: rate,
+          collectionEfficiency: 1,
+        }),
+      };
+      const counter = { value: 0 };
+      const fills = computeLocalClearing(input, new Map(), netPrice, 1e-8, counter);
+      expect(fills, `case ${caseIndex}`).toHaveLength(3);
+      expect(counter.value).toBe(3);
+      const debits = fills.reduce(
+        (sum, fill) => sum + fill.quantity * fill.buyerGrossUnitPrice, 0,
+      );
+      expect(debits, `case ${caseIndex} overspent budget`).toBeLessThanOrEqual(budget);
+      expect(debits).toBeGreaterThan(0);
+      for (let index = 0; index < 3; index++) {
+        const fill = fills[index]!;
+        expect(fill.sellerIntentId).toBe(sellers[index]!.id);
+        expect(fill.quantity).toBeGreaterThan(0);
+        expect(fill.quantity).toBeLessThanOrEqual(caps[index]!);
+        expect(fill.buyerGrossUnitPrice).toBe(grossPrice);
+      }
+      // Sorting is an explicit economic reproducibility contract, including
+      // which seller receives the final one-ULP quantity adjustment.
+      expect(computeLocalClearing(
+        { ...input, sellerIntents: [...sellers].reverse() },
+        new Map(), netPrice, 1e-8, { value: 0 },
+      )).toEqual(fills);
+    }
+  });
+
   it("clears when supply equals demand", () => {
     const buyerIntent: MarketIntent = {
       id: createMarketIntentId("mi:buyer-eq"),
