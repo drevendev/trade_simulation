@@ -233,8 +233,14 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
       // No new international trade may occur once the original cargos exist;
       // delayed delivery MUST still take place under this blockade.
       const isOpen = tick === 7;
-      const normal = run(f, normalWorld, isOpen, tick);
-      const reversed = run(f, reorderedWorld, isOpen, tick);
+      let normal: ReturnType<typeof run>;
+      let reversed: ReturnType<typeof run>;
+      try {
+        normal = run(f, normalWorld, isOpen, tick);
+        reversed = run(f, reorderedWorld, isOpen, tick);
+      } catch (error) {
+        throw new Error("M5 extended golden failed on tick " + tick, { cause: error });
+      }
       for (const result of [normal, reversed]) {
         expect(result.phaseTrace).toEqual([...Array(16).keys()]);
         expect(result.phaseBoundaryError).toBeUndefined();
