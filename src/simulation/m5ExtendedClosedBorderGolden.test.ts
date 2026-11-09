@@ -157,10 +157,14 @@ function fixture() {
   return { world, options, chosen, reserveFloor, currencies, links };
 }
 
-function run(f: ReturnType<typeof fixture>, world: WorldState, allowed = true, tick = 7) {
+function run(
+  f: ReturnType<typeof fixture>, world: WorldState, allowed = true, tick = 7,
+  observer?: Parameters<typeof executeM5AutonomousRegionalTradeTick>[5],
+) {
   return executeM5AutonomousRegionalTradeTick(
     world, tick, households, (_phase, current) => current,
     allowed ? f.options : { ...f.options, phase1TradeLawProvider: () => undefined },
+    observer,
   );
 }
 
@@ -235,11 +239,37 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
       const isOpen = tick === 7;
       let normal: ReturnType<typeof run>;
       let reversed: ReturnType<typeof run>;
+      let phase4BudgetEvidence: { id: string; max: number; spent: number; excess: number }[] = [];
+      const observe: Parameters<typeof executeM5AutonomousRegionalTradeTick>[5] =
+        (phase, _before, _after, context) => {
+          if (phase !== 4) return;
+          const intents = [
+            ...(context.productionMarketIntents ?? []),
+            ...(context.householdMarketIntents ?? []),
+          ];
+          phase4BudgetEvidence = intents.filter(i => i.side === "BUY").map(intent => {
+            const spent = (context.phase4MarketAllocations ?? [])
+              .filter(allocation => allocation.buyerIntentId === intent.id)
+              .reduce((total, allocation) =>
+                total + allocation.quantity * allocation.buyerGrossUnitPrice, 0);
+            return {
+              id: String(intent.id), max: intent.maxSpend!,
+              spent, excess: spent - intent.maxSpend!,
+            };
+          });
+        };
       try {
-        normal = run(f, normalWorld, isOpen, tick);
+        normal = run(f, normalWorld, isOpen, tick, observe);
         reversed = run(f, reorderedWorld, isOpen, tick);
       } catch (error) {
-        throw new Error("M5 extended golden failed on tick " + tick, { cause: error });
+        const offenders = phase4BudgetEvidence
+          .filter(budget => budget.spent > 0)
+          .sort((a, b) => b.excess - a.excess);
+        throw new Error(
+          "M5 extended golden failed on tick " + tick +
+          "; Phase-4 BUY budgets=" + JSON.stringify(offenders),
+          { cause: error },
+        );
       }
       for (const result of [normal, reversed]) {
         expect(result.phaseTrace).toEqual([...Array(16).keys()]);
