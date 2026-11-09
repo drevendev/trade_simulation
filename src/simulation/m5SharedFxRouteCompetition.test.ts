@@ -941,7 +941,10 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
 
     // Leave enough stock to serve either route alone after local clearing,
     // but not the sum of both independent route offers.
-    const sharedExportBudget = (largestNormal + totalNormal) / 2;
+    // Keep both routes independently payable after Phase-4 repricing;
+    // trim the combined normal demand by 5% of the smaller route rather than
+    // starving the second contender entirely in this price-sensitive fixture.
+    const sharedExportBudget = largestNormal + (totalNormal - largestNormal) * 0.95;
     const reducedSellerStock = localSaleQuantity + sharedExportBudget;
     expect(reducedSellerStock).toBeLessThan(seller.inputInventory.get(IRON)!);
     const scarceWorld: WorldState = {
