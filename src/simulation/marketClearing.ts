@@ -409,7 +409,9 @@ function materializeMatchPlan(
 
     const collectedTaxPerUnit = marketPrice * taxInfo.assessedTaxRate * taxInfo.collectionEfficiency;
     const grossUnitPrice = marketPrice + collectedTaxPerUnit;
-    assertFiniteCanonicalNumber(grossUnitPrice, "grossUnitPrice for local allocation");
+    if (!Number.isFinite(grossUnitPrice)) {
+      throw new Error("Local clearing taxation/money products must be finite before allocation");
+    }
     if (grossUnitPrice < 0) {
       throw new Error("Local clearing grossUnitPrice must be >= 0");
     }
