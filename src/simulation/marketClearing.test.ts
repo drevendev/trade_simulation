@@ -325,6 +325,51 @@ describe("Local clearing algorithm", () => {
     };
   }
 
+  it("cannot materialize a paid lot with zero budget even if demand evidence is forged", () => {
+    // An invalid upstream effective-demand callback can claim positive demand
+    // for a zero-funded buyer. At a positive price below one, a binary64
+    // subnormal quantity can multiply to a zero debit; it is not a free trade.
+    const buyer: MarketIntent = {
+      id: createMarketIntentId("mi:unfunded-forged-demand"),
+      actor: { type: "CLAN", clanId: testClanId },
+      regionId: testRegionId,
+      goodId: testGoodId,
+      side: "BUY",
+      purpose: "CONSUMPTION",
+      desiredQuantity: 1,
+      maxSpend: 0,
+      sourcePlanId: "plan:unfunded",
+    };
+    const seller: MarketIntent = {
+      id: createMarketIntentId("mi:unfunded-seller"),
+      actor: { type: "PRODUCTION_UNIT", productionUnitId: testProductionUnitId },
+      regionId: testRegionId,
+      goodId: testGoodId,
+      side: "SELL",
+      purpose: "INVENTORY_REBALANCE",
+      desiredQuantity: 1,
+      sourcePlanId: "plan:unfunded-seller",
+    };
+    const input: LocalClearingInput = {
+      ...createTestInput([buyer], [seller]),
+      computeEffectiveDemand: () => 1, // adversarial: ignores maxSpend
+    };
+    const counter = { value: 9 };
+    expect(computeLocalClearing(input, new Map(), 0.1, 1e-8, counter)).toEqual([]);
+    expect(counter.value).toBe(9); // No free stock and no consumed allocation ID.
+
+    // Positive control: the same physically feasible match does settle
+    // at the same sub-unit price when the buyer has real funds.
+    const funded = computeLocalClearing(
+      { ...input, buyerIntents: [{ ...buyer, maxSpend: 1 }] },
+      new Map(), 0.1, 1e-8, { value: 9 },
+    );
+    expect(funded).toHaveLength(1);
+    expect(funded[0]!.quantity).toBe(1);
+    expect(funded[0]!.quantity * funded[0]!.buyerGrossUnitPrice).toBeGreaterThan(0);
+    expect(funded[0]!.id).toBe("ma:m:central/good:wheat/MAIN/10");
+  });
+
   it("caps the actual two-seller buyer debit, not only aggregate affordable demand", () => {
     // Binary64 counterexample: the rounded aggregate q * gross is affordable,
     // but its two separately materialized match debits are one ULP too large.
