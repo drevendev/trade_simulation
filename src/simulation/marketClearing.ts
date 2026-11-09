@@ -446,6 +446,13 @@ function materializeMatchPlan(
     if (nextCommitted > maxSpend) {
       throw new Error("Local clearing emitted buyer debit exceeds maxSpend");
     }
+    // A tiny, strictly positive payment can disappear when added to an
+    // already spent large binary64 balance. Publishing that match transfers
+    // goods although the buyer's committed debit does not change. Drop only
+    // this unrepresentable paid tail; explicit zero-price lots stay valid.
+    if (grossUnitPrice > 0 && nextCommitted === previouslyCommitted) {
+      return null;
+    }
     buyerDebitByIntent.set(match.buyer.id, nextCommitted);
     return { match: affordableMatch, grossUnitPrice, consumptionTaxAmount, destinationStateId: taxInfo.destinationStateId };
   }).filter((entry) => entry !== null);
