@@ -919,12 +919,8 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     const largestNormal = Math.max(...normal.cargos.map(cargo => cargo.quantity));
     expect(totalNormal).toBeGreaterThan(largestNormal);
     const firstLinkId = f.links[0]!;
-    const firstNormal = normal.cargos.find(cargo => cargo.transportLinkId === firstLinkId)!;
-    const secondNormal = normal.cargos.find(cargo => cargo.transportLinkId === f.links[1])!;
-    const firstLimitQuantity = firstNormal.quantity * 0.5;
     const firstLink = f.world.transportLinks.get(firstLinkId)!;
     const cargoWeight = baselineDefinitionPack.goods[IRON]!.cargoWeightPerUnit;
-    expect(firstLimitQuantity).toBeGreaterThan(0);
     expect(cargoWeight).toBeGreaterThan(0);
     expect(firstLink.seed.condition).toBeGreaterThan(0);
     const sourceSellerId = normal.cargos[0]!.seller.type === "PRODUCTION_UNIT"
@@ -948,45 +944,43 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     // paid Phase-7 export stock, rather than local sale, proves non-vacuity.
     expect(localSaleQuantity).toBeGreaterThanOrEqual(0);
 
-    // Cap the first contender physically in this scoped fixture so a scarcity-
-    // driven Phase-6 price response cannot consume the entire seller stock on
-    // that one route. Each link can still ship alone, but the two *capped*
-    // offers together exceed the ONE available post-Phase-4 stock budget.
-    const cappedPotential = firstLimitQuantity + secondNormal.quantity;
-    const largestCappedOffer = Math.max(firstLimitQuantity, secondNormal.quantity);
-    const sharedExportBudget = (largestCappedOffer + cappedPotential) / 2;
-    expect(sharedExportBudget).toBeGreaterThan(largestCappedOffer);
-    expect(sharedExportBudget).toBeLessThan(cappedPotential);
+    // One seller, two payable independent counterparties, but only ONE
+    // physical opening inventory. This makes both links contest a real shared
+    // Phase-7 export offer rather than granting each route a copy of the stock.
+    const sharedExportBudget = (largestNormal + totalNormal) / 2;
     const reducedSellerStock = localSaleQuantity + sharedExportBudget;
     expect(reducedSellerStock).toBeLessThan(seller.inputInventory.get(IRON)!);
-    const scarceWorld: WorldState = {
+    const scarceUncapped: WorldState = {
       ...f.world,
-      transportLinks: new Map(f.world.transportLinks).set(firstLinkId, {
-        ...firstLink,
-        seed: { ...firstLink.seed,
-          baseCapacity: firstLimitQuantity * cargoWeight / firstLink.seed.condition,
-        },
-      }),
       productionUnits: new Map(f.world.productionUnits).set(sourceSellerId!, {
         ...seller,
         inputInventory: new Map(seller.inputInventory).set(IRON, reducedSellerStock),
       }),
     };
+    const soloFirst = runOnlyLink(f, scarceUncapped, firstLinkId);
+    const soloSecond = runOnlyLink(f, scarceUncapped, f.links[1]!);
+    expect(soloFirst.phaseBoundaryError).toBeUndefined();
+    expect(soloSecond.phaseBoundaryError).toBeUndefined();
+    expect(soloFirst.reconciliationErrors).toBeNull();
+    expect(soloSecond.reconciliationErrors).toBeNull();
+    const firstOffer = assertPaidCargoReceipts(soloFirst, [firstLinkId]).cargos[0]!.quantity;
+    const secondOffer = assertPaidCargoReceipts(soloSecond, [f.links[1]!]).cargos[0]!.quantity;
+    expect(firstOffer).toBeGreaterThan(0);
+    expect(secondOffer).toBeGreaterThan(0);
+    // Cap the first route at half its *actual* scarce-stock offer, not at its
+    // much larger unconstrained-baseline cargo. Otherwise that first route
+    // consumes the entire scarce offer and the second cannot participate.
+    const firstLimitQuantity = firstOffer * 0.5;
+    const scarceWorld: WorldState = {
+      ...scarceUncapped,
+      transportLinks: new Map(scarceUncapped.transportLinks).set(firstLinkId, {
+        ...firstLink,
+        seed: { ...firstLink.seed,
+          baseCapacity: firstLimitQuantity * cargoWeight / firstLink.seed.condition,
+        },
+      }),
+    };
     const scarce = run(f, scarceWorld);
-    const aloneSecond = runOnlyLink(f, scarceWorld, f.links[1]!);
-    const diagCargo = (x: ReturnType<typeof run>) => [...(x.world.shipments?.values() ?? [])].map(c => ({
-      link: c.transportLinkId, quantity: c.quantity, seller: c.seller,
-    }));
-    console.error("SCARCE_DIAG " + JSON.stringify({
-      baseline: diagCargo(baseline),
-      constrained: diagCargo(scarce), secondAlone: diagCargo(aloneSecond),
-      budget: sharedExportBudget, firstLimitQuantity, secondNormal: secondNormal.quantity,
-      sourceSellerId, initialSellerStock: seller.inputInventory.get(IRON),
-      remainingSellerStock: scarce.world.productionUnits.get(sourceSellerId!)?.inputInventory.get(IRON),
-      phase7: scarce.context.transactions.filter(tx => tx.phase === 7).map(tx => ({
-        type: tx.type, quantity: tx.quantity, moneyAmount: tx.moneyAmount,
-      })).slice(0, 15),
-    }));
     expect(scarce.phaseTrace).toEqual([...Array(16).keys()]);
     expect(scarce.phaseBoundaryError).toBeUndefined();
     expect(scarce.reconciliationErrors).toBeNull();
