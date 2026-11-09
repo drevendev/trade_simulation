@@ -325,6 +325,60 @@ describe("Local clearing algorithm", () => {
     };
   }
 
+  it("does not allocate a paid microscopic tail when the budget addition absorbs its debit", () => {
+    // The first seller takes the buyer's entire rounded binary64 payment,
+    // although the buyer's total affordable quantity contains one more ULP.
+    // A second, positive trade would credit its seller but leave the running
+    // BUY commitment unchanged, violating stock-flow payment authority.
+    const net = 1;
+    const gross = net + net * 0.05;
+    const budget = 0.00000199512;
+    const total = budget / gross;
+    const bits = new DataView(new ArrayBuffer(8));
+    bits.setFloat64(0, total);
+    bits.setBigUint64(0, bits.getBigUint64(0) - 1n);
+    const first = bits.getFloat64(0);
+    const tail = total - first;
+    expect(first + tail).toBe(total);
+    expect(first * gross).toBe(budget);
+    expect(tail * gross).toBeGreaterThan(0);
+    expect(budget + tail * gross).toBeGreaterThan(budget);
+
+    const buyer: MarketIntent = {
+      id: createMarketIntentId("mi:absorbed-buyer"),
+      actor: { type: "CLAN", clanId: testClanId },
+      regionId: testRegionId, goodId: testGoodId, side: "BUY",
+      purpose: "CONSUMPTION", desiredQuantity: 1,
+      maxSpend: budget, sourcePlanId: "plan:absorbed-buyer",
+    };
+    const seller = (id: number, quantity: number): MarketIntent => ({
+      id: createMarketIntentId(`mi:absorbed-seller-${id}`),
+      actor: { type: "PRODUCTION_UNIT", productionUnitId: (`pu:absorbed-${id}` as ProductionUnitId) },
+      regionId: testRegionId, goodId: testGoodId, side: "SELL",
+      purpose: "INVENTORY_REBALANCE", desiredQuantity: quantity,
+      sourcePlanId: "plan:absorbed-seller",
+    });
+    const sellers = [seller(1, first), seller(2, tail)];
+    const input: LocalClearingInput = {
+      ...createTestInput([buyer], sellers),
+      computeGrossUnitPrice: (_intent, price) => price + price * 0.05,
+      computeEffectiveDemand,
+      getTaxationInfo: () => ({
+        destinationStateId: testStateId,
+        assessedTaxRate: 0.05, collectionEfficiency: 1,
+      }),
+    };
+    const allocations = computeLocalClearing(input, new Map(), net, 1e-8, { value: 0 });
+    expect(allocations).toHaveLength(1);
+    expect(allocations[0]!.sellerIntentId).toBe(sellers[0]!.id);
+    expect(allocations[0]!.quantity).toBe(first);
+    expect(allocations[0]!.quantity * allocations[0]!.buyerGrossUnitPrice).toBe(budget);
+    expect(computeLocalClearing(
+      { ...input, sellerIntents: [...sellers].reverse() },
+      new Map(), net, 1e-8, { value: 0 },
+    )).toEqual(allocations);
+  });
+
   it("caps the actual two-seller buyer debit, not only aggregate affordable demand", () => {
     // Binary64 counterexample: the rounded aggregate q * gross is affordable,
     // but its two separately materialized match debits are one ULP too large.
