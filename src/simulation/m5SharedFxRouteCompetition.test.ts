@@ -1243,4 +1243,88 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
       tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
   });
 
+  it("honors already-paid transit after link capacity drops to zero", () => {
+    const f = fixture();
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) => [
+        id, { ...link, travelTicks: 2 },
+      ] as const)),
+    };
+    const dispatched = run(f, opening, true, 7);
+    expect(dispatched.phaseBoundaryError).toBeUndefined();
+    expect(dispatched.reconciliationErrors).toBeNull();
+    const cargos = assertPaidCargoReceipts(dispatched, f.links).cargos;
+    expect(cargos).toHaveLength(2);
+    expect(cargos.every(cargo => cargo.arrivalTick === 9)).toBe(true);
+    const ids = new Set(cargos.map(cargo => cargo.id));
+    expect(ids.size).toBe(2);
+
+    // FX balances and legal borders remain untouched; only physical capacity
+    // changes. Existing in-transit goods must not be retroactively blocked.
+    const disabled: WorldState = {
+      ...dispatched.world,
+      transportLinks: new Map([...dispatched.world.transportLinks].map(([id, link]) => [
+        id, { ...link, seed: { ...link.seed, baseCapacity: 0 } },
+      ] as const)),
+    };
+    const unrestricted = run(f, dispatched.world, true, 8);
+    expect(unrestricted.phaseBoundaryError).toBeUndefined();
+    expect(unrestricted.reconciliationErrors).toBeNull();
+    expect(unrestricted.context.transactions.some(tx =>
+      tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH")).toBe(true);
+
+    const blocked = run(f, disabled, true, 8);
+    expect(blocked.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(blocked.phaseBoundaryError).toBeUndefined();
+    expect(blocked.reconciliationErrors).toBeNull();
+    expect(new Set(blocked.world.shipments?.keys())).toEqual(ids);
+    expect(blocked.context.transactions.filter(tx => tx.phase === 7 &&
+      ["FX_INPUT", "FX_OUTPUT", "TRADE_GOODS_SALE", "SHIPMENT_DISPATCH",
+        "IMPORT_TARIFF", "TRANSPORT_FEE"].includes(tx.type))).toHaveLength(0);
+    expect(blocked.context.transactions.some(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE" &&
+      (tx.quantity ?? 0) > 0 && (tx.moneyAmount ?? 0) > 0)).toBe(true);
+
+    const arrived = run(f, blocked.world, true, 9);
+    expect(arrived.phaseBoundaryError).toBeUndefined();
+    expect(arrived.reconciliationErrors).toBeNull();
+    const deliveries = arrived.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY");
+    expect(deliveries).toHaveLength(cargos.length);
+    expect(arrived.world.shipments?.size).toBe(0);
+    for (const cargo of cargos) {
+      expect(deliveries.filter(tx =>
+        tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id &&
+        tx.quantity === cargo.quantity)).toHaveLength(1);
+      expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+      if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") continue;
+      const id = cargo.beneficialOwner.productionUnitId;
+      expect(arrived.world.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0)
+        .toBeCloseTo(
+          (blocked.world.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0) +
+          cargo.quantity, 7,
+        );
+    }
+    expect(arrived.context.transactions.filter(tx =>
+      ["FX_INPUT", "FX_OUTPUT", "TRADE_GOODS_SALE", "SHIPMENT_DISPATCH",
+        "IMPORT_TARIFF", "TRANSPORT_FEE"].includes(tx.type))).toHaveLength(0);
+    for (const world of [blocked.world, arrived.world]) {
+      expect(totalIron(world)).toBeCloseTo(totalIron(disabled), 7);
+      for (const currency of f.currencies) {
+        expect(totalCash(world, currency)).toBeCloseTo(totalCash(disabled, currency), 6);
+      }
+    }
+    const replay = run(f, disabled, true, 8);
+    expect(replay.context.transactions).toEqual(blocked.context.transactions);
+    expect(replay.world.shipments).toEqual(blocked.world.shipments);
+    expect(replay.world.productionUnits).toEqual(blocked.world.productionUnits);
+    const next = run(f, arrived.world, true, 10);
+    expect(next.phaseBoundaryError).toBeUndefined();
+    expect(next.reconciliationErrors).toBeNull();
+    expect(next.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
+  });
+
+
 });
