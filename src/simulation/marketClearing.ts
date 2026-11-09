@@ -424,10 +424,17 @@ function materializeMatchPlan(
       throw new Error("Local clearing BUY intent must have finite nonnegative maxSpend");
     }
     const previouslyCommitted = buyerDebitByIntent.get(match.buyer.id) ?? 0;
-    const quantity = grossUnitPrice > 0 &&
-      previouslyCommitted + match.quantity * grossUnitPrice > maxSpend
-      ? affordableMatchQuantity(match.quantity, grossUnitPrice, previouslyCommitted, maxSpend)
-      : match.quantity;
+    let quantity = match.quantity;
+    if (grossUnitPrice > 0) {
+      // Test the cash envelope before rounded multiplication: a subnormal
+      // positive physical quantity can have a zero binary64 debit. With no
+      // budget, that must never materialize as a free paid allocation.
+      if (maxSpend === 0) {
+        quantity = 0;
+      } else if (previouslyCommitted + quantity * grossUnitPrice > maxSpend) {
+        quantity = affordableMatchQuantity(quantity, grossUnitPrice, previouslyCommitted, maxSpend);
+      }
+    }
     if (quantity === 0) return null;
     const affordableMatch = quantity === match.quantity ? match : { ...match, quantity };
     const consumptionTaxAmount = quantity * collectedTaxPerUnit;
