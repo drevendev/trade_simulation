@@ -918,6 +918,15 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     const totalNormal = normal.cargos.reduce((sum, cargo) => sum + cargo.quantity, 0);
     const largestNormal = Math.max(...normal.cargos.map(cargo => cargo.quantity));
     expect(totalNormal).toBeGreaterThan(largestNormal);
+    const firstLinkId = f.links[0]!;
+    const firstNormal = normal.cargos.find(cargo => cargo.transportLinkId === firstLinkId)!;
+    const secondNormal = normal.cargos.find(cargo => cargo.transportLinkId === f.links[1])!;
+    const firstLimitQuantity = firstNormal.quantity * 0.5;
+    const firstLink = f.world.transportLinks.get(firstLinkId)!;
+    const cargoWeight = baselineDefinitionPack.goods[IRON]!.cargoWeightPerUnit;
+    expect(firstLimitQuantity).toBeGreaterThan(0);
+    expect(cargoWeight).toBeGreaterThan(0);
+    expect(firstLink.seed.condition).toBeGreaterThan(0);
     const sourceSellerId = normal.cargos[0]!.seller.type === "PRODUCTION_UNIT"
       ? normal.cargos[0]!.seller.productionUnitId : null;
     expect(sourceSellerId).not.toBeNull();
@@ -939,16 +948,25 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     // paid Phase-7 export stock, rather than local sale, proves non-vacuity.
     expect(localSaleQuantity).toBeGreaterThanOrEqual(0);
 
-    // Leave enough stock to serve either route alone after local clearing,
-    // but not the sum of both independent route offers.
-    // Keep both routes independently payable after Phase-4 repricing;
-    // trim the combined normal demand by 5% of the smaller route rather than
-    // starving the second contender entirely in this price-sensitive fixture.
-    const sharedExportBudget = largestNormal + (totalNormal - largestNormal) * 0.95;
+    // Cap the first contender physically in this scoped fixture so a scarcity-
+    // driven Phase-6 price response cannot consume the entire seller stock on
+    // that one route. Each link can still ship alone, but the two *capped*
+    // offers together exceed the ONE available post-Phase-4 stock budget.
+    const cappedPotential = firstLimitQuantity + secondNormal.quantity;
+    const largestCappedOffer = Math.max(firstLimitQuantity, secondNormal.quantity);
+    const sharedExportBudget = (largestCappedOffer + cappedPotential) / 2;
+    expect(sharedExportBudget).toBeGreaterThan(largestCappedOffer);
+    expect(sharedExportBudget).toBeLessThan(cappedPotential);
     const reducedSellerStock = localSaleQuantity + sharedExportBudget;
     expect(reducedSellerStock).toBeLessThan(seller.inputInventory.get(IRON)!);
     const scarceWorld: WorldState = {
       ...f.world,
+      transportLinks: new Map(f.world.transportLinks).set(firstLinkId, {
+        ...firstLink,
+        seed: { ...firstLink.seed,
+          baseCapacity: firstLimitQuantity * cargoWeight / firstLink.seed.condition,
+        },
+      }),
       productionUnits: new Map(f.world.productionUnits).set(sourceSellerId!, {
         ...seller,
         inputInventory: new Map(seller.inputInventory).set(IRON, reducedSellerStock),
