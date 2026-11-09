@@ -354,6 +354,10 @@ function affordableMatchQuantity(
   priorDebit: number,
   maxSpend: number,
 ): number {
+  // A zero-budget BUY cannot acquire a positive-priced lot. For a price
+  // below one, subnormal positive quantities can round their debit to zero;
+  // searching those representations must not convert no funds into stock.
+  if (maxSpend === 0) return 0;
   const bits = new DataView(new ArrayBuffer(8));
   bits.setFloat64(0, requested);
   let low = 0n;
