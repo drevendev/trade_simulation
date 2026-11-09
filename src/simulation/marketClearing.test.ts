@@ -358,6 +358,22 @@ describe("Local clearing algorithm", () => {
     expect(computeLocalClearing(input, new Map(), 0.1, 1e-8, counter)).toEqual([]);
     expect(counter.value).toBe(9); // No free stock and no consumed allocation ID.
 
+    // The full-sized forged lot enters the affordability search, but a single
+    // subnormal lot has gross debit zero and would bypass that search entirely.
+    // Positive physical lots below quantityEpsilon are legal clearing inputs:
+    // rejecting unpaid delivery must not depend on a minimum-lot cutoff.
+    const subnormal = Number.MIN_VALUE;
+    expect(subnormal * (0.1 + 0.1 * 0.1)).toBe(0);
+    const tinyInput: LocalClearingInput = {
+      ...input,
+      buyerIntents: [{ ...buyer, desiredQuantity: subnormal }],
+      sellerIntents: [{ ...seller, desiredQuantity: subnormal }],
+      computeEffectiveDemand: () => subnormal,
+    };
+    const tinyCounter = { value: 9 };
+    expect(computeLocalClearing(tinyInput, new Map(), 0.1, 1e-8, tinyCounter)).toEqual([]);
+    expect(tinyCounter.value).toBe(9);
+
     // Positive control: the same physically feasible match does settle
     // at the same sub-unit price when the buyer has real funds.
     const funded = computeLocalClearing(
