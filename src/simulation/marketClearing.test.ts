@@ -325,6 +325,72 @@ describe("Local clearing algorithm", () => {
     };
   }
 
+  it("caps the actual two-seller buyer debit, not only aggregate affordable demand", () => {
+    // Binary64 counterexample: the rounded aggregate q * gross is affordable,
+    // but its two separately materialized match debits are one ULP too large.
+    const net = 1.0001355523809525;
+    const gross = net + net * 0.05;
+    const budget = 0.0001123729857;
+    const aggregate = budget / gross;
+    const first = aggregate / 9;
+    const second = aggregate - first;
+    expect(aggregate * gross).toBe(budget);
+    expect(first * gross + second * gross).toBeGreaterThan(budget);
+
+    const buyer: MarketIntent = {
+      id: createMarketIntentId("mi:split-buyer"),
+      actor: { type: "CLAN", clanId: testClanId },
+      regionId: testRegionId,
+      goodId: testGoodId,
+      side: "BUY",
+      purpose: "CONSUMPTION",
+      desiredQuantity: 1,
+      maxSpend: budget,
+      sourcePlanId: "plan:split-buyer",
+    };
+    const seller = (ordinal: number, quantity: number): MarketIntent => ({
+      id: createMarketIntentId(`mi:split-seller-${ordinal}`),
+      actor: { type: "PRODUCTION_UNIT", productionUnitId: (`pu:split-${ordinal}` as ProductionUnitId) },
+      regionId: testRegionId,
+      goodId: testGoodId,
+      side: "SELL",
+      purpose: "INVENTORY_REBALANCE",
+      desiredQuantity: quantity,
+      sourcePlanId: "plan:split-seller",
+    });
+    const sellers = [seller(1, first), seller(2, second)];
+    const input: LocalClearingInput = {
+      ...createTestInput([buyer], sellers),
+      computeGrossUnitPrice: (_intent, price) => price + price * 0.05,
+      computeEffectiveDemand,
+      getTaxationInfo: () => ({
+        destinationStateId: testStateId,
+        assessedTaxRate: 0.05,
+        collectionEfficiency: 1,
+      }),
+    };
+    const counter = { value: 0 };
+    const allocations = computeLocalClearing(input, new Map(), net, 1e-8, counter);
+    expect(allocations).toHaveLength(2); // Both sellers actually clear stock.
+    expect(allocations.map(a => a.sellerIntentId)).toEqual(sellers.map(s => s.id));
+    expect(allocations[0]!.quantity).toBe(first); // No blanket haircut.
+    expect(allocations[1]!.quantity).toBeLessThan(second);
+    const spent = allocations.reduce(
+      (sum, allocation) => sum + allocation.quantity * allocation.buyerGrossUnitPrice, 0,
+    );
+    expect(spent).toBeLessThanOrEqual(budget);
+    expect(spent).toBeGreaterThan(0);
+    expect(allocations.reduce((sum, allocation) => sum + allocation.quantity, 0))
+      .toBeLessThanOrEqual(aggregate);
+    expect(counter.value).toBe(2);
+    // Shuffled insertion is not permitted to change which owner receives
+    // the rounding tail or the buyer's exact budget result.
+    expect(computeLocalClearing(
+      { ...input, sellerIntents: [...sellers].reverse() },
+      new Map(), net, 1e-8, { value: 0 },
+    )).toEqual(allocations);
+  });
+
   it("clears when supply equals demand", () => {
     const buyerIntent: MarketIntent = {
       id: createMarketIntentId("mi:buyer-eq"),
