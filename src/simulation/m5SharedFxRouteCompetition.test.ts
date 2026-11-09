@@ -1121,4 +1121,93 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     expect(replay.world.monetaryAuthorities).toEqual(reopened.world.monetaryAuthorities);
   });
 
+
+  it("preserves paid transit, delivery owners and per-currency stocks across four shuffled-registry ticks", () => {
+    const f = fixture();
+    // Keep corridor order intentional; only unordered keyed registries may be
+    // permuted. Both shipments take two ticks, so the test spans dispatch,
+    // in-transit ownership, arrival and the following no-replay tick.
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
+        [id, { ...link, travelTicks: 2 }] as const)),
+    };
+    const shuffled: WorldState = {
+      ...opening,
+      states: new Map([...opening.states].reverse()),
+      regions: new Map([...opening.regions].reverse()),
+      markets: new Map([...opening.markets].reverse()),
+      cohorts: new Map([...opening.cohorts].reverse()),
+      clans: new Map([...opening.clans].reverse()),
+      productionUnits: new Map([...opening.productionUnits].reverse()),
+      transportLinks: new Map([...opening.transportLinks].reverse()),
+      monetaryAuthorities: new Map([...opening.monetaryAuthorities].reverse()
+        .map(([id, authority]) => [id, {
+          ...authority,
+          fxPools: new Map([...authority.fxPools].reverse()
+            .map(([poolId, pool]) =>
+              [poolId, { ...pool, cash: new Map([...pool.cash].reverse()) }] as const)),
+        }] as const)),
+    };
+    expect([...shuffled.regions.keys()]).not.toEqual([...opening.regions.keys()]);
+    expect([...shuffled.transportLinks.keys()]).not.toEqual([...opening.transportLinks.keys()]);
+
+    let normalWorld = opening;
+    let shuffledWorld = shuffled;
+    const byTick = new Map<number, ReturnType<typeof run>>();
+    for (const tick of [7, 8, 9, 10]) {
+      // Close new international orders after the paid opening dispatch. Due
+      // deliveries must still settle independently of today's trade policy.
+      const normal = run(f, normalWorld, tick === 7, tick);
+      const reversed = run(f, shuffledWorld, tick === 7, tick);
+      for (const [before, result] of [
+        [normalWorld, normal], [shuffledWorld, reversed],
+      ] as const) {
+        expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+        expect(result.phaseBoundaryError).toBeUndefined();
+        expect(result.reconciliationErrors).toBeNull();
+        expect(totalIron(result.world)).toBeCloseTo(totalIron(before), 7);
+        for (const currency of f.currencies) {
+          expect(totalCash(result.world, currency)).toBeCloseTo(totalCash(before, currency), 6);
+        }
+      }
+      // Aggregate accounting could conceal swapped owners or a double payout:
+      // compare the exact ordered receipts, owner inventories, market prices,
+      // outstanding cargo and issuer-held FX reserves on EVERY tick.
+      expect(reversed.context.transactions).toEqual(normal.context.transactions);
+      expect(reversed.world.shipments).toEqual(normal.world.shipments);
+      expect(reversed.world.productionUnits).toEqual(normal.world.productionUnits);
+      expect(reversed.world.monetaryAuthorities).toEqual(normal.world.monetaryAuthorities);
+      expect(reversed.world.markets).toEqual(normal.world.markets);
+      byTick.set(tick, normal);
+      normalWorld = normal.world;
+      shuffledWorld = reversed.world;
+    }
+
+    const dispatched = byTick.get(7)!;
+    const paidCargo = assertPaidCargoReceipts(dispatched, f.links).cargos;
+    expect(paidCargo).toHaveLength(2);
+    expect(paidCargo.every(cargo => cargo.arrivalTick === 9)).toBe(true);
+    const receipts = (tick: number) => byTick.get(tick)!.context.transactions
+      .filter(tx => tx.type === "SHIPMENT_DELIVERY");
+    expect(receipts(7)).toHaveLength(0);
+    expect(receipts(8)).toHaveLength(0);
+    expect(receipts(9)).toHaveLength(2);
+    expect(receipts(10)).toHaveLength(0);
+    expect(new Set(receipts(9).map(tx => tx.reason))).toEqual(new Set(
+      paidCargo.map(cargo => "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id)));
+    for (const tick of [8, 9, 10]) {
+      expect(byTick.get(tick)!.context.transactions.filter(tx =>
+        tx.phase === 7 && ["FX_INPUT", "FX_OUTPUT", "SHIPMENT_DISPATCH"].includes(tx.type)))
+        .toHaveLength(0);
+    }
+    expect(byTick.get(10)!.world.shipments?.size).toBe(0);
+
+    // Negative control: altering one delivery quantity must be observable,
+    // even though the number of receipts and the arrival tick stay identical.
+    const corrupted = [...receipts(9)];
+    corrupted[0] = { ...corrupted[0]!, quantity: corrupted[0]!.quantity! + 1 };
+    expect(corrupted).not.toEqual(receipts(9));
+  });
+
 });
