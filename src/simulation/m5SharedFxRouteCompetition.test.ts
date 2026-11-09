@@ -977,7 +977,7 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     const diagCargo = (x: ReturnType<typeof run>) => [...(x.world.shipments?.values() ?? [])].map(c => ({
       link: c.transportLinkId, quantity: c.quantity, seller: c.seller,
     }));
-    throw new Error("SCARCE_DIAG " + JSON.stringify({
+    console.error("SCARCE_DIAG " + JSON.stringify({
       baseline: diagCargo(baseline),
       constrained: diagCargo(scarce), secondAlone: diagCargo(aloneSecond),
       budget: sharedExportBudget, firstLimitQuantity, secondNormal: secondNormal.quantity,
