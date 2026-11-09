@@ -1219,7 +1219,7 @@ describe("M5 #676: distinct State tariff laws settle on separate live FX border 
         expect(tariff[0]!.moneyAmount).toBeGreaterThan(0);
         expect(sale[0]!.moneyAmount).toBeGreaterThan(0);
         expect(result.context.phase1ImportTariffs?.ratesByDestinationStateGood.get(
-          [destinationStateId, IRON].join("|"),
+          JSON.stringify([destinationStateId, IRON]),
         )).toBe(expectedRates.get(destinationStateId));
         levyByLink.set(linkId, tariff[0]!.moneyAmount! / sale[0]!.moneyAmount!);
       }
