@@ -921,6 +921,14 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     const sourceSellerId = normal.cargos[0]!.seller.type === "PRODUCTION_UNIT"
       ? normal.cargos[0]!.seller.productionUnitId : null;
     expect(sourceSellerId).not.toBeNull();
+    // The baseline must actually have one shared seller behind both routes.
+    expect(normal.cargos).toHaveLength(f.links.length);
+    for (const cargo of normal.cargos) {
+      expect(cargo.seller.type).toBe("PRODUCTION_UNIT");
+      if (cargo.seller.type === "PRODUCTION_UNIT") {
+        expect(cargo.seller.productionUnitId).toBe(sourceSellerId);
+      }
+    }
     const seller = f.world.productionUnits.get(sourceSellerId!)!;
     const localSaleQuantity = baseline.context.transactions.filter(tx =>
       tx.phase === 4 && tx.type === "MARKET_SALE" &&
@@ -947,7 +955,16 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     expect(scarce.phaseTrace).toEqual([...Array(16).keys()]);
     expect(scarce.phaseBoundaryError).toBeUndefined();
     expect(scarce.reconciliationErrors).toBeNull();
-    const scarceCargos = assertPaidCargoReceipts(scarce).cargos;
+    const scarceCargos = assertPaidCargoReceipts(scarce, f.links).cargos;
+    // Scarcity must not hide a lost contender: BOTH paid links still dispatch
+    // from the SAME source seller, not merely any positive aggregate export.
+    expect(scarceCargos).toHaveLength(f.links.length);
+    for (const cargo of scarceCargos) {
+      expect(cargo.seller.type).toBe("PRODUCTION_UNIT");
+      if (cargo.seller.type === "PRODUCTION_UNIT") {
+        expect(cargo.seller.productionUnitId).toBe(sourceSellerId);
+      }
+    }
     const totalScarce = scarceCargos.reduce((sum, cargo) => sum + cargo.quantity, 0);
     expect(totalScarce).toBeGreaterThan(0);
     expect(totalScarce).toBeLessThan(totalNormal);
@@ -959,6 +976,15 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
       .reduce((sum, tx) => sum + (tx.quantity ?? 0), 0);
     expect(localScarce).toBeCloseTo(localSaleQuantity, 7);
     expect(localScarce + totalScarce).toBeLessThanOrEqual(reducedSellerStock + 1e-8);
+
+    // Sensitive negative control: a legal one-link-only counterfactual is an
+    // otherwise valid paid export, but MUST fail the two-link acceptance gate.
+    const oneLinkOnly = runOnlyLink(f, scarceWorld, f.links[0]!);
+    expect(oneLinkOnly.phaseBoundaryError).toBeUndefined();
+    expect(oneLinkOnly.reconciliationErrors).toBeNull();
+    expect(assertPaidCargoReceipts(oneLinkOnly, [f.links[0]!]).cargos).toHaveLength(1);
+    expect(() => assertPaidCargoReceipts(oneLinkOnly, f.links)).toThrow();
+
     expect(totalIron(scarce.world)).toBeCloseTo(totalIron(scarceWorld), 7);
     for (const currency of f.currencies) {
       expect(totalCash(scarce.world, currency)).toBeCloseTo(totalCash(scarceWorld, currency), 6);
