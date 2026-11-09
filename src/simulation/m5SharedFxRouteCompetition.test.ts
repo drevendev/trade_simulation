@@ -1336,6 +1336,36 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     expect(next.reconciliationErrors).toBeNull();
     expect(next.context.transactions.filter(tx =>
       tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
+
+    // Recover capacity at tick 10 without restoring the spent prior invoices.
+    // New trade must resume, but old cargo must not arrive a second time.
+    const restored: WorldState = {
+      ...arrived.world,
+      transportLinks: new Map([...arrived.world.transportLinks].map(([id, link]) => [
+        id, { ...link, seed: { ...link.seed,
+          baseCapacity: f.world.transportLinks.get(id)!.seed.baseCapacity } },
+      ] as const)),
+    };
+    const resumed = run(f, restored, true, 10);
+    expect(resumed.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(resumed.phaseBoundaryError).toBeUndefined();
+    expect(resumed.reconciliationErrors).toBeNull();
+    expect(resumed.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
+    const newDispatches = resumed.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
+    expect(newDispatches.length).toBeGreaterThan(0);
+    const newCargo = [...(resumed.world.shipments?.values() ?? [])];
+    expect(newCargo).toHaveLength(newDispatches.length);
+    expect(newCargo.every(cargo => cargo.departureTick === 10 && !ids.has(cargo.id))).toBe(true);
+    expect(new Set(newCargo.map(cargo => cargo.id)).size).toBe(newCargo.length);
+    expect(totalIron(resumed.world)).toBeCloseTo(totalIron(restored), 7);
+    for (const currency of f.currencies) {
+      expect(totalCash(resumed.world, currency)).toBeCloseTo(totalCash(restored, currency), 6);
+    }
+    const restoredReplay = run(f, restored, true, 10);
+    expect(restoredReplay.context.transactions).toEqual(resumed.context.transactions);
+    expect(restoredReplay.world.shipments).toEqual(resumed.world.shipments);
   });
 
 
