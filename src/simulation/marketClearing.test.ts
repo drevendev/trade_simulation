@@ -385,7 +385,7 @@ describe("Local clearing algorithm", () => {
     // After the final representable ordinal is spent, refusal is atomic.
     const exhausted = { value: Number.MAX_SAFE_INTEGER };
     expect(() => computeLocalClearing(input, new Map(), 1, 1e-8, exhausted))
-      .toThrow("cannot reserve safe ordinals for emitted matches");
+      .toThrow("cannot reserve safe ordinals");
     expect(exhausted.value).toBe(Number.MAX_SAFE_INTEGER);
   });
 
