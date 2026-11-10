@@ -230,8 +230,76 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     let normalWorld = opening;
     let reorderedWorld = reordered(opening);
     let dispatchedIds: string[] = [];
+    let frozenCargo = [...(opening.shipments?.values() ?? [])];
     let deliveredCount = 0;
     let paidOutputCount = 0;
+    let observedPhase1Deliveries = 0;
+
+    // Verify identities, payment owners and amounts against the dispatch-frozen
+    // cargo, rather than only comparing aggregate counts across two replays.
+    const verifyPaid = (
+      transactions: ReturnType<typeof run>["context"]["transactions"],
+      cargos: typeof frozenCargo,
+    ) => {
+      const phase7 = transactions.filter(tx => tx.phase === 7);
+      const dispatches = phase7.filter(tx => tx.type === "SHIPMENT_DISPATCH");
+      const inputs = phase7.filter(tx => tx.type === "FX_INPUT");
+      const outputs = phase7.filter(tx => tx.type === "FX_OUTPUT");
+      expect(dispatches).toHaveLength(cargos.length);
+      expect(inputs).toHaveLength(cargos.length);
+      expect(outputs).toHaveLength(cargos.length);
+      const bundles = new Set<string>();
+      const settlementIds = new Set<string>();
+      for (const cargo of cargos) {
+        expect(cargo.fxSettlementId).toBeDefined();
+        expect(cargo.quantity).toBeGreaterThan(0);
+        const dispatch = dispatches.filter(tx =>
+          tx.goodId === cargo.goodId &&
+          tx.quantity === cargo.quantity &&
+          tx.sourceRegionId === cargo.originRegionId &&
+          tx.destinationRegionId === cargo.destinationRegionId &&
+          tx.source && JSON.stringify(tx.source) === JSON.stringify(cargo.seller) &&
+          tx.destination && JSON.stringify(tx.destination) === JSON.stringify(cargo.beneficialOwner));
+        expect(dispatch).toHaveLength(1);
+        const bundle = dispatch[0]!.bundleId;
+        expect(bundle).toBeDefined();
+        bundles.add(bundle!);
+        settlementIds.add(cargo.fxSettlementId!);
+        const input = inputs.filter(tx =>
+          tx.bundleId === bundle && tx.fxSettlementId === cargo.fxSettlementId);
+        const output = outputs.filter(tx =>
+          tx.bundleId === bundle && tx.fxSettlementId === cargo.fxSettlementId);
+        expect(input).toHaveLength(1);
+        expect(output).toHaveLength(1);
+        expect(input[0]!.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+        expect(output[0]!.currencyId).toBe(cargo.invoiceCurrencyId);
+        expect(input[0]!.source).toEqual(cargo.beneficialOwner);
+        expect(output[0]!.destination).toEqual(cargo.seller);
+        expect(input[0]!.moneyAmount).toBeGreaterThan(0);
+        expect(output[0]!.moneyAmount).toBeGreaterThan(0);
+      }
+      expect(bundles.size).toBe(cargos.length);
+      expect(settlementIds.size).toBe(cargos.length);
+    };
+    const verifyDue = (
+      receipts: ReturnType<typeof run>["context"]["transactions"],
+      cargos: typeof frozenCargo,
+    ) => {
+      expect(receipts).toHaveLength(cargos.length);
+      expect(new Set(receipts.map(tx => tx.reason)).size).toBe(cargos.length);
+      for (const cargo of cargos) {
+        const matching = receipts.filter(tx =>
+          tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id);
+        expect(matching).toHaveLength(1);
+        expect(matching[0]).toMatchObject({
+          tick: cargo.arrivalTick, phase: 1, goodId: cargo.goodId,
+          quantity: cargo.quantity, destination: cargo.beneficialOwner,
+          sourceRegionId: cargo.originRegionId,
+          destinationRegionId: cargo.destinationRegionId,
+        });
+        expect(matching[0]!.moneyAmount).toBeUndefined();
+      }
+    };
 
     for (let tick = 7; tick < 23; tick++) {
       // No new international trade may occur once the original cargos exist;
@@ -241,7 +309,22 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
       let reversed: ReturnType<typeof run>;
       let phase4BudgetEvidence: { id: string; max: number; spent: number; excess: number }[] = [];
       const observe: Parameters<typeof executeM5AutonomousRegionalTradeTick>[5] =
-        (phase, _before, _after, context) => {
+        (phase, before, after, context) => {
+          if (phase === 1 && tick === 9) {
+            observedPhase1Deliveries++;
+            expect(after.shipments?.size ?? 0).toBe(0);
+            expect(after.monetaryAuthorities).toEqual(before.monetaryAuthorities);
+            // The actual Phase-1 physical stock must go to each frozen owner,
+            // not just produce correctly labeled receipts.
+            for (const cargo of frozenCargo) {
+              expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+              if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") continue;
+              const id = cargo.beneficialOwner.productionUnitId;
+              const oldStock = before.productionUnits.get(id)!.inputInventory.get(cargo.goodId) ?? 0;
+              const newStock = after.productionUnits.get(id)!.inputInventory.get(cargo.goodId) ?? 0;
+              expect(newStock - oldStock).toBeCloseTo(cargo.quantity, 8);
+            }
+          }
           if (phase !== 4) return;
           const intents = [
             ...(context.productionMarketIntents ?? []),
@@ -309,6 +392,15 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
           .toEqual(new Set(f.links));
         expect(cargos.every(cargo => cargo.arrivalTick === 9 &&
           cargo.departureTick === 7 && cargo.quantity > 0)).toBe(true);
+        frozenCargo = cargos.map(cargo => ({ ...cargo }));
+        verifyPaid(normal.context.transactions, frozenCargo);
+        // This negative control exercises the SAME payment oracle against a
+        // falsely linked FX leg rather than comparing unrelated arrays.
+        const altered = normal.context.transactions.map(tx =>
+          tx.type === "FX_INPUT" && tx.phase === 7 &&
+          tx.fxSettlementId === frozenCargo[0]!.fxSettlementId
+            ? { ...tx, fxSettlementId: "fxs:forged" as typeof tx.fxSettlementId } : tx);
+        expect(() => verifyPaid(altered, frozenCargo)).toThrow();
         dispatchedIds = cargos.map(cargo => cargo.id);
       } else {
         expect(dispatches).toHaveLength(0);
@@ -324,15 +416,15 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
         expect(normal.world.shipments?.size ?? 0).toBe(0);
         if (tick === 9) {
           expect(deliveries).toHaveLength(2);
-          const reasons = deliveries.map(tx => tx.reason);
-          expect(reasons).toEqual(dispatchedIds.map(
-            id => "IN_TRANSIT_TO_INPUT_STOCK:" + id,
-          ));
-          for (const delivery of deliveries) {
-            expect(delivery.phase).toBe(1);
-            expect(delivery.moneyAmount).toBeUndefined();
-            expect(delivery.quantity).toBeGreaterThan(0);
-          }
+          verifyDue(deliveries, frozenCargo);
+          // Preserve aggregate quantity while falsifying an individual
+          // beneficiary/quantity: the owner-bound acceptance must reject it.
+          const alteredQuantity = deliveries.map((tx, index) => index === 0
+            ? { ...tx, quantity: tx.quantity! + 1 } : tx);
+          const alteredOwner = deliveries.map((tx, index) => index === 0
+            ? { ...tx, destination: frozenCargo[1]!.beneficialOwner } : tx);
+          expect(() => verifyDue(alteredQuantity, frozenCargo)).toThrow();
+          expect(() => verifyDue(alteredOwner, frozenCargo)).toThrow();
         } else {
           expect(deliveries).toHaveLength(0);
         }
@@ -346,6 +438,7 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     // twenty-four independent funds are not available to be double-spent.
     expect(dispatchedIds).toHaveLength(2);
     expect(new Set(dispatchedIds).size).toBe(2);
+    expect(observedPhase1Deliveries).toBe(1);
     expect(paidOutputCount).toBe(2);
     expect(deliveredCount).toBe(2);
     expect(normalWorld.shipments?.size ?? 0).toBe(0);
