@@ -399,7 +399,7 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
         const altered = normal.context.transactions.map(tx =>
           tx.type === "FX_INPUT" && tx.phase === 7 &&
           tx.fxSettlementId === frozenCargo[0]!.fxSettlementId
-            ? { ...tx, fxSettlementId: "fxs:forged" as typeof tx.fxSettlementId } : tx);
+            ? { ...tx, fxSettlementId: "fxs:forged" as NonNullable<typeof tx.fxSettlementId> } : tx);
         expect(() => verifyPaid(altered, frozenCargo)).toThrow();
         dispatchedIds = cargos.map(cargo => cargo.id);
       } else {
