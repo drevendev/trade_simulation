@@ -460,8 +460,8 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
         tx.phase === 7 && tx.type === "IMPORT_TARIFF");
     expect(localReceipts.length).toBeGreaterThan(0);
     expect(dispatched(full)).toHaveLength(2);
-    expect(new Set(dispatched(full).map(tx => tx.transportLinkId)))
-      .toEqual(new Set(f.links));
+    expect(new Set([...(full.world.shipments?.values() ?? [])]
+      .map(cargo => cargo.transportLinkId))).toEqual(new Set(f.links));
 
     const withFactors = (factors: Map<TransportLinkId, number>, world = f.world) =>
       run({ ...f, options: { ...f.options, infrastructureFactors: factors } }, world);
