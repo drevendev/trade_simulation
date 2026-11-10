@@ -463,12 +463,6 @@ function materializeMatchPlan(
       throw new Error("Local clearing collected consumption tax has no State treasury destination");
     }
     const nextCommitted = previouslyCommitted + buyerDebit;
-    // An individually positive debit can disappear when added to an existing
-    // large commitment (binary64 ULP absorption). The buyer's balance cannot
-    // represent this extra payment, so do not transfer the seller's goods.
-    if (grossUnitPrice > 0 && nextCommitted === previouslyCommitted) {
-      return null;
-    }
     if (nextCommitted > maxSpend) {
       throw new Error("Local clearing emitted buyer debit exceeds maxSpend");
     }

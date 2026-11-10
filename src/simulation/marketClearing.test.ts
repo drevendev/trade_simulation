@@ -408,7 +408,7 @@ describe("Local clearing algorithm", () => {
     expect(funded[0]!.id).toBe("ma:m:central/good:wheat/MAIN/10");
   });
 
-  it("skips a positive micro-lot when its debit disappears in the buyer's running balance", () => {
+  it("preserves individually paid micro-lots even when a running binary64 sum absorbs their debit", () => {
     const price = 1e16;
     const tinyQuantity = 1e-17;
     expect(tinyQuantity * price).toBeGreaterThan(0);
@@ -451,12 +451,19 @@ describe("Local clearing algorithm", () => {
     };
     const counter = { value: 30 };
     const allocations = computeLocalClearing(input, new Map(), price, 1e-8, counter);
-    expect(allocations.map(a => a.sellerIntentId)).toEqual([sellers[0]!.id, sellers[2]!.id]);
+    // The second lot has its own representable positive payment. Discarding
+    // it merely because a separate running total absorbs 0.1 breaks SLP-787
+    // balanced matching and per-lot settlement semantics.
+    expect(allocations.map(a => a.sellerIntentId)).toEqual(sellers.map(s => s.id));
     expect(allocations.map(a => a.id)).toEqual([
       "ma:m:central/good:wheat/MAIN/31",
       "ma:m:central/good:wheat/MAIN/32",
+      "ma:m:central/good:wheat/MAIN/33",
     ]);
-    expect(counter.value).toBe(32);
+    expect(allocations[1]!.quantity).toBe(tinyQuantity);
+    expect(allocations[1]!.quantity * allocations[1]!.buyerGrossUnitPrice).toBeGreaterThan(0);
+    expect(allocations[1]!.quantity * allocations[1]!.sellerNetUnitPrice).toBeGreaterThan(0);
+    expect(counter.value).toBe(33);
     expect(allocations.reduce((sum, a) => sum + a.quantity * a.buyerGrossUnitPrice, 0))
       .toBeLessThanOrEqual(buyer.maxSpend!);
     expect(computeLocalClearing(
