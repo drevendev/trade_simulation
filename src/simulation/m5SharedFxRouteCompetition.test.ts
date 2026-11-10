@@ -1237,6 +1237,317 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     expect(replay.world.monetaryAuthorities).toEqual(ninth.world.monetaryAuthorities);
   });
 
+
+  it("delivers already-paid cargo after spendable FX liquidity vanishes, without repaying it", () => {
+    const f = fixture();
+    // Both border routes must have the same two-tick transit maturity here.
+    // The baseline topology deliberately has different default travel times.
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) => [
+        id, { ...link, travelTicks: 2 },
+      ] as const)),
+    };
+    const dispatched = run(f, opening, true, 7);
+    expect(dispatched.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(dispatched.phaseBoundaryError).toBeUndefined();
+    expect(dispatched.reconciliationErrors).toBeNull();
+    const prior = assertPaidCargoReceipts(dispatched, f.links).cargos;
+    expect(prior).toHaveLength(2);
+    expect(prior.every(cargo => cargo.arrivalTick === 9)).toBe(true);
+    const priorIds = new Set(prior.map(cargo => cargo.id));
+    expect(priorIds.size).toBe(2);
+
+    // Transfer, do not destroy, every spendable output-currency unit *after*
+    // tick-7 invoices have been paid. Open Phase-1 borders on the next tick:
+    // trade must be blocked by the live FX pool, not by border policy.
+    const outputCurrency = f.currencies[0]!;
+    const authority = dispatched.world.monetaryAuthorities.get(f.chosen.authorityId)!;
+    const pool = authority.fxPools.get(f.chosen.poolId)!;
+    const available = pool.cash.get(outputCurrency)! - f.reserveFloor;
+    expect(available).toBeGreaterThan(0);
+    const recipient = [...dispatched.world.productionUnits.values()]
+      .find(unit => unit.wallet.has(outputCurrency))!;
+    expect(recipient).toBeDefined();
+    const depleted: WorldState = {
+      ...dispatched.world,
+      monetaryAuthorities: new Map(dispatched.world.monetaryAuthorities).set(
+        f.chosen.authorityId, {
+          ...authority,
+          fxPools: new Map(authority.fxPools).set(f.chosen.poolId, {
+            ...pool, cash: new Map(pool.cash).set(outputCurrency, f.reserveFloor),
+          }),
+        },
+      ),
+      productionUnits: new Map(dispatched.world.productionUnits).set(
+        recipient.productionUnitId, {
+          ...recipient,
+          wallet: new Map(recipient.wallet).set(
+            outputCurrency, recipient.wallet.get(outputCurrency)! + available,
+          ),
+        },
+      ),
+    };
+    expect(totalCash(depleted, outputCurrency))
+      .toBeCloseTo(totalCash(dispatched.world, outputCurrency), 6);
+    expect(totalIron(depleted)).toBeCloseTo(totalIron(dispatched.world), 7);
+
+    const waiting = run(f, depleted, true, 8);
+    expect(waiting.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(waiting.phaseBoundaryError).toBeUndefined();
+    expect(waiting.reconciliationErrors).toBeNull();
+    expect(new Set([...(waiting.world.shipments?.keys() ?? [])])).toEqual(priorIds);
+    expect(waiting.context.transactions.filter(tx => tx.phase === 7 &&
+      ["FX_INPUT", "FX_OUTPUT", "SHIPMENT_DISPATCH", "TRADE_GOODS_SALE",
+        "IMPORT_TARIFF", "TRANSPORT_FEE"].includes(tx.type))).toHaveLength(0);
+    expect(waiting.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE" &&
+      (tx.moneyAmount ?? 0) > 0 && (tx.quantity ?? 0) > 0).length)
+      .toBeGreaterThan(0);
+    expect(totalIron(waiting.world)).toBeCloseTo(totalIron(depleted), 7);
+    for (const currency of f.currencies) {
+      expect(totalCash(waiting.world, currency)).toBeCloseTo(totalCash(depleted, currency), 6);
+    }
+
+    // Delivery is a physical Phase-1 change for the prepaid beneficial owner.
+    // It must NOT require a new FX quote or charge a second invoice.
+    let deliveryPhases = 0;
+    const arrived = executeM5AutonomousRegionalTradeTick(
+      waiting.world, 9, households, (_phase, current) => current, f.options,
+      (phase, before, after, context) => {
+        if (phase !== 1) return;
+        deliveryPhases++;
+        const receipts = context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY");
+        expect(receipts).toHaveLength(priorIds.size);
+        expect(after.shipments?.size).toBe(0);
+        for (const cargo of prior) {
+          expect(receipts.filter(tx =>
+            tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id &&
+            tx.quantity === cargo.quantity)).toHaveLength(1);
+          expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+          if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") continue;
+          const id = cargo.beneficialOwner.productionUnitId;
+          expect(after.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0)
+            .toBeCloseTo(
+              (before.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0) +
+              cargo.quantity, 7,
+            );
+        }
+        expect(after.monetaryAuthorities).toEqual(before.monetaryAuthorities);
+      },
+    );
+    expect(deliveryPhases).toBe(1);
+    expect(arrived.phaseBoundaryError).toBeUndefined();
+    expect(arrived.reconciliationErrors).toBeNull();
+    expect(arrived.world.shipments?.size).toBe(0);
+    expect(arrived.context.transactions.filter(tx =>
+      ["FX_INPUT", "FX_OUTPUT", "TRADE_GOODS_SALE", "SHIPMENT_DISPATCH",
+        "IMPORT_TARIFF", "TRANSPORT_FEE"].includes(tx.type))).toHaveLength(0);
+    expect(totalIron(arrived.world)).toBeCloseTo(totalIron(depleted), 7);
+    for (const currency of f.currencies) {
+      expect(totalCash(arrived.world, currency)).toBeCloseTo(totalCash(depleted, currency), 6);
+    }
+
+    const replay = run(f, depleted, true, 8);
+    expect(replay.context.transactions).toEqual(waiting.context.transactions);
+    expect(replay.world.shipments).toEqual(waiting.world.shipments);
+    expect(replay.world.monetaryAuthorities).toEqual(waiting.world.monetaryAuthorities);
+    const next = run(f, arrived.world, true, 10);
+    expect(next.phaseBoundaryError).toBeUndefined();
+    expect(next.reconciliationErrors).toBeNull();
+    expect(next.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
+    expect(next.context.transactions.filter(tx => tx.phase === 7 &&
+      ["FX_INPUT", "FX_OUTPUT", "SHIPMENT_DISPATCH"].includes(tx.type))).toHaveLength(0);
+
+    // After prepaid goods mature, only a fresh CASH-CONSERVING pool refill
+    // can restart FX trade. Neither elapsed time nor the delivery pays again.
+    const refill = 20_000;
+    const arrivalAuthority = arrived.world.monetaryAuthorities.get(f.chosen.authorityId)!;
+    const arrivalPool = arrivalAuthority.fxPools.get(f.chosen.poolId)!;
+    expect(arrivalPool.cash.get(outputCurrency)).toBe(f.reserveFloor);
+    const funder = [...arrived.world.productionUnits.values()].find(unit =>
+      (unit.wallet.get(outputCurrency) ?? 0) > refill * 2);
+    expect(funder).toBeDefined();
+    const replenished: WorldState = {
+      ...arrived.world,
+      productionUnits: new Map(arrived.world.productionUnits).set(
+        funder!.productionUnitId, {
+          ...funder!,
+          wallet: new Map(funder!.wallet).set(
+            outputCurrency, funder!.wallet.get(outputCurrency)! - refill),
+        },
+      ),
+      monetaryAuthorities: new Map(arrived.world.monetaryAuthorities).set(
+        f.chosen.authorityId, {
+          ...arrivalAuthority,
+          fxPools: new Map(arrivalAuthority.fxPools).set(f.chosen.poolId, {
+            ...arrivalPool,
+            cash: new Map(arrivalPool.cash).set(outputCurrency, f.reserveFloor + refill),
+          }),
+        },
+      ),
+    };
+    expect(totalCash(replenished, outputCurrency))
+      .toBeCloseTo(totalCash(arrived.world, outputCurrency), 6);
+    const resumed = run(f, replenished, true, 10);
+    expect(resumed.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(resumed.phaseBoundaryError).toBeUndefined();
+    expect(resumed.reconciliationErrors).toBeNull();
+    expect(resumed.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
+    const newPayments = assertPaidCargoReceipts(resumed);
+    expect(newPayments.cargos.length).toBeGreaterThan(0);
+    expect(newPayments.paid).toBeGreaterThan(0);
+    expect(newPayments.paid).toBeLessThanOrEqual(refill + 1e-8);
+    for (const cargo of newPayments.cargos) {
+      expect(f.links).toContain(cargo.transportLinkId);
+      expect(cargo.departureTick).toBe(10);
+      expect(priorIds.has(cargo.id)).toBe(false);
+    }
+    for (const currency of f.currencies) {
+      expect(totalCash(resumed.world, currency))
+        .toBeCloseTo(totalCash(replenished, currency), 6);
+    }
+    expect(totalIron(resumed.world)).toBeCloseTo(totalIron(replenished), 7);
+    const replayResumed = run(f, replenished, true, 10);
+    expect(replayResumed.context.transactions).toEqual(resumed.context.transactions);
+    expect(replayResumed.world.shipments).toEqual(resumed.world.shipments);
+    expect(replayResumed.world.monetaryAuthorities).toEqual(resumed.world.monetaryAuthorities);
+  });
+
+  it("honors already-paid transit after link capacity drops to zero", () => {
+    const f = fixture();
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) => [
+        id, { ...link, travelTicks: 2 },
+      ] as const)),
+    };
+    const dispatched = run(f, opening, true, 7);
+    expect(dispatched.phaseBoundaryError).toBeUndefined();
+    expect(dispatched.reconciliationErrors).toBeNull();
+    const cargos = assertPaidCargoReceipts(dispatched, f.links).cargos;
+    expect(cargos).toHaveLength(2);
+    expect(cargos.every(cargo => cargo.arrivalTick === 9)).toBe(true);
+    const ids = new Set(cargos.map(cargo => cargo.id));
+    expect(ids.size).toBe(2);
+
+    // FX balances and legal borders remain untouched; only physical capacity
+    // changes. Existing in-transit goods must not be retroactively blocked.
+    const disabled: WorldState = {
+      ...dispatched.world,
+      transportLinks: new Map([...dispatched.world.transportLinks].map(([id, link]) => [
+        id, { ...link, seed: { ...link.seed, baseCapacity: 0 } },
+      ] as const)),
+    };
+    const unrestricted = run(f, dispatched.world, true, 8);
+    expect(unrestricted.phaseBoundaryError).toBeUndefined();
+    expect(unrestricted.reconciliationErrors).toBeNull();
+    expect(unrestricted.context.transactions.some(tx =>
+      tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH")).toBe(true);
+
+    const blocked = run(f, disabled, true, 8);
+    expect(blocked.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(blocked.phaseBoundaryError).toBeUndefined();
+    expect(blocked.reconciliationErrors).toBeNull();
+    expect(new Set(blocked.world.shipments?.keys())).toEqual(ids);
+    expect(blocked.context.transactions.filter(tx => tx.phase === 7 &&
+      ["FX_INPUT", "FX_OUTPUT", "TRADE_GOODS_SALE", "SHIPMENT_DISPATCH",
+        "IMPORT_TARIFF", "TRANSPORT_FEE"].includes(tx.type))).toHaveLength(0);
+    expect(blocked.context.transactions.some(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE" &&
+      (tx.quantity ?? 0) > 0 && (tx.moneyAmount ?? 0) > 0)).toBe(true);
+
+    // Inspect exact delivery mutation at Phase 1, before later market or
+    // production phases are allowed to spend the newly arrived input stock.
+    let phase1Observations = 0;
+    const arrived = executeM5AutonomousRegionalTradeTick(
+      blocked.world, 9, households, (_phase, current) => current, f.options,
+      (phase, before, after, context) => {
+        if (phase !== 1) return;
+        phase1Observations++;
+        const deliveries = context.transactions.filter(tx =>
+          tx.type === "SHIPMENT_DELIVERY");
+        expect(deliveries).toHaveLength(cargos.length);
+        expect(after.shipments?.size).toBe(0);
+        for (const cargo of cargos) {
+          expect(deliveries.filter(tx =>
+            tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id &&
+            tx.quantity === cargo.quantity)).toHaveLength(1);
+          expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+          if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") continue;
+          const id = cargo.beneficialOwner.productionUnitId;
+          expect(after.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0)
+            .toBeCloseTo(
+              (before.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0) +
+              cargo.quantity, 7,
+            );
+        }
+        expect(after.monetaryAuthorities).toEqual(before.monetaryAuthorities);
+      },
+    );
+    expect(phase1Observations).toBe(1);
+    expect(arrived.phaseBoundaryError).toBeUndefined();
+    expect(arrived.reconciliationErrors).toBeNull();
+    expect(arrived.world.shipments?.size).toBe(0);
+    expect(arrived.context.transactions.filter(tx =>
+      ["FX_INPUT", "FX_OUTPUT", "TRADE_GOODS_SALE", "SHIPMENT_DISPATCH",
+        "IMPORT_TARIFF", "TRANSPORT_FEE"].includes(tx.type))).toHaveLength(0);
+    for (const world of [blocked.world, arrived.world]) {
+      expect(totalIron(world)).toBeCloseTo(totalIron(disabled), 7);
+      for (const currency of f.currencies) {
+        expect(totalCash(world, currency)).toBeCloseTo(totalCash(disabled, currency), 6);
+      }
+    }
+    const replay = run(f, disabled, true, 8);
+    expect(replay.context.transactions).toEqual(blocked.context.transactions);
+    expect(replay.world.shipments).toEqual(blocked.world.shipments);
+    expect(replay.world.productionUnits).toEqual(blocked.world.productionUnits);
+    const next = run(f, arrived.world, true, 10);
+    expect(next.phaseBoundaryError).toBeUndefined();
+    expect(next.reconciliationErrors).toBeNull();
+    expect(next.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
+
+    // Recover capacity at tick 10 without restoring the spent prior invoices.
+    // New trade must resume, but old cargo must not arrive a second time.
+    const restored: WorldState = {
+      ...arrived.world,
+      transportLinks: new Map([...arrived.world.transportLinks].map(([id, link]) => [
+        id, { ...link, seed: { ...link.seed,
+          baseCapacity: f.world.transportLinks.get(id)!.seed.baseCapacity } },
+      ] as const)),
+    };
+    const resumed = run(f, restored, true, 10);
+    expect(resumed.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(resumed.phaseBoundaryError).toBeUndefined();
+    expect(resumed.reconciliationErrors).toBeNull();
+    expect(resumed.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
+    const newDispatches = resumed.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
+    expect(newDispatches.length).toBeGreaterThan(0);
+    // Recovery must restore paid FX settlement, not merely create cargo IDs.
+    // This checks positive, paired currency legs and each cargo's FX/bundle
+    // settlement identity against its actual Phase-7 dispatch receipt.
+    const paidRecovery = assertPaidCargoReceipts(resumed);
+    expect(paidRecovery.cargos).toHaveLength(newDispatches.length);
+    expect(paidRecovery.paid).toBeGreaterThan(0);
+    const newCargo = [...(resumed.world.shipments?.values() ?? [])];
+    expect(newCargo).toHaveLength(newDispatches.length);
+    expect(newCargo.every(cargo => cargo.departureTick === 10 && !ids.has(cargo.id))).toBe(true);
+    expect(new Set(newCargo.map(cargo => cargo.id)).size).toBe(newCargo.length);
+    expect(totalIron(resumed.world)).toBeCloseTo(totalIron(restored), 7);
+    for (const currency of f.currencies) {
+      expect(totalCash(resumed.world, currency)).toBeCloseTo(totalCash(restored, currency), 6);
+    }
+    const restoredReplay = run(f, restored, true, 10);
+    expect(restoredReplay.context.transactions).toEqual(resumed.context.transactions);
+    expect(restoredReplay.world.shipments).toEqual(resumed.world.shipments);
+  });
+
+
 });
 
 
