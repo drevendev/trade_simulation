@@ -75,6 +75,14 @@ export interface LocalClearingInput {
     assessedTaxRate: number;
     collectionEfficiency: number;
   };
+  /**
+   * Optional live-world feasibility gate. Pure matching has no authoritative wallet or
+   * inventory balances; a settlement-enabled caller must validate the candidate against
+   * its sequential, immutable projected WorldState before treating it as a paid trade.
+   * Returning false skips a numerically unrepresentable lot without consuming an ID.
+   * Material authorization/stock defects must throw, never silently become no-trades.
+   */
+  readonly acceptLiveAllocation?: ((candidate: MarketAllocation) => boolean) | undefined;
 }
 
 /**
@@ -118,7 +126,22 @@ export function computeEffectiveDemand(
   }
 
   const effectivePrice = Math.max(grossUnitPrice, moneyEpsilon);
-  return Math.min(intent.desiredQuantity, intent.maxSpend / effectivePrice);
+  const quantity = Math.min(intent.desiredQuantity, intent.maxSpend / effectivePrice);
+  // A correctly rounded division can round UP so that multiplying the
+  // resulting binary64 quantity by the exact same gross price exceeds the
+  // buyer's budget by one ULP. Never interpret moneyEpsilon as permission
+  // to overspend (Phase-6/7's strict committed-envelope ledger rejects it).
+  if (!(quantity > 0) || !(quantity * effectivePrice > intent.maxSpend)) {
+    return quantity;
+  }
+  const bits = new DataView(new ArrayBuffer(8));
+  bits.setFloat64(0, quantity);
+  bits.setBigUint64(0, bits.getBigUint64(0) - 1n);
+  const affordable = bits.getFloat64(0);
+  if (affordable < 0 || affordable * effectivePrice > intent.maxSpend) {
+    throw new Error("Local effective demand cannot represent an affordable quantity");
+  }
+  return affordable;
 }
 
 /**
@@ -325,6 +348,40 @@ function selectStableMatchPlan(
 }
 
 /**
+ * Find the largest representable nonnegative match quantity whose emitted
+ * binary64 debit fits the BUY intent's remaining budget. Testing the actual
+ * running sum matters: independently rounded seller fills can overdraw by
+ * one ULP even when aggregate demand * grossPrice fits exactly.
+ *
+ * Positive finite float64 bit patterns are monotonically ordered. Search
+ * their 64-bit space rather than repeatedly subtracting an arbitrary haircut.
+ */
+function affordableMatchQuantity(
+  requested: number,
+  grossPrice: number,
+  priorDebit: number,
+  maxSpend: number,
+): number {
+  // A zero-budget BUY cannot acquire a positive-priced lot. For a price
+  // below one, subnormal positive quantities can round their debit to zero;
+  // searching those representations must not convert no funds into stock.
+  if (maxSpend === 0) return 0;
+  const bits = new DataView(new ArrayBuffer(8));
+  bits.setFloat64(0, requested);
+  let low = 0n;
+  let high = bits.getBigUint64(0);
+  while (low < high) {
+    const mid = (low + high + 1n) / 2n;
+    bits.setBigUint64(0, mid);
+    const candidate = bits.getFloat64(0);
+    if (priorDebit + candidate * grossPrice <= maxSpend) low = mid;
+    else high = mid - 1n;
+  }
+  bits.setBigUint64(0, low);
+  return bits.getFloat64(0);
+}
+
+/**
  * Materialize exactly one already-selected plan. This is the only stage allowed to invoke
  * taxation callbacks or consume allocation IDs, so rejected numerical trials cannot leak
  * externally observable effects.
@@ -339,15 +396,38 @@ function materializeMatchPlan(
   // plan before spending an ordinal: a bad late taxation callback must not leave
   // earlier IDs consumed when the clearing attempt throws and is retried.
   const firstOrdinal = allocationIdCounter.value;
-  if (!Number.isSafeInteger(firstOrdinal) || firstOrdinal < 0 ||
-      plan.length > Number.MAX_SAFE_INTEGER - firstOrdinal) {
-    throw new Error("Local clearing allocation counter cannot reserve safe ordinals for the whole match plan");
+  if (!Number.isSafeInteger(firstOrdinal) || firstOrdinal < 0) {
+    throw new Error("Local clearing allocation counter must be a nonnegative safe integer");
+  }
+  // Fail before taxation callbacks if even potentially emitted allocations
+  // cannot fit. A zero-funded BUY cannot pay a positive NET price, and a
+  // positive physical lot whose NET seller receipt underflows to zero is
+  // also guaranteed to be dropped later. Neither needs an allocation ID.
+  // Keep explicitly free price-zero fixtures on their own existing path.
+  // A positive budget may still be strictly smaller than the NET payment for
+  // the smallest positive binary64 quantity. Such a match cannot emit any
+  // paid lot, even after the affordability search, and must not reserve an ID.
+  // The net bound is conservative because collected tax cannot lower gross.
+  const smallestNetDebit = Number.MIN_VALUE * marketPrice;
+  const potentiallyPayableCount = plan.filter((match) =>
+    !(marketPrice > 0 &&
+      (match.buyer.maxSpend === 0 ||
+        (typeof match.buyer.maxSpend === "number" &&
+         match.buyer.maxSpend > 0 && match.buyer.maxSpend < smallestNetDebit) ||
+        match.quantity * marketPrice === 0))).length;
+  if (potentiallyPayableCount > Number.MAX_SAFE_INTEGER - firstOrdinal) {
+    throw new Error("Local clearing allocation counter cannot reserve safe ordinals for potentially payable matches");
   }
   assertFiniteCanonicalNumber(marketPrice, "marketPrice for local allocation materialization");
   if (marketPrice < 0) {
     throw new Error("Local clearing marketPrice must be >= 0");
   }
 
+  // Enforce each BUY envelope at the actual per-seller allocation boundary.
+  // The plan is physically valid already; only an unaffordable rounding tail
+  // may be reduced. Unfilled stock stays with the seller; no extra transfer or
+  // allocation ID is generated for an unrepresentable positive tail.
+  const buyerDebitByIntent = new Map<MarketIntentId, number>();
   const prepared = plan.map((match) => {
     const taxInfo = input.getTaxationInfo(match.buyer, match.buyer.regionId, input.goodId);
     assertFiniteCanonicalNumber(taxInfo.assessedTaxRate, "assessedTaxRate for local allocation");
@@ -359,9 +439,42 @@ function materializeMatchPlan(
 
     const collectedTaxPerUnit = marketPrice * taxInfo.assessedTaxRate * taxInfo.collectionEfficiency;
     const grossUnitPrice = marketPrice + collectedTaxPerUnit;
-    const consumptionTaxAmount = match.quantity * collectedTaxPerUnit;
-    const sellerReceipt = match.quantity * marketPrice;
-    const buyerDebit = match.quantity * grossUnitPrice;
+    if (!Number.isFinite(grossUnitPrice)) {
+      throw new Error("Local clearing taxation/money products must be finite before allocation");
+    }
+    if (grossUnitPrice < 0) {
+      throw new Error("Local clearing grossUnitPrice must be >= 0");
+    }
+    const maxSpend = match.buyer.maxSpend;
+    if (typeof maxSpend !== "number" || !Number.isFinite(maxSpend) || maxSpend < 0) {
+      throw new Error("Local clearing BUY intent must have finite nonnegative maxSpend");
+    }
+    const previouslyCommitted = buyerDebitByIntent.get(match.buyer.id) ?? 0;
+    let quantity = match.quantity;
+    if (grossUnitPrice > 0) {
+      // Test the cash envelope before rounded multiplication: a subnormal
+      // positive physical quantity can have a zero binary64 debit. With no
+      // budget, that must never materialize as a free paid allocation.
+      if (maxSpend === 0) {
+        quantity = 0;
+      } else if (previouslyCommitted + quantity * grossUnitPrice > maxSpend) {
+        quantity = affordableMatchQuantity(quantity, grossUnitPrice, previouslyCommitted, maxSpend);
+      }
+    }
+    // A positive physical lot cannot be transferred as a paid trade when its
+    // own seller receipt or buyer debit underflows to zero in binary64. Leave
+    // that unrepresentable lot with the seller instead of aborting the whole
+    // tick. This is not a minimum-lot cutoff or a ban on nonzero tiny payments.
+    if (quantity > 0 &&
+        ((marketPrice > 0 && quantity * marketPrice === 0) ||
+         (grossUnitPrice > 0 && quantity * grossUnitPrice === 0))) {
+      quantity = 0;
+    }
+    if (quantity === 0) return null;
+    const affordableMatch = quantity === match.quantity ? match : { ...match, quantity };
+    const consumptionTaxAmount = quantity * collectedTaxPerUnit;
+    const sellerReceipt = quantity * marketPrice;
+    const buyerDebit = quantity * grossUnitPrice;
     if (![collectedTaxPerUnit, grossUnitPrice, consumptionTaxAmount, sellerReceipt, buyerDebit]
       .every(Number.isFinite)) {
       throw new Error("Local clearing taxation/money products must be finite before allocation");
@@ -375,14 +488,30 @@ function materializeMatchPlan(
         (typeof taxInfo.destinationStateId !== "string" || taxInfo.destinationStateId.trim() === "")) {
       throw new Error("Local clearing collected consumption tax has no State treasury destination");
     }
-    return { match, grossUnitPrice, consumptionTaxAmount, destinationStateId: taxInfo.destinationStateId };
-  });
+    const nextCommitted = previouslyCommitted + buyerDebit;
+    if (nextCommitted > maxSpend) {
+      throw new Error("Local clearing emitted buyer debit exceeds maxSpend");
+    }
+    buyerDebitByIntent.set(match.buyer.id, nextCommitted);
+    return { match: affordableMatch, grossUnitPrice, consumptionTaxAmount, destinationStateId: taxInfo.destinationStateId };
+  }).filter((entry) => entry !== null);
 
-  // All callback/numeric checks succeeded. Build the deterministic contiguous ID
-  // sequence locally; publish the caller counter only after every record exists.
-  const allocations: MarketAllocation[] = prepared.map(({ match, grossUnitPrice, consumptionTaxAmount, destinationStateId }, index) => ({
+  // Tentative matches rejected for zero funding or unrepresentable payments
+  // consume no IDs. Reserve only the *emitted* allocations, after all numeric
+  // and tax validation, without mutating the caller's counter on exhaustion.
+  if (input.acceptLiveAllocation === undefined &&
+      prepared.length > Number.MAX_SAFE_INTEGER - firstOrdinal) {
+    throw new Error("Local clearing allocation counter cannot reserve safe ordinals for emitted matches");
+  }
 
-      id: createMarketAllocationId(`ma:${input.marketId}/${input.goodId}/${input.pass}/${firstOrdinal + index + 1}`),
+  // The live-world gate is evaluated in stable match order before IDs are committed.
+  // Refused precision tails are not sales, cannot consume an allocation ID and cannot
+  // silently acquire stock. A proposed ID is only a temporary preflight identity.
+  const allocations: MarketAllocation[] = [];
+  for (const { match, grossUnitPrice, consumptionTaxAmount, destinationStateId } of prepared) {
+    const nextOrdinal = firstOrdinal + allocations.length + 1;
+    const candidate: MarketAllocation = {
+      id: createMarketAllocationId(`ma:${input.marketId}/${input.goodId}/${input.pass}/${Number.isSafeInteger(nextOrdinal) ? nextOrdinal : "preflight"}`),
       marketId: input.marketId,
       regionId: input.regionId,
       goodId: input.goodId,
@@ -407,7 +536,13 @@ function materializeMatchPlan(
         | "INPUT"
         | "OUTPUT"
         | "INVESTMENT",
-    }));
+    };
+    if (input.acceptLiveAllocation?.(candidate) === false) continue;
+    if (!Number.isSafeInteger(nextOrdinal)) {
+      throw new Error("Local clearing allocation counter cannot reserve safe ordinals for emitted matches");
+    }
+    allocations.push(candidate);
+  }
   allocationIdCounter.value = firstOrdinal + allocations.length;
   return allocations;
 }
