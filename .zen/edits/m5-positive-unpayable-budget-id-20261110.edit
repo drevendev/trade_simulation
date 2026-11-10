@@ -1,0 +1,86 @@
+### FILE: src/simulation/marketClearing.ts
+<<<<<<< FIND
+  // Keep explicitly free price-zero fixtures on their own existing path.
+  const potentiallyPayableCount = plan.filter((match) =>
+    !(marketPrice > 0 &&
+      (match.buyer.maxSpend === 0 || match.quantity * marketPrice === 0))).length;
+=======
+  // Keep explicitly free price-zero fixtures on their own existing path.
+  // A positive budget may still be strictly smaller than the NET payment for
+  // the smallest positive binary64 quantity. Such a match cannot emit any
+  // paid lot, even after the affordability search, and must not reserve an ID.
+  // The net bound is conservative because collected tax cannot lower gross.
+  const smallestNetDebit = Number.MIN_VALUE * marketPrice;
+  const potentiallyPayableCount = plan.filter((match) =>
+    !(marketPrice > 0 &&
+      (match.buyer.maxSpend === 0 ||
+        (typeof match.buyer.maxSpend === "number" &&
+         match.buyer.maxSpend > 0 && match.buyer.maxSpend < smallestNetDebit) ||
+        match.quantity * marketPrice === 0))).length;
+>>>>>>> REPLACE
+
+### FILE: src/simulation/marketClearing.test.ts
+<<<<<<< FIND
+  it("cannot materialize a paid lot with zero budget even if demand evidence is forged", () => {
+=======
+  it("does not exhaust the final allocation ID on a positive but unpayably small budget", () => {
+    // Even the least positive representable quantity costs more than the
+    // first buyer owns. Positive funding is not sufficient to reserve an ID.
+    const price = 1e100;
+    const belowMinimumLot = Number.MIN_VALUE;
+    expect(Number.MIN_VALUE * price).toBeGreaterThan(belowMinimumLot);
+    const buyers: MarketIntent[] = [
+      { id: createMarketIntentId("mi:tiny-positive-budget"),
+        actor: { type: "CLAN", clanId: testClanId },
+        regionId: testRegionId, goodId: testGoodId, side: "BUY",
+        purpose: "CONSUMPTION", desiredQuantity: 1,
+        maxSpend: belowMinimumLot, sourcePlanId: "plan:tiny" },
+      { id: createMarketIntentId("mi:properly-funded"),
+        actor: { type: "CLAN", clanId: testClanId },
+        regionId: testRegionId, goodId: testGoodId, side: "BUY",
+        purpose: "CONSUMPTION", desiredQuantity: 1,
+        maxSpend: price, sourcePlanId: "plan:funded" },
+    ];
+    const sellers: MarketIntent[] = [1, 2].map(index => ({
+      id: createMarketIntentId(`mi:minimum-lot-seller-${index}`),
+      actor: { type: "PRODUCTION_UNIT",
+        productionUnitId: (`pu:minimum-lot-seller-${index}` as ProductionUnitId) },
+      regionId: testRegionId, goodId: testGoodId, side: "SELL" as const,
+      purpose: "INVENTORY_REBALANCE" as const, desiredQuantity: 1,
+      sourcePlanId: "plan:min-lot",
+    }));
+    const input: LocalClearingInput = {
+      ...createTestInput(buyers, sellers),
+      // Adversarial planner claims both demands are physically feasible;
+      // the money authority must still exclude an impossible first lot.
+      computeEffectiveDemand: intent => intent.desiredQuantity,
+      computeGrossUnitPrice: (_intent, net) => net,
+      getTaxationInfo: () => ({
+        destinationStateId: null, assessedTaxRate: 0, collectionEfficiency: 1,
+      }),
+    };
+    const lastFreeOrdinal = Number.MAX_SAFE_INTEGER - 1;
+    const counter = { value: lastFreeOrdinal };
+    const allocations = computeLocalClearing(input, new Map(), price, 1e-8, counter);
+    expect(allocations).toHaveLength(1);
+    expect(allocations[0]!.buyerIntentId).toBe(buyers[1]!.id);
+    expect(allocations[0]!.sellerIntentId).toBe(sellers[1]!.id);
+    expect(allocations[0]!.quantity).toBe(1);
+    expect(allocations[0]!.quantity * allocations[0]!.buyerGrossUnitPrice).toBe(price);
+    expect(allocations[0]!.id).toBe(
+      `ma:m:central/good:wheat/MAIN/${Number.MAX_SAFE_INTEGER}`,
+    );
+    expect(counter.value).toBe(Number.MAX_SAFE_INTEGER);
+    expect(computeLocalClearing({
+      ...input, buyerIntents: [...buyers].reverse(),
+      sellerIntents: [...sellers].reverse(),
+    }, new Map(), price, 1e-8, { value: lastFreeOrdinal })).toEqual(allocations);
+
+    const exhausted = { value: Number.MAX_SAFE_INTEGER };
+    expect(() => computeLocalClearing(input, new Map(), price, 1e-8, exhausted))
+      .toThrow("cannot reserve safe ordinals");
+    expect(exhausted.value).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it("cannot materialize a paid lot with zero budget even if demand evidence is forged", () => {
+>>>>>>> REPLACE
