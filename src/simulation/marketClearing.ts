@@ -75,6 +75,14 @@ export interface LocalClearingInput {
     assessedTaxRate: number;
     collectionEfficiency: number;
   };
+  /**
+   * Optional live-world feasibility gate. Pure matching has no authoritative wallet or
+   * inventory balances; a settlement-enabled caller must validate the candidate against
+   * its sequential, immutable projected WorldState before treating it as a paid trade.
+   * Returning false skips a numerically unrepresentable lot without consuming an ID.
+   * Material authorization/stock defects must throw, never silently become no-trades.
+   */
+  readonly acceptLiveAllocation?: (candidate: MarketAllocation) => boolean;
 }
 
 /**
@@ -491,15 +499,19 @@ function materializeMatchPlan(
   // Tentative matches rejected for zero funding or unrepresentable payments
   // consume no IDs. Reserve only the *emitted* allocations, after all numeric
   // and tax validation, without mutating the caller's counter on exhaustion.
-  if (prepared.length > Number.MAX_SAFE_INTEGER - firstOrdinal) {
+  if (input.acceptLiveAllocation === undefined &&
+      prepared.length > Number.MAX_SAFE_INTEGER - firstOrdinal) {
     throw new Error("Local clearing allocation counter cannot reserve safe ordinals for emitted matches");
   }
 
-  // All callback/numeric checks succeeded. Build the deterministic contiguous ID
-  // sequence locally; publish the caller counter only after every record exists.
-  const allocations: MarketAllocation[] = prepared.map(({ match, grossUnitPrice, consumptionTaxAmount, destinationStateId }, index) => ({
-
-      id: createMarketAllocationId(`ma:${input.marketId}/${input.goodId}/${input.pass}/${firstOrdinal + index + 1}`),
+  // The live-world gate is evaluated in stable match order before IDs are committed.
+  // Refused precision tails are not sales, cannot consume an allocation ID and cannot
+  // silently acquire stock. A proposed ID is only a temporary preflight identity.
+  const allocations: MarketAllocation[] = [];
+  for (const { match, grossUnitPrice, consumptionTaxAmount, destinationStateId } of prepared) {
+    const nextOrdinal = firstOrdinal + allocations.length + 1;
+    const candidate: MarketAllocation = {
+      id: createMarketAllocationId(`ma:${input.marketId}/${input.goodId}/${input.pass}/${Number.isSafeInteger(nextOrdinal) ? nextOrdinal : "preflight"}`),
       marketId: input.marketId,
       regionId: input.regionId,
       goodId: input.goodId,
@@ -524,7 +536,13 @@ function materializeMatchPlan(
         | "INPUT"
         | "OUTPUT"
         | "INVESTMENT",
-    }));
+    };
+    if (input.acceptLiveAllocation?.(candidate) === false) continue;
+    if (!Number.isSafeInteger(nextOrdinal)) {
+      throw new Error("Local clearing allocation counter cannot reserve safe ordinals for emitted matches");
+    }
+    allocations.push(candidate);
+  }
   allocationIdCounter.value = firstOrdinal + allocations.length;
   return allocations;
 }
