@@ -391,12 +391,14 @@ function materializeMatchPlan(
   if (!Number.isSafeInteger(firstOrdinal) || firstOrdinal < 0) {
     throw new Error("Local clearing allocation counter must be a nonnegative safe integer");
   }
-  // Fail before invoking taxation callbacks when even the potentially payable
-  // matches cannot fit. A zero-funded buyer at a strictly positive NET price
-  // is guaranteed to be rejected; do not reserve an ordinal for that match.
-  // At price zero, retain the canonical explicitly free fixture behavior.
+  // Fail before taxation callbacks if even potentially emitted allocations
+  // cannot fit. A zero-funded BUY cannot pay a positive NET price, and a
+  // positive physical lot whose NET seller receipt underflows to zero is
+  // also guaranteed to be dropped later. Neither needs an allocation ID.
+  // Keep explicitly free price-zero fixtures on their own existing path.
   const potentiallyPayableCount = plan.filter((match) =>
-    !(marketPrice > 0 && match.buyer.maxSpend === 0)).length;
+    !(marketPrice > 0 &&
+      (match.buyer.maxSpend === 0 || match.quantity * marketPrice === 0))).length;
   if (potentiallyPayableCount > Number.MAX_SAFE_INTEGER - firstOrdinal) {
     throw new Error("Local clearing allocation counter cannot reserve safe ordinals for potentially payable matches");
   }
