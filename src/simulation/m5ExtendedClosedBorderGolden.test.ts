@@ -443,4 +443,76 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     expect(deliveredCount).toBe(2);
     expect(normalWorld.shipments?.size ?? 0).toBe(0);
   });
+  it("isolates a zero-capacity border corridor without consuming its neighbor's FX or local market", () => {
+    const f = fixture();
+    const full = run(f, f.world);
+    const openingIron = totalIron(f.world);
+    const openingCash = f.currencies.map(currency => totalCash(f.world, currency));
+    const localReceipts = full.context.transactions.filter(tx => tx.phase === 4);
+    const dispatched = (result: ReturnType<typeof run>) =>
+      result.context.transactions.filter(tx =>
+        tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
+    const fxLegs = (result: ReturnType<typeof run>) =>
+      result.context.transactions.filter(tx => tx.phase === 7 &&
+        (tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT"));
+    const tariffReceipts = (result: ReturnType<typeof run>) =>
+      result.context.transactions.filter(tx =>
+        tx.phase === 7 && tx.type === "IMPORT_TARIFF");
+    expect(localReceipts.length).toBeGreaterThan(0);
+    expect(dispatched(full)).toHaveLength(2);
+    expect(new Set([...(full.world.shipments?.values() ?? [])]
+      .map(cargo => cargo.transportLinkId))).toEqual(new Set(f.links));
+
+    const withFactors = (factors: Map<TransportLinkId, number>, world = f.world) =>
+      run({ ...f, options: { ...f.options, infrastructureFactors: factors } }, world);
+
+    // Both corridors are independently legal and funded, but making either
+    // one physically unusable must not eliminate the other paid shipment.
+    for (const disabled of f.links) {
+      const factors = new Map<TransportLinkId, number>(f.links.map(id =>
+        [id, id === disabled ? 0 : 1] as const));
+      const result = withFactors(factors);
+      const permuted = withFactors(factors, reordered(f.world));
+      for (const actual of [result, permuted]) {
+        expect(actual.phaseTrace).toEqual([...Array(16).keys()]);
+        expect(actual.phaseBoundaryError).toBeUndefined();
+        expect(actual.reconciliationErrors).toBeNull();
+        expect(dispatched(actual)).toHaveLength(1);
+        expect(fxLegs(actual)).toHaveLength(2);
+        expect(tariffReceipts(actual)).toHaveLength(1);
+        expect(actual.world.shipments?.size).toBe(1);
+        expect([...actual.world.shipments!.values()][0]!.transportLinkId)
+          .toBe(f.links.find(id => id !== disabled));
+        expect(actual.context.transactions.filter(tx => tx.phase === 4))
+          .toEqual(localReceipts);
+        expect(totalIron(actual.world)).toBeCloseTo(openingIron, 6);
+        for (const [index, currency] of f.currencies.entries()) {
+          expect(totalCash(actual.world, currency)).toBeCloseTo(openingCash[index]!, 5);
+        }
+      }
+      expect(permuted.context.transactions).toEqual(result.context.transactions);
+      expect(permuted.world.shipments).toEqual(result.world.shipments);
+      expect(permuted.world.monetaryAuthorities).toEqual(result.world.monetaryAuthorities);
+    }
+
+    // An entirely zero-capacity network must not produce paid foreign cargo,
+    // move goods into transit or debit the shared FX pool. Local procurement
+    // remains non-vacuously executable on the same opening WorldState.
+    const noCapacity = withFactors(new Map<TransportLinkId, number>(
+      f.links.map(id => [id, 0] as const),
+    ));
+    expect(noCapacity.phaseBoundaryError).toBeUndefined();
+    expect(noCapacity.reconciliationErrors).toBeNull();
+    expect(dispatched(noCapacity)).toHaveLength(0);
+    expect(fxLegs(noCapacity)).toHaveLength(0);
+    expect(tariffReceipts(noCapacity)).toHaveLength(0);
+    expect(noCapacity.world.shipments?.size ?? 0).toBe(0);
+    expect(noCapacity.context.transactions.filter(tx => tx.phase === 4))
+      .toEqual(localReceipts);
+    expect(noCapacity.world.monetaryAuthorities).toEqual(f.world.monetaryAuthorities);
+    expect(totalIron(noCapacity.world)).toBeCloseTo(openingIron, 6);
+    for (const [index, currency] of f.currencies.entries()) {
+      expect(totalCash(noCapacity.world, currency)).toBeCloseTo(openingCash[index]!, 5);
+    }
+  });
 });
