@@ -1679,4 +1679,159 @@ describe("M5 #676: distinct State tariff laws settle on separate live FX border 
     expect(replay.world.states).toEqual(ordinary.world.states);
     expect(replay.world.monetaryAuthorities).toEqual(ordinary.world.monetaryAuthorities);
   });
+
+  it("preserves paid transit, delivery owners and per-currency stocks across four shuffled-registry ticks", () => {
+    const f = fixture();
+    // Keep corridor order intentional; only unordered keyed registries may be
+    // permuted. Both shipments take two ticks, so the test spans dispatch,
+    // in-transit ownership, arrival and the following no-replay tick.
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
+        [id, { ...link, travelTicks: 2 }] as const)),
+    };
+    const shuffled: WorldState = {
+      ...opening,
+      states: new Map([...opening.states].reverse()),
+      regions: new Map([...opening.regions].reverse()),
+      markets: new Map([...opening.markets].reverse()),
+      cohorts: new Map([...opening.cohorts].reverse()),
+      clans: new Map([...opening.clans].reverse()),
+      productionUnits: new Map([...opening.productionUnits].reverse()),
+      transportLinks: new Map([...opening.transportLinks].reverse()),
+      monetaryAuthorities: new Map([...opening.monetaryAuthorities].reverse()
+        .map(([id, authority]) => [id, {
+          ...authority,
+          fxPools: new Map([...authority.fxPools].reverse()
+            .map(([poolId, pool]) =>
+              [poolId, { ...pool, cash: new Map([...pool.cash].reverse()) }] as const)),
+        }] as const)),
+    };
+    expect([...shuffled.regions.keys()]).not.toEqual([...opening.regions.keys()]);
+    expect([...shuffled.transportLinks.keys()]).not.toEqual([...opening.transportLinks.keys()]);
+
+    let observedDeliveryPhase = 0;
+    let normalWorld = opening;
+    let shuffledWorld = shuffled;
+    const byTick = new Map<number, ReturnType<typeof run>>();
+    for (const tick of [7, 8, 9, 10]) {
+      // Close new international orders after the paid opening dispatch. Due
+      // deliveries must still settle independently of today's trade policy.
+      const normal = tick === 9
+        ? executeM5AutonomousRegionalTradeTick(
+          normalWorld, tick, households, (_phase, current) => current,
+          { ...f.options, phase1TradeLawProvider: () => undefined },
+          (phase, before, after, context) => {
+            if (phase !== 1) return;
+            observedDeliveryPhase++;
+            const priorPaid = [...(byTick.get(7)!.world.shipments?.values() ?? [])];
+            expect(priorPaid).toHaveLength(2);
+            const ownerIds = priorPaid.map(cargo =>
+              cargo.beneficialOwner.type === "PRODUCTION_UNIT"
+                ? cargo.beneficialOwner.productionUnitId : null);
+            expect(new Set(ownerIds).size).toBe(priorPaid.length);
+            const arrivals = context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY");
+            expect(arrivals).toHaveLength(priorPaid.length);
+            for (const cargo of priorPaid) {
+              const receipt = arrivals.find(tx =>
+                tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id);
+              expect(receipt).toMatchObject({
+                tick: cargo.arrivalTick, phase: 1, goodId: cargo.goodId,
+                quantity: cargo.quantity, destination: cargo.beneficialOwner,
+                sourceRegionId: cargo.originRegionId,
+                destinationRegionId: cargo.destinationRegionId,
+              });
+              expect(receipt?.moneyAmount).toBeUndefined();
+              expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+              if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") continue;
+              const ownerId = cargo.beneficialOwner.productionUnitId;
+              expect(after.productionUnits.get(ownerId)!.inputInventory.get(cargo.goodId) ?? 0)
+                .toBeCloseTo(
+                  (before.productionUnits.get(ownerId)!.inputInventory.get(cargo.goodId) ?? 0) +
+                    cargo.quantity,
+                  7,
+                );
+            }
+            expect(after.monetaryAuthorities).toEqual(before.monetaryAuthorities);
+            expect(after.shipments?.size).toBe(0);
+          },
+        )
+        : run(f, normalWorld, tick === 7, tick);
+      const reversed = run(f, shuffledWorld, tick === 7, tick);
+      for (const [before, result] of [
+        [normalWorld, normal], [shuffledWorld, reversed],
+      ] as const) {
+        expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+        expect(result.phaseBoundaryError).toBeUndefined();
+        expect(result.reconciliationErrors).toBeNull();
+        expect(totalIron(result.world)).toBeCloseTo(totalIron(before), 7);
+        for (const currency of f.currencies) {
+          expect(totalCash(result.world, currency)).toBeCloseTo(totalCash(before, currency), 6);
+        }
+      }
+      // Aggregate accounting could conceal swapped owners or a double payout:
+      // compare the exact ordered receipts, owner inventories, market prices,
+      // outstanding cargo and issuer-held FX reserves on EVERY tick.
+      expect(reversed.context.transactions).toEqual(normal.context.transactions);
+      expect(reversed.world.shipments).toEqual(normal.world.shipments);
+      expect(reversed.world.productionUnits).toEqual(normal.world.productionUnits);
+      expect(reversed.world.monetaryAuthorities).toEqual(normal.world.monetaryAuthorities);
+      expect(reversed.world.markets).toEqual(normal.world.markets);
+      byTick.set(tick, normal);
+      normalWorld = normal.world;
+      shuffledWorld = reversed.world;
+    }
+
+    expect(observedDeliveryPhase).toBe(1);
+    const dispatched = byTick.get(7)!;
+    const paidCargo = assertPaidCargoReceipts(dispatched, f.links).cargos;
+    expect(paidCargo).toHaveLength(2);
+    expect(paidCargo.every(cargo => cargo.arrivalTick === 9)).toBe(true);
+    const receipts = (tick: number) => byTick.get(tick)!.context.transactions
+      .filter(tx => tx.type === "SHIPMENT_DELIVERY");
+    expect(receipts(7)).toHaveLength(0);
+    expect(receipts(8)).toHaveLength(0);
+    expect(receipts(9)).toHaveLength(2);
+    expect(receipts(10)).toHaveLength(0);
+    const verifyDue = (
+      arrivals: ReturnType<typeof run>["context"]["transactions"],
+    ) => {
+      expect(arrivals).toHaveLength(paidCargo.length);
+      expect(new Set(arrivals.map(tx => tx.reason))).toEqual(new Set(
+        paidCargo.map(cargo => "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id)));
+      for (const cargo of paidCargo) {
+        const receipt = arrivals.find(tx =>
+          tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id);
+        expect(receipt).toMatchObject({
+          tick: cargo.arrivalTick, phase: 1, goodId: cargo.goodId,
+          quantity: cargo.quantity, destination: cargo.beneficialOwner,
+          sourceRegionId: cargo.originRegionId,
+          destinationRegionId: cargo.destinationRegionId,
+        });
+        expect(receipt?.moneyAmount).toBeUndefined();
+      }
+    };
+    verifyDue(receipts(9));
+    for (const tick of [8, 9, 10]) {
+      expect(byTick.get(tick)!.context.transactions.filter(tx =>
+        tx.phase === 7 && ["FX_INPUT", "FX_OUTPUT", "SHIPMENT_DISPATCH"].includes(tx.type)))
+        .toHaveLength(0);
+    }
+    expect(byTick.get(10)!.world.shipments?.size).toBe(0);
+
+    // Sensitive negative controls: the SAME cargo oracle must reject a
+    // wrong quantity or beneficial owner, not merely a different array.
+    const corrupted = [...receipts(9)];
+    corrupted[0] = { ...corrupted[0]!, quantity: corrupted[0]!.quantity! + 1 };
+    expect(() => verifyDue(corrupted)).toThrow();
+
+    const firstCargo = paidCargo.find(cargo =>
+      corrupted[0]!.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id)!;
+    const otherOwner = paidCargo.find(cargo => cargo.id !== firstCargo.id)!.beneficialOwner;
+    expect(otherOwner).not.toEqual(firstCargo.beneficialOwner);
+    const misowned = [...receipts(9)];
+    misowned[0] = { ...misowned[0]!, destination: otherOwner };
+    expect(() => verifyDue(misowned)).toThrow();
+  });
+
 });
