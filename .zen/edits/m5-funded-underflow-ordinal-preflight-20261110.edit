@@ -1,0 +1,105 @@
+### FILE: src/simulation/marketClearing.ts
+<<<<<<< FIND
+  // Fail before invoking taxation callbacks when even the potentially payable
+  // matches cannot fit. A zero-funded buyer at a strictly positive NET price
+  // is guaranteed to be rejected; do not reserve an ordinal for that match.
+  // At price zero, retain the canonical explicitly free fixture behavior.
+  const potentiallyPayableCount = plan.filter((match) =>
+    !(marketPrice > 0 && match.buyer.maxSpend === 0)).length;
+=======
+  // Fail before taxation callbacks if even potentially emitted allocations
+  // cannot fit. A zero-funded BUY cannot pay a positive NET price, and a
+  // positive physical lot whose NET seller receipt underflows to zero is
+  // also guaranteed to be dropped later. Neither needs an allocation ID.
+  // Keep explicitly free price-zero fixtures on their own existing path.
+  const potentiallyPayableCount = plan.filter((match) =>
+    !(marketPrice > 0 &&
+      (match.buyer.maxSpend === 0 || match.quantity * marketPrice === 0))).length;
+>>>>>>> REPLACE
+
+### FILE: src/simulation/marketClearing.test.ts
+<<<<<<< FIND
+  it("cannot materialize a paid lot with zero budget even if demand evidence is forged", () => {
+=======
+  it("reserves the final safe ID for a funded payable match, not a funded underflow", () => {
+    // A funded, physically positive subnormal trade is not payable at a
+    // positive subunit NET price: its seller cash receipt rounds to zero.
+    // This rejection is knowable before calling the tax provider, so it
+    // must not exhaust IDs needed by the next genuinely payable trade.
+    const tiny = Number.MIN_VALUE;
+    expect(tiny * 0.1).toBe(0);
+    const buyers: MarketIntent[] = [
+      {
+        id: createMarketIntentId("mi:funded-01-underflow"),
+        actor: { type: "CLAN", clanId: testClanId },
+        regionId: testRegionId,
+        goodId: testGoodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: tiny,
+        maxSpend: 1,
+        sourcePlanId: "plan:funded-underflow",
+      },
+      {
+        id: createMarketIntentId("mi:funded-02-payable"),
+        actor: { type: "CLAN", clanId: testClanId },
+        regionId: testRegionId,
+        goodId: testGoodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: 5,
+        maxSpend: 10,
+        sourcePlanId: "plan:funded-payable",
+      },
+    ];
+    const sellers: MarketIntent[] = [
+      {
+        id: createMarketIntentId("mi:seller-01-underflow"),
+        actor: { type: "PRODUCTION_UNIT", productionUnitId: ("pu:funded-01-underflow" as ProductionUnitId) },
+        regionId: testRegionId,
+        goodId: testGoodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: tiny,
+        sourcePlanId: "plan:seller-underflow",
+      },
+      {
+        id: createMarketIntentId("mi:seller-02-payable"),
+        actor: { type: "PRODUCTION_UNIT", productionUnitId: ("pu:funded-02-payable" as ProductionUnitId) },
+        regionId: testRegionId,
+        goodId: testGoodId,
+        side: "SELL",
+        purpose: "INVENTORY_REBALANCE",
+        desiredQuantity: 5,
+        sourcePlanId: "plan:seller-payable",
+      },
+    ];
+    const input: LocalClearingInput = {
+      ...createTestInput(buyers, sellers),
+      computeEffectiveDemand: (intent) => intent.desiredQuantity,
+    };
+    const lastAvailable = Number.MAX_SAFE_INTEGER - 1;
+    const counter = { value: lastAvailable };
+    const allocations = computeLocalClearing(input, new Map(), 0.1, 1e-8, counter);
+    expect(allocations).toHaveLength(1);
+    expect(allocations[0]!.buyerIntentId).toBe(buyers[1]!.id);
+    expect(allocations[0]!.sellerIntentId).toBe(sellers[1]!.id);
+    expect(allocations[0]!.quantity).toBe(5);
+    expect(allocations[0]!.quantity * allocations[0]!.sellerNetUnitPrice).toBeGreaterThan(0);
+    expect(allocations[0]!.quantity * allocations[0]!.buyerGrossUnitPrice).toBeGreaterThan(0);
+    expect(allocations[0]!.id).toBe(`ma:m:central/good:wheat/MAIN/${Number.MAX_SAFE_INTEGER}`);
+    expect(counter.value).toBe(Number.MAX_SAFE_INTEGER);
+    expect(computeLocalClearing(
+      { ...input, buyerIntents: [...buyers].reverse(), sellerIntents: [...sellers].reverse() },
+      new Map(), 0.1, 1e-8, { value: lastAvailable },
+    )).toEqual(allocations);
+
+    // Exhaustion of the last actually needed ID must still fail atomically.
+    const exhausted = { value: Number.MAX_SAFE_INTEGER };
+    expect(() => computeLocalClearing(input, new Map(), 0.1, 1e-8, exhausted))
+      .toThrow("cannot reserve safe ordinals");
+    expect(exhausted.value).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it("cannot materialize a paid lot with zero budget even if demand evidence is forged", () => {
+>>>>>>> REPLACE
