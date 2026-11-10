@@ -27,7 +27,12 @@ import {
   type LocalClearingInput,
 } from "./marketClearing";
 import type { TaxPolicyProvider } from "./marketSettlement";
-import { readActorWallet, readMarketActorInventory } from "./marketSettlementTransition";
+import {
+  executeAllocation,
+  readActorWallet,
+  readMarketActorInventory,
+  SettlementRefusedError,
+} from "./marketSettlementTransition";
 import { marketPriceKey } from "./phase6MarketPriceFormation";
 
 /**
@@ -252,6 +257,13 @@ export const createPhase8Handler = (options?: {
     const newAggregates = new Map(context.marketClearingAggregates);
     const allocationIdCounter = { value: 0 };
 
+    // Pure local clearing knows intent budgets, not the binary64 representation of
+    // real actor wallets. Keep one immutable *speculative* settlement across every
+    // deterministically ordered MAIN market/good group. Only accepted allocations
+    // enter it; the authoritative input WorldState remains unchanged until Phase-8's
+    // normal settlement transition. This also covers seller and treasury credits.
+    let settlementPreview = world;
+
     // Seller reserve/commitment authority is physical-endpoint global, not local-market
     // group state. Build the strictest reserve from every valid SELL declaration first,
     // then consume capacity only for sellers whose group has both sides and can actually
@@ -447,6 +459,23 @@ export const createPhase8Handler = (options?: {
         computeGrossUnitPrice: (intent, sellerNetPrice) =>
           grossUnitPriceForBuyer(intent, sellerNetPrice),
         getTaxationInfo: (buyer) => taxationForBuyer(buyer),
+        acceptLiveAllocation: enforceLiveWalletBudgets
+          ? (candidate) => {
+              try {
+                settlementPreview = executeAllocation(settlementPreview, context, candidate);
+                return true;
+              } catch (error) {
+                // Only a precision-inexpressible physical/money posting is a
+                // legitimate unfilled lot. Never mask no-funds, invalid owner,
+                // wrong bucket, malformed tax or other conservation defects.
+                if (error instanceof SettlementRefusedError &&
+                    /(goods|money) (transfer lost to binary64 rounding|endpoint rounded away from requested posting)/.test(error.message)) {
+                  return false;
+                }
+                throw error;
+              }
+            }
+          : undefined,
       };
 
       // Execute production clearing algorithm. This runs identically regardless
