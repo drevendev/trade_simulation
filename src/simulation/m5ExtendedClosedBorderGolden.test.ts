@@ -515,4 +515,73 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
       expect(totalCash(noCapacity.world, currency)).toBeCloseTo(openingCash[index]!, 5);
     }
   });
+
+  it("halts both foreign routes at a finite FX pool's operational floor while keeping local trade", () => {
+    const f = fixture();
+    const funded = run(f, f.world);
+    const phase4 = (result: ReturnType<typeof run>) =>
+      result.context.transactions.filter(tx => tx.phase === 4);
+    const phase7 = (result: ReturnType<typeof run>) =>
+      result.context.transactions.filter(tx => tx.phase === 7);
+    const dispatched = (result: ReturnType<typeof run>) =>
+      phase7(result).filter(tx => tx.type === "SHIPMENT_DISPATCH");
+    const fxLegs = (result: ReturnType<typeof run>) =>
+      phase7(result).filter(tx => tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT");
+    const tariffs = (result: ReturnType<typeof run>) =>
+      phase7(result).filter(tx => tx.type === "IMPORT_TARIFF");
+
+    // Positive controls: both routes are legal, profitable and independently
+    // funded, and local-market settlement actually occurs before Phase 7.
+    expect(dispatched(funded)).toHaveLength(2);
+    expect(fxLegs(funded)).toHaveLength(4);
+    expect(tariffs(funded)).toHaveLength(2);
+    expect(phase4(funded).length).toBeGreaterThan(0);
+
+    // Keep all other world data and the currency pair unchanged. Both FX
+    // reserves now equal their contractual floors, so neither seller-currency
+    // payout can be authorized; no replacement/phantom FX pool is available.
+    const monetaryAuthorities = new Map([...f.world.monetaryAuthorities].map(
+      ([id, authority]) => [id, {
+        ...authority,
+        fxPools: new Map([...authority.fxPools].map(([poolId, pool]) => [
+          poolId, poolId === f.chosen.poolId ? {
+            ...pool,
+            cash: new Map(pool.cash)
+              .set(pool.baseCurrencyId, pool.minOperationalReserveBase)
+              .set(pool.quoteCurrencyId, pool.minOperationalReserveQuote),
+          } : pool,
+        ] as const)),
+      }] as const,
+    ));
+    const dryWorld: WorldState = { ...f.world, monetaryAuthorities };
+    const openingIron = totalIron(dryWorld);
+    const openingCash = f.currencies.map(currency => totalCash(dryWorld, currency));
+    const blocked = run(f, dryWorld);
+    const permuted = run(f, reordered(dryWorld));
+
+    for (const result of [blocked, permuted]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(dispatched(result)).toHaveLength(0);
+      expect(fxLegs(result)).toHaveLength(0);
+      expect(tariffs(result)).toHaveLength(0);
+      expect(result.world.shipments?.size ?? 0).toBe(0);
+      expect(phase4(result)).toEqual(phase4(funded));
+      expect(result.world.monetaryAuthorities).toEqual(dryWorld.monetaryAuthorities);
+      expect(totalIron(result.world)).toBeCloseTo(openingIron, 6);
+      for (const [index, currency] of f.currencies.entries()) {
+        expect(totalCash(result.world, currency)).toBeCloseTo(openingCash[index]!, 5);
+      }
+    }
+
+    // Reverse-keyed registries must not change any payment, owned stock,
+    // tariff outcome or next-tick state under the same exhausted FX pool.
+    expect(permuted.context.transactions).toEqual(blocked.context.transactions);
+    expect(permuted.world.productionUnits).toEqual(blocked.world.productionUnits);
+    expect(permuted.world.monetaryAuthorities).toEqual(blocked.world.monetaryAuthorities);
+    expect(permuted.world.shipments).toEqual(blocked.world.shipments);
+    expect(permuted.world.markets).toEqual(blocked.world.markets);
+  });
+
 });
