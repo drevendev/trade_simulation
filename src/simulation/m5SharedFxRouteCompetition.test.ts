@@ -208,8 +208,12 @@ function totalIron(world: WorldState): number {
 function assertPaidCargoReceipts(
   result: ReturnType<typeof run>,
   expectedLinks?: readonly TransportLinkId[],
+  departureTick?: number,
 ) {
-  const cargos = [...(result.world.shipments?.values() ?? [])];
+  // Previously paid cargo may still be in transit in later ticks. Bind each
+  // Phase-7 payment to cargo dispatched THIS tick, not all outstanding stock.
+  const cargos = [...(result.world.shipments?.values() ?? [])].filter(cargo =>
+    departureTick === undefined || cargo.departureTick === departureTick);
   const phase7 = result.context.transactions.filter(tx => tx.phase === 7);
   const outputs = phase7.filter(tx => tx.type === "FX_OUTPUT");
   const inputs = phase7.filter(tx => tx.type === "FX_INPUT");
@@ -1119,6 +1123,118 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     expect(replay.world.shipments).toEqual(reopened.world.shipments);
     expect(replay.world.productionUnits).toEqual(reopened.world.productionUnits);
     expect(replay.world.monetaryAuthorities).toEqual(reopened.world.monetaryAuthorities);
+  });
+
+  it("delivers overlapping paid shipment vintages on their own due ticks without repaying", () => {
+    const f = fixture();
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
+        [id, { ...link, travelTicks: 2 }] as const)),
+    };
+    // A restricted first tick followed by an unrestricted second one makes
+    // both dispatch dates non-vacuous without replenishing goods or FX by hand.
+    const first = executeM5AutonomousRegionalTradeTick(
+      opening, 7, households, (_phase, current) => current, {
+        ...f.options,
+        phase1TradeLawProvider: query =>
+          query.goodId === IRON && query.linkId === f.links[1] ? null : undefined,
+      },
+    );
+    const firstCargo = [...(first.world.shipments?.values() ?? [])];
+    expect(firstCargo).toHaveLength(1);
+    expect(firstCargo[0]!.transportLinkId).toBe(f.links[1]);
+    expect(firstCargo[0]!.arrivalTick).toBe(9);
+    expect(first.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH")).toHaveLength(1);
+    const firstPaid = assertPaidCargoReceipts(first, [f.links[1]!], 7);
+    expect(firstPaid.paid).toBeGreaterThan(0);
+
+    const second = run(f, first.world, true, 8);
+    const secondCargo = [...(second.world.shipments?.values() ?? [])].filter(
+      cargo => cargo.departureTick === 8);
+    expect(new Set(secondCargo.map(cargo => cargo.transportLinkId)))
+      .toEqual(new Set(f.links));
+    expect(secondCargo).toHaveLength(2);
+    expect(secondCargo.every(cargo => cargo.arrivalTick === 10)).toBe(true);
+    expect(second.world.shipments?.size).toBe(firstCargo.length + secondCargo.length);
+    expect(second.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
+    // The tick-7 shipment remains in transit, so only tick-8 departures may
+    // match tick-8 FX receipts. Check unique positive, owner/currency-bound
+    // FX_INPUT + FX_OUTPUT and dispatch for each new shipment.
+    const secondPaid = assertPaidCargoReceipts(second, f.links, 8);
+    expect(secondPaid.paid).toBeGreaterThan(0);
+    expect(new Set([...firstCargo, ...secondCargo].map(cargo => cargo.fxSettlementId)).size)
+      .toBe(firstCargo.length + secondCargo.length);
+
+    const ironAtStart = totalIron(opening);
+    const moneyAtStart = f.currencies.map(currency => totalCash(opening, currency));
+    const expectConservation = (result: ReturnType<typeof run>) => {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(totalIron(result.world)).toBeCloseTo(ironAtStart, 7);
+      for (const [index, currency] of f.currencies.entries()) {
+        expect(totalCash(result.world, currency)).toBeCloseTo(moneyAtStart[index]!, 6);
+      }
+    };
+    expectConservation(first);
+    expectConservation(second);
+
+    // Borders close after two already-paid departure ticks. Due deliveries
+    // must still happen at tick 9 and tick 10, with no Phase-7 resettlement.
+    const ninth = run(f, second.world, false, 9);
+    const tenth = run(f, ninth.world, false, 10);
+    expectConservation(ninth);
+    expectConservation(tenth);
+    const noNewPayments = (result: ReturnType<typeof run>) =>
+      result.context.transactions.filter(tx => tx.phase === 7 &&
+        ["FX_INPUT", "FX_OUTPUT", "SHIPMENT_DISPATCH", "TRADE_GOODS_SALE",
+          "IMPORT_TARIFF", "TRANSPORT_FEE"].includes(tx.type));
+    expect(noNewPayments(ninth)).toHaveLength(0);
+    expect(noNewPayments(tenth)).toHaveLength(0);
+
+    const deliveryReceipts = (result: ReturnType<typeof run>) =>
+      result.context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY");
+    const verifyDue = (
+      receipts: ReturnType<typeof run>["context"]["transactions"],
+      due: typeof firstCargo,
+    ) => {
+      expect(receipts).toHaveLength(due.length);
+      expect(new Set(receipts.map(tx => tx.reason))).toEqual(new Set(due.map(
+        cargo => "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id)));
+      for (const cargo of due) {
+        const receipt = receipts.find(tx =>
+          tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id);
+        expect(receipt).toMatchObject({
+          tick: cargo.arrivalTick, phase: 1, goodId: cargo.goodId,
+          quantity: cargo.quantity, destination: cargo.beneficialOwner,
+          sourceRegionId: cargo.originRegionId,
+          destinationRegionId: cargo.destinationRegionId,
+        });
+        expect(receipt?.moneyAmount).toBeUndefined();
+      }
+    };
+    const atNine = deliveryReceipts(ninth);
+    const atTen = deliveryReceipts(tenth);
+    verifyDue(atNine, firstCargo);
+    verifyDue(atTen, secondCargo);
+    expect([...ninth.world.shipments?.values() ?? []].map(cargo => cargo.departureTick))
+      .toEqual(secondCargo.map(cargo => cargo.departureTick));
+    expect(tenth.world.shipments?.size).toBe(0);
+
+    // Negative control: identical aggregate delivered quantity but a forged
+    // cargo identity must not satisfy the owner-and-vintage receipt contract.
+    const forged = atNine.map((tx, index) => index === 0
+      ? { ...tx, reason: "IN_TRANSIT_TO_INPUT_STOCK:unknown" } : tx);
+    expect(() => verifyDue(forged, firstCargo)).toThrow();
+
+    const replay = run(f, second.world, false, 9);
+    expect(replay.context.transactions).toEqual(ninth.context.transactions);
+    expect(replay.world.shipments).toEqual(ninth.world.shipments);
+    expect(replay.world.productionUnits).toEqual(ninth.world.productionUnits);
+    expect(replay.world.monetaryAuthorities).toEqual(ninth.world.monetaryAuthorities);
   });
 
 
