@@ -454,16 +454,22 @@ describe("Local clearing algorithm", () => {
     // The second lot has its own representable positive payment. Discarding
     // it merely because a separate running total absorbs 0.1 breaks SLP-787
     // balanced matching and per-lot settlement semantics.
-    expect(allocations.map(a => a.sellerIntentId)).toEqual(sellers.map(s => s.id));
-    expect(allocations.map(a => a.id)).toEqual([
-      "ma:m:central/good:wheat/MAIN/31",
-      "ma:m:central/good:wheat/MAIN/32",
-      "ma:m:central/good:wheat/MAIN/33",
-    ]);
-    expect(allocations[1]!.quantity).toBe(tinyQuantity);
-    expect(allocations[1]!.quantity * allocations[1]!.buyerGrossUnitPrice).toBeGreaterThan(0);
-    expect(allocations[1]!.quantity * allocations[1]!.sellerNetUnitPrice).toBeGreaterThan(0);
-    expect(counter.value).toBe(33);
+    // Exact dyadic matching may split an owner's fill into multiple lots;
+    // preserve each seller, not an assumed one-allocation-per-seller shape.
+    expect(new Set(allocations.map(a => a.sellerIntentId))).toEqual(
+      new Set(sellers.map(s => s.id)),
+    );
+    expect(allocations.map(a => a.id)).toEqual(allocations.map(
+      (_, index) => `ma:m:central/good:wheat/MAIN/${31 + index}`,
+    ));
+    const tinyLots = allocations.filter(a => a.sellerIntentId === sellers[1]!.id);
+    expect(tinyLots).not.toHaveLength(0);
+    expect(tinyLots.reduce((sum, a) => sum + a.quantity, 0)).toBe(tinyQuantity);
+    for (const lot of tinyLots) {
+      expect(lot.quantity * lot.buyerGrossUnitPrice).toBeGreaterThan(0);
+      expect(lot.quantity * lot.sellerNetUnitPrice).toBeGreaterThan(0);
+    }
+    expect(counter.value).toBe(30 + allocations.length);
     expect(allocations.reduce((sum, a) => sum + a.quantity * a.buyerGrossUnitPrice, 0))
       .toBeLessThanOrEqual(buyer.maxSpend!);
     expect(computeLocalClearing(
