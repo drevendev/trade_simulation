@@ -1227,3 +1227,134 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
   });
 
 });
+
+
+describe("M5 #676: distinct State tariff laws settle on separate live FX border routes", () => {
+  it("credits the correct importing treasuries and responds to reversing statutory rates", () => {
+    const f = fixture();
+    const betaRegion = [...f.world.regions.values()].find(
+      region => region.seed.key === "region:b4-chokepoint",
+    )!;
+    const otherRegion = [...f.world.regions.values()].find(
+      region => region.seed.key === "region:b5-pastoral",
+    )!;
+    const gammaState = [...f.world.states.values()].find(
+      state => state.seed.key === "state:gamma",
+    )!;
+    expect(betaRegion.controllerStateId).not.toBeNull();
+    expect(otherRegion.controllerStateId).toBe(betaRegion.controllerStateId);
+    expect(gammaState.stateId).not.toBe(betaRegion.controllerStateId);
+    // Test-only geopolitical change: two importing States (Beta and Gamma)
+    // share Beta legal tender, while Alpha exporters are paid via the real
+    // finite Alpha/Beta FX pool. The currency is not inferred from sovereignty.
+    const world: WorldState = {
+      ...f.world,
+      regions: new Map(f.world.regions).set(otherRegion.regionId, {
+        ...otherRegion, controllerStateId: gammaState.stateId,
+      }),
+    };
+    const betaStateId = betaRegion.controllerStateId!;
+    const gammaStateId = gammaState.stateId;
+    const rates = (reversed: boolean) => new Map([
+      [betaStateId, reversed ? 0.20 : 0.05],
+      [gammaStateId, reversed ? 0.05 : 0.20],
+    ]);
+    const tick = (reversed: boolean, permitsBorders = true) => {
+      const statutory = rates(reversed);
+      return executeM5AutonomousRegionalTradeTick(
+        world, 7, households, (_phase, current) => current, {
+          ...f.options,
+          phase1TradeLawProvider: permitsBorders
+            ? f.options.phase1TradeLawProvider
+            : () => undefined,
+          phase1TariffLawProvider: query =>
+            query.goodId === IRON ? (statutory.get(query.destinationStateId) ?? 0) : 0,
+        },
+      );
+    };
+    const ordinary = tick(false);
+    const reversed = tick(true);
+    const blocked = tick(false, false);
+
+    for (const result of [ordinary, reversed, blocked]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(totalIron(result.world)).toBeCloseTo(totalIron(world), 7);
+      for (const currency of f.currencies) {
+        expect(totalCash(result.world, currency)).toBeCloseTo(totalCash(world, currency), 6);
+      }
+    }
+    expect(assertPaidCargoReceipts(ordinary, f.links).cargos).toHaveLength(2);
+    expect(assertPaidCargoReceipts(reversed, f.links).cargos).toHaveLength(2);
+    expect(blocked.world.shipments?.size ?? 0).toBe(0);
+    const localSales = (result: typeof ordinary) =>
+      result.context.transactions.filter(tx =>
+        tx.phase === 4 && tx.type === "MARKET_SALE");
+    expect(localSales(ordinary)).toEqual(localSales(blocked));
+    expect(localSales(reversed)).toEqual(localSales(blocked));
+    expect(localSales(blocked).length).toBeGreaterThan(0);
+
+    const inspect = (result: typeof ordinary, expectedRates: ReadonlyMap<typeof betaStateId, number>) => {
+      const cargos = [...(result.world.shipments?.values() ?? [])];
+      const phase7 = result.context.transactions.filter(tx => tx.phase === 7);
+      const levyByLink = new Map<TransportLinkId, number>();
+      const paidBundleIds = new Set<string>();
+      for (const [index, linkId] of f.links.entries()) {
+        const cargo = cargos.find(item => item.transportLinkId === linkId)!;
+        expect(cargo).toBeDefined();
+        const destinationStateId = index === 0 ? betaStateId : gammaStateId;
+        const dispatch = phase7.filter(tx =>
+          tx.type === "SHIPMENT_DISPATCH" &&
+          tx.sourceRegionId === cargo.originRegionId &&
+          tx.destinationRegionId === cargo.destinationRegionId);
+        expect(dispatch).toHaveLength(1);
+        const bundleId = dispatch[0]!.bundleId!;
+        paidBundleIds.add(bundleId);
+        const tariff = phase7.filter(tx =>
+          tx.type === "IMPORT_TARIFF" && tx.bundleId === bundleId);
+        const sale = phase7.filter(tx =>
+          tx.type === "TRADE_GOODS_SALE" && tx.bundleId === bundleId);
+        expect(tariff).toHaveLength(1);
+        expect(sale).toHaveLength(1);
+        expect(tariff[0]!.destination).toEqual({
+          type: "STATE", stateId: destinationStateId,
+        });
+        expect(tariff[0]!.currencyId).toBe(f.currencies[1]);
+        expect(tariff[0]!.moneyAmount).toBeGreaterThan(0);
+        expect(sale[0]!.moneyAmount).toBeGreaterThan(0);
+        expect(result.context.phase1ImportTariffs?.ratesByDestinationStateGood.get(
+          JSON.stringify([destinationStateId, IRON]),
+        )).toBe(expectedRates.get(destinationStateId));
+        levyByLink.set(linkId, tariff[0]!.moneyAmount! / sale[0]!.moneyAmount!);
+      }
+      expect(paidBundleIds.size).toBe(2);
+      for (const stateId of [betaStateId, gammaStateId]) {
+        const expectedCredit = phase7.filter(tx =>
+          tx.destination?.type === "STATE" &&
+          tx.destination.stateId === stateId &&
+          tx.moneyAmount !== undefined)
+          .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+        expect(expectedCredit).toBeGreaterThan(0);
+        const before = blocked.world.states.get(stateId)!.treasury.get(f.currencies[1]!) ?? 0;
+        const after = result.world.states.get(stateId)!.treasury.get(f.currencies[1]!) ?? 0;
+        expect(after - before).toBeCloseTo(expectedCredit, 6);
+      }
+      return levyByLink;
+    };
+    const usualLevies = inspect(ordinary, rates(false));
+    const invertedLevies = inspect(reversed, rates(true));
+    // An ignored/stale Phase-1 tariff would give the same per-route levy.
+    expect(invertedLevies.get(f.links[0]!)!).toBeGreaterThan(
+      usualLevies.get(f.links[0]!)!,
+    );
+    expect(invertedLevies.get(f.links[1]!)!).toBeLessThan(
+      usualLevies.get(f.links[1]!)!,
+    );
+    const replay = tick(false);
+    expect(replay.context.transactions).toEqual(ordinary.context.transactions);
+    expect(replay.world.shipments).toEqual(ordinary.world.shipments);
+    expect(replay.world.states).toEqual(ordinary.world.states);
+    expect(replay.world.monetaryAuthorities).toEqual(ordinary.world.monetaryAuthorities);
+  });
+});
