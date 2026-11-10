@@ -1241,6 +1241,63 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     expect(next.reconciliationErrors).toBeNull();
     expect(next.context.transactions.filter(tx =>
       tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
+    expect(next.context.transactions.filter(tx => tx.phase === 7 &&
+      ["FX_INPUT", "FX_OUTPUT", "SHIPMENT_DISPATCH"].includes(tx.type))).toHaveLength(0);
+
+    // After prepaid goods mature, only a fresh CASH-CONSERVING pool refill
+    // can restart FX trade. Neither elapsed time nor the delivery pays again.
+    const refill = 20_000;
+    const arrivalAuthority = arrived.world.monetaryAuthorities.get(f.chosen.authorityId)!;
+    const arrivalPool = arrivalAuthority.fxPools.get(f.chosen.poolId)!;
+    expect(arrivalPool.cash.get(outputCurrency)).toBe(f.reserveFloor);
+    const funder = [...arrived.world.productionUnits.values()].find(unit =>
+      (unit.wallet.get(outputCurrency) ?? 0) > refill * 2);
+    expect(funder).toBeDefined();
+    const replenished: WorldState = {
+      ...arrived.world,
+      productionUnits: new Map(arrived.world.productionUnits).set(
+        funder!.productionUnitId, {
+          ...funder!,
+          wallet: new Map(funder!.wallet).set(
+            outputCurrency, funder!.wallet.get(outputCurrency)! - refill),
+        },
+      ),
+      monetaryAuthorities: new Map(arrived.world.monetaryAuthorities).set(
+        f.chosen.authorityId, {
+          ...arrivalAuthority,
+          fxPools: new Map(arrivalAuthority.fxPools).set(f.chosen.poolId, {
+            ...arrivalPool,
+            cash: new Map(arrivalPool.cash).set(outputCurrency, f.reserveFloor + refill),
+          }),
+        },
+      ),
+    };
+    expect(totalCash(replenished, outputCurrency))
+      .toBeCloseTo(totalCash(arrived.world, outputCurrency), 6);
+    const resumed = run(f, replenished, true, 10);
+    expect(resumed.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(resumed.phaseBoundaryError).toBeUndefined();
+    expect(resumed.reconciliationErrors).toBeNull();
+    expect(resumed.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
+    const newPayments = assertPaidCargoReceipts(resumed);
+    expect(newPayments.cargos.length).toBeGreaterThan(0);
+    expect(newPayments.paid).toBeGreaterThan(0);
+    expect(newPayments.paid).toBeLessThanOrEqual(refill + 1e-8);
+    for (const cargo of newPayments.cargos) {
+      expect(f.links).toContain(cargo.transportLinkId);
+      expect(cargo.departureTick).toBe(10);
+      expect(priorIds.has(cargo.id)).toBe(false);
+    }
+    for (const currency of f.currencies) {
+      expect(totalCash(resumed.world, currency))
+        .toBeCloseTo(totalCash(replenished, currency), 6);
+    }
+    expect(totalIron(resumed.world)).toBeCloseTo(totalIron(replenished), 7);
+    const replayResumed = run(f, replenished, true, 10);
+    expect(replayResumed.context.transactions).toEqual(resumed.context.transactions);
+    expect(replayResumed.world.shipments).toEqual(resumed.world.shipments);
+    expect(replayResumed.world.monetaryAuthorities).toEqual(resumed.world.monetaryAuthorities);
   });
 
   it("honors already-paid transit after link capacity drops to zero", () => {
