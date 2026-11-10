@@ -325,6 +325,70 @@ describe("Local clearing algorithm", () => {
     };
   }
 
+  it("reserves ordinals for payable matches rather than zero-funded tentative matches", () => {
+    // Two physically feasible tentative lots, but the first BUY has no cash.
+    // With one safe ordinal left, the payable second trade must still succeed.
+    const buyers: MarketIntent[] = [
+      {
+        id: createMarketIntentId("mi:budget-zero"),
+        actor: { type: "CLAN", clanId: testClanId },
+        regionId: testRegionId,
+        goodId: testGoodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: 5,
+        maxSpend: 0,
+        sourcePlanId: "plan:budget-zero",
+      },
+      {
+        id: createMarketIntentId("mi:funded"),
+        actor: { type: "CLAN", clanId: testClanId },
+        regionId: testRegionId,
+        goodId: testGoodId,
+        side: "BUY",
+        purpose: "CONSUMPTION",
+        desiredQuantity: 5,
+        maxSpend: 10,
+        sourcePlanId: "plan:funded",
+      },
+    ];
+    const sellers: MarketIntent[] = [1, 2].map((index) => ({
+      id: createMarketIntentId(`mi:reserve-seller-${index}`),
+      actor: { type: "PRODUCTION_UNIT", productionUnitId: (`pu:reserve-seller-${index}` as ProductionUnitId) },
+      regionId: testRegionId,
+      goodId: testGoodId,
+      side: "SELL",
+      purpose: "INVENTORY_REBALANCE",
+      desiredQuantity: 5,
+      sourcePlanId: "plan:reserve-seller",
+    }));
+    const input: LocalClearingInput = {
+      ...createTestInput(buyers, sellers),
+      computeEffectiveDemand: (intent) => intent.desiredQuantity,
+      // Adversarial demand evidence; final payment validation must still
+      // discard the zero-funded BUY without spending its allocation ID.
+    };
+    const lastAvailable = Number.MAX_SAFE_INTEGER - 1;
+    const counter = { value: lastAvailable };
+    const paid = computeLocalClearing(input, new Map(), 1, 1e-8, counter);
+    expect(paid).toHaveLength(1);
+    expect(paid[0]!.buyerIntentId).toBe(buyers[1]!.id);
+    expect(paid[0]!.quantity).toBe(5);
+    expect(paid[0]!.quantity * paid[0]!.buyerGrossUnitPrice).toBeGreaterThan(0);
+    expect(paid[0]!.id).toBe(`ma:m:central/good:wheat/MAIN/${Number.MAX_SAFE_INTEGER}`);
+    expect(counter.value).toBe(Number.MAX_SAFE_INTEGER);
+    expect(computeLocalClearing(
+      { ...input, buyerIntents: [...buyers].reverse(), sellerIntents: [...sellers].reverse() },
+      new Map(), 1, 1e-8, { value: lastAvailable },
+    )).toEqual(paid);
+
+    // After the final representable ordinal is spent, refusal is atomic.
+    const exhausted = { value: Number.MAX_SAFE_INTEGER };
+    expect(() => computeLocalClearing(input, new Map(), 1, 1e-8, exhausted))
+      .toThrow("cannot reserve safe ordinals for emitted matches");
+    expect(exhausted.value).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
   it("cannot materialize a paid lot with zero budget even if demand evidence is forged", () => {
     // An invalid upstream effective-demand callback can claim positive demand
     // for a zero-funded buyer. At a positive price below one, a binary64
