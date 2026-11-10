@@ -208,8 +208,12 @@ function totalIron(world: WorldState): number {
 function assertPaidCargoReceipts(
   result: ReturnType<typeof run>,
   expectedLinks?: readonly TransportLinkId[],
+  departureTick?: number,
 ) {
-  const cargos = [...(result.world.shipments?.values() ?? [])];
+  // Previously paid cargo may still be in transit in later ticks. Bind each
+  // Phase-7 payment to cargo dispatched THIS tick, not all outstanding stock.
+  const cargos = [...(result.world.shipments?.values() ?? [])].filter(cargo =>
+    departureTick === undefined || cargo.departureTick === departureTick);
   const phase7 = result.context.transactions.filter(tx => tx.phase === 7);
   const outputs = phase7.filter(tx => tx.type === "FX_OUTPUT");
   const inputs = phase7.filter(tx => tx.type === "FX_INPUT");
@@ -1143,6 +1147,8 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     expect(firstCargo[0]!.arrivalTick).toBe(9);
     expect(first.context.transactions.filter(tx =>
       tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH")).toHaveLength(1);
+    const firstPaid = assertPaidCargoReceipts(first, [f.links[1]], 7);
+    expect(firstPaid.paid).toBeGreaterThan(0);
 
     const second = run(f, first.world, true, 8);
     const secondCargo = [...(second.world.shipments?.values() ?? [])].filter(
@@ -1154,8 +1160,13 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     expect(second.world.shipments?.size).toBe(firstCargo.length + secondCargo.length);
     expect(second.context.transactions.filter(tx =>
       tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
-    expect(second.context.transactions.filter(tx =>
-      tx.phase === 7 && tx.type === "FX_OUTPUT")).toHaveLength(secondCargo.length);
+    // The tick-7 shipment remains in transit, so only tick-8 departures may
+    // match tick-8 FX receipts. Check unique positive, owner/currency-bound
+    // FX_INPUT + FX_OUTPUT and dispatch for each new shipment.
+    const secondPaid = assertPaidCargoReceipts(second, f.links, 8);
+    expect(secondPaid.paid).toBeGreaterThan(0);
+    expect(new Set([...firstCargo, ...secondCargo].map(cargo => cargo.fxSettlementId)).size)
+      .toBe(firstCargo.length + secondCargo.length);
 
     const ironAtStart = totalIron(opening);
     const moneyAtStart = f.currencies.map(currency => totalCash(opening, currency));
