@@ -388,9 +388,8 @@ function materializeMatchPlan(
   // plan before spending an ordinal: a bad late taxation callback must not leave
   // earlier IDs consumed when the clearing attempt throws and is retried.
   const firstOrdinal = allocationIdCounter.value;
-  if (!Number.isSafeInteger(firstOrdinal) || firstOrdinal < 0 ||
-      plan.length > Number.MAX_SAFE_INTEGER - firstOrdinal) {
-    throw new Error("Local clearing allocation counter cannot reserve safe ordinals for the whole match plan");
+  if (!Number.isSafeInteger(firstOrdinal) || firstOrdinal < 0) {
+    throw new Error("Local clearing allocation counter must be a nonnegative safe integer");
   }
   assertFiniteCanonicalNumber(marketPrice, "marketPrice for local allocation materialization");
   if (marketPrice < 0) {
@@ -469,6 +468,13 @@ function materializeMatchPlan(
     buyerDebitByIntent.set(match.buyer.id, nextCommitted);
     return { match: affordableMatch, grossUnitPrice, consumptionTaxAmount, destinationStateId: taxInfo.destinationStateId };
   }).filter((entry) => entry !== null);
+
+  // Tentative matches rejected for zero funding or unrepresentable payments
+  // consume no IDs. Reserve only the *emitted* allocations, after all numeric
+  // and tax validation, without mutating the caller's counter on exhaustion.
+  if (prepared.length > Number.MAX_SAFE_INTEGER - firstOrdinal) {
+    throw new Error("Local clearing allocation counter cannot reserve safe ordinals for emitted matches");
+  }
 
   // All callback/numeric checks succeeded. Build the deterministic contiguous ID
   // sequence locally; publish the caller counter only after every record exists.
