@@ -469,7 +469,7 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     // Both corridors are independently legal and funded, but making either
     // one physically unusable must not eliminate the other paid shipment.
     for (const disabled of f.links) {
-      const factors = new Map(f.links.map(id =>
+      const factors = new Map<TransportLinkId, number>(f.links.map(id =>
         [id, id === disabled ? 0 : 1] as const));
       const result = withFactors(factors);
       const permuted = withFactors(factors, reordered(f.world));
@@ -498,7 +498,9 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     // An entirely zero-capacity network must not produce paid foreign cargo,
     // move goods into transit or debit the shared FX pool. Local procurement
     // remains non-vacuously executable on the same opening WorldState.
-    const noCapacity = withFactors(new Map(f.links.map(id => [id, 0] as const)));
+    const noCapacity = withFactors(new Map<TransportLinkId, number>(
+      f.links.map(id => [id, 0] as const),
+    ));
     expect(noCapacity.phaseBoundaryError).toBeUndefined();
     expect(noCapacity.reconciliationErrors).toBeNull();
     expect(dispatched(noCapacity)).toHaveLength(0);
