@@ -391,6 +391,15 @@ function materializeMatchPlan(
   if (!Number.isSafeInteger(firstOrdinal) || firstOrdinal < 0) {
     throw new Error("Local clearing allocation counter must be a nonnegative safe integer");
   }
+  // Fail before invoking taxation callbacks when even the potentially payable
+  // matches cannot fit. A zero-funded buyer at a strictly positive NET price
+  // is guaranteed to be rejected; do not reserve an ordinal for that match.
+  // At price zero, retain the canonical explicitly free fixture behavior.
+  const potentiallyPayableCount = plan.filter((match) =>
+    !(marketPrice > 0 && match.buyer.maxSpend === 0)).length;
+  if (potentiallyPayableCount > Number.MAX_SAFE_INTEGER - firstOrdinal) {
+    throw new Error("Local clearing allocation counter cannot reserve safe ordinals for potentially payable matches");
+  }
   assertFiniteCanonicalNumber(marketPrice, "marketPrice for local allocation materialization");
   if (marketPrice < 0) {
     throw new Error("Local clearing marketPrice must be >= 0");
