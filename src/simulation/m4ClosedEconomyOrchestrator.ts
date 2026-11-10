@@ -228,7 +228,6 @@ export function phase4ProcurementHandler(
           throw new Error(`Phase-4 prior-close price for ${String(goodId)} must be finite and > 0`);
         }
         const facts = taxFacts(region, goodId, options.taxPolicy);
-        const grossFactor = 1 + facts.assessedTaxRate * facts.collectionEfficiency;
         const input: LocalClearingInput = {
           marketId: market.marketId,
           regionId: region.regionId,
@@ -253,7 +252,12 @@ export function phase4ProcurementHandler(
             committed.set(key, alreadyCommitted + sellable);
             return sellable;
           },
-          computeGrossUnitPrice: (_intent, sellerNetPrice) => sellerNetPrice * grossFactor,
+          // Use the identical binary64 operation order as marketClearing's
+          // materializeMatchPlan; multiplying by a pre-rounded grossFactor
+          // can overstate an allocated buyer's exact committed maxSpend by
+          // one ULP after enough endogenous price updates.
+          computeGrossUnitPrice: (_intent, sellerNetPrice) =>
+            sellerNetPrice + sellerNetPrice * facts.assessedTaxRate * facts.collectionEfficiency,
           getTaxationInfo: () => facts,
         };
         allocations.push(

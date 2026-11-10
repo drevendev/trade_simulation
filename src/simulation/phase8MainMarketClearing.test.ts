@@ -1024,3 +1024,119 @@ describe("Phase-8 consumption-tax policy input (REQ-MARKET-004, Issue #481)", ()
     );
   });
 });
+
+
+describe("SLP-1005-01: actual Phase-8 wallet precision gate", () => {
+  it("does not plan a swallowed second payment but keeps the same payable micro-lot", () => {
+    const world = buildWorld();
+    const actors = counterparties(world);
+    const marketId = liveMarketId(world, actors.regionId);
+    const originalMarket = world.markets.get(marketId)!;
+    const originalBuyer = world.cohorts.get(actors.buyerCohortId)!;
+    const originalSeller = world.productionUnits.get(actors.sellerUnitId)!;
+    const originalState = world.states.get(actors.stateId)!;
+    const microGood = "good:phase8-precision-micro" as GoodId;
+    const price = 1e16;
+    const microQuantity = 1e-17;
+
+    const seeded: WorldState = {
+      ...world,
+      markets: new Map(world.markets).set(marketId, {
+        ...originalMarket,
+        priceByGood: new Map(originalMarket.priceByGood)
+          .set(FOOD, price).set(microGood, price),
+      }),
+      cohorts: new Map(world.cohorts).set(actors.buyerCohortId, {
+        ...originalBuyer,
+        wallet: new Map(originalBuyer.wallet).set(actors.currencyId, price),
+        householdInventory: new Map(originalBuyer.householdInventory)
+          .set(FOOD, 0).set(microGood, 0),
+      }),
+      states: new Map(world.states).set(actors.stateId, {
+        ...originalState,
+        treasury: new Map(originalState.treasury).set(actors.currencyId, 0),
+        publicInventory: new Map(originalState.publicInventory).set(FOOD, 0.5),
+      }),
+      productionUnits: new Map(world.productionUnits).set(actors.sellerUnitId, {
+        ...originalSeller,
+        wallet: new Map(originalSeller.wallet).set(actors.currencyId, 0),
+        outputInventory: new Map(originalSeller.outputInventory).set(microGood, microQuantity),
+      }),
+    };
+
+    const buyer = (goodId: GoodId, quantity: number, budget: number): MarketIntent => ({
+      id: createMarketIntentId(`mi:precision-buyer-${goodId}`),
+      actor: { type: "COHORT", cohortId: actors.buyerCohortId },
+      regionId: actors.regionId, goodId, side: "BUY", purpose: "CONSUMPTION",
+      desiredQuantity: quantity, maxSpend: budget, inventoryBucket: "GENERAL",
+      sourcePlanId: "plan:phase8-precision",
+    });
+    const seller = (goodId: GoodId, quantity: number, fromState: boolean): MarketIntent => ({
+      id: createMarketIntentId(`mi:precision-seller-${goodId}`),
+      actor: fromState
+        ? { type: "STATE", stateId: actors.stateId }
+        : { type: "PRODUCTION_UNIT", productionUnitId: actors.sellerUnitId },
+      regionId: actors.regionId, goodId, side: "SELL", purpose: "INVENTORY_REBALANCE",
+      desiredQuantity: quantity, inventoryBucket: fromState ? "GENERAL" : "OUTPUT",
+      sourcePlanId: "plan:phase8-precision",
+    });
+    const foodBuy = buyer(FOOD, 0.5, price);
+    const foodSell = seller(FOOD, 0.5, true);
+    const microBuy = buyer(microGood, microQuantity, price);
+    const microSell = seller(microGood, microQuantity, false);
+    const handler = (intents: MarketIntent[]) => createPhase8Handler({
+      getFixtureIntents: () => intents,
+      getFixtureMarketIds: () => new Map([[actors.regionId, marketId]]),
+      collectTelemetry: false,
+      enforceLiveWalletBudgets: true,
+      taxPolicy: {
+        getConsumptionTaxRate: () => 0,
+        getCollectionEfficiency: () => 1,
+      },
+    });
+
+    // Food comes first in stable market/good order, so the genuinely paid
+    // first allocation leaves 5e15 in the buyer's authoritative wallet.
+    // Binary64 cannot then debit 0.1 from 5e15, even though the intent budget
+    // is positive and the pure matcher can calculate a positive micro-lot.
+    const run = executeTick(seeded, 1, seeded.pendingTransitions,
+      handler([microSell, foodBuy, microBuy, foodSell]));
+    expect(run.reconciliationErrors).toBeNull();
+    expect(run.context.marketAllocations).toHaveLength(1);
+    expect(run.context.marketAllocations[0]!.goodId).toBe(FOOD);
+    const settled = applyMarketSettlementTransition(seeded, run.context);
+    expect(settled.cohorts.get(actors.buyerCohortId)!.wallet.get(actors.currencyId)).toBe(5e15);
+    expect(settled.cohorts.get(actors.buyerCohortId)!.householdInventory.get(FOOD)).toBe(0.5);
+    expect(settled.cohorts.get(actors.buyerCohortId)!.householdInventory.get(microGood)).toBe(0);
+    expect(settled.productionUnits.get(actors.sellerUnitId)!.outputInventory.get(microGood))
+      .toBe(microQuantity);
+    expect(seeded.cohorts.get(actors.buyerCohortId)!.wallet.get(actors.currencyId)).toBe(price);
+
+    // It is NOT a blanket tiny-lot ban: at a representable payer-wallet scale,
+    // the same quantity and price must clear and reach both real endpoints.
+    const smallBuyer = seeded.cohorts.get(actors.buyerCohortId)!;
+    const funded: WorldState = {
+      ...seeded,
+      cohorts: new Map(seeded.cohorts).set(actors.buyerCohortId, {
+        ...smallBuyer, wallet: new Map(smallBuyer.wallet).set(actors.currencyId, 1),
+      }),
+    };
+    const positive = executeTick(funded, 1, funded.pendingTransitions,
+      handler([microBuy, microSell]));
+    expect(positive.reconciliationErrors).toBeNull();
+    expect(positive.context.marketAllocations).toHaveLength(1);
+    const micro = positive.context.marketAllocations[0]!;
+    expect(micro.goodId).toBe(microGood);
+    expect(micro.quantity).toBe(microQuantity);
+    expect(micro.quantity * micro.buyerGrossUnitPrice).toBeGreaterThan(0);
+    const positiveSettled = applyMarketSettlementTransition(funded, positive.context);
+    expect(positiveSettled.cohorts.get(actors.buyerCohortId)!.wallet.get(actors.currencyId))
+      .toBe(0.9);
+    expect(positiveSettled.productionUnits.get(actors.sellerUnitId)!.wallet.get(actors.currencyId))
+      .toBe(0.1);
+    expect(positiveSettled.cohorts.get(actors.buyerCohortId)!.householdInventory.get(microGood))
+      .toBe(microQuantity);
+    expect(positiveSettled.productionUnits.get(actors.sellerUnitId)!.outputInventory.get(microGood))
+      .toBe(0);
+  });
+});

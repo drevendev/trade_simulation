@@ -17,8 +17,8 @@ import type { SimulationConfig } from "../config/simulationConfig";
 import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import { initializeTickContext } from "./tickOrchestrator";
 import type { TickContext } from "./tickOrchestrator";
-import { createMarketAllocationId, type MarketAllocation } from "./marketClearing";
-import { createMarketIntentId } from "./marketIntent";
+import { computeEffectiveDemand, computeLocalClearing, createMarketAllocationId, type LocalClearingInput, type MarketAllocation } from "./marketClearing";
+import { createMarketIntentId, type MarketIntent } from "./marketIntent";
 import {
   applyActorMoneyDeltas,
   applyMarketSettlementTransition,
@@ -1016,5 +1016,124 @@ describe("SLP-788-01/02: actual WorldState posting conservation", () => {
     expect(next.cohorts.get(buyerCohortId)!.wallet.get(currencyId)).toBe(8.75);
     expect(next.productionUnits.get(sellerUnitId)!.wallet.get(currencyId)).toBe(1);
     expect(next.states.get(stateId)!.treasury.get(currencyId)).toBe(0.25);
+  });
+});
+
+/**
+ * SLP-1005-01: clearing-to-live-wallet precision contract, NOT a completed
+ * implementation fix. The pure matcher knows only intent maxSpend, while the
+ * authoritative buyer and seller wallet endpoints may be unable to represent
+ * an individually positive transfer after an earlier real settlement.
+ */
+describe("SLP-1005-01: clearing to live wallet binary64 boundary", () => {
+  it("refuses an absorbed real debit, but settles the identical micro-lot at a representable wallet scale", () => {
+    const original = buildWorld();
+    const { sellerUnitId, buyerCohortId, stateId, currencyId } = pickCounterparties(original);
+    const sellerUnit = original.productionUnits.get(sellerUnitId)!;
+    const buyerCohort = original.cohorts.get(buyerCohortId)!;
+    const sellingState = original.states.get(stateId)!;
+    const region = [...original.regions.values()].find(
+      (r) => r.seed.key === sellerUnit.seed.regionKey,
+    )!;
+    const microGood = "good:precision-micro-lot" as GoodId;
+    const price = 1e16;
+    const microQuantity = 1e-17;
+    const buyer: ActorRef = { type: "COHORT", cohortId: buyerCohortId };
+    const firstSeller: ActorRef = { type: "STATE", stateId };
+    const microSeller: ActorRef = { type: "PRODUCTION_UNIT", productionUnitId: sellerUnitId };
+    const opening: WorldState = {
+      ...original,
+      cohorts: new Map(original.cohorts).set(buyerCohortId, {
+        ...buyerCohort,
+        wallet: new Map(buyerCohort.wallet).set(currencyId, price),
+        householdInventory: new Map(buyerCohort.householdInventory)
+          .set(FOOD, 0).set(microGood, 0),
+      }),
+      states: new Map(original.states).set(stateId, {
+        ...sellingState,
+        treasury: new Map(sellingState.treasury).set(currencyId, 0),
+        publicInventory: new Map(sellingState.publicInventory).set(FOOD, 0.5),
+      }),
+      productionUnits: new Map(original.productionUnits).set(sellerUnitId, {
+        ...sellerUnit,
+        wallet: new Map(sellerUnit.wallet).set(currencyId, 0),
+        outputInventory: new Map(sellerUnit.outputInventory).set(microGood, microQuantity),
+      }),
+    };
+
+    function clear(goodId: GoodId, quantity: number, seller: ActorRef,
+      bucket: "GENERAL" | "OUTPUT", maxSpend: number): MarketAllocation {
+      const buyIntent: MarketIntent = {
+        id: createMarketIntentId(`mi:precision-buy-${goodId}`),
+        actor: buyer, regionId: region.regionId, goodId,
+        side: "BUY", purpose: "CONSUMPTION", inventoryBucket: "GENERAL",
+        desiredQuantity: quantity, maxSpend, sourcePlanId: "plan:precision",
+      };
+      const sellIntent: MarketIntent = {
+        id: createMarketIntentId(`mi:precision-sell-${goodId}`),
+        actor: seller, regionId: region.regionId, goodId,
+        side: "SELL", purpose: "INVENTORY_REBALANCE", inventoryBucket: bucket,
+        desiredQuantity: quantity, sourcePlanId: "plan:precision",
+      };
+      const plan: LocalClearingInput = {
+        marketId: "m:precision-wallet" as MarketAllocation["marketId"],
+        regionId: region.regionId, goodId, pass: "MAIN", marketCurrencyId: currencyId,
+        buyerIntents: [buyIntent], sellerIntents: [sellIntent],
+        computeEffectiveDemand,
+        computeSellableQuantity: (intent) => intent.desiredQuantity,
+        computeGrossUnitPrice: (_intent, sellerNet) => sellerNet,
+        getTaxationInfo: () => ({
+          destinationStateId: null, assessedTaxRate: 0, collectionEfficiency: 1,
+        }),
+      };
+      const allocations = computeLocalClearing(plan, new Map(), price, 1e-8, { value: 0 });
+      expect(allocations).toHaveLength(1);
+      return allocations[0]!;
+    }
+
+    // First trade is a genuine, paid 0.5-unit stock movement from a State
+    // warehouse to a real household. Its wallet debit is exactly representable.
+    const first = clear(FOOD, 0.5, firstSeller, "GENERAL", price);
+    const afterFirst = executeAllocation(opening, context(), first);
+    expect(afterFirst.cohorts.get(buyerCohortId)!.wallet.get(currencyId)).toBe(5e15);
+    expect(afterFirst.cohorts.get(buyerCohortId)!.householdInventory.get(FOOD)).toBe(0.5);
+    expect(afterFirst.states.get(stateId)!.publicInventory.get(FOOD)).toBe(0);
+
+    // The pure matcher still emits this as a positive paid lot; it cannot see
+    // that 5e15 - 0.1 is represented as the unchanged 5e15 wallet balance.
+    const micro = clear(microGood, microQuantity, microSeller, "OUTPUT", price);
+    expect(micro.quantity).toBe(microQuantity);
+    expect(micro.quantity * micro.buyerGrossUnitPrice).toBeCloseTo(0.1);
+    expect(5e15 - micro.quantity * micro.buyerGrossUnitPrice).toBe(5e15);
+
+    const beforeRefusal = snapshotSettlementStocks(afterFirst);
+    // Mutation-sensitive negative control: if settlement ever silently accepts
+    // this lot while leaving the payer's cash unchanged, this assertion fails.
+    expect(() => executeAllocation(afterFirst, context(), micro))
+      .toThrow(/money transfer lost to binary64 rounding/);
+    expect(snapshotSettlementStocks(afterFirst)).toEqual(beforeRefusal);
+    expect(afterFirst.cohorts.get(buyerCohortId)!.householdInventory.get(microGood)).toBe(0);
+    expect(afterFirst.productionUnits.get(sellerUnitId)!.outputInventory.get(microGood))
+      .toBe(microQuantity);
+
+    // Same tiny positive lot is not intrinsically invalid: with a small but
+    // funded buyer wallet and a zero seller wallet, both money postings and
+    // the physical stock movement can be represented and settled exactly
+    // within the existing absolute conservation tolerance.
+    const smallBuyer: WorldState = {
+      ...opening,
+      cohorts: new Map(opening.cohorts).set(buyerCohortId, {
+        ...opening.cohorts.get(buyerCohortId)!,
+        wallet: new Map(opening.cohorts.get(buyerCohortId)!.wallet).set(currencyId, 1),
+      }),
+    };
+    const fundedMicro = clear(microGood, microQuantity, microSeller, "OUTPUT", 1);
+    const afterMicro = executeAllocation(smallBuyer, context(), fundedMicro);
+    expect(afterMicro.cohorts.get(buyerCohortId)!.wallet.get(currencyId)).toBe(0.9);
+    expect(afterMicro.productionUnits.get(sellerUnitId)!.wallet.get(currencyId)).toBe(0.1);
+    expect(afterMicro.cohorts.get(buyerCohortId)!.householdInventory.get(microGood))
+      .toBe(microQuantity);
+    expect(afterMicro.productionUnits.get(sellerUnitId)!.outputInventory.get(microGood)).toBe(0);
+    expect(smallBuyer.cohorts.get(buyerCohortId)!.wallet.get(currencyId)).toBe(1);
   });
 });
