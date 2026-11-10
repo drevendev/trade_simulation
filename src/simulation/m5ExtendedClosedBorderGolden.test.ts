@@ -584,4 +584,131 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     expect(permuted.world.markets).toEqual(blocked.world.markets);
   });
 
+
+  it("sizes paid cargo across competing routes to one scarce FX payout budget before seller stock moves", () => {
+    const f = fixture();
+    const full = run(f, f.world);
+    const originalCargo = [...(full.world.shipments?.values() ?? [])];
+    const originalOutputs = full.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_OUTPUT");
+    expect(originalCargo).toHaveLength(2);
+    expect(originalOutputs).toHaveLength(2);
+    expect(new Set(originalCargo.map(cargo => cargo.transportLinkId)))
+      .toEqual(new Set(f.links));
+    const sourceCurrency = originalCargo[0]!.invoiceCurrencyId;
+    expect(originalCargo.every(cargo => cargo.invoiceCurrencyId === sourceCurrency)).toBe(true);
+    expect(originalOutputs.every(tx => tx.currencyId === sourceCurrency &&
+      tx.moneyAmount! > 0)).toBe(true);
+
+    // This capacity is smaller than EITHER full invoice. Both paths remain
+    // legal and physical; only a single issuer's actual payout stock changes.
+    const available = Math.min(...originalOutputs.map(tx => tx.moneyAmount!)) / 4;
+    expect(available).toBeGreaterThan(0);
+    const authority = f.world.monetaryAuthorities.get(f.chosen.authorityId)!;
+    const pool = authority.fxPools.get(f.chosen.poolId)!;
+    const floor = sourceCurrency === pool.baseCurrencyId
+      ? pool.minOperationalReserveBase : pool.minOperationalReserveQuote;
+    const withAvailableOutput = (budget: number): WorldState => ({
+      ...f.world,
+      monetaryAuthorities: new Map(f.world.monetaryAuthorities).set(
+        f.chosen.authorityId, {
+          ...authority,
+          fxPools: new Map(authority.fxPools).set(f.chosen.poolId, {
+            ...pool,
+            cash: new Map(pool.cash).set(sourceCurrency, floor + budget),
+          }),
+        },
+      ),
+    });
+    const scarceOpening = withAvailableOutput(available);
+    const scarce = run(f, scarceOpening);
+    const shuffled = run(f, reordered(scarceOpening));
+    const atFloor = run(f, withAvailableOutput(0));
+    const openingCash = f.currencies.map(currency => totalCash(scarceOpening, currency));
+    const openingIron = totalIron(scarceOpening);
+
+    const phase7 = (result: ReturnType<typeof run>, type: string) =>
+      result.context.transactions.filter(tx => tx.phase === 7 && tx.type === type);
+    const cargos = [...(scarce.world.shipments?.values() ?? [])];
+    const outputs = phase7(scarce, "FX_OUTPUT");
+    const inputs = phase7(scarce, "FX_INPUT");
+    const dispatches = phase7(scarce, "SHIPMENT_DISPATCH");
+    const tariffs = phase7(scarce, "IMPORT_TARIFF");
+    const originalByLink = new Map(originalCargo.map(cargo =>
+      [cargo.transportLinkId, cargo] as const));
+    expect(cargos.length).toBeGreaterThan(0); // scarcity must not be an all-blocked test
+    expect(cargos.length).toBeLessThanOrEqual(2);
+    expect(dispatches).toHaveLength(cargos.length);
+    expect(outputs).toHaveLength(cargos.length);
+    expect(inputs).toHaveLength(cargos.length);
+    expect(tariffs).toHaveLength(cargos.length);
+    expect(phase7(atFloor, "SHIPMENT_DISPATCH")).toHaveLength(0);
+
+    for (const cargo of cargos) {
+      expect(cargo.quantity).toBeGreaterThan(0);
+      expect(cargo.quantity).toBeLessThan(originalByLink.get(cargo.transportLinkId)!.quantity);
+      const paidDispatch = dispatches.filter(tx =>
+        tx.quantity === cargo.quantity &&
+        tx.sourceRegionId === cargo.originRegionId &&
+        tx.destinationRegionId === cargo.destinationRegionId &&
+        tx.source && JSON.stringify(tx.source) === JSON.stringify(cargo.seller) &&
+        tx.destination && JSON.stringify(tx.destination) === JSON.stringify(cargo.beneficialOwner));
+      expect(paidDispatch).toHaveLength(1);
+      const bundleId = paidDispatch[0]!.bundleId;
+      expect(outputs.filter(tx =>
+        tx.bundleId === bundleId && tx.fxSettlementId === cargo.fxSettlementId))
+        .toHaveLength(1);
+      expect(inputs.filter(tx =>
+        tx.bundleId === bundleId && tx.fxSettlementId === cargo.fxSettlementId))
+        .toHaveLength(1);
+    }
+
+    const sourcePaid = outputs.reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+    const buyerPaid = inputs.reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+    expect(sourcePaid).toBeGreaterThan(0);
+    expect(sourcePaid).toBeLessThanOrEqual(available + 1e-6);
+    const beforePool = scarceOpening.monetaryAuthorities.get(f.chosen.authorityId)!
+      .fxPools.get(f.chosen.poolId)!;
+    const afterPool = scarce.world.monetaryAuthorities.get(f.chosen.authorityId)!
+      .fxPools.get(f.chosen.poolId)!;
+    const buyerCurrency = f.currencies.find(id => id !== sourceCurrency)!;
+    const verifyPayout = (amount: number) =>
+      expect(afterPool.cash.get(sourceCurrency)! - beforePool.cash.get(sourceCurrency)!)
+        .toBeCloseTo(-amount, 6);
+    verifyPayout(sourcePaid);
+    expect(() => verifyPayout(sourcePaid + 1)).toThrow();
+    expect(afterPool.cash.get(sourceCurrency)!).toBeGreaterThanOrEqual(floor);
+    expect(afterPool.cash.get(buyerCurrency)! - beforePool.cash.get(buyerCurrency)!)
+      .toBeCloseTo(buyerPaid, 6);
+
+    // Isolate the seller's foreign debit by subtracting an otherwise identical
+    // local-only tick at the reserve floor. No unpaid foreign stock may vanish.
+    const seller = originalCargo[0]!.seller;
+    expect(seller.type).toBe("PRODUCTION_UNIT");
+    expect(new Set(originalCargo.map(cargo => JSON.stringify(cargo.seller))).size).toBe(1);
+    if (seller.type !== "PRODUCTION_UNIT") throw new Error("Expected production seller");
+    const atFloorStock = atFloor.world.productionUnits.get(seller.productionUnitId)!
+      .inputInventory.get(IRON) ?? 0;
+    const scarceStock = scarce.world.productionUnits.get(seller.productionUnitId)!
+      .inputInventory.get(IRON) ?? 0;
+    expect(atFloorStock - scarceStock)
+      .toBeCloseTo(cargos.reduce((sum, cargo) => sum + cargo.quantity, 0), 6);
+    expect(scarce.context.transactions.filter(tx => tx.phase === 4))
+      .toEqual(atFloor.context.transactions.filter(tx => tx.phase === 4));
+
+    for (const result of [scarce, shuffled]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(totalIron(result.world)).toBeCloseTo(openingIron, 6);
+      for (const [index, currency] of f.currencies.entries()) {
+        expect(totalCash(result.world, currency)).toBeCloseTo(openingCash[index]!, 5);
+      }
+    }
+    expect(shuffled.context.transactions).toEqual(scarce.context.transactions);
+    expect(shuffled.world.productionUnits).toEqual(scarce.world.productionUnits);
+    expect(shuffled.world.monetaryAuthorities).toEqual(scarce.world.monetaryAuthorities);
+    expect(shuffled.world.shipments).toEqual(scarce.world.shipments);
+  });
+
 });
