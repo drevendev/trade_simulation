@@ -1147,7 +1147,7 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     expect(firstCargo[0]!.arrivalTick).toBe(9);
     expect(first.context.transactions.filter(tx =>
       tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH")).toHaveLength(1);
-    const firstPaid = assertPaidCargoReceipts(first, [f.links[1]], 7);
+    const firstPaid = assertPaidCargoReceipts(first, [f.links[1]!], 7);
     expect(firstPaid.paid).toBeGreaterThan(0);
 
     const second = run(f, first.world, true, 8);
