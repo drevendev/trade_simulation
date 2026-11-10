@@ -82,7 +82,7 @@ export interface LocalClearingInput {
    * Returning false skips a numerically unrepresentable lot without consuming an ID.
    * Material authorization/stock defects must throw, never silently become no-trades.
    */
-  readonly acceptLiveAllocation?: (candidate: MarketAllocation) => boolean;
+  readonly acceptLiveAllocation?: ((candidate: MarketAllocation) => boolean) | undefined;
 }
 
 /**
