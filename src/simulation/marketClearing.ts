@@ -396,9 +396,17 @@ function materializeMatchPlan(
   // positive physical lot whose NET seller receipt underflows to zero is
   // also guaranteed to be dropped later. Neither needs an allocation ID.
   // Keep explicitly free price-zero fixtures on their own existing path.
+  // A positive budget may still be strictly smaller than the NET payment for
+  // the smallest positive binary64 quantity. Such a match cannot emit any
+  // paid lot, even after the affordability search, and must not reserve an ID.
+  // The net bound is conservative because collected tax cannot lower gross.
+  const smallestNetDebit = Number.MIN_VALUE * marketPrice;
   const potentiallyPayableCount = plan.filter((match) =>
     !(marketPrice > 0 &&
-      (match.buyer.maxSpend === 0 || match.quantity * marketPrice === 0))).length;
+      (match.buyer.maxSpend === 0 ||
+        (typeof match.buyer.maxSpend === "number" &&
+         match.buyer.maxSpend > 0 && match.buyer.maxSpend < smallestNetDebit) ||
+        match.quantity * marketPrice === 0))).length;
   if (potentiallyPayableCount > Number.MAX_SAFE_INTEGER - firstOrdinal) {
     throw new Error("Local clearing allocation counter cannot reserve safe ordinals for potentially payable matches");
   }

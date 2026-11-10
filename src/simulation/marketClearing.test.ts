@@ -469,6 +469,65 @@ describe("Local clearing algorithm", () => {
     expect(exhausted.value).toBe(Number.MAX_SAFE_INTEGER);
   });
 
+  it("does not exhaust the final allocation ID on a positive but unpayably small budget", () => {
+    // Even the least positive representable quantity costs more than the
+    // first buyer owns. Positive funding is not sufficient to reserve an ID.
+    const price = 1e100;
+    const belowMinimumLot = Number.MIN_VALUE;
+    expect(Number.MIN_VALUE * price).toBeGreaterThan(belowMinimumLot);
+    const buyers: MarketIntent[] = [
+      { id: createMarketIntentId("mi:tiny-positive-budget"),
+        actor: { type: "CLAN", clanId: testClanId },
+        regionId: testRegionId, goodId: testGoodId, side: "BUY",
+        purpose: "CONSUMPTION", desiredQuantity: 1,
+        maxSpend: belowMinimumLot, sourcePlanId: "plan:tiny" },
+      { id: createMarketIntentId("mi:properly-funded"),
+        actor: { type: "CLAN", clanId: testClanId },
+        regionId: testRegionId, goodId: testGoodId, side: "BUY",
+        purpose: "CONSUMPTION", desiredQuantity: 1,
+        maxSpend: price, sourcePlanId: "plan:funded" },
+    ];
+    const sellers: MarketIntent[] = [1, 2].map(index => ({
+      id: createMarketIntentId(`mi:minimum-lot-seller-${index}`),
+      actor: { type: "PRODUCTION_UNIT",
+        productionUnitId: (`pu:minimum-lot-seller-${index}` as ProductionUnitId) },
+      regionId: testRegionId, goodId: testGoodId, side: "SELL" as const,
+      purpose: "INVENTORY_REBALANCE" as const, desiredQuantity: 1,
+      sourcePlanId: "plan:min-lot",
+    }));
+    const input: LocalClearingInput = {
+      ...createTestInput(buyers, sellers),
+      // Adversarial planner claims both demands are physically feasible;
+      // the money authority must still exclude an impossible first lot.
+      computeEffectiveDemand: intent => intent.desiredQuantity,
+      computeGrossUnitPrice: (_intent, net) => net,
+      getTaxationInfo: () => ({
+        destinationStateId: null, assessedTaxRate: 0, collectionEfficiency: 1,
+      }),
+    };
+    const lastFreeOrdinal = Number.MAX_SAFE_INTEGER - 1;
+    const counter = { value: lastFreeOrdinal };
+    const allocations = computeLocalClearing(input, new Map(), price, 1e-8, counter);
+    expect(allocations).toHaveLength(1);
+    expect(allocations[0]!.buyerIntentId).toBe(buyers[1]!.id);
+    expect(allocations[0]!.sellerIntentId).toBe(sellers[1]!.id);
+    expect(allocations[0]!.quantity).toBe(1);
+    expect(allocations[0]!.quantity * allocations[0]!.buyerGrossUnitPrice).toBe(price);
+    expect(allocations[0]!.id).toBe(
+      `ma:m:central/good:wheat/MAIN/${Number.MAX_SAFE_INTEGER}`,
+    );
+    expect(counter.value).toBe(Number.MAX_SAFE_INTEGER);
+    expect(computeLocalClearing({
+      ...input, buyerIntents: [...buyers].reverse(),
+      sellerIntents: [...sellers].reverse(),
+    }, new Map(), price, 1e-8, { value: lastFreeOrdinal })).toEqual(allocations);
+
+    const exhausted = { value: Number.MAX_SAFE_INTEGER };
+    expect(() => computeLocalClearing(input, new Map(), price, 1e-8, exhausted))
+      .toThrow("cannot reserve safe ordinals");
+    expect(exhausted.value).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
   it("cannot materialize a paid lot with zero budget even if demand evidence is forged", () => {
     // An invalid upstream effective-demand callback can claim positive demand
     // for a zero-funded buyer. At a positive price below one, a binary64
