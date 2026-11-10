@@ -1,0 +1,12 @@
+### FILE: src/simulation/marketClearing.test.ts
+<<<<<<< FIND
+    expect(allocations[0]!.buyerIntentId).toBe(buyers[1]!.id);
+    expect(allocations[0]!.sellerIntentId).toBe(sellers[1]!.id);
+    expect(allocations[0]!.quantity).toBe(1);
+=======
+    expect(allocations[0]!.buyerIntentId).toBe(buyers[1]!.id);
+    // The funded BUY sorts first by persistent ID, so seller 1 owns the
+    // paid allocation; seller 2's positive but unaffordable lot stays unsold.
+    expect(allocations[0]!.sellerIntentId).toBe(sellers[0]!.id);
+    expect(allocations[0]!.quantity).toBe(1);
+>>>>>>> REPLACE
