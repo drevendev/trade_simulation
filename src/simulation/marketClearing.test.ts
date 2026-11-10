@@ -510,7 +510,9 @@ describe("Local clearing algorithm", () => {
     const allocations = computeLocalClearing(input, new Map(), price, 1e-8, counter);
     expect(allocations).toHaveLength(1);
     expect(allocations[0]!.buyerIntentId).toBe(buyers[1]!.id);
-    expect(allocations[0]!.sellerIntentId).toBe(sellers[1]!.id);
+    // The funded BUY sorts first by persistent ID, so seller 1 owns the
+    // paid allocation; seller 2's positive but unaffordable lot stays unsold.
+    expect(allocations[0]!.sellerIntentId).toBe(sellers[0]!.id);
     expect(allocations[0]!.quantity).toBe(1);
     expect(allocations[0]!.quantity * allocations[0]!.buyerGrossUnitPrice).toBe(price);
     expect(allocations[0]!.id).toBe(
