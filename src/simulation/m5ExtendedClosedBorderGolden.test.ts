@@ -1819,4 +1819,186 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
   });
 
 
+
+  it("settles opposite FX directions in the same tick and delivers both paid cargos once", () => {
+    const f = fixture();
+    const baseline = buildInitialWorld(
+      baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 42,
+    );
+    const alphaSource = [...f.world.regions.values()].find(r => r.seed.key === "region:a4-border")!;
+    const betaDestination = [...f.world.regions.values()].find(r => r.seed.key === "region:b4-chokepoint")!;
+    const betaSource = [...f.world.regions.values()].find(r => r.seed.key === "region:b5-pastoral")!;
+    const alphaDestination = [...baseline.regions.values()].find(
+      r => r.seed.key === "region:a5-copper-mine",
+    )!;
+    const alphaMarket = [...baseline.markets.values()].find(
+      m => m.seed.regionKey === alphaDestination.seed.key,
+    )!;
+    expect(alphaMarket).toBeDefined();
+    expect(betaSource.settlementCurrencyId).toBe(betaDestination.settlementCurrencyId);
+    expect(alphaDestination.settlementCurrencyId).toBe(alphaSource.settlementCurrencyId);
+
+    // Keep the original profitable Alpha -> Beta route. Redirect the second
+    // independent link into a profitable Beta -> Alpha route, using another
+    // seller and buyer in distinct markets (not impossible two-way arbitrage).
+    const originalLink = f.world.transportLinks.get(f.links[0]!)!;
+    const reverseTemplate = f.world.transportLinks.get(f.links[1]!)!;
+    const forward = { ...originalLink, travelTicks: 2 };
+    const backward = {
+      ...reverseTemplate,
+      fromRegionId: betaSource.regionId,
+      toRegionId: alphaDestination.regionId,
+      travelTicks: 2,
+      seed: {
+        ...reverseTemplate.seed,
+        key: "link:test-b5-a5-opposite",
+        fromRegionKey: betaSource.seed.key,
+        toRegionKey: alphaDestination.seed.key,
+      },
+    };
+    const units = [...f.world.productionUnits.values()];
+    expect(units).toHaveLength(6);
+    const betaSeller = {
+      ...units[4]!,
+      status: "CLOSING" as const,
+      installedCapital: 0,
+      wallet: new Map([[betaSource.settlementCurrencyId, 5]]),
+      inputInventory: new Map([[IRON, 1000]]),
+      outputInventory: new Map(),
+      investmentInventory: new Map(),
+    };
+    const alphaBuyer = {
+      ...units[5]!,
+      status: "ACTIVE" as const,
+      installedCapital: 5,
+      seed: { ...units[5]!.seed, regionKey: alphaDestination.seed.key },
+      wallet: new Map([[alphaDestination.settlementCurrencyId, 1_000_000]]),
+      inputInventory: new Map(),
+      outputInventory: new Map(),
+      investmentInventory: new Map(),
+    };
+    const markets = new Map([...f.world.markets].map(([id, market]) => [
+      id, {
+        ...market,
+        priceByGood: new Map(market.priceByGood).set(
+          IRON, market.seed.regionKey === betaSource.seed.key ? 1 :
+            market.seed.regionKey === alphaSource.seed.key ? 1 : 100,
+        ),
+      },
+    ] as const));
+    markets.set(alphaMarket.marketId, {
+      ...alphaMarket, priceByGood: new Map(alphaMarket.priceByGood).set(IRON, 100),
+    });
+    const opening: WorldState = {
+      ...f.world,
+      regions: new Map([...f.world.regions, [alphaDestination.regionId, alphaDestination]]),
+      markets,
+      productionUnits: new Map([
+        ...units.slice(0, 4).map(unit => [unit.productionUnitId, unit] as const),
+        [betaSeller.productionUnitId, betaSeller],
+        [alphaBuyer.productionUnitId, alphaBuyer],
+      ]),
+      transportLinks: new Map([
+        [forward.linkId, forward], [backward.linkId, backward],
+      ]),
+      outgoingTransportLinkIdsByRegion: new Map([
+        [alphaSource.regionId, [forward.linkId]],
+        [betaSource.regionId, [backward.linkId]],
+      ]),
+    };
+    const ironBefore = totalIron(opening);
+    const cashBefore = f.currencies.map(currency => totalCash(opening, currency));
+
+    const first = run(f, opening, true, 7);
+    const reorderedFirst = run(f, reordered(opening), true, 7);
+    expect(first.reconciliationErrors).toBeNull();
+    expect(first.context.transactions).toEqual(reorderedFirst.context.transactions);
+    expect(economicReplayFingerprint(7, first.world, first.context.transactions))
+      .toBe(economicReplayFingerprint(
+        7, reorderedFirst.world, reorderedFirst.context.transactions,
+      ));
+    const cargos = [...(first.world.shipments?.values() ?? [])];
+    expect(cargos).toHaveLength(2);
+    expect(cargos.map(c => [c.originRegionId, c.destinationRegionId])).toEqual([
+      [alphaSource.regionId, betaDestination.regionId],
+      [betaSource.regionId, alphaDestination.regionId],
+    ]);
+    const verifyBundles = (receipts: typeof first.context.transactions) => {
+      const phase7 = receipts.filter(tx => tx.phase === 7);
+      const dispatches = phase7.filter(tx => tx.type === "SHIPMENT_DISPATCH");
+      const inputs = phase7.filter(tx => tx.type === "FX_INPUT");
+      const outputs = phase7.filter(tx => tx.type === "FX_OUTPUT");
+      const tariffs = phase7.filter(tx => tx.type === "IMPORT_TARIFF");
+      expect(dispatches).toHaveLength(2);
+      expect(inputs).toHaveLength(2);
+      expect(outputs).toHaveLength(2);
+      expect(tariffs).toHaveLength(2);
+      expect(new Set(inputs.map(tx => tx.currencyId))).toEqual(new Set(f.currencies));
+      expect(new Set(outputs.map(tx => tx.currencyId))).toEqual(new Set(f.currencies));
+      for (const cargo of cargos) {
+        const dispatch = dispatches.filter(tx =>
+          tx.sourceRegionId === cargo.originRegionId &&
+          tx.destinationRegionId === cargo.destinationRegionId &&
+          tx.goodId === cargo.goodId && tx.quantity === cargo.quantity);
+        expect(dispatch).toHaveLength(1);
+        const bundle = dispatch[0]!.bundleId;
+        expect(bundle).toBeDefined();
+        expect(inputs.filter(tx =>
+          tx.bundleId === bundle &&
+          tx.fxSettlementId === cargo.fxSettlementId &&
+          tx.currencyId === cargo.buyerPaymentCurrencyId &&
+          JSON.stringify(tx.source) === JSON.stringify(cargo.beneficialOwner)))
+          .toHaveLength(1);
+        expect(outputs.filter(tx =>
+          tx.bundleId === bundle &&
+          tx.fxSettlementId === cargo.fxSettlementId &&
+          tx.currencyId === cargo.invoiceCurrencyId &&
+          JSON.stringify(tx.destination) === JSON.stringify(cargo.seller)))
+          .toHaveLength(1);
+        expect(tariffs.filter(tx => tx.bundleId === bundle)).toHaveLength(1);
+      }
+    };
+    verifyBundles(first.context.transactions);
+    // The oracle must reject a missing FX leg, not just count shipments.
+    expect(() => verifyBundles(first.context.transactions.filter(
+      tx => tx.type !== "FX_OUTPUT" || tx.currencyId !== f.currencies[1],
+    ))).toThrow();
+    expect(totalIron(first.world)).toBeCloseTo(ironBefore, 6);
+    f.currencies.forEach((currency, i) =>
+      expect(totalCash(first.world, currency)).toBeCloseTo(cashBefore[i]!, 5));
+
+    let normalWorld = first.world;
+    let reversedWorld = reorderedFirst.world;
+    for (let tick = 8; tick <= 10; tick++) {
+      // A newly closed border must not cancel or re-pay already-settled cargo.
+      const normal = run(f, normalWorld, false, tick);
+      const reversed = run(f, reversedWorld, false, tick);
+      expect(normal.reconciliationErrors).toBeNull();
+      expect(normal.context.transactions).toEqual(reversed.context.transactions);
+      expect(economicReplayFingerprint(tick, normal.world, normal.context.transactions))
+        .toBe(economicReplayFingerprint(
+          tick, reversed.world, reversed.context.transactions,
+        ));
+      expect(normal.context.transactions.filter(tx =>
+        tx.phase === 7 && ["SHIPMENT_DISPATCH", "FX_INPUT", "FX_OUTPUT", "IMPORT_TARIFF"]
+          .includes(tx.type))).toHaveLength(0);
+      const delivered = normal.context.transactions.filter(tx =>
+        tx.phase === 1 && tx.type === "SHIPMENT_DELIVERY");
+      expect(delivered).toHaveLength(tick === 9 ? 2 : 0);
+      for (const cargo of cargos) {
+        expect(delivered.filter(tx =>
+          tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id &&
+          tx.quantity === cargo.quantity &&
+          JSON.stringify(tx.destination) === JSON.stringify(cargo.beneficialOwner)))
+          .toHaveLength(tick === cargo.arrivalTick ? 1 : 0);
+      }
+      expect(totalIron(normal.world)).toBeCloseTo(ironBefore, 6);
+      f.currencies.forEach((currency, i) =>
+        expect(totalCash(normal.world, currency)).toBeCloseTo(cashBefore[i]!, 5));
+      normalWorld = normal.world;
+      reversedWorld = reversed.world;
+    }
+    expect(normalWorld.shipments?.size ?? 0).toBe(0);
+  });
+
 });
