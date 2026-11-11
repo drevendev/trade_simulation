@@ -282,4 +282,81 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     expect(run(f, waiting.world, false, 9).context.transactions)
       .toEqual(arrived.context.transactions);
   });
+
+  it("retains exactly one paid shared-currency cargo over 12 blocked ticks and shuffled registries", () => {
+    const f = fixture();
+    const currency = f.origin.settlementCurrencyId;
+    const openingCash = totalCash(f.world, currency);
+    const openingIron = totalIron(f.world);
+    const reorder = (world: WorldState): WorldState => ({
+      ...world,
+      states: new Map([...world.states].reverse()),
+      regions: new Map([...world.regions].reverse()),
+      markets: new Map([...world.markets].reverse()),
+      cohorts: new Map([...world.cohorts].reverse()),
+      clans: new Map([...world.clans].reverse()),
+      productionUnits: new Map([...world.productionUnits].reverse()),
+      transportLinks: new Map([...world.transportLinks].reverse()),
+      monetaryAuthorities: new Map([...world.monetaryAuthorities].reverse()),
+    });
+    let regular = f.world;
+    let shuffled = reorder(f.world);
+    let dispatchedCargoId: string | undefined;
+    let actualDeliveries = 0;
+    for (let tick = 7; tick < 19; tick++) {
+      const permitted = tick === 7;
+      const normal = run(f, regular, permitted, tick);
+      const reversed = run(f, shuffled, permitted, tick);
+      for (const result of [normal, reversed]) {
+        expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+        expect(result.phaseBoundaryError).toBeUndefined();
+        expect(result.reconciliationErrors).toBeNull();
+        expect(totalCash(result.world, currency)).toBeCloseTo(openingCash, 6);
+        expect(totalIron(result.world)).toBeCloseTo(openingIron, 7);
+        expect(result.world.monetaryAuthorities).toEqual(f.world.monetaryAuthorities);
+        const transactions = result.context.transactions;
+        expect(transactions.filter(tx =>
+          tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT")).toHaveLength(0);
+        const paid = transactions.filter(tx => tx.phase === 7 &&
+          ["TRADE_GOODS_SALE", "SHIPMENT_DISPATCH", "IMPORT_TARIFF",
+            "TRANSPORT_FEE", "CONSUMPTION_TAX"].includes(tx.type));
+        const deliveries = transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY");
+        expect(deliveries).toHaveLength(tick === 9 ? 1 : 0);
+        if (tick === 7) {
+          const cargos = [...(result.world.shipments?.values() ?? [])];
+          expect(cargos).toHaveLength(1);
+          expect(paid.some(tx => tx.type === "TRADE_GOODS_SALE")).toBe(true);
+          expect(paid.some(tx => tx.type === "IMPORT_TARIFF")).toBe(true);
+          expect(cargos[0]!.fxSettlementId).toBeUndefined();
+          expect(cargos[0]!.buyerPaymentCurrencyId).toBe(currency);
+          expect(cargos[0]!.invoiceCurrencyId).toBe(currency);
+          expect(cargos[0]!.arrivalTick).toBe(9);
+        } else {
+          expect(paid).toHaveLength(0);
+          expect(result.world.shipments?.size ?? 0).toBe(tick < 9 ? 1 : 0);
+        }
+        if (tick === 9) {
+          expect(deliveries[0]!.reason).toBe(
+            "IN_TRANSIT_TO_INPUT_STOCK:" + dispatchedCargoId,
+          );
+          expect(deliveries[0]!.moneyAmount).toBeUndefined();
+        }
+      }
+      if (tick === 7) {
+        dispatchedCargoId = [...(normal.world.shipments?.values() ?? [])][0]?.id;
+        expect(dispatchedCargoId).toBeDefined();
+      }
+      if (tick === 9) actualDeliveries++;
+      expect(reversed.context.transactions).toEqual(normal.context.transactions);
+      expect(reversed.world.productionUnits).toEqual(normal.world.productionUnits);
+      expect(reversed.world.states).toEqual(normal.world.states);
+      expect(reversed.world.shipments).toEqual(normal.world.shipments);
+      expect(reversed.world.markets).toEqual(normal.world.markets);
+      regular = normal.world;
+      shuffled = reversed.world;
+    }
+    expect(actualDeliveries).toBe(1);
+    expect(regular.shipments?.size ?? 0).toBe(0);
+  });
+
 });
