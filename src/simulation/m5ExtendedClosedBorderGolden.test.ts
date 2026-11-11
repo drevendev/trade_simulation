@@ -1654,4 +1654,169 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     expect(() => verify(diverted)).toThrow();
   });
 
+
+  it("resumes paid international trade after a prior FX-floor denial without retroactive settlement", () => {
+    const f = fixture();
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
+        [id, { ...link, travelTicks: 2 }] as const)),
+    };
+    const authority = opening.monetaryAuthorities.get(f.chosen.authorityId)!;
+    const pool = authority.fxPools.get(f.chosen.poolId)!;
+    const dryWorld: WorldState = {
+      ...opening,
+      monetaryAuthorities: new Map(opening.monetaryAuthorities).set(
+        f.chosen.authorityId, {
+          ...authority,
+          fxPools: new Map(authority.fxPools).set(f.chosen.poolId, {
+            ...pool,
+            cash: new Map(pool.cash)
+              .set(pool.baseCurrencyId, pool.minOperationalReserveBase)
+              .set(pool.quoteCurrencyId, pool.minOperationalReserveQuote),
+          }),
+        },
+      ),
+    };
+    const phase7 = (result: ReturnType<typeof run>, type: string) =>
+      result.context.transactions.filter(tx => tx.phase === 7 && tx.type === type);
+
+    // Both routes are legal and physically usable. At the FX operational
+    // floor neither may reserve a payout, pay customs, or create in-transit stock.
+    const dry = run(f, dryWorld, true, 7);
+    const dryShuffled = run(f, reordered(dryWorld), true, 7);
+    for (const result of [dry, dryShuffled]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      for (const type of ["SHIPMENT_DISPATCH", "FX_INPUT", "FX_OUTPUT", "IMPORT_TARIFF"]) {
+        expect(phase7(result, type)).toHaveLength(0);
+      }
+      expect(result.world.shipments?.size ?? 0).toBe(0);
+      expect(result.context.transactions.filter(tx => tx.phase === 4).length)
+        .toBeGreaterThan(0);
+      expect(result.world.monetaryAuthorities).toEqual(dryWorld.monetaryAuthorities);
+    }
+    expect(dryShuffled.context.transactions).toEqual(dry.context.transactions);
+    expect(dryShuffled.world.productionUnits).toEqual(dry.world.productionUnits);
+    expect(dryShuffled.world.markets).toEqual(dry.world.markets);
+
+    // The independent opening-of-tick fixture change is a test-input
+    // replenishment, NOT simulated money creation. Measure conservation only
+    // against that new funded opening and never attribute it to a trade tick.
+    const sellerCurrency = f.currencies[0]!;
+    const buyerCurrency = f.currencies[1]!;
+    const replenish = (world: WorldState): WorldState => {
+      const owner = world.monetaryAuthorities.get(f.chosen.authorityId)!;
+      const existing = owner.fxPools.get(f.chosen.poolId)!;
+      return {
+        ...world,
+        monetaryAuthorities: new Map(world.monetaryAuthorities).set(
+          f.chosen.authorityId, {
+            ...owner,
+            fxPools: new Map(owner.fxPools).set(f.chosen.poolId, {
+              ...existing,
+              cash: new Map(existing.cash).set(
+                sellerCurrency, existing.cash.get(sellerCurrency)! + 100_000,
+              ),
+            }),
+          },
+        ),
+      };
+    };
+    const fundedOpening = replenish(dry.world);
+    const shuffledOpening = replenish(dryShuffled.world);
+    const openingIron = totalIron(fundedOpening);
+    const openingCash = f.currencies.map(currency => totalCash(fundedOpening, currency));
+    const resumed = run(f, fundedOpening, true, 8);
+    const resumedShuffled = run(f, shuffledOpening, true, 8);
+    const cargos = [...(resumed.world.shipments?.values() ?? [])];
+    expect(cargos).toHaveLength(2);
+    expect(new Set(cargos.map(cargo => cargo.transportLinkId))).toEqual(new Set(f.links));
+    expect(cargos.every(cargo => cargo.departureTick === 8 && cargo.arrivalTick === 10))
+      .toBe(true);
+
+    const verifyPayment = (journal: typeof resumed.context.transactions) => {
+      const dispatches = journal.filter(tx =>
+        tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
+      const inputs = journal.filter(tx => tx.phase === 7 && tx.type === "FX_INPUT");
+      const outputs = journal.filter(tx => tx.phase === 7 && tx.type === "FX_OUTPUT");
+      const duties = journal.filter(tx => tx.phase === 7 && tx.type === "IMPORT_TARIFF");
+      for (const entries of [dispatches, inputs, outputs, duties]) {
+        expect(entries).toHaveLength(cargos.length);
+      }
+      for (const cargo of cargos) {
+        const dispatch = dispatches.filter(tx =>
+          tx.sourceRegionId === cargo.originRegionId &&
+          tx.destinationRegionId === cargo.destinationRegionId &&
+          tx.quantity === cargo.quantity);
+        expect(dispatch).toHaveLength(1);
+        expect(inputs.filter(tx =>
+          tx.bundleId === dispatch[0]!.bundleId &&
+          tx.fxSettlementId === cargo.fxSettlementId)).toHaveLength(1);
+        expect(outputs.filter(tx =>
+          tx.bundleId === dispatch[0]!.bundleId &&
+          tx.fxSettlementId === cargo.fxSettlementId)).toHaveLength(1);
+        expect(duties.filter(tx => tx.bundleId === dispatch[0]!.bundleId))
+          .toHaveLength(1);
+      }
+    };
+    verifyPayment(resumed.context.transactions);
+    verifyPayment(resumedShuffled.context.transactions);
+    const paidOutputs = phase7(resumed, "FX_OUTPUT");
+    const paidInputs = phase7(resumed, "FX_INPUT");
+    const startingPool = fundedOpening.monetaryAuthorities.get(f.chosen.authorityId)!
+      .fxPools.get(f.chosen.poolId)!;
+    const finalPool = resumed.world.monetaryAuthorities.get(f.chosen.authorityId)!
+      .fxPools.get(f.chosen.poolId)!;
+    expect(finalPool.cash.get(sellerCurrency)! - startingPool.cash.get(sellerCurrency)!)
+      .toBeCloseTo(-paidOutputs.reduce((sum, tx) => sum + tx.moneyAmount!, 0), 6);
+    expect(finalPool.cash.get(buyerCurrency)! - startingPool.cash.get(buyerCurrency)!)
+      .toBeCloseTo(paidInputs.reduce((sum, tx) => sum + tx.moneyAmount!, 0), 6);
+    // Deleting one payment leg must fail the same bundle-aware settlement oracle.
+    const omitted = resumed.context.transactions.filter(tx =>
+      !(tx.type === "FX_OUTPUT" && tx.fxSettlementId === cargos[0]!.fxSettlementId));
+    expect(() => verifyPayment(omitted)).toThrow();
+
+    expect(resumedShuffled.context.transactions).toEqual(resumed.context.transactions);
+    let normalWorld = resumed.world;
+    let shuffledWorld = resumedShuffled.world;
+    let delivered = 0;
+    for (let tick = 9; tick <= 12; tick++) {
+      const normal = run(f, normalWorld, false, tick);
+      const shuffled = run(f, shuffledWorld, false, tick);
+      for (const result of [normal, shuffled]) {
+        expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+        expect(result.phaseBoundaryError).toBeUndefined();
+        expect(result.reconciliationErrors).toBeNull();
+        for (const type of ["SHIPMENT_DISPATCH", "FX_INPUT", "FX_OUTPUT", "IMPORT_TARIFF"]) {
+          expect(phase7(result, type)).toHaveLength(0);
+        }
+        expect(totalIron(result.world)).toBeCloseTo(openingIron, 6);
+        for (const [i, currency] of f.currencies.entries()) {
+          expect(totalCash(result.world, currency)).toBeCloseTo(openingCash[i]!, 5);
+        }
+      }
+      const deliveries = normal.context.transactions.filter(tx =>
+        tx.phase === 1 && tx.type === "SHIPMENT_DELIVERY");
+      expect(deliveries).toHaveLength(tick === 10 ? cargos.length : 0);
+      for (const cargo of cargos) {
+        expect(deliveries.filter(tx =>
+          tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id &&
+          tx.quantity === cargo.quantity &&
+          JSON.stringify(tx.destination) === JSON.stringify(cargo.beneficialOwner)))
+          .toHaveLength(tick === cargo.arrivalTick ? 1 : 0);
+      }
+      delivered += deliveries.length;
+      expect(shuffled.context.transactions).toEqual(normal.context.transactions);
+      expect(economicReplayFingerprint(tick, shuffled.world, shuffled.context.transactions))
+        .toBe(economicReplayFingerprint(tick, normal.world, normal.context.transactions));
+      normalWorld = normal.world;
+      shuffledWorld = shuffled.world;
+    }
+    expect(delivered).toBe(2);
+    expect(normalWorld.shipments?.size ?? 0).toBe(0);
+  });
+
+
 });
