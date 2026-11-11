@@ -894,4 +894,218 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     expect(shuffled.world.monetaryAuthorities).toEqual(normal.world.monetaryAuthorities);
   });
 
+
+  it("reconciles paid FX principals and corridor charges to live wallets before staggered delivery", () => {
+    const f = fixture();
+    const [fast, slow] = f.links;
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
+        [id, { ...link, travelTicks: id === fast ? 1 : 3 }] as const)),
+    };
+    const openingIron = totalIron(opening);
+    const openingCash = f.currencies.map(currency => totalCash(opening, currency));
+    let normalWorld = opening;
+    let shuffledWorld = reordered(opening);
+    let frozenCargo = [...(opening.shipments?.values() ?? [])];
+
+    for (let tick = 7; tick <= 12; tick++) {
+      const phase7Snapshots: { before: WorldState; after: WorldState }[] = [];
+      const observe: Parameters<typeof executeM5AutonomousRegionalTradeTick>[5] =
+        (phase, before, after) => {
+          if (phase === 7) phase7Snapshots.push({ before, after });
+        };
+      const result = run(f, normalWorld, tick === 7, tick, observe);
+      const shuffled = run(f, shuffledWorld, tick === 7, tick);
+      expect(phase7Snapshots).toHaveLength(1);
+      for (const actual of [result, shuffled]) {
+        expect(actual.phaseTrace).toEqual([...Array(16).keys()]);
+        expect(actual.phaseBoundaryError).toBeUndefined();
+        expect(actual.reconciliationErrors).toBeNull();
+        expect(totalIron(actual.world)).toBeCloseTo(openingIron, 6);
+        for (const [index, currency] of f.currencies.entries()) {
+          expect(totalCash(actual.world, currency)).toBeCloseTo(openingCash[index]!, 5);
+        }
+      }
+      expect(shuffled.context.transactions).toEqual(result.context.transactions);
+      expect(shuffled.world.shipments).toEqual(result.world.shipments);
+      expect(shuffled.world.productionUnits).toEqual(result.world.productionUnits);
+      expect(shuffled.world.monetaryAuthorities).toEqual(result.world.monetaryAuthorities);
+      expect(shuffled.world.states).toEqual(result.world.states);
+
+      const { before, after } = phase7Snapshots[0]!;
+      const phase7 = result.context.transactions.filter(tx => tx.phase === 7);
+      const paymentTypes = ["FX_INPUT", "FX_OUTPUT", "IMPORT_TARIFF",
+        "CONSUMPTION_TAX", "TRANSPORT_FEE"];
+      if (tick === 7) {
+        frozenCargo = [...(result.world.shipments?.values() ?? [])];
+        expect(frozenCargo).toHaveLength(2);
+        expect(new Set(frozenCargo.map(cargo => cargo.transportLinkId)))
+          .toEqual(new Set([fast, slow]));
+        expect(new Set(frozenCargo.map(cargo => cargo.fxSettlementId)).size).toBe(2);
+        const bundleIds = new Set<string>();
+
+        // Each physical corridor must carry one and only one invoice, FX pair
+        // and destination charge set. The invoice is NONPOSTING: only FX legs
+        // and actual destination charges may change wallets.
+        const verifyCorridor = (
+          journal: typeof phase7, cargo: (typeof frozenCargo)[number],
+        ) => {
+          const matching = journal.filter(tx =>
+            tx.type === "SHIPMENT_DISPATCH" &&
+            tx.sourceRegionId === cargo.originRegionId &&
+            tx.destinationRegionId === cargo.destinationRegionId &&
+            tx.goodId === cargo.goodId &&
+            tx.quantity === cargo.quantity);
+          expect(matching).toHaveLength(1);
+          const bundleId = matching[0]!.bundleId!;
+          expect(bundleId).toBeDefined();
+          const one = (type: string) => {
+            const entries = journal.filter(tx =>
+              tx.bundleId === bundleId && tx.type === type);
+            expect(entries).toHaveLength(1);
+            return entries[0]!;
+          };
+          const charge = (type: string, amount: number) => {
+            const entries = journal.filter(tx =>
+              tx.bundleId === bundleId && tx.type === type);
+            expect(entries).toHaveLength(amount > 0 ? 1 : 0);
+            expect(entries.reduce((sum, tx) => sum + tx.moneyAmount!, 0))
+              .toBeCloseTo(amount, 6);
+            if (entries.length > 0) {
+              expect(entries[0]!.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+              expect(entries[0]!.source).toEqual(cargo.beneficialOwner);
+            }
+          };
+          const invoice = one("TRADE_GOODS_SALE");
+          const input = one("FX_INPUT");
+          const output = one("FX_OUTPUT");
+          expect(invoice.reason).toBe("PHASE7_FX_INVOICE_REFERENCE_NONPOSTING");
+          expect(invoice.fxSettlementId).toBe(cargo.fxSettlementId);
+          expect(input.fxSettlementId).toBe(cargo.fxSettlementId);
+          expect(output.fxSettlementId).toBe(cargo.fxSettlementId);
+          expect(invoice.moneyAmount).toBeCloseTo(output.moneyAmount!, 6);
+          expect(invoice.moneyAmount).toBeCloseTo(
+            cargo.sellerNetUnitPrice * cargo.quantity, 6);
+          expect(input.moneyAmount).toBeCloseTo(cargo.buyerGoodsPaymentAmount, 6);
+          expect(input.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+          expect(output.currencyId).toBe(cargo.invoiceCurrencyId);
+          expect(input.source).toEqual(cargo.beneficialOwner);
+          expect(output.destination).toEqual(cargo.seller);
+          charge("TRANSPORT_FEE", cargo.transportFeeAmount);
+          charge("IMPORT_TARIFF", cargo.tariffAmount);
+          charge("CONSUMPTION_TAX", cargo.consumptionTaxAmount);
+          return bundleId;
+        };
+        for (const cargo of frozenCargo) {
+          const bundleId = verifyCorridor(phase7, cargo);
+          expect(bundleIds.has(bundleId)).toBe(false);
+          bundleIds.add(bundleId);
+        }
+
+        // Sensitive negative controls: moving a tariff to the wrong route or
+        // inflating one FX leg must fail the same corridor-level oracle.
+        const first = frozenCargo[0]!;
+        const otherBundle = [...bundleIds].find(id =>
+          id !== phase7.find(tx => tx.type === "SHIPMENT_DISPATCH" &&
+            tx.destinationRegionId === first.destinationRegionId)!.bundleId)!;
+        const wrongTariff = phase7.map(tx =>
+          tx.type === "IMPORT_TARIFF" && tx.destinationRegionId === first.destinationRegionId
+            ? { ...tx, bundleId: otherBundle as NonNullable<typeof tx.bundleId> } : tx);
+        expect(() => verifyCorridor(wrongTariff, first)).toThrow();
+        const inflatedFx = phase7.map(tx =>
+          tx.type === "FX_INPUT" && tx.fxSettlementId === first.fxSettlementId
+            ? { ...tx, moneyAmount: tx.moneyAmount! + 1 } : tx);
+        expect(() => verifyCorridor(inflatedFx, first)).toThrow();
+
+        const inputs = phase7.filter(tx => tx.type === "FX_INPUT");
+        const outputs = phase7.filter(tx => tx.type === "FX_OUTPUT");
+        expect(inputs).toHaveLength(2);
+        expect(outputs).toHaveLength(2);
+        const beforePool = before.monetaryAuthorities.get(f.chosen.authorityId)!
+          .fxPools.get(f.chosen.poolId)!;
+        const afterPool = after.monetaryAuthorities.get(f.chosen.authorityId)!
+          .fxPools.get(f.chosen.poolId)!;
+        for (const currency of f.currencies) {
+          const expectedDelta = inputs.filter(tx => tx.currencyId === currency)
+            .reduce((sum, tx) => sum + tx.moneyAmount!, 0) -
+            outputs.filter(tx => tx.currencyId === currency)
+              .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+          expect((afterPool.cash.get(currency) ?? 0) - (beforePool.cash.get(currency) ?? 0))
+            .toBeCloseTo(expectedDelta, 6);
+        }
+
+        // Compare the actual Phase-7 snapshots, excluding Phase-4 local
+        // trading and Phase-5 payroll, so only these two settled corridors
+        // explain the observed buyer debits, seller credit and State receipts.
+        const seller = frozenCargo[0]!.seller;
+        expect(seller.type).toBe("PRODUCTION_UNIT");
+        expect(frozenCargo.every(cargo =>
+          JSON.stringify(cargo.seller) === JSON.stringify(seller))).toBe(true);
+        if (seller.type !== "PRODUCTION_UNIT") throw new Error("Expected production seller");
+        const invoiceCurrency = frozenCargo[0]!.invoiceCurrencyId;
+        const sellerBefore = before.productionUnits.get(seller.productionUnitId)!
+          .wallet.get(invoiceCurrency) ?? 0;
+        const sellerAfter = after.productionUnits.get(seller.productionUnitId)!
+          .wallet.get(invoiceCurrency) ?? 0;
+        expect(sellerAfter - sellerBefore).toBeCloseTo(
+          outputs.reduce((sum, tx) => sum + tx.moneyAmount!, 0), 6);
+        const buyerIds = new Set<string>();
+        for (const cargo of frozenCargo) {
+          expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+          if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") {
+            throw new Error("Expected production buyer");
+          }
+          const buyerId = cargo.beneficialOwner.productionUnitId;
+          expect(buyerIds.has(buyerId)).toBe(false);
+          buyerIds.add(buyerId);
+          const from = before.productionUnits.get(buyerId)!
+            .wallet.get(cargo.buyerPaymentCurrencyId) ?? 0;
+          const to = after.productionUnits.get(buyerId)!
+            .wallet.get(cargo.buyerPaymentCurrencyId) ?? 0;
+          const expectedDebit = cargo.buyerGoodsPaymentAmount +
+            cargo.transportFeeAmount + cargo.tariffAmount + cargo.consumptionTaxAmount;
+          expect(from - to).toBeCloseTo(expectedDebit, 6);
+        }
+        for (const [stateId, state] of before.states) {
+          for (const currency of f.currencies) {
+            const expectedReceipts = phase7.filter(tx =>
+              ["TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"].includes(tx.type) &&
+              tx.destination?.type === "STATE" &&
+              tx.destination.stateId === stateId && tx.currencyId === currency)
+              .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+            const beforeCash = state.treasury.get(currency) ?? 0;
+            const afterCash = after.states.get(stateId)!.treasury.get(currency) ?? 0;
+            expect(afterCash - beforeCash).toBeCloseTo(expectedReceipts, 6);
+          }
+        }
+      } else {
+        // Delivery and closed borders must not replay dispatch FX or tariffs.
+        expect(phase7.filter(tx => paymentTypes.includes(tx.type) ||
+          tx.type === "TRADE_GOODS_SALE" || tx.type === "SHIPMENT_DISPATCH"))
+          .toHaveLength(0);
+        expect(after.monetaryAuthorities).toEqual(before.monetaryAuthorities);
+      }
+      const due = frozenCargo.filter(cargo => cargo.arrivalTick === tick);
+      const deliveries = result.context.transactions.filter(tx =>
+        tx.type === "SHIPMENT_DELIVERY");
+      expect(deliveries).toHaveLength(due.length);
+      for (const cargo of due) {
+        const receipt = deliveries.find(tx =>
+          tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id);
+        expect(receipt).toMatchObject({
+          tick, phase: 1, goodId: cargo.goodId, quantity: cargo.quantity,
+          destination: cargo.beneficialOwner,
+        });
+        expect(receipt?.moneyAmount).toBeUndefined();
+      }
+      expect(result.world.shipments?.size ?? 0)
+        .toBe(frozenCargo.filter(cargo => cargo.arrivalTick > tick).length);
+      normalWorld = result.world;
+      shuffledWorld = shuffled.world;
+    }
+    expect(normalWorld.shipments?.size ?? 0).toBe(0);
+  });
+
+
 });
