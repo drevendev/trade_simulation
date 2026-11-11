@@ -1525,4 +1525,133 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     expect(deliveryCount).toBe(cargos.length);
   });
 
+
+  it("applies concurrent destination-State tariff rates to distinct border corridors", () => {
+    const f = fixture();
+    const firstLink = f.world.transportLinks.get(f.links[0]!)!;
+    const secondLink = f.world.transportLinks.get(f.links[1]!)!;
+    const origin = f.world.regions.get(firstLink.fromRegionId)!;
+    const firstDestination = f.world.regions.get(firstLink.toRegionId)!;
+    const secondDestination = f.world.regions.get(secondLink.toRegionId)!;
+    const firstImporter = firstDestination.controllerStateId!;
+    // A border change without currency redenomination: one Beta-currency
+    // destination is now governed by a third State. Both FX corridors remain
+    // funded by the same pool, but the two import governments have different laws.
+    const secondImporter = [...f.world.states.keys()].find(id =>
+      id !== origin.controllerStateId && id !== firstImporter)!;
+    expect(secondImporter).toBeDefined();
+    const opening: WorldState = {
+      ...f.world,
+      regions: new Map([...f.world.regions].map(([id, region]) =>
+        [id, id === secondDestination.regionId
+          ? { ...region, controllerStateId: secondImporter }
+          : region] as const)),
+    };
+    expect(opening.regions.get(secondDestination.regionId)!.settlementCurrencyId)
+      .toBe(firstDestination.settlementCurrencyId);
+    const rates = new Map([[firstImporter, 0.25], [secondImporter, 0.10]]);
+    const scenario: ReturnType<typeof fixture> = {
+      ...f,
+      world: opening,
+      options: {
+        ...f.options,
+        phase1TariffLawProvider: query =>
+          query.goodId === IRON ? rates.get(query.destinationStateId) ?? 0 : 0,
+      },
+    };
+    const openingIron = totalIron(opening);
+    const openingCash = f.currencies.map(currency => totalCash(opening, currency));
+    const phase7Snapshots: { before: WorldState; after: WorldState }[] = [];
+    const normal = run(scenario, opening, true, 7, (phase, before, after) => {
+      if (phase === 7) phase7Snapshots.push({ before, after });
+    });
+    const shuffled = run(scenario, reordered(opening));
+    expect(phase7Snapshots).toHaveLength(1);
+    for (const result of [normal, shuffled]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(totalIron(result.world)).toBeCloseTo(openingIron, 6);
+      for (const [index, currency] of f.currencies.entries()) {
+        expect(totalCash(result.world, currency)).toBeCloseTo(openingCash[index]!, 5);
+      }
+      for (const [stateId, rate] of rates) {
+        expect(result.context.phase1ImportTariffs?.ratesByDestinationStateGood
+          .get(phase7ImportTariffKey(stateId, IRON))).toBe(rate);
+      }
+    }
+    const cargos = [...(normal.world.shipments?.values() ?? [])];
+    expect(cargos).toHaveLength(2);
+    expect(new Set(cargos.map(c => c.transportLinkId))).toEqual(new Set(f.links));
+    expect(new Set(cargos.map(c =>
+      opening.regions.get(c.destinationRegionId)!.controllerStateId)))
+      .toEqual(new Set([firstImporter, secondImporter]));
+    const pool = opening.monetaryAuthorities.get(f.chosen.authorityId)!
+      .fxPools.get(f.chosen.poolId)!;
+
+    // Recompute each duty from the independently configured law, opening FX
+    // spot rate, actual paid cargo and transport fee; never trust journal totals.
+    const verify = (journal: typeof normal.context.transactions) => {
+      const entries = journal.filter(tx => tx.phase === 7 && tx.type === "IMPORT_TARIFF");
+      expect(entries).toHaveLength(cargos.length);
+      for (const cargo of cargos) {
+        const importer = opening.regions.get(cargo.destinationRegionId)!.controllerStateId!;
+        const sourceInvoice = cargo.sellerNetUnitPrice * cargo.quantity;
+        const converted = cargo.invoiceCurrencyId === pool.baseCurrencyId
+          ? sourceInvoice * pool.spotRateQuotePerBase
+          : sourceInvoice / pool.spotRateQuotePerBase;
+        const due = (converted + cargo.transportFeeAmount) * rates.get(importer)!;
+        expect(cargo.tariffAmount).toBeCloseTo(due, 6);
+        const dispatches = journal.filter(tx =>
+          tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH" &&
+          tx.sourceRegionId === cargo.originRegionId &&
+          tx.destinationRegionId === cargo.destinationRegionId);
+        expect(dispatches).toHaveLength(1);
+        const booked = entries.filter(tx => tx.bundleId === dispatches[0]!.bundleId);
+        expect(booked).toHaveLength(1);
+        expect(booked[0]!.moneyAmount).toBeCloseTo(due, 6);
+        expect(booked[0]!.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+        expect(booked[0]!.source).toEqual(cargo.beneficialOwner);
+        expect(booked[0]!.destination).toEqual({ type: "STATE", stateId: importer });
+      }
+    };
+    verify(normal.context.transactions);
+    verify(shuffled.context.transactions);
+    expect(shuffled.context.transactions).toEqual(normal.context.transactions);
+    expect(shuffled.world.shipments).toEqual(normal.world.shipments);
+    expect(shuffled.world.states).toEqual(normal.world.states);
+    expect(shuffled.world.productionUnits).toEqual(normal.world.productionUnits);
+    expect(shuffled.world.monetaryAuthorities).toEqual(normal.world.monetaryAuthorities);
+
+    // Actual treasury increments across Phase 7 must go to the two separate
+    // jurisdictions, even though both routes pay in the same buyer currency.
+    const { before, after } = phase7Snapshots[0]!;
+    for (const [stateId] of rates) {
+      const currency = firstDestination.settlementCurrencyId;
+      const expected = cargos.reduce((sum, cargo) => {
+        const importer = opening.regions.get(cargo.destinationRegionId)!.controllerStateId;
+        const feeReceiver = opening.transportLinks.get(cargo.transportLinkId)!.feeReceiver;
+        return sum + (importer === stateId
+          ? cargo.tariffAmount + cargo.consumptionTaxAmount : 0) +
+          (feeReceiver?.type === "STATE" && feeReceiver.stateId === stateId
+            ? cargo.transportFeeAmount : 0);
+      }, 0);
+      const actual = (after.states.get(stateId)!.treasury.get(currency) ?? 0) -
+        (before.states.get(stateId)!.treasury.get(currency) ?? 0);
+      expect(actual).toBeCloseTo(expected, 6);
+    }
+
+    // Negative control: redirect one correctly sized duty to the other
+    // government; conservation still looks fine, but legality must fail.
+    let corrupted = false;
+    const diverted = normal.context.transactions.map(tx => {
+      if (corrupted || tx.phase !== 7 || tx.type !== "IMPORT_TARIFF" ||
+          tx.destination?.type !== "STATE" || tx.destination.stateId !== firstImporter) return tx;
+      corrupted = true;
+      return { ...tx, destination: { type: "STATE" as const, stateId: secondImporter } };
+    });
+    expect(corrupted).toBe(true);
+    expect(() => verify(diverted)).toThrow();
+  });
+
 });
