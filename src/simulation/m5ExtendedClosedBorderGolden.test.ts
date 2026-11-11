@@ -907,7 +907,7 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     const openingCash = f.currencies.map(currency => totalCash(opening, currency));
     let normalWorld = opening;
     let shuffledWorld = reordered(opening);
-    let frozenCargo: NonNullable<WorldState["shipments"]> extends Map<unknown, infer T> ? T[] : never = [];
+    let frozenCargo = [...(opening.shipments?.values() ?? [])];
 
     for (let tick = 7; tick <= 12; tick++) {
       const phase7Snapshots: { before: WorldState; after: WorldState }[] = [];
