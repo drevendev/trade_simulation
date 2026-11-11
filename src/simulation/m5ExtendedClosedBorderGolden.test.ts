@@ -5,6 +5,7 @@
  * the same opening economy constructed in reverse keyed-registry order.
  * The full acceptance gate remains PARTIAL; this does not invent economics.
  */
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
@@ -216,6 +217,50 @@ function reordered(world: WorldState): WorldState {
   };
 }
 
+/**
+ * Test-only content-sensitive economic replay fingerprint, NOT the canonical
+ * run identity. Sort unordered keyed registries recursively, while preserving
+ * transaction sequence and genuinely ordered route collections.
+ *
+ * Hashing the actual stock and receipt contents catches a drift that comparing
+ * only tick numbers or transaction counts would silently miss.
+ */
+function economicReplayFingerprint(
+  tick: number,
+  world: WorldState,
+  transactions: ReturnType<typeof run>["context"]["transactions"],
+): string {
+  const normalize = (value: unknown): unknown => {
+    if (value instanceof Map) {
+      return [...value].sort(([a], [b]) =>
+        String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0,
+      ).map(([key, entry]) => [key, normalize(entry)]);
+    }
+    if (Array.isArray(value)) return value.map(normalize);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value)
+        .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+        .map(([key, entry]) => [key, normalize(entry)]));
+    }
+    return value;
+  };
+  const economic = {
+    tick,
+    transactions,
+    regions: world.regions,
+    states: world.states,
+    clans: world.clans,
+    cohorts: world.cohorts,
+    productionUnits: world.productionUnits,
+    markets: world.markets,
+    monetaryAuthorities: world.monetaryAuthorities,
+    transportLinks: world.transportLinks,
+    shipments: world.shipments,
+    pendingTransitions: world.pendingTransitions,
+  };
+  return createHash("sha256").update(JSON.stringify(normalize(economic))).digest("hex");
+}
+
 describe("M5 #676: extended multi-tick physical and financial replay", () => {
   it("preserves a two-route paid cargo lifecycle across 16 ticks of border closure", () => {
     const f = fixture();
@@ -374,6 +419,10 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
       expect(reversed.world.markets).toEqual(normal.world.markets);
       expect(reversed.world.monetaryAuthorities).toEqual(normal.world.monetaryAuthorities);
       expect(reversed.world.states).toEqual(normal.world.states);
+      const fingerprint = economicReplayFingerprint(tick, normal.world, normal.context.transactions);
+      expect(fingerprint).toMatch(/^[a-f0-9]{64}$/);
+      expect(economicReplayFingerprint(tick, reversed.world, reversed.context.transactions))
+        .toBe(fingerprint);
 
       const phase7 = normal.context.transactions.filter(tx => tx.phase === 7);
       const dispatches = phase7.filter(tx => tx.type === "SHIPMENT_DISPATCH");
@@ -387,6 +436,28 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
         expect(paidOutputs).toHaveLength(2);
         expect(paidInputs).toHaveLength(2);
         expect(tariffReceipts).toHaveLength(2);
+        // Both controls preserve tick and transaction count. A timestamp-
+        // or count-only hash would miss a forged payment or shifted live cash.
+        const forgedPayment = normal.context.transactions.map(tx =>
+          tx === paidOutputs[0]
+            ? { ...tx, moneyAmount: tx.moneyAmount! + 1 } : tx);
+        expect(forgedPayment).not.toEqual(normal.context.transactions);
+        expect(economicReplayFingerprint(tick, normal.world, forgedPayment))
+          .not.toBe(fingerprint);
+        const firstUnit = [...normal.world.productionUnits.values()][0]!;
+        const walletCurrency = [...firstUnit.wallet.keys()][0]!;
+        const changedWorld: WorldState = {
+          ...normal.world,
+          productionUnits: new Map(normal.world.productionUnits).set(
+            firstUnit.productionUnitId, {
+              ...firstUnit,
+              wallet: new Map(firstUnit.wallet)
+                .set(walletCurrency, firstUnit.wallet.get(walletCurrency)! + 1),
+            },
+          ),
+        };
+        expect(economicReplayFingerprint(tick, changedWorld, normal.context.transactions))
+          .not.toBe(fingerprint);
         const cargos = [...(normal.world.shipments?.values() ?? [])];
         expect(cargos).toHaveLength(2);
         expect(new Set(cargos.map(cargo => cargo.transportLinkId)))
