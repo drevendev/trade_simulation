@@ -966,6 +966,14 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
             expect(entries).toHaveLength(1);
             return entries[0]!;
           };
+          // A frozen Phase-1 destination controller, not a journal entry or
+          // a cargo-reported tax recipient, owns these public receipts.
+          const importingRegion = opening.regions.get(cargo.destinationRegionId);
+          expect(importingRegion).toBeDefined();
+          const importerStateId = importingRegion!.controllerStateId;
+          expect(importerStateId).not.toBeNull();
+          const legalTreasury = { type: "STATE" as const, stateId: importerStateId! };
+          const linkFeeRecipient = opening.transportLinks.get(cargo.transportLinkId)?.feeReceiver;
           const charge = (type: string, amount: number) => {
             const entries = journal.filter(tx =>
               tx.bundleId === bundleId && tx.type === type);
@@ -975,6 +983,9 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
             if (entries.length > 0) {
               expect(entries[0]!.currencyId).toBe(cargo.buyerPaymentCurrencyId);
               expect(entries[0]!.source).toEqual(cargo.beneficialOwner);
+              expect(entries[0]!.destination).toEqual(
+                type === "TRANSPORT_FEE" ? linkFeeRecipient : legalTreasury,
+              );
             }
           };
           const invoice = one("TRADE_GOODS_SALE");
@@ -1017,6 +1028,23 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
           tx.type === "FX_INPUT" && tx.fxSettlementId === first.fxSettlementId
             ? { ...tx, moneyAmount: tx.moneyAmount! + 1 } : tx);
         expect(() => verifyCorridor(inflatedFx, first)).toThrow();
+        const originState = opening.regions.get(first.originRegionId)!.controllerStateId;
+        const destinationState = opening.regions.get(first.destinationRegionId)!.controllerStateId;
+        expect(originState).not.toBeNull();
+        expect(originState).not.toBe(destinationState);
+        const firstBundleId = phase7.find(tx =>
+          tx.type === "SHIPMENT_DISPATCH" &&
+          tx.destinationRegionId === first.destinationRegionId)!.bundleId;
+        for (const type of ["IMPORT_TARIFF", "CONSUMPTION_TAX"] as const) {
+          // A journal can still balance if a public charge is diverted to the
+          // wrong State. Both independently authorized recipients must be checked.
+          const diverted = phase7.map(tx =>
+            tx.bundleId === firstBundleId && tx.type === type
+              ? { ...tx, destination: { type: "STATE" as const, stateId: originState! } }
+              : tx);
+          expect(diverted).not.toEqual(phase7);
+          expect(() => verifyCorridor(diverted, first)).toThrow();
+        }
 
         const inputs = phase7.filter(tx => tx.type === "FX_INPUT");
         const outputs = phase7.filter(tx => tx.type === "FX_OUTPUT");
@@ -1069,11 +1097,19 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
         }
         for (const [stateId, state] of before.states) {
           for (const currency of f.currencies) {
-            const expectedReceipts = phase7.filter(tx =>
-              ["TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"].includes(tx.type) &&
-              tx.destination?.type === "STATE" &&
-              tx.destination.stateId === stateId && tx.currencyId === currency)
-              .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+            // This oracle is independent from the journal's destination
+            // claims: even a consistently misrouted but balanced tax posting
+            // must fail against the frozen legal importer and link fee owner.
+            const expectedReceipts = frozenCargo.reduce((sum, cargo) => {
+              if (cargo.buyerPaymentCurrencyId !== currency) return sum;
+              const controller = opening.regions.get(cargo.destinationRegionId)!.controllerStateId;
+              const feeOwner = opening.transportLinks.get(cargo.transportLinkId)!.feeReceiver;
+              return sum +
+                (controller === stateId
+                  ? cargo.tariffAmount + cargo.consumptionTaxAmount : 0) +
+                (feeOwner?.type === "STATE" && feeOwner.stateId === stateId
+                  ? cargo.transportFeeAmount : 0);
+            }, 0);
             const beforeCash = state.treasury.get(currency) ?? 0;
             const afterCash = after.states.get(stateId)!.treasury.get(currency) ?? 0;
             expect(afterCash - beforeCash).toBeCloseTo(expectedReceipts, 6);
