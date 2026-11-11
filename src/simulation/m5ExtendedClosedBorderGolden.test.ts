@@ -11,6 +11,7 @@ import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { GoodId, TransportLinkId } from "../domain/id";
 import type { PhaseHandler } from "./tickOrchestrator";
+import { effectiveTransportLinkCapacity } from "./transportCapacity";
 import { executeM5AutonomousRegionalTradeTick, type M5AutonomousRegionalTradeOptions } from "./m5AutonomousRegionalTradeTick";
 import { buildInitialWorld, type WorldState, type ProductionUnitState, type RegionState } from "./worldState";
 
@@ -852,6 +853,10 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
         } : link,
       ] as const)),
     };
+    const measuredCapacity = effectiveTransportLinkCapacity(
+      restrictedWorld.transportLinks.get(restrictedLink)!, 1,
+    );
+    expect(measuredCapacity).toBeCloseTo(physicalLimit, 10);
     const normal = run(f, restrictedWorld);
     const shuffled = run(f, reordered(restrictedWorld));
     const cargo = [...(normal.world.shipments?.values() ?? [])];
@@ -860,7 +865,7 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     const restrictedCargo = cargo.find(c => c.transportLinkId === restrictedLink)!;
     const otherCargo = cargo.find(c => c.transportLinkId === unrestrictedLink)!;
     const assertPhysicalBudget = (quantity: number) =>
-      expect(quantity * ironWeight).toBeLessThanOrEqual(physicalLimit + 1e-8);
+      expect(quantity * ironWeight).toBeLessThanOrEqual(measuredCapacity + 1e-8);
     assertPhysicalBudget(restrictedCargo.quantity);
     expect(restrictedCargo.quantity).toBeGreaterThan(0);
     expect(restrictedCargo.quantity).toBeLessThan(initialRestricted.quantity);
