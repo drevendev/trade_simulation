@@ -1144,4 +1144,107 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
   });
 
 
+  it("settles a cross-currency route's transport fee to its private Cohort owner, not a treasury", () => {
+    const f = fixture();
+    const privateLinkId = f.links[0]!;
+    const privateLink = f.world.transportLinks.get(privateLinkId)!;
+    const sourceRegion = f.world.regions.get(privateLink.fromRegionId)!;
+    const feeCohort = [...f.world.cohorts.values()].find(cohort =>
+      cohort.seed.regionKey === sourceRegion.seed.key);
+    expect(feeCohort).toBeDefined();
+    const privateReceiver = { type: "COHORT" as const, cohortId: feeCohort!.cohortId };
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
+        [id, id === privateLinkId ? { ...link, feeReceiver: privateReceiver } : link] as const)),
+    };
+    const remainingLink = opening.transportLinks.get(f.links[1]!)!;
+    expect(remainingLink.feeReceiver?.type).toBe("STATE");
+
+    const snapshots: { before: WorldState; after: WorldState }[] = [];
+    const normal = run(f, opening, true, 7, (phase, before, after) => {
+      if (phase === 7) snapshots.push({ before, after });
+    });
+    const shuffled = run(f, reordered(opening));
+    expect(snapshots).toHaveLength(1);
+    for (const result of [normal, shuffled]) {
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(totalIron(result.world)).toBeCloseTo(totalIron(opening), 6);
+      for (const currency of f.currencies) {
+        expect(totalCash(result.world, currency)).toBeCloseTo(totalCash(opening, currency), 5);
+      }
+    }
+    expect(shuffled.context.transactions).toEqual(normal.context.transactions);
+    expect(shuffled.world.cohorts).toEqual(normal.world.cohorts);
+    expect(shuffled.world.states).toEqual(normal.world.states);
+    expect(shuffled.world.shipments).toEqual(normal.world.shipments);
+    expect(shuffled.world.monetaryAuthorities).toEqual(normal.world.monetaryAuthorities);
+
+    const cargos = [...(normal.world.shipments?.values() ?? [])];
+    expect(cargos).toHaveLength(2);
+    expect(new Set(cargos.map(cargo => cargo.transportLinkId))).toEqual(new Set(f.links));
+    const privateCargo = cargos.find(cargo => cargo.transportLinkId === privateLinkId)!;
+    expect(privateCargo.transportFeeAmount).toBeGreaterThan(0);
+    expect(cargos.find(cargo => cargo.transportLinkId !== privateLinkId)!.transportFeeAmount)
+      .toBeGreaterThan(0);
+    const phase7 = normal.context.transactions.filter(tx => tx.phase === 7);
+    const dispatch = phase7.filter(tx =>
+      tx.type === "SHIPMENT_DISPATCH" &&
+      tx.destinationRegionId === privateCargo.destinationRegionId &&
+      tx.sourceRegionId === privateCargo.originRegionId);
+    expect(dispatch).toHaveLength(1);
+    const privateBundleId = dispatch[0]!.bundleId;
+    expect(privateBundleId).toBeDefined();
+    const verifyPrivateFee = (journal: typeof phase7) => {
+      const entries = journal.filter(tx => tx.type === "TRANSPORT_FEE" &&
+        tx.bundleId === privateBundleId);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.destination).toEqual(privateReceiver);
+      expect(entries[0]!.source).toEqual(privateCargo.beneficialOwner);
+      expect(entries[0]!.currencyId).toBe(privateCargo.buyerPaymentCurrencyId);
+      expect(entries[0]!.moneyAmount).toBeCloseTo(privateCargo.transportFeeAmount, 6);
+    };
+    verifyPrivateFee(phase7);
+
+    // A financially balanced journal can send the correct amount to the wrong
+    // recipient. The independent link owner must reject that misdirection.
+    const importerStateId = opening.regions.get(privateCargo.destinationRegionId)!
+      .controllerStateId!;
+    const diverted = phase7.map(tx =>
+      tx.type === "TRANSPORT_FEE" && tx.bundleId === privateBundleId
+        ? { ...tx, destination: { type: "STATE" as const, stateId: importerStateId } }
+        : tx);
+    expect(diverted).not.toEqual(phase7);
+    expect(() => verifyPrivateFee(diverted)).toThrow();
+
+    const { before, after } = snapshots[0]!;
+    const buyerCurrency = privateCargo.buyerPaymentCurrencyId;
+    const beforePrivate = before.cohorts.get(privateReceiver.cohortId)!.wallet.get(buyerCurrency) ?? 0;
+    const afterPrivate = after.cohorts.get(privateReceiver.cohortId)!.wallet.get(buyerCurrency) ?? 0;
+    const verifyPrivateWallet = (expected: number) =>
+      expect(afterPrivate - beforePrivate).toBeCloseTo(expected, 6);
+    verifyPrivateWallet(privateCargo.transportFeeAmount);
+    expect(() => verifyPrivateWallet(privateCargo.transportFeeAmount + 1)).toThrow();
+
+    // Derive legal public receipts from opening jurisdictions and links, never
+    // from journal destinations. Only the other route's fee belongs to a State.
+    for (const [stateId, state] of before.states) {
+      for (const currency of f.currencies) {
+        const expected = cargos.reduce((sum, cargo) => {
+          if (cargo.buyerPaymentCurrencyId !== currency) return sum;
+          const importer = opening.regions.get(cargo.destinationRegionId)!.controllerStateId;
+          const receiver = opening.transportLinks.get(cargo.transportLinkId)!.feeReceiver;
+          return sum + (importer === stateId
+            ? cargo.tariffAmount + cargo.consumptionTaxAmount : 0) +
+            (receiver?.type === "STATE" && receiver.stateId === stateId
+              ? cargo.transportFeeAmount : 0);
+        }, 0);
+        const actual = (after.states.get(stateId)!.treasury.get(currency) ?? 0) -
+          (state.treasury.get(currency) ?? 0);
+        expect(actual).toBeCloseTo(expected, 6);
+      }
+    }
+  });
+
 });
