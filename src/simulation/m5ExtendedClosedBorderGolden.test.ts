@@ -1410,4 +1410,119 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     expect(() => verify(taxed, taxRate, inflated)).toThrow();
   });
 
+
+  it("settles Phase-1 import tariffs once and never re-taxes cargo after a policy change", () => {
+    const f = fixture();
+    const rateAtDispatch = 0.25;
+    const withTariff = (rate: number): ReturnType<typeof fixture> => ({
+      ...f,
+      options: {
+        ...f.options,
+        phase1TariffLawProvider: query => query.goodId === IRON ? rate : 0,
+      },
+    });
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
+        [id, { ...link, travelTicks: 3 }] as const)),
+    };
+    const openingIron = totalIron(opening);
+    const openingCash = f.currencies.map(currency => totalCash(opening, currency));
+
+    // The import policy is frozen at dispatch. Customs payments occur before
+    // goods enter transit, not when the cargo reaches the destination.
+    const dispatched = run(withTariff(rateAtDispatch), opening, true, 7);
+    const dispatchedShuffled = run(withTariff(rateAtDispatch), reordered(opening), true, 7);
+    for (const result of [dispatched, dispatchedShuffled]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+    }
+    const cargos = [...(dispatched.world.shipments?.values() ?? [])];
+    expect(cargos).toHaveLength(2);
+    expect(new Set(cargos.map(c => c.transportLinkId))).toEqual(new Set(f.links));
+    expect(cargos.map(cargo => cargo.arrivalTick)).toEqual([10, 10]);
+    const paidTariffs = dispatched.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "IMPORT_TARIFF");
+    expect(paidTariffs).toHaveLength(2);
+    for (const cargo of cargos) {
+      const importerStateId = opening.regions.get(cargo.destinationRegionId)!.controllerStateId!;
+      expect(dispatched.context.phase1ImportTariffs?.ratesByDestinationStateGood
+        .get(phase7ImportTariffKey(importerStateId, IRON))).toBe(rateAtDispatch);
+      expect(cargo.tariffAmount).toBeGreaterThan(0);
+    }
+    expect(dispatchedShuffled.context.transactions).toEqual(dispatched.context.transactions);
+    expect(dispatchedShuffled.world.shipments).toEqual(dispatched.world.shipments);
+
+    const assertNoNewTradeCharges = (
+      journal: typeof dispatched.context.transactions,
+    ) => expect(journal.filter(tx =>
+      tx.phase === 7 && [
+        "SHIPMENT_DISPATCH", "FX_INPUT", "FX_OUTPUT",
+        "IMPORT_TARIFF", "CONSUMPTION_TAX", "TRANSPORT_FEE",
+      ].includes(tx.type))).toHaveLength(0);
+
+    let normalWorld = dispatched.world;
+    let shuffledWorld = dispatchedShuffled.world;
+    let deliveryCount = 0;
+    for (let tick = 8; tick <= 12; tick++) {
+      // The border closes and the import tariff is abolished. Previously
+      // settled shipments must still deliver without rebooking or refunding.
+      const normal = run(withTariff(0), normalWorld, false, tick);
+      const shuffled = run(withTariff(0), shuffledWorld, false, tick);
+      for (const result of [normal, shuffled]) {
+        expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+        expect(result.phaseBoundaryError).toBeUndefined();
+        expect(result.reconciliationErrors).toBeNull();
+        assertNoNewTradeCharges(result.context.transactions);
+        expect(totalIron(result.world)).toBeCloseTo(openingIron, 6);
+        for (const [i, currency] of f.currencies.entries()) {
+          expect(totalCash(result.world, currency)).toBeCloseTo(openingCash[i]!, 5);
+        }
+        for (const cargo of cargos) {
+          const importerStateId = opening.regions
+            .get(cargo.destinationRegionId)!.controllerStateId!;
+          expect(result.context.phase1ImportTariffs?.ratesByDestinationStateGood
+            .get(phase7ImportTariffKey(importerStateId, IRON))).toBe(0);
+        }
+      }
+
+      const deliveries = normal.context.transactions.filter(tx =>
+        tx.phase === 1 && tx.type === "SHIPMENT_DELIVERY");
+      expect(deliveries).toHaveLength(tick === 10 ? cargos.length : 0);
+      for (const cargo of cargos) {
+        const matching = deliveries.filter(tx =>
+          tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id);
+        expect(matching).toHaveLength(tick === cargo.arrivalTick ? 1 : 0);
+        if (matching.length) {
+          expect(matching[0]).toMatchObject({
+            quantity: cargo.quantity,
+            destination: cargo.beneficialOwner,
+            sourceRegionId: cargo.originRegionId,
+            destinationRegionId: cargo.destinationRegionId,
+          });
+          expect(matching[0]!.moneyAmount).toBeUndefined();
+          deliveryCount++;
+        }
+      }
+      expect(normal.world.shipments?.size ?? 0).toBe(tick < 10 ? 2 : 0);
+      expect(shuffled.context.transactions).toEqual(normal.context.transactions);
+      expect(economicReplayFingerprint(tick, shuffled.world, shuffled.context.transactions))
+        .toBe(economicReplayFingerprint(tick, normal.world, normal.context.transactions));
+
+      // Negative control: a late positive tariff silently inserted in a
+      // balanced-looking journal must still fail the no-retroactive-charge oracle.
+      if (tick === 8) {
+        const forgedLateCharge = [
+          ...normal.context.transactions,
+          { ...paidTariffs[0]!, tick },
+        ];
+        expect(() => assertNoNewTradeCharges(forgedLateCharge)).toThrow();
+      }
+      normalWorld = normal.world;
+      shuffledWorld = shuffled.world;
+    }
+    expect(deliveryCount).toBe(cargos.length);
+  });
+
 });
