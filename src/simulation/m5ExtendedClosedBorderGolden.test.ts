@@ -824,4 +824,69 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     expect(world.shipments?.size ?? 0).toBe(0);
   });
 
+  it("shrinks only the physically constrained foreign corridor before paid dispatch", () => {
+    const f = fixture();
+    const unrestricted = run(f, f.world);
+    const initialCargo = [...(unrestricted.world.shipments?.values() ?? [])];
+    expect(initialCargo).toHaveLength(2);
+    const restrictedLink = f.links[0]!;
+    const unrestrictedLink = f.links[1]!;
+    const initialRestricted = initialCargo.find(c => c.transportLinkId === restrictedLink)!;
+    const initialOther = initialCargo.find(c => c.transportLinkId === unrestrictedLink)!;
+    expect(initialRestricted).toBeDefined();
+    expect(initialOther).toBeDefined();
+    const originalLink = f.world.transportLinks.get(restrictedLink)!;
+    expect(originalLink.seed.condition).toBeGreaterThan(0);
+    const ironWeight = baselineDefinitionPack.goods[IRON]!.cargoWeightPerUnit;
+    const physicalLimit = initialRestricted.quantity * ironWeight / 4;
+    expect(physicalLimit).toBeGreaterThan(0);
+
+    // Reduce only one link's physical cargo-weight budget, not its legality,
+    // FX reserves, seller stock, destination cash or the competing corridor.
+    const restrictedWorld: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) => [
+        id, id === restrictedLink ? {
+          ...link,
+          seed: { ...link.seed, baseCapacity: physicalLimit / link.seed.condition },
+        } : link,
+      ] as const)),
+    };
+    const normal = run(f, restrictedWorld);
+    const shuffled = run(f, reordered(restrictedWorld));
+    const cargo = [...(normal.world.shipments?.values() ?? [])];
+    expect(cargo).toHaveLength(2); // neither route is spuriously disabled
+    expect(new Set(cargo.map(c => c.transportLinkId))).toEqual(new Set(f.links));
+    const restrictedCargo = cargo.find(c => c.transportLinkId === restrictedLink)!;
+    const otherCargo = cargo.find(c => c.transportLinkId === unrestrictedLink)!;
+    const assertPhysicalBudget = (quantity: number) =>
+      expect(quantity * ironWeight).toBeLessThanOrEqual(physicalLimit + 1e-8);
+    assertPhysicalBudget(restrictedCargo.quantity);
+    expect(restrictedCargo.quantity).toBeGreaterThan(0);
+    expect(restrictedCargo.quantity).toBeLessThan(initialRestricted.quantity);
+    expect(otherCargo.quantity).toBeCloseTo(initialOther.quantity, 8);
+    expect(() => assertPhysicalBudget(initialRestricted.quantity)).toThrow();
+
+    for (const result of [normal, shuffled]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      const phase7 = result.context.transactions.filter(tx => tx.phase === 7);
+      for (const type of ["SHIPMENT_DISPATCH", "FX_INPUT", "FX_OUTPUT", "IMPORT_TARIFF"]) {
+        expect(phase7.filter(tx => tx.type === type)).toHaveLength(2);
+      }
+      expect(result.context.transactions.filter(tx => tx.phase === 4))
+        .toEqual(unrestricted.context.transactions.filter(tx => tx.phase === 4));
+      expect(totalIron(result.world)).toBeCloseTo(totalIron(restrictedWorld), 6);
+      for (const currency of f.currencies) {
+        expect(totalCash(result.world, currency))
+          .toBeCloseTo(totalCash(restrictedWorld, currency), 5);
+      }
+    }
+    expect(shuffled.context.transactions).toEqual(normal.context.transactions);
+    expect(shuffled.world.shipments).toEqual(normal.world.shipments);
+    expect(shuffled.world.productionUnits).toEqual(normal.world.productionUnits);
+    expect(shuffled.world.monetaryAuthorities).toEqual(normal.world.monetaryAuthorities);
+  });
+
 });
