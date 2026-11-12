@@ -1897,8 +1897,9 @@ describe("M5 #676: mid-run registry rehydration across overlapping paid cargo", 
       clans: new Map([...world.clans].reverse()),
       productionUnits: new Map([...world.productionUnits].reverse()),
       transportLinks: new Map([...world.transportLinks].reverse()),
-      shipments: world.shipments === undefined
-        ? undefined : new Map([...world.shipments].reverse()),
+      ...(world.shipments === undefined ? {} : {
+        shipments: new Map([...world.shipments].reverse()),
+      }),
       monetaryAuthorities: new Map([...world.monetaryAuthorities].reverse()
         .map(([id, authority]) => [id, {
           ...authority,
