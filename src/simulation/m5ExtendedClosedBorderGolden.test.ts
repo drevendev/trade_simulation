@@ -1909,7 +1909,10 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     const ironBefore = totalIron(opening);
     const cashBefore = f.currencies.map(currency => totalCash(opening, currency));
 
-    const first = run(f, opening, true, 7);
+    const phase7Snapshots: { before: WorldState; after: WorldState }[] = [];
+    const first = run(f, opening, true, 7, (phase, before, after) => {
+      if (phase === 7) phase7Snapshots.push({ before, after });
+    });
     const reorderedFirst = run(f, reordered(opening), true, 7);
     expect(first.reconciliationErrors).toBeNull();
     expect(first.context.transactions).toEqual(reorderedFirst.context.transactions);
@@ -1959,6 +1962,99 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
       }
     };
     verifyBundles(first.context.transactions);
+
+    // Reconcile physical Phase-7 money postings against frozen cargo claims,
+    // not against a journal that might itself contain balanced false payees.
+    // Both FX directions execute in one tick through the SAME finite pool.
+    expect(phase7Snapshots).toHaveLength(1);
+    const { before, after } = phase7Snapshots[0]!;
+    const assertExactSettlement = (openingPhase: WorldState, settledPhase: WorldState) => {
+      for (const [unitId, unit] of openingPhase.productionUnits) {
+        for (const currency of f.currencies) {
+          const expected = cargos.reduce((sum, cargo) => {
+            const sellerCredit = cargo.seller.type === "PRODUCTION_UNIT" &&
+              cargo.seller.productionUnitId === unitId &&
+              cargo.invoiceCurrencyId === currency
+                ? cargo.sellerNetUnitPrice * cargo.quantity : 0;
+            const buyerDebit = cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+              cargo.beneficialOwner.productionUnitId === unitId &&
+              cargo.buyerPaymentCurrencyId === currency
+                ? cargo.buyerGoodsPaymentAmount + cargo.transportFeeAmount +
+                  cargo.tariffAmount + cargo.consumptionTaxAmount : 0;
+            return sum + sellerCredit - buyerDebit;
+          }, 0);
+          const actual = (settledPhase.productionUnits.get(unitId)!.wallet.get(currency) ?? 0) -
+            (unit.wallet.get(currency) ?? 0);
+          expect(actual).toBeCloseTo(expected, 6);
+        }
+      }
+
+      for (const [stateId, state] of openingPhase.states) {
+        for (const currency of f.currencies) {
+          // Legal jurisdictions and fee recipients come from the opening world,
+          // independently of the tariff/fee journal's claimed destinations.
+          const expected = cargos.reduce((sum, cargo) => {
+            if (cargo.buyerPaymentCurrencyId !== currency) return sum;
+            const importer = opening.regions.get(cargo.destinationRegionId)!.controllerStateId;
+            const feeOwner = opening.transportLinks.get(cargo.transportLinkId)!.feeReceiver;
+            return sum + (importer === stateId
+              ? cargo.tariffAmount + cargo.consumptionTaxAmount : 0) +
+              (feeOwner?.type === "STATE" && feeOwner.stateId === stateId
+                ? cargo.transportFeeAmount : 0);
+          }, 0);
+          const actual = (settledPhase.states.get(stateId)!.treasury.get(currency) ?? 0) -
+            (state.treasury.get(currency) ?? 0);
+          expect(actual).toBeCloseTo(expected, 6);
+        }
+      }
+
+      const priorPool = openingPhase.monetaryAuthorities.get(f.chosen.authorityId)!
+        .fxPools.get(f.chosen.poolId)!;
+      const settledPool = settledPhase.monetaryAuthorities.get(f.chosen.authorityId)!
+        .fxPools.get(f.chosen.poolId)!;
+      for (const currency of f.currencies) {
+        // A bidirectional pool has BOTH an input and output in each currency:
+        // checking only one leg or aggregate global money misses netting errors.
+        const expected = cargos.reduce((sum, cargo) =>
+          sum + (cargo.buyerPaymentCurrencyId === currency
+            ? cargo.buyerGoodsPaymentAmount : 0) -
+            (cargo.invoiceCurrencyId === currency
+              ? cargo.sellerNetUnitPrice * cargo.quantity : 0), 0);
+        const actual = (settledPool.cash.get(currency) ?? 0) -
+          (priorPool.cash.get(currency) ?? 0);
+        expect(actual).toBeCloseTo(expected, 6);
+      }
+    };
+    assertExactSettlement(before, after);
+    expect(cargos[0]!.buyerPaymentCurrencyId).toBe(cargos[1]!.invoiceCurrencyId);
+
+    // Mutate two different live actor wallets with equal and opposite entries
+    // in the SAME currency. Total currency conservation still passes, but a
+    // per-payer/per-seller oracle must reject the misallocated payment.
+    const buyer = cargos[0]!.beneficialOwner;
+    const reverseSeller = cargos[1]!.seller;
+    if (buyer.type !== "PRODUCTION_UNIT" || reverseSeller.type !== "PRODUCTION_UNIT") {
+      throw new Error("Expected two production-unit payment owners");
+    }
+    expect(buyer.productionUnitId).not.toBe(reverseSeller.productionUnitId);
+    const shiftedCurrency = cargos[0]!.buyerPaymentCurrencyId;
+    const forgedUnits = new Map(after.productionUnits);
+    for (const change of [
+      { id: buyer.productionUnitId, amount: 1 },
+      { id: reverseSeller.productionUnitId, amount: -1 },
+    ]) {
+      const unit = forgedUnits.get(change.id)!;
+      forgedUnits.set(change.id, {
+        ...unit,
+        wallet: new Map(unit.wallet).set(
+          shiftedCurrency, (unit.wallet.get(shiftedCurrency) ?? 0) + change.amount,
+        ),
+      });
+    }
+    const falselyBalanced: WorldState = { ...after, productionUnits: forgedUnits };
+    expect(totalCash(falselyBalanced, shiftedCurrency))
+      .toBeCloseTo(totalCash(after, shiftedCurrency), 6);
+    expect(() => assertExactSettlement(before, falselyBalanced)).toThrow();
     // The oracle must reject a missing FX leg, not just count shipments.
     expect(() => verifyBundles(first.context.transactions.filter(
       tx => tx.type !== "FX_OUTPUT" || tx.currencyId !== f.currencies[1],
