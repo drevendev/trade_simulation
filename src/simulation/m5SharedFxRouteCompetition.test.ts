@@ -1962,3 +1962,115 @@ describe("M5 #676: mid-run registry rehydration across overlapping paid cargo", 
     expect(rehydrated.shipments?.size).toBe(0);
   });
 });
+
+describe("M5 #676: staggered route transit across overlapping FX-paid vintages", () => {
+  it("delivers four prepaid cargos in due-tick order, not dispatch or route order", () => {
+    const f = fixture();
+    // Two legal routes share an FX pool but have DIFFERENT travel times.
+    // Tick 7 and 8 each dispatch both routes; their four deliveries interleave
+    // over ticks 8, 9, 10, 11 instead of following dispatch order.
+    const travelByLink = new Map<TransportLinkId, number>([
+      [f.links[0]!, 3], [f.links[1]!, 1],
+    ]);
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) => [
+        id, { ...link, travelTicks: travelByLink.get(id)! },
+      ] as const)),
+    };
+    const paid: ReturnType<typeof assertPaidCargoReceipts>["cargos"] = [];
+    type TxList = ReturnType<typeof run>["context"]["transactions"];
+    const receiptsByTick = new Map<number, TxList>();
+    const verifyDue = (receipts: TxList, due: typeof paid) => {
+      expect(receipts).toHaveLength(due.length);
+      expect(new Set(receipts.map(tx => tx.reason))).toEqual(new Set(due.map(
+        cargo => "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id)));
+      for (const cargo of due) {
+        const matching = receipts.filter(tx =>
+          tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id);
+        expect(matching).toHaveLength(1);
+        expect(matching[0]).toMatchObject({
+          tick: cargo.arrivalTick, phase: 1, goodId: cargo.goodId,
+          quantity: cargo.quantity, destination: cargo.beneficialOwner,
+          sourceRegionId: cargo.originRegionId,
+          destinationRegionId: cargo.destinationRegionId,
+        });
+        expect(matching[0]!.moneyAmount).toBeUndefined();
+      }
+    };
+
+    let world = opening;
+    let phaseOneCount = 0;
+    for (const tick of [7, 8, 9, 10, 11]) {
+      const result = executeM5AutonomousRegionalTradeTick(
+        world, tick, households, (_phase, current) => current,
+        tick <= 8 ? f.options : {
+          ...f.options, phase1TradeLawProvider: () => undefined,
+        },
+        (phase, before, after, context) => {
+          if (phase !== 1) return;
+          phaseOneCount++;
+          const due = paid.filter(cargo => cargo.arrivalTick === tick);
+          const arrivals = context.transactions.filter(tx =>
+            tx.type === "SHIPMENT_DELIVERY");
+          verifyDue(arrivals, due);
+          receiptsByTick.set(tick, arrivals);
+          expect(after.monetaryAuthorities).toEqual(before.monetaryAuthorities);
+          expect(after.shipments?.size ?? 0)
+            .toBe((before.shipments?.size ?? 0) - due.length);
+          for (const cargo of due) {
+            expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+            if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") continue;
+            const id = cargo.beneficialOwner.productionUnitId;
+            const prior = before.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0;
+            const later = after.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0;
+            expect(later - prior).toBeCloseTo(cargo.quantity, 7);
+          }
+        },
+      );
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(totalIron(result.world)).toBeCloseTo(totalIron(opening), 7);
+      for (const currency of f.currencies) {
+        expect(totalCash(result.world, currency))
+          .toBeCloseTo(totalCash(opening, currency), 6);
+      }
+      if (tick <= 8) {
+        const current = assertPaidCargoReceipts(result, f.links, tick).cargos;
+        expect(current).toHaveLength(2);
+        for (const cargo of current) {
+          expect(cargo.arrivalTick)
+            .toBe(tick + travelByLink.get(cargo.transportLinkId)!);
+        }
+        paid.push(...current);
+      } else {
+        expect(result.context.transactions.filter(tx => tx.phase === 7 &&
+          ["FX_INPUT", "FX_OUTPUT", "SHIPMENT_DISPATCH", "TRADE_GOODS_SALE",
+            "IMPORT_TARIFF", "TRANSPORT_FEE"].includes(tx.type)))
+          .toHaveLength(0);
+      }
+      world = result.world;
+    }
+
+    expect(phaseOneCount).toBe(5);
+    expect(paid).toHaveLength(4);
+    expect(new Set(paid.map(cargo => cargo.id)).size).toBe(4);
+    expect(new Set(paid.map(cargo => cargo.fxSettlementId)).size).toBe(4);
+    expect(receiptsByTick.get(7)).toHaveLength(0);
+    for (const tick of [8, 9, 10, 11]) {
+      expect(receiptsByTick.get(tick)).toHaveLength(1);
+    }
+    expect(world.shipments?.size ?? 0).toBe(0);
+
+    // Sensitive owner negative control: an arrival booked to the other route's
+    // prepaid buyer would conserve aggregate goods but must fail the due oracle.
+    const dueAtTen = paid.filter(cargo => cargo.arrivalTick === 10);
+    const otherOwner = paid.find(cargo => cargo.arrivalTick === 8)!.beneficialOwner;
+    expect(otherOwner).not.toEqual(dueAtTen[0]!.beneficialOwner);
+    const forged = receiptsByTick.get(10)!.map(tx => ({
+      ...tx, destination: otherOwner,
+    }));
+    expect(() => verifyDue(forged, dueAtTen)).toThrow();
+  });
+});
