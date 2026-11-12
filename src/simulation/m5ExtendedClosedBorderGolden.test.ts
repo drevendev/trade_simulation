@@ -2109,4 +2109,112 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     }
   });
 
+  it("shares one directed physical corridor across two independently paid destination buyers", () => {
+    const f = fixture();
+    const linkId = f.links[0]!;
+    const originalLink = f.world.transportLinks.get(linkId)!;
+    const destination = f.world.regions.get(originalLink.toRegionId)!;
+    const otherDestination = f.world.regions.get(f.world.transportLinks.get(f.links[1]!)!.toRegionId)!;
+    expect(destination.settlementCurrencyId).toBe(otherDestination.settlementCurrencyId);
+
+    // Move the second ACTIVE importer into the first destination region.
+    // Both production buyers now compete for the very same directed link,
+    // good and origin seller; neither gets an independent cargo-weight budget.
+    const movedBuyer = [...f.world.productionUnits.values()].find(unit =>
+      unit.status === "ACTIVE" && unit.seed.regionKey === otherDestination.seed.key)!;
+    expect(movedBuyer).toBeDefined();
+    const relocated = {
+      ...movedBuyer,
+      seed: { ...movedBuyer.seed, regionKey: destination.seed.key },
+    };
+    const opening: WorldState = {
+      ...f.world,
+      productionUnits: new Map(f.world.productionUnits).set(relocated.productionUnitId, relocated),
+      transportLinks: new Map([[linkId, originalLink]]),
+      outgoingTransportLinkIdsByRegion: new Map([[originalLink.fromRegionId, [linkId]]]),
+    };
+    const singleCorridor = {
+      ...f,
+      world: opening,
+      links: [linkId],
+      options: {
+        ...f.options,
+        infrastructureFactors: new Map([[linkId, 1]]),
+        phase1TradeLawProvider: (query: Parameters<typeof f.options.phase1TradeLawProvider>[0]) =>
+          query.goodId === IRON && query.linkId === linkId ? null : undefined,
+      },
+    };
+    const baseline = run(singleCorridor, opening);
+    expect(baseline.phaseBoundaryError).toBeUndefined();
+    expect(baseline.reconciliationErrors).toBeNull();
+    const unrestricted = [...(baseline.world.shipments?.values() ?? [])];
+    expect(unrestricted).toHaveLength(2);
+    expect(new Set(unrestricted.map(cargo => cargo.transportLinkId))).toEqual(new Set([linkId]));
+    expect(new Set(unrestricted.map(cargo => JSON.stringify(cargo.beneficialOwner))).size).toBe(2);
+    expect(unrestricted.every(cargo => cargo.fxSettlementId !== undefined)).toBe(true);
+
+    const weight = baselineDefinitionPack.goods[IRON]!.cargoWeightPerUnit;
+    const baselineUse = unrestricted.reduce((sum, cargo) => sum + cargo.quantity * weight, 0);
+    expect(baselineUse).toBeGreaterThan(0);
+    const constrained: WorldState = {
+      ...opening,
+      transportLinks: new Map([[linkId, {
+        ...originalLink,
+        seed: {
+          ...originalLink.seed,
+          baseCapacity: baselineUse * 0.7 / originalLink.seed.condition,
+        },
+      }]]),
+    };
+    const physicalCapacity = effectiveTransportLinkCapacity(
+      constrained.transportLinks.get(linkId)!, 1,
+    );
+    expect(physicalCapacity).toBeCloseTo(baselineUse * 0.7, 8);
+    const openingIron = totalIron(constrained);
+    const openingCash = f.currencies.map(currency => totalCash(constrained, currency));
+    const limited = run(singleCorridor, constrained);
+    const reversed = run(singleCorridor, reordered(constrained));
+    const cargo = [...(limited.world.shipments?.values() ?? [])];
+    expect(cargo).toHaveLength(2);
+    expect(new Set(cargo.map(c => JSON.stringify(c.beneficialOwner))).size).toBe(2);
+
+    function assertSinglePhysicalBudget(shipments: typeof cargo): void {
+      expect(shipments).toHaveLength(2);
+      expect(shipments.every(c => c.transportLinkId === linkId && c.quantity > 0)).toBe(true);
+      const spent = shipments.reduce((sum, c) => sum + c.quantity * weight, 0);
+      expect(spent).toBeLessThanOrEqual(physicalCapacity + 1e-8);
+    }
+    assertSinglePhysicalBudget(cargo);
+    const constrainedUse = cargo.reduce((sum, c) => sum + c.quantity * weight, 0);
+    expect(constrainedUse).toBeLessThan(baselineUse);
+    expect(constrainedUse).toBeGreaterThan(0);
+    // Negative control: a second physical budget for either buyer cannot be
+    // hidden by individually valid shipments and a correct dispatch count.
+    const overbooked = [
+      { ...cargo[0]!, quantity: physicalCapacity / weight + 1 },
+      cargo[1]!,
+    ];
+    expect(() => assertSinglePhysicalBudget(overbooked)).toThrow();
+
+    for (const result of [limited, reversed]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      const transactions = result.context.transactions.filter(tx => tx.phase === 7);
+      for (const type of ["SHIPMENT_DISPATCH", "FX_INPUT", "FX_OUTPUT", "IMPORT_TARIFF"]) {
+        expect(transactions.filter(tx => tx.type === type)).toHaveLength(cargo.length);
+      }
+      expect(totalIron(result.world)).toBeCloseTo(openingIron, 6);
+      for (const [index, currency] of f.currencies.entries()) {
+        expect(totalCash(result.world, currency)).toBeCloseTo(openingCash[index]!, 5);
+      }
+    }
+    expect(reversed.context.transactions).toEqual(limited.context.transactions);
+    expect(reversed.world.shipments).toEqual(limited.world.shipments);
+    expect(reversed.world.productionUnits).toEqual(limited.world.productionUnits);
+    expect(economicReplayFingerprint(7, reversed.world, reversed.context.transactions))
+      .toBe(economicReplayFingerprint(7, limited.world, limited.context.transactions));
+  });
+
+
 });
