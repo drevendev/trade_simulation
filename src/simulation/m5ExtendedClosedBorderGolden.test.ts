@@ -1319,6 +1319,132 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     }
   });
 
+  it("credits a Clan-owned cross-currency corridor fee without diverting public tax receipts", () => {
+    const f = fixture();
+    const linkId = f.links[0]!;
+    const link = f.world.transportLinks.get(linkId)!;
+    const clan = [...f.world.clans.values()][0]!;
+    expect(clan).toBeDefined();
+    const feeOwner = { type: "CLAN" as const, clanId: clan.clanId };
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map(f.world.transportLinks).set(linkId, {
+        ...link, feeReceiver: feeOwner,
+      }),
+    };
+    const snapshots: { before: WorldState; after: WorldState }[] = [];
+    const settled = run(f, opening, true, 7, (phase, before, after) => {
+      if (phase === 7) snapshots.push({ before, after });
+    });
+    const reversed = run(f, reordered(opening));
+    expect(snapshots).toHaveLength(1);
+    for (const result of [settled, reversed]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(totalIron(result.world)).toBeCloseTo(totalIron(opening), 6);
+      for (const currency of f.currencies) {
+        expect(totalCash(result.world, currency))
+          .toBeCloseTo(totalCash(opening, currency), 5);
+      }
+    }
+    expect(reversed.context.transactions).toEqual(settled.context.transactions);
+    expect(reversed.world.clans).toEqual(settled.world.clans);
+    expect(reversed.world.states).toEqual(settled.world.states);
+    expect(reversed.world.shipments).toEqual(settled.world.shipments);
+
+    const cargos = [...(settled.world.shipments?.values() ?? [])];
+    expect(cargos).toHaveLength(2);
+    const privateCargo = cargos.find(cargo => cargo.transportLinkId === linkId)!;
+    expect(privateCargo).toBeDefined();
+    expect(privateCargo.transportFeeAmount).toBeGreaterThan(0);
+    const dispatch = settled.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH" &&
+      tx.sourceRegionId === privateCargo.originRegionId &&
+      tx.destinationRegionId === privateCargo.destinationRegionId);
+    expect(dispatch).toHaveLength(1);
+    const bundle = dispatch[0]!.bundleId;
+    expect(bundle).toBeDefined();
+
+    const { before, after } = snapshots[0]!;
+    const audit = (
+      finalWorld: WorldState,
+      journal: typeof settled.context.transactions,
+    ) => {
+      const fees = journal.filter(tx =>
+        tx.phase === 7 && tx.type === "TRANSPORT_FEE" && tx.bundleId === bundle);
+      expect(fees).toHaveLength(1);
+      expect(fees[0]).toMatchObject({
+        source: privateCargo.beneficialOwner, destination: feeOwner,
+        currencyId: privateCargo.buyerPaymentCurrencyId,
+      });
+      expect(fees[0]!.moneyAmount).toBeCloseTo(privateCargo.transportFeeAmount, 6);
+      for (const currency of f.currencies) {
+        const clanBefore = before.clans.get(clan.clanId)!.treasury.get(currency) ?? 0;
+        const clanAfter = finalWorld.clans.get(clan.clanId)!.treasury.get(currency) ?? 0;
+        const expected = currency === privateCargo.buyerPaymentCurrencyId
+          ? privateCargo.transportFeeAmount : 0;
+        expect(clanAfter - clanBefore).toBeCloseTo(expected, 6);
+      }
+      // Taxes follow the importer, but transport fees follow the configured
+      // live owner, even when that owner is not a State or local to the route.
+      for (const [stateId, state] of before.states) {
+        for (const currency of f.currencies) {
+          const expected = cargos.reduce((sum, cargo) => {
+            if (cargo.buyerPaymentCurrencyId !== currency) return sum;
+            const importer = opening.regions.get(cargo.destinationRegionId)!.controllerStateId;
+            const receiver = opening.transportLinks.get(cargo.transportLinkId)!.feeReceiver;
+            return sum + (importer === stateId
+              ? cargo.tariffAmount + cargo.consumptionTaxAmount : 0) +
+              (receiver?.type === "STATE" && receiver.stateId === stateId
+                ? cargo.transportFeeAmount : 0);
+          }, 0);
+          const actual = (finalWorld.states.get(stateId)!.treasury.get(currency) ?? 0) -
+            (state.treasury.get(currency) ?? 0);
+          expect(actual).toBeCloseTo(expected, 6);
+        }
+      }
+    };
+    audit(after, settled.context.transactions);
+
+    // A balanced but misdirected fee receipt and a money-conserving wallet
+    // diversion must BOTH fail this owner-based oracle.
+    const importerStateId = opening.regions.get(privateCargo.destinationRegionId)!
+      .controllerStateId!;
+    const forgedJournal = settled.context.transactions.map(tx =>
+      tx.phase === 7 && tx.type === "TRANSPORT_FEE" && tx.bundleId === bundle
+        ? { ...tx, destination: { type: "STATE" as const, stateId: importerStateId } }
+        : tx);
+    expect(() => audit(after, forgedJournal)).toThrow();
+
+    const currency = privateCargo.buyerPaymentCurrencyId;
+    const afterClan = after.clans.get(clan.clanId)!;
+    const afterImporter = after.states.get(importerStateId)!;
+    const forgedWorld: WorldState = {
+      ...after,
+      clans: new Map(after.clans).set(clan.clanId, {
+        ...afterClan, treasury: new Map(afterClan.treasury).set(
+          currency, (afterClan.treasury.get(currency) ?? 0) - 1,
+        ),
+      }),
+      states: new Map(after.states).set(importerStateId, {
+        ...afterImporter, treasury: new Map(afterImporter.treasury).set(
+          currency, (afterImporter.treasury.get(currency) ?? 0) + 1,
+        ),
+      }),
+    };
+    expect(totalCash(forgedWorld, currency)).toBeCloseTo(totalCash(after, currency), 6);
+    expect(() => audit(forgedWorld, settled.context.transactions)).toThrow();
+
+    const blocked = run(f, settled.world, false, 8);
+    expect(blocked.phaseBoundaryError).toBeUndefined();
+    expect(blocked.reconciliationErrors).toBeNull();
+    expect(blocked.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "TRANSPORT_FEE")).toHaveLength(0);
+    expect(blocked.world.clans.get(clan.clanId)!.treasury)
+      .toEqual(settled.world.clans.get(clan.clanId)!.treasury);
+  });
+
   it("reconciles divergent Phase-1 tariff regimes across two real FX corridors", () => {
     const f = fixture();
     const taxRate = 0.25;
