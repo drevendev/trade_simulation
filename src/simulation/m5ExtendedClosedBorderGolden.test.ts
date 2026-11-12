@@ -2001,4 +2001,112 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     expect(normalWorld.shipments?.size ?? 0).toBe(0);
   });
 
+
+  it("delivers paid in-transit cargo when every corridor loses physical capacity after dispatch", () => {
+    const f = fixture();
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
+        [id, { ...link, travelTicks: 2 }] as const)),
+    };
+    const ironBefore = totalIron(opening);
+    const cashBefore = f.currencies.map(currency => totalCash(opening, currency));
+    const first = run(f, opening, true, 7);
+    expect(first.phaseBoundaryError).toBeUndefined();
+    expect(first.reconciliationErrors).toBeNull();
+    const frozen = [...(first.world.shipments?.values() ?? [])];
+    expect(frozen).toHaveLength(2); // Two real, funded corridor shipments.
+    expect(new Set(frozen.map(cargo => cargo.transportLinkId))).toEqual(new Set(f.links));
+    expect(frozen.every(cargo => cargo.arrivalTick === 9 && cargo.quantity > 0)).toBe(true);
+    expect(first.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH")).toHaveLength(2);
+    expect(first.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_OUTPUT")).toHaveLength(2);
+
+    // Collapse BOTH physical capacities after the real FX/customs settlement.
+    // Unlike a border closure, the law still authorizes these corridors:
+    // capacity alone must refuse new dispatch, without cancelling old cargo.
+    const collapsed = {
+      ...f,
+      options: {
+        ...f.options,
+        infrastructureFactors: new Map(f.links.map(id => [id, 0] as const)),
+      },
+    };
+    const second = run(collapsed, first.world, true, 8);
+    expect(second.world.shipments).toEqual(first.world.shipments);
+    expect(second.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
+
+    const phase1Snapshots: { before: WorldState; after: WorldState }[] = [];
+    const third = run(collapsed, second.world, true, 9, (phase, before, after) => {
+      if (phase === 1) phase1Snapshots.push({ before, after });
+    });
+    expect(phase1Snapshots).toHaveLength(1);
+    expect(third.world.shipments?.size ?? 0).toBe(0);
+    const deliveryReceipts = third.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY");
+    const verifyDelivery = (journal: typeof deliveryReceipts) => {
+      expect(journal).toHaveLength(frozen.length);
+      for (const cargo of frozen) {
+        const match = journal.filter(tx =>
+          tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id);
+        expect(match).toHaveLength(1);
+        expect(match[0]).toMatchObject({
+          phase: 1, tick: 9, goodId: cargo.goodId,
+          quantity: cargo.quantity, destination: cargo.beneficialOwner,
+          sourceRegionId: cargo.originRegionId,
+          destinationRegionId: cargo.destinationRegionId,
+        });
+        expect(match[0]!.moneyAmount).toBeUndefined();
+        if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") {
+          throw new Error("Expected paid production-unit cargo owner");
+        }
+        const id = cargo.beneficialOwner.productionUnitId;
+        const before = phase1Snapshots[0]!.before.productionUnits.get(id)!
+          .inputInventory.get(cargo.goodId) ?? 0;
+        const after = phase1Snapshots[0]!.after.productionUnits.get(id)!
+          .inputInventory.get(cargo.goodId) ?? 0;
+        expect(after - before).toBeCloseTo(cargo.quantity, 8);
+      }
+    };
+    verifyDelivery(deliveryReceipts);
+    // An equal number of receipts is not enough if one delivery duplicates goods.
+    const forged = deliveryReceipts.map((tx, index) =>
+      index === 0 ? { ...tx, quantity: tx.quantity! + 1 } : tx);
+    expect(() => verifyDelivery(forged)).toThrow();
+
+    const fourth = run(collapsed, third.world, true, 10);
+    expect(fourth.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY")).toHaveLength(0);
+    for (const result of [second, third, fourth]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(result.context.transactions.filter(tx => tx.phase === 7 &&
+        ["SHIPMENT_DISPATCH", "FX_INPUT", "FX_OUTPUT", "IMPORT_TARIFF",
+          "TRANSPORT_FEE", "TRADE_GOODS_SALE"].includes(tx.type))).toHaveLength(0);
+    }
+    for (const result of [first, second, third, fourth]) {
+      expect(totalIron(result.world)).toBeCloseTo(ironBefore, 6);
+      for (const [index, currency] of f.currencies.entries()) {
+        expect(totalCash(result.world, currency)).toBeCloseTo(cashBefore[index]!, 5);
+      }
+    }
+
+    // Keyed insertion order must not determine whether a paid cargo survives
+    // a capacity shock or who receives its physical contents.
+    let reversedWorld = reordered(opening);
+    for (const [tick, actual] of [[7, first], [8, second], [9, third], [10, fourth]] as const) {
+      const mirror = run(tick === 7 ? f : collapsed, reversedWorld, true, tick);
+      expect(mirror.phaseBoundaryError).toBeUndefined();
+      expect(mirror.reconciliationErrors).toBeNull();
+      expect(mirror.context.transactions).toEqual(actual.context.transactions);
+      expect(mirror.world.shipments).toEqual(actual.world.shipments);
+      expect(economicReplayFingerprint(tick, mirror.world, mirror.context.transactions))
+        .toBe(economicReplayFingerprint(tick, actual.world, actual.context.transactions));
+      reversedWorld = reordered(mirror.world);
+    }
+  });
+
 });
