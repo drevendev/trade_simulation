@@ -35,6 +35,10 @@ import { createPhase8Handler } from "./phase8MainMarketClearing";
 import { executeMarketSettlement } from "./marketSettlement";
 import { applyMarketSettlementTransition } from "./marketSettlementTransition";
 import { applyMarketStateTransition } from "./marketStateTransition";
+import {
+  captureFxCloseOpening, reconcileAndPlanFxClose, publishFxClose,
+  type FxClosePolicy, type FxMonetaryClose,
+} from "./fxMonetaryClose";
 
 export interface M5AutonomousRegionalTradeOptions {
   /** Same source of consumption-tax authority in Phase 4 and frozen Phase 1. */
@@ -66,6 +70,9 @@ export interface M5AutonomousRegionalTradeOptions {
    * Replaces upstream Phase-9 handler/transition to prevent double realization.
    * Requires canonical need categories; no fallback needs are invented. */
   readonly realizeHouseholdConsumptionInPhase9?: true;
+  /** Own Phase-11 reconciliation and publish N+1 quote metadata at Phase-15 close.
+   * Explicit coefficients; no implied M7 policy or hidden numerical defaults. */
+  readonly closeFxAtPhase11?: FxClosePolicy;
 }
 
 /**
@@ -90,6 +97,9 @@ export function executeM5AutonomousRegionalTradeTick(
   const infrastructureFactors = new Map(options.infrastructureFactors);
   const scorePolicy = { ...options.scorePolicy };
   const transportFeeCostPolicy = { ...options.transportFeeCostPolicy };
+  const fxPolicy = options.closeFxAtPhase11 === undefined ? undefined : { ...options.closeFxAtPhase11 };
+  const fxOpening = fxPolicy === undefined ? undefined : captureFxCloseOpening(openingWorld, tickNumber);
+  let fxClose: FxMonetaryClose | undefined;
   const householdPhase2 = options.planHouseholdNeedsInPhase2 === true
     ? createPhase2HouseholdConsumptionPlanningHandler({ taxPolicy: options.procurement.taxPolicy })
     : null;
@@ -161,6 +171,14 @@ export function executeM5AutonomousRegionalTradeTick(
     ? phase9HouseholdHandler()
     : null;
   const handler: PhaseHandler = (world, context, pending) => {
+    if (context.phase === 11 && fxPolicy !== undefined && fxOpening !== undefined) {
+      if (context.fxMonetaryClose !== undefined) {
+        throw new Error("M5 FX close forbids externally supplied monetary close evidence");
+      }
+      // Single-owned Phase 11; all tick-N settlement consumers have finished.
+      fxClose = reconcileAndPlanFxClose(fxOpening, world, context, fxPolicy);
+      return { ...context, fxMonetaryClose: fxClose };
+    }
     // Phase-9 reads stocks *after* the Phase-8 transition. The shared M4
     // handler intentionally projects no second purchase from allocations.
     if (context.phase === 9 && phase9 !== null) return phase9(world, context, pending);
@@ -178,6 +196,14 @@ export function executeM5AutonomousRegionalTradeTick(
     return { ...cleared, transactions: [...cleared.transactions, ...postings] };
   };
   const applyTransition: PhaseWorldTransition = (phase, world, context) => {
+    if (fxOpening !== undefined && phase === 11) return world;
+    if (fxOpening !== undefined && phase === 15) {
+      if (fxClose === undefined || context.fxMonetaryClose !== fxClose) {
+        throw new Error("M5 FX close requires its own Phase-11 evidence at publication");
+      }
+      const afterOtherClose = bridge.applyPhaseTransition(phase, world, context);
+      return publishFxClose(fxOpening, afterOtherClose, context, fxClose);
+    }
     if (phase === 5 && canonicalLabor !== null) {
       if (!Array.isArray(context.wageSettlements) ||
           !Array.isArray(context.productionExecutions) ||
