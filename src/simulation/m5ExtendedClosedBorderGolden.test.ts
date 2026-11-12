@@ -2582,10 +2582,20 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       ...f.world,
       transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
         [id, { ...link, travelTicks: 2 }] as const)),
+      // The general baseline contains reverse / unrelated FX fixtures that are
+      // not legal active pairs under Phase-11's single-pool-per-pair contract.
+      // Keep the ONE real issuer-owned pool used by these two corridors.
+      monetaryAuthorities: new Map([...f.world.monetaryAuthorities].map(
+        ([id, authority]) => [id, {
+          ...authority,
+          fxPools: new Map([...authority.fxPools].filter(
+            ([poolId]) => poolId === f.chosen.poolId)),
+        }] as const)),
     };
     const poolOf = (state: WorldState) =>
       state.monetaryAuthorities.get(f.chosen.authorityId)!
         .fxPools.get(f.chosen.poolId)!;
+    const originalPairCash = new Map(poolOf(f.world).cash);
     const originalIron = totalIron(initial);
     const originalCash = f.currencies.map(currency => totalCash(initial, currency));
     const dispatched = new Set<string>();
@@ -2698,6 +2708,6 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(dispatched.size).toBeGreaterThanOrEqual(2);
     expect(delivered).toEqual(dispatched);
     expect(normal.shipments?.size ?? 0).toBe(0);
-    expect(initial.monetaryAuthorities).toBe(f.world.monetaryAuthorities);
+    expect(poolOf(f.world).cash).toEqual(originalPairCash);
   });
 });
