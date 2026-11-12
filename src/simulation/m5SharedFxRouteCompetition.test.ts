@@ -1118,6 +1118,48 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
         expect(currentBundles.has(tx.bundleId)).toBe(true);
       }
     }
+    // A prior tick's FX payments must not be replayed when another wave of
+    // real cargo uses the same finite pool. Audit the actual issuer-owned
+    // reserve deltas independently at EACH opening/closing policy branch.
+    const assertCurrentTickFx = (
+      result: ReturnType<typeof tick>, before: WorldState, routeCount: number,
+    ) => {
+      const actual = result.context.transactions.filter(tx => tx.phase === 7);
+      const inputs = actual.filter(tx => tx.type === "FX_INPUT");
+      const outputs = actual.filter(tx => tx.type === "FX_OUTPUT");
+      expect(inputs).toHaveLength(routeCount);
+      expect(outputs).toHaveLength(routeCount);
+      expect(new Set(outputs.map(tx => tx.fxSettlementId)).size).toBe(routeCount);
+      const beforePool = before.monetaryAuthorities.get(f.chosen.authorityId)!
+        .fxPools.get(f.chosen.poolId)!;
+      const afterPool = result.world.monetaryAuthorities.get(f.chosen.authorityId)!
+        .fxPools.get(f.chosen.poolId)!;
+      const audit = (journal: typeof actual) => {
+        for (const currency of f.currencies) {
+          const inflow = journal.filter(tx =>
+            tx.type === "FX_INPUT" && tx.currencyId === currency)
+            .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+          const outflow = journal.filter(tx =>
+            tx.type === "FX_OUTPUT" && tx.currencyId === currency)
+            .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+          const observed = (afterPool.cash.get(currency) ?? 0) -
+            (beforePool.cash.get(currency) ?? 0);
+          expect(observed).toBeCloseTo(inflow - outflow, 6);
+        }
+      };
+      audit(actual);
+      // A plausible journal with one overstated FX payout must fail even
+      // when shipment counts and all physical-goods checks still pass.
+      const forged = actual.map(tx =>
+        tx.type === "FX_OUTPUT" && tx.fxSettlementId === outputs[0]!.fxSettlementId
+          ? { ...tx, moneyAmount: tx.moneyAmount! + 1 } : tx);
+      expect(() => audit(forged)).toThrow();
+    };
+    assertCurrentTickFx(bothOpen, opening, 2);
+    assertCurrentTickFx(restricted, opening, 1);
+    assertCurrentTickFx(stillClosed, restricted.world, 1);
+    assertCurrentTickFx(reopened, restricted.world, 2);
+
     const replay = tick(restricted.world, 8, true);
     expect(replay.context.transactions).toEqual(reopened.context.transactions);
     expect(replay.world.shipments).toEqual(reopened.world.shipments);
