@@ -1877,3 +1877,88 @@ describe("M5 #676: distinct State tariff laws settle on separate live FX border 
   });
 
 });
+describe("M5 #676: mid-run registry rehydration across overlapping paid cargo", () => {
+  it("preserves FX journals and both delivery vintages when unordered maps are rebuilt on every tick", () => {
+    const f = fixture();
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
+        [id, { ...link, travelTicks: 2 }] as const)),
+    };
+    // A reload may reconstruct keyed registries in a different insertion
+    // order on *every* tick, not just once at world genesis. Route arrays
+    // retain their meaningful ordering; only key-addressed maps are permuted.
+    const reindex = (world: WorldState): WorldState => ({
+      ...world,
+      states: new Map([...world.states].reverse()),
+      regions: new Map([...world.regions].reverse()),
+      markets: new Map([...world.markets].reverse()),
+      cohorts: new Map([...world.cohorts].reverse()),
+      clans: new Map([...world.clans].reverse()),
+      productionUnits: new Map([...world.productionUnits].reverse()),
+      transportLinks: new Map([...world.transportLinks].reverse()),
+      ...(world.shipments === undefined ? {} : {
+        shipments: new Map([...world.shipments].reverse()),
+      }),
+      monetaryAuthorities: new Map([...world.monetaryAuthorities].reverse()
+        .map(([id, authority]) => [id, {
+          ...authority,
+          fxPools: new Map([...authority.fxPools].reverse()
+            .map(([poolId, pool]) => [
+              poolId, { ...pool, cash: new Map([...pool.cash].reverse()) },
+            ] as const)),
+        }] as const)),
+    });
+
+    let uninterrupted = opening;
+    let rehydrated = opening;
+    let paidDepartures = 0;
+    let deliveries = 0;
+    for (const tick of [7, 8, 9, 10]) {
+      const rebuilt = reindex(rehydrated);
+      expect([...rebuilt.regions.keys()]).not.toEqual([...rehydrated.regions.keys()]);
+      expect([...rebuilt.transportLinks.keys()])
+        .not.toEqual([...rehydrated.transportLinks.keys()]);
+      const tradeOpen = tick <= 8;
+      const baseline = run(f, uninterrupted, tradeOpen, tick);
+      const replay = run(f, rebuilt, tradeOpen, tick);
+      for (const result of [baseline, replay]) {
+        expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+        expect(result.phaseBoundaryError).toBeUndefined();
+        expect(result.reconciliationErrors).toBeNull();
+        expect(totalIron(result.world)).toBeCloseTo(totalIron(uninterrupted), 7);
+        for (const currency of f.currencies) {
+          expect(totalCash(result.world, currency))
+            .toBeCloseTo(totalCash(uninterrupted, currency), 6);
+        }
+      }
+      // Exact journals and recipients are sensitive to an incorrect payout
+      // even when aggregate cash and shipment counts still conserve.
+      expect(replay.context.transactions).toEqual(baseline.context.transactions);
+      expect(replay.world.productionUnits).toEqual(baseline.world.productionUnits);
+      expect(replay.world.monetaryAuthorities).toEqual(baseline.world.monetaryAuthorities);
+      expect(replay.world.states).toEqual(baseline.world.states);
+      expect(replay.world.clans).toEqual(baseline.world.clans);
+      expect(replay.world.markets).toEqual(baseline.world.markets);
+      expect(replay.world.shipments).toEqual(baseline.world.shipments);
+      if (tradeOpen) {
+        // Both trade ticks must actually pay for two independent route
+        // dispatches, otherwise an all-zero replay would prove nothing.
+        const receipts = assertPaidCargoReceipts(replay, f.links, tick);
+        expect(receipts.cargos).toHaveLength(2);
+        paidDepartures += receipts.cargos.length;
+      } else {
+        expect(replay.context.transactions.filter(tx =>
+          tx.phase === 7 && ["FX_INPUT", "FX_OUTPUT", "SHIPMENT_DISPATCH"].includes(tx.type)))
+          .toHaveLength(0);
+      }
+      deliveries += replay.context.transactions.filter(tx =>
+        tx.type === "SHIPMENT_DELIVERY").length;
+      uninterrupted = baseline.world;
+      rehydrated = replay.world;
+    }
+    expect(paidDepartures).toBe(4);
+    expect(deliveries).toBe(4);
+    expect(rehydrated.shipments?.size).toBe(0);
+  });
+});
