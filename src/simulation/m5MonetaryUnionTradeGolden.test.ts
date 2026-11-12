@@ -369,7 +369,8 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     expect(clan).toBeDefined();
     const destinationStateId = f.destination.controllerStateId!;
     const privateLink = {
-      ...f.link, feeReceiver: { type: "CLAN" as const, clanId: clan.clanId },
+      ...f.world.transportLinks.get(f.link.linkId)!,
+      feeReceiver: { type: "CLAN" as const, clanId: clan.clanId },
     };
     const opening: WorldState = {
       ...f.world,
