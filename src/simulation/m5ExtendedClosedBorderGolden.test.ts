@@ -2559,3 +2559,145 @@ describe("M5 #676: 120-tick recurring border policy replay", () => {
     expect(world.shipments?.size ?? 0).toBe(0);
   });
 });
+/**
+ * MTFX-T24 / #676: exercising the newly integrated Phase-11 close against
+ * actual paid multi-route shipments, not a separately synthesized FX exchange.
+ * Every tick checks both physical ownership and all currency owners; the
+ * quote can move only after that tick's Phase-7 payments have completed.
+ */
+describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
+  it("replays 600 16-phase ticks with conserving cash, cargo and N+1 quotes", () => {
+    const original = fixture();
+    const closeFxAtPhase11 = {
+      flowPressureAlpha: 0.25,
+      flowCoefficient: 0.08,
+      reserveCoefficient: 0.02,
+      maxAbsoluteLogMovePerTick: 0.03,
+    };
+    const f = {
+      ...original,
+      options: { ...original.options, closeFxAtPhase11 },
+    };
+    const initial: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
+        [id, { ...link, travelTicks: 2 }] as const)),
+    };
+    const poolOf = (state: WorldState) =>
+      state.monetaryAuthorities.get(f.chosen.authorityId)!
+        .fxPools.get(f.chosen.poolId)!;
+    const originalIron = totalIron(initial);
+    const originalCash = f.currencies.map(currency => totalCash(initial, currency));
+    const dispatched = new Set<string>();
+    const delivered = new Set<string>();
+    let normal = initial;
+    let shuffled = reordered(initial);
+    let liveFxTicks = 0;
+    let repricedTicks = 0;
+    let blockedLocalTicks = 0;
+
+    for (let tick = 7; tick < 607; tick++) {
+      const open = (tick - 7) % 12 === 0;
+      const priorSpot = poolOf(normal).spotRateQuotePerBase;
+      const due = [...(normal.shipments?.values() ?? [])].filter(
+        cargo => cargo.arrivalTick === tick,
+      );
+      const beforeIds = new Set(normal.shipments?.keys());
+      let observedAtPhase7: number | undefined;
+      let phase11Cash: ReadonlyMap<string, number> | undefined;
+      const actual = run(f, normal, open, tick, (phase, _before, after) => {
+        if (phase === 7) observedAtPhase7 = poolOf(after).spotRateQuotePerBase;
+        if (phase === 11) phase11Cash = new Map(poolOf(after).cash);
+      });
+      const replay = run(f, shuffled, open, tick);
+      for (const result of [actual, replay]) {
+        expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+        expect(result.phaseBoundaryError).toBeUndefined();
+        expect(result.reconciliationErrors).toBeNull();
+        expect(totalIron(result.world)).toBeCloseTo(originalIron, 6);
+        for (const [i, currency] of f.currencies.entries()) {
+          expect(totalCash(result.world, currency)).toBeCloseTo(originalCash[i]!, 5);
+        }
+        const pool = poolOf(result.world);
+        expect(pool.cash.get(pool.baseCurrencyId)!).toBeGreaterThanOrEqual(
+          pool.minOperationalReserveBase,
+        );
+        expect(pool.cash.get(pool.quoteCurrencyId)!).toBeGreaterThanOrEqual(
+          pool.minOperationalReserveQuote,
+        );
+      }
+      expect(replay.context.transactions).toEqual(actual.context.transactions);
+      expect(economicReplayFingerprint(tick, replay.world, replay.context.transactions))
+        .toBe(economicReplayFingerprint(tick, actual.world, actual.context.transactions));
+
+      const close = actual.context.fxMonetaryClose!;
+      const pairClose = close.pools.find(p => p.pairId === f.chosen.poolId)!;
+      const finalPool = poolOf(actual.world);
+      const postings = actual.context.transactions;
+      const inputs = postings.filter(tx => tx.phase === 7 && tx.type === "FX_INPUT");
+      const outputs = postings.filter(tx => tx.phase === 7 && tx.type === "FX_OUTPUT");
+      const departures = postings.filter(tx =>
+        tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
+      const arrivals = postings.filter(tx => tx.type === "SHIPMENT_DELIVERY");
+      const fresh = [...(actual.world.shipments?.values() ?? [])].filter(
+        cargo => !beforeIds.has(cargo.id),
+      );
+
+      expect(close.tick).toBe(tick);
+      expect(close.activateTick).toBe(tick + 1);
+      expect(pairClose.settlements).toBe(inputs.length);
+      expect(inputs.length).toBe(outputs.length);
+      expect(departures.length).toBe(fresh.length);
+      expect(inputs.length).toBe(fresh.length);
+      expect(observedAtPhase7).toBe(priorSpot);
+      expect(pairClose.currentSpot).toBe(priorSpot);
+      expect(finalPool.spotRateQuotePerBase).toBe(pairClose.nextSpot);
+      expect(new Map(finalPool.cash)).toEqual(phase11Cash);
+      expect(Math.abs(Math.log(pairClose.nextSpot / priorSpot)))
+        .toBeLessThanOrEqual(closeFxAtPhase11.maxAbsoluteLogMovePerTick + 1e-12);
+      if (inputs.length) liveFxTicks++;
+      if (finalPool.spotRateQuotePerBase !== priorSpot) repricedTicks++;
+
+      if (!open) {
+        expect(departures).toHaveLength(0);
+        expect(inputs).toHaveLength(0);
+        expect(pairClose.settlements).toBe(0);
+        expect(finalPool.spotRateQuotePerBase).toBe(priorSpot);
+        if (postings.some(tx =>
+          tx.phase === 4 && tx.type === "MARKET_SALE" && (tx.moneyAmount ?? 0) > 0
+        )) blockedLocalTicks++;
+      }
+      for (const cargo of fresh) {
+        expect(dispatched.has(cargo.id)).toBe(false);
+        expect(cargo.departureTick).toBe(tick);
+        expect(cargo.arrivalTick).toBe(tick + 2);
+        expect(inputs.filter(tx => tx.fxSettlementId === cargo.fxSettlementId))
+          .toHaveLength(1);
+        expect(outputs.filter(tx => tx.fxSettlementId === cargo.fxSettlementId))
+          .toHaveLength(1);
+        dispatched.add(cargo.id);
+      }
+      expect(arrivals).toHaveLength(due.length);
+      for (const cargo of due) {
+        expect(arrivals.filter(tx =>
+          tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id &&
+          JSON.stringify(tx.destination) === JSON.stringify(cargo.beneficialOwner) &&
+          tx.quantity === cargo.quantity
+        )).toHaveLength(1);
+        expect(dispatched.has(cargo.id)).toBe(true);
+        expect(delivered.has(cargo.id)).toBe(false);
+        delivered.add(cargo.id);
+      }
+      normal = actual.world;
+      shuffled = reordered(replay.world);
+    }
+
+    expect(liveFxTicks).toBeGreaterThan(0);
+    expect(repricedTicks).toBeGreaterThan(0);
+    expect(blockedLocalTicks).toBeGreaterThan(0);
+    expect(dispatched.size).toBeGreaterThanOrEqual(2);
+    expect(delivered).toEqual(dispatched);
+    expect(normal.shipments?.size ?? 0).toBe(0);
+    expect(initial.monetaryAuthorities).toBe(f.world.monetaryAuthorities);
+  });
+});
