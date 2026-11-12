@@ -2604,7 +2604,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       );
       const beforeIds = new Set(normal.shipments?.keys());
       let observedAtPhase7: number | undefined;
-      let phase11Cash: ReadonlyMap<string, number> | undefined;
+      let phase11Cash: ReturnType<typeof poolOf>["cash"] | undefined;
       const actual = run(f, normal, open, tick, (phase, _before, after) => {
         if (phase === 7) observedAtPhase7 = poolOf(after).spotRateQuotePerBase;
         if (phase === 11) phase11Cash = new Map(poolOf(after).cash);
