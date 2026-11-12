@@ -462,6 +462,15 @@ export function executeM5LiveQuotedTradeTick(
             ...context,
             transactions: committed.transactions,
             phase7MainIntents: committed.phase8MainIntents,
+            // Publish the actual promises used by this execution, not rebuilt
+            // quotes from the post-settlement reserves or a parallel tick path.
+            phase7FxReservations: Object.freeze(
+              [...fxReservationByLotOrdinal.entries()]
+                .sort(([a], [b]) => a - b)
+                .map(([, reservation]) => Object.freeze({
+                  ...reservation, quote: Object.freeze({ ...reservation.quote }),
+                })),
+            ),
           };
         }
       }
