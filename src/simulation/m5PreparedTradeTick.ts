@@ -162,6 +162,13 @@ export function executeM5PreparedTradeTick(
             ...context,
             transactions: committed.transactions,
             phase7MainIntents: committed.phase8MainIntents,
+            phase7FxReservations: Object.freeze(
+              [...input.fxReservationByLotOrdinal.entries()]
+                .sort(([a], [b]) => a - b)
+                .map(([, reservation]) => Object.freeze({
+                  ...reservation, quote: Object.freeze({ ...reservation.quote }),
+                })),
+            ),
           };
         }
       }

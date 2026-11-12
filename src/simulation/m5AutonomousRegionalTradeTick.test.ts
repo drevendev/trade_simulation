@@ -147,6 +147,50 @@ function run(f: ReturnType<typeof fixture>) {
   );
 }
 
+describe("M5 #675 autonomous Phase-11 FX close", () => {
+  it("keeps the paid Phase-7 quote through tick N and activates its successor for N+1", () => {
+    const f = fixture();
+    const pair = [...f.world.monetaryAuthorities.values()].flatMap(a => [...a.fxPools.values()])
+      .find(p => (p.baseCurrencyId === f.source.settlementCurrencyId && p.quoteCurrencyId === f.destination.settlementCurrencyId) ||
+        (p.quoteCurrencyId === f.source.settlementCurrencyId && p.baseCurrencyId === f.destination.settlementCurrencyId))!;
+    const world: WorldState = { ...f.world, monetaryAuthorities: new Map([...f.world.monetaryAuthorities].map(([id, a]) => [id, {
+      ...a, fxPools: new Map([...a.fxPools].filter(([key]) => key === pair.pairId)),
+    }])) };
+    const spot = (w: WorldState) => [...w.monetaryAuthorities.values()].flatMap(a => [...a.fxPools.values()])[0]!.spotRateQuotePerBase;
+    const cash = (w: WorldState) => [...w.monetaryAuthorities.values()].flatMap(a => [...a.fxPools.values()])[0]!.cash;
+    const options: M5AutonomousRegionalTradeOptions = { ...f.options, settleMainMarketInPhase8: true,
+      closeFxAtPhase11: { flowPressureAlpha: 0.25, flowCoefficient: 0.08,
+        reserveCoefficient: 0.02, maxAbsoluteLogMovePerTick: 0.03 } };
+    const phases: { phase: number; spot: number }[] = [];
+    let phase11Cash: ReadonlyMap<unknown, number> | undefined;
+    const result = executeM5AutonomousRegionalTradeTick(world, 7, households, (_phase, w) => w,
+      options, (phase, _before, after, ctx) => {
+        phases.push({ phase, spot: spot(after) });
+        if (phase === 11) {
+          phase11Cash = cash(after);
+          expect(ctx.fxMonetaryClose?.activateTick).toBe(8);
+          expect(spot(after)).toBe(pair.spotRateQuotePerBase);
+        }
+      });
+    expect(result.reconciliationErrors).toBeNull();
+    expect(result.phaseTrace).toHaveLength(16);
+    expect(result.context.transactions.filter(tx => tx.type === "FX_INPUT").length).toBeGreaterThan(0);
+    expect(result.context.phase7FxReservations?.length).toBeGreaterThan(0);
+    expect(phases.slice(0, 15).every(p => p.spot === pair.spotRateQuotePerBase)).toBe(true);
+    const close = result.context.fxMonetaryClose!.pools[0]!;
+    expect(close.nextSpot).not.toBe(close.currentSpot);
+    expect(spot(result.world)).toBe(close.nextSpot);
+    expect(cash(result.world)).toBe(phase11Cash);
+    expect(spot(world)).toBe(pair.spotRateQuotePerBase);
+    let nextPhase7Spot = 0;
+    executeM5AutonomousRegionalTradeTick(result.world, 8, households, (_phase, w) => w,
+      { ...options, phase1TradeLawProvider: () => undefined }, (phase, _before, after) => {
+        if (phase === 7) nextPhase7Spot = spot(after);
+      });
+    expect(nextPhase7Spot).toBe(close.nextSpot);
+  });
+});
+
 function totalIron(world: WorldState): number {
   return [...world.productionUnits.values()].reduce(
     (total, unit) => total +
