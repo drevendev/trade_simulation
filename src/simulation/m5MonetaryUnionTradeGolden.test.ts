@@ -359,4 +359,128 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     expect(regular.shipments?.size ?? 0).toBe(0);
   });
 
+
+  it("credits a private Clan corridor owner without leaking union-currency fees into State taxes or FX", () => {
+    const f = fixture();
+    const currency = f.origin.settlementCurrencyId;
+    const clan = [...f.world.clans.values()].find(
+      candidate => (candidate.treasury.get(currency) ?? 0) > 0,
+    )!;
+    expect(clan).toBeDefined();
+    const destinationStateId = f.destination.controllerStateId!;
+    const privateLink = {
+      ...f.link, feeReceiver: { type: "CLAN" as const, clanId: clan.clanId },
+    };
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([[f.link.linkId, privateLink]]),
+    };
+    const beforeCash = totalCash(opening, currency);
+    const beforeIron = totalIron(opening);
+    // Closed-border control includes all earlier local Phase-4 cash/tax flows.
+    const closed = run(f, opening, false, 7);
+    const paid = run(f, opening, true, 7);
+    for (const result of [paid, closed]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(totalCash(result.world, currency)).toBeCloseTo(beforeCash, 6);
+      expect(totalIron(result.world)).toBeCloseTo(beforeIron, 7);
+      expect(result.world.monetaryAuthorities).toEqual(opening.monetaryAuthorities);
+      expect(result.context.transactions.filter(tx =>
+        tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT")).toHaveLength(0);
+    }
+    const cargo = [...(paid.world.shipments?.values() ?? [])];
+    expect(cargo).toHaveLength(1);
+    expect(cargo[0]!.buyerPaymentCurrencyId).toBe(currency);
+    expect(cargo[0]!.invoiceCurrencyId).toBe(currency);
+    expect(cargo[0]!.fxSettlementId).toBeUndefined();
+    expect(cargo[0]!.transportFeeAmount).toBeGreaterThan(0);
+    expect(cargo[0]!.tariffAmount).toBeGreaterThan(0);
+    expect(closed.world.shipments?.size ?? 0).toBe(0);
+    const journal = paid.context.transactions.filter(tx => tx.phase === 7);
+    const actualClan = paid.world.clans.get(clan.clanId)!;
+    const actualState = paid.world.states.get(destinationStateId)!;
+
+    // Oracle uses the configured opening route fee owner, NOT a journal payee
+    // or aggregate money conservation to decide who is entitled to the fee.
+    const assertOwnerPayments = (
+      settled: WorldState, receipts: typeof journal,
+    ): void => {
+      const fees = receipts.filter(tx => tx.type === "TRANSPORT_FEE");
+      const tariffs = receipts.filter(tx => tx.type === "IMPORT_TARIFF");
+      const taxes = receipts.filter(tx => tx.type === "CONSUMPTION_TAX");
+      expect(fees).toHaveLength(1);
+      expect(tariffs).toHaveLength(1);
+      expect(taxes).toHaveLength(1);
+      expect(fees[0]).toMatchObject({
+        currencyId: currency, destination: privateLink.feeReceiver,
+        moneyAmount: cargo[0]!.transportFeeAmount,
+      });
+      expect(tariffs[0]).toMatchObject({
+        currencyId: currency,
+        destination: { type: "STATE", stateId: destinationStateId },
+        moneyAmount: cargo[0]!.tariffAmount,
+      });
+      expect(taxes[0]).toMatchObject({
+        currencyId: currency,
+        destination: { type: "STATE", stateId: destinationStateId },
+        moneyAmount: cargo[0]!.consumptionTaxAmount,
+      });
+      const clanPaid = (settled.clans.get(clan.clanId)!.treasury.get(currency) ?? 0) -
+        (closed.world.clans.get(clan.clanId)!.treasury.get(currency) ?? 0);
+      expect(clanPaid).toBeCloseTo(cargo[0]!.transportFeeAmount, 6);
+      const statePaid = (settled.states.get(destinationStateId)!.treasury.get(currency) ?? 0) -
+        (closed.world.states.get(destinationStateId)!.treasury.get(currency) ?? 0);
+      expect(statePaid).toBeCloseTo(
+        cargo[0]!.tariffAmount + cargo[0]!.consumptionTaxAmount, 6,
+      );
+    };
+    assertOwnerPayments(paid.world, journal);
+    expect((actualClan.treasury.get(currency) ?? 0) -
+      (clan.treasury.get(currency) ?? 0)).toBeCloseTo(cargo[0]!.transportFeeAmount, 6);
+
+    // Two conserved-money falsifications that must not pass an owner-level audit.
+    const divertedReceipt = journal.map(tx => tx.type === "TRANSPORT_FEE"
+      ? { ...tx, destination: { type: "STATE" as const, stateId: destinationStateId } }
+      : tx);
+    expect(() => assertOwnerPayments(paid.world, divertedReceipt)).toThrow();
+    const divertedWorld: WorldState = {
+      ...paid.world,
+      clans: new Map(paid.world.clans).set(clan.clanId, {
+        ...actualClan,
+        treasury: new Map(actualClan.treasury).set(
+          currency, (actualClan.treasury.get(currency) ?? 0) - 1,
+        ),
+      }),
+      states: new Map(paid.world.states).set(destinationStateId, {
+        ...actualState,
+        treasury: new Map(actualState.treasury).set(
+          currency, (actualState.treasury.get(currency) ?? 0) + 1,
+        ),
+      }),
+    };
+    expect(totalCash(divertedWorld, currency))
+      .toBeCloseTo(totalCash(paid.world, currency), 6);
+    expect(() => assertOwnerPayments(divertedWorld, journal)).toThrow();
+
+    // Border closure after payment cannot cancel or re-charge in-transit stock.
+    const waiting = run(f, paid.world, false, 8);
+    const delivered = run(f, waiting.world, false, 9);
+    for (const result of [waiting, delivered]) {
+      expect(result.reconciliationErrors).toBeNull();
+      expect(result.context.transactions.filter(tx =>
+        tx.type === "TRANSPORT_FEE" || tx.type === "IMPORT_TARIFF" ||
+        tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT")).toHaveLength(0);
+      expect(result.world.clans.get(clan.clanId)!.treasury).toEqual(actualClan.treasury);
+      expect(totalCash(result.world, currency)).toBeCloseTo(beforeCash, 6);
+      expect(totalIron(result.world)).toBeCloseTo(beforeIron, 7);
+    }
+    expect(waiting.world.shipments?.size).toBe(1);
+    expect(delivered.world.shipments?.size).toBe(0);
+    expect(delivered.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY")).toHaveLength(1);
+  });
+
+
 });
