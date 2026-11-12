@@ -2440,3 +2440,122 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
 
 
 });
+
+
+describe("M5 #676: 120-tick recurring border policy replay", () => {
+  it("conserves paid FX and physical cargo across repeated closure/reopening windows", () => {
+    const f = fixture();
+    const initial: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
+        [id, { ...link, travelTicks: 2 }] as const)),
+    };
+    const openingIron = totalIron(initial);
+    const openingCash = f.currencies.map(currency => totalCash(initial, currency));
+    let world = initial;
+    let shuffled = reordered(initial);
+    const dispatched = new Set<string>();
+    const delivered = new Set<string>();
+    let activeWindows = 0;
+    let blockedLocalPurchases = 0;
+
+    for (let tick = 7; tick < 127; tick++) {
+      // Repeated reopening must not retroactively repay or redeliver old cargo.
+      // Each reopened tick is deliberately followed by eleven blocked ticks.
+      const open = (tick - 7) % 12 === 0;
+      if (open) activeWindows++;
+      const due = [...(world.shipments?.values() ?? [])].filter(
+        cargo => cargo.arrivalTick === tick,
+      );
+      const previousIds = new Set(world.shipments?.keys());
+      const observer: Parameters<typeof executeM5AutonomousRegionalTradeTick>[5] =
+        (phase, before, after) => {
+          if (phase !== 1) return;
+          // A transaction receipt alone is insufficient: verify the actual
+          // Phase-1 stock change at the frozen cargo's beneficial owner.
+          const expected = new Map<string, number>();
+          for (const cargo of due) {
+            expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+            if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") continue;
+            const id = String(cargo.beneficialOwner.productionUnitId);
+            expected.set(id, (expected.get(id) ?? 0) + cargo.quantity);
+          }
+          for (const [id, quantity] of expected) {
+            const oldUnit = [...before.productionUnits.values()].find(
+              unit => String(unit.productionUnitId) === id)!;
+            const newUnit = after.productionUnits.get(oldUnit.productionUnitId)!;
+            expect((newUnit.inputInventory.get(IRON) ?? 0) -
+              (oldUnit.inputInventory.get(IRON) ?? 0)).toBeCloseTo(quantity, 7);
+          }
+        };
+      const actual = run(f, world, open, tick, observer);
+      const replay = run(f, shuffled, open, tick);
+
+      for (const result of [actual, replay]) {
+        expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+        expect(result.phaseBoundaryError).toBeUndefined();
+        expect(result.reconciliationErrors).toBeNull();
+        expect(totalIron(result.world)).toBeCloseTo(openingIron, 6);
+        for (const [index, currency] of f.currencies.entries()) {
+          expect(totalCash(result.world, currency)).toBeCloseTo(openingCash[index]!, 5);
+        }
+      }
+      expect(replay.context.transactions).toEqual(actual.context.transactions);
+      expect(economicReplayFingerprint(tick, replay.world, replay.context.transactions))
+        .toBe(economicReplayFingerprint(tick, actual.world, actual.context.transactions));
+
+      const posted = actual.context.transactions;
+      const dispatches = posted.filter(tx => tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
+      const fxInputs = posted.filter(tx => tx.phase === 7 && tx.type === "FX_INPUT");
+      const fxOutputs = posted.filter(tx => tx.phase === 7 && tx.type === "FX_OUTPUT");
+      const tariffs = posted.filter(tx => tx.phase === 7 && tx.type === "IMPORT_TARIFF");
+      const arrivals = posted.filter(tx => tx.type === "SHIPMENT_DELIVERY");
+      const fresh = [...(actual.world.shipments?.values() ?? [])].filter(
+        cargo => !previousIds.has(cargo.id),
+      );
+      expect(fresh).toHaveLength(dispatches.length);
+      expect(fxInputs).toHaveLength(dispatches.length);
+      expect(fxOutputs).toHaveLength(dispatches.length);
+      expect(tariffs).toHaveLength(dispatches.length);
+      if (!open) {
+        expect(dispatches).toHaveLength(0);
+        if (posted.some(tx => tx.phase === 4 && tx.type === "MARKET_SALE" &&
+            (tx.moneyAmount ?? 0) > 0)) blockedLocalPurchases++;
+      }
+      for (const cargo of fresh) {
+        expect(dispatched.has(cargo.id)).toBe(false);
+        expect(cargo.departureTick).toBe(tick);
+        expect(cargo.arrivalTick).toBe(tick + 2);
+        expect(fxInputs.filter(tx => tx.fxSettlementId === cargo.fxSettlementId))
+          .toHaveLength(1);
+        expect(fxOutputs.filter(tx => tx.fxSettlementId === cargo.fxSettlementId))
+          .toHaveLength(1);
+        dispatched.add(cargo.id);
+      }
+      expect(arrivals).toHaveLength(due.length);
+      for (const cargo of due) {
+        const receipt = arrivals.filter(tx =>
+          tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id);
+        expect(receipt).toHaveLength(1);
+        expect(receipt[0]).toMatchObject({
+          tick, phase: 1, destination: cargo.beneficialOwner,
+          sourceRegionId: cargo.originRegionId,
+          destinationRegionId: cargo.destinationRegionId,
+          goodId: cargo.goodId, quantity: cargo.quantity,
+        });
+        expect(receipt[0]!.moneyAmount).toBeUndefined();
+        expect(dispatched.has(cargo.id)).toBe(true);
+        expect(delivered.has(cargo.id)).toBe(false);
+        delivered.add(cargo.id);
+      }
+      world = actual.world;
+      shuffled = reordered(replay.world);
+    }
+
+    expect(activeWindows).toBe(10);
+    expect(dispatched.size).toBeGreaterThanOrEqual(2);
+    expect(blockedLocalPurchases).toBeGreaterThan(0);
+    expect(delivered).toEqual(dispatched);
+    expect(world.shipments?.size ?? 0).toBe(0);
+  });
+});
