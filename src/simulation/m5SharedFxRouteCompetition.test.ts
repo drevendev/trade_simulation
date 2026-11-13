@@ -2402,4 +2402,100 @@ describe("M5 #676: replenishing FX while paid cargo is still in transit", () => 
     }
     expect(world.shipments?.size ?? 0).toBe(0);
   });
+
+  it("checks each seller's exact stock debit and buyer payment under shared FX scarcity", () => {
+    const f = fixture();
+    const unrestricted = run(f, f.world);
+    const full = assertPaidCargoReceipts(unrestricted, f.links);
+    expect(full.cargos).toHaveLength(2);
+    const opening = withOutputStock(f, full.paid * 0.60);
+    const closed = run(f, opening, false);
+    const limited = run(f, opening);
+    for (const result of [closed, limited]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+    }
+    const { cargos, outputs, inputs, paid } = assertPaidCargoReceipts(limited);
+    expect(cargos.length).toBeGreaterThan(0);
+    expect(paid).toBeGreaterThan(0);
+    expect(paid).toBeLessThan(full.paid);
+    const sourceSellers = [...opening.productionUnits.values()].filter(unit =>
+      unit.status === "CLOSING" && unit.seed.regionKey === "region:a4-border");
+    expect(sourceSellers).toHaveLength(1);
+    const sellerId = sourceSellers[0]!.productionUnitId;
+    const loadedQuantity = cargos.reduce((sum, cargo) => {
+      expect(cargo.seller).toEqual({ type: "PRODUCTION_UNIT", productionUnitId: sellerId });
+      expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+      return sum + cargo.quantity;
+    }, 0);
+    // Closed-border execution shares the actual Phase-4 procurement history.
+    // Its stocks are the independent pre-export oracle, not a journal claim.
+    const closedSeller = closed.world.productionUnits.get(sellerId)!;
+    const sellerBeforeExport = closedSeller.inputInventory.get(IRON) ?? 0;
+    const assertExactSourceDebit = (actual: WorldState) => {
+      const remaining = actual.productionUnits.get(sellerId)!.inputInventory.get(IRON) ?? 0;
+      expect(sellerBeforeExport - remaining).toBeCloseTo(loadedQuantity, 8);
+    };
+    assertExactSourceDebit(limited.world);
+    const sellerCredit = (limited.world.productionUnits.get(sellerId)!.wallet.get(f.currencies[0]!) ?? 0) -
+      (closedSeller.wallet.get(f.currencies[0]!) ?? 0);
+    const postedSellerCredit = outputs.filter(tx =>
+      tx.destination?.type === "PRODUCTION_UNIT" &&
+      tx.destination.productionUnitId === sellerId)
+      .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+    expect(sellerCredit).toBeCloseTo(postedSellerCredit, 7);
+    expect(postedSellerCredit).toBeCloseTo(paid, 7);
+
+    const charges = new Set(["TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"]);
+    const transactions = limited.context.transactions.filter(tx => tx.phase === 7);
+    const buyers = new Set(cargos.map(cargo => {
+      if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") {
+        throw new Error("fixture requires a ProductionUnit buyer");
+      }
+      return cargo.beneficialOwner.productionUnitId;
+    }));
+    for (const buyerId of buyers) {
+      const before = closed.world.productionUnits.get(buyerId)!.wallet.get(f.currencies[1]!) ?? 0;
+      const after = limited.world.productionUnits.get(buyerId)!.wallet.get(f.currencies[1]!) ?? 0;
+      const journalDebit = transactions.filter(tx =>
+        tx.source?.type === "PRODUCTION_UNIT" &&
+        tx.source.productionUnitId === buyerId &&
+        (tx.type === "FX_INPUT" || charges.has(tx.type)))
+        .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+      expect(journalDebit).toBeGreaterThan(0);
+      expect(before - after).toBeCloseTo(journalDebit, 7);
+    }
+    expect(inputs.reduce((sum, tx) => sum + tx.moneyAmount!, 0))
+      .toBeGreaterThan(0);
+    expect(totalIron(limited.world)).toBeCloseTo(totalIron(opening), 7);
+    for (const currency of f.currencies) {
+      expect(totalCash(limited.world, currency)).toBeCloseTo(totalCash(opening, currency), 6);
+    }
+
+    // A wrong-owner goods transfer can keep aggregate goods conserved while
+    // silently overstating the source debit. This negative control must fail.
+    const receiverId = [...buyers][0]!;
+    const sellerAfter = limited.world.productionUnits.get(sellerId)!;
+    const receiverAfter = limited.world.productionUnits.get(receiverId)!;
+    const misplaced = 0.5;
+    expect(sellerAfter.inputInventory.get(IRON) ?? 0).toBeGreaterThan(misplaced);
+    const forged: WorldState = {
+      ...limited.world,
+      productionUnits: new Map(limited.world.productionUnits)
+        .set(sellerId, {
+          ...sellerAfter,
+          inputInventory: new Map(sellerAfter.inputInventory)
+            .set(IRON, (sellerAfter.inputInventory.get(IRON) ?? 0) - misplaced),
+        })
+        .set(receiverId, {
+          ...receiverAfter,
+          inputInventory: new Map(receiverAfter.inputInventory)
+            .set(IRON, (receiverAfter.inputInventory.get(IRON) ?? 0) + misplaced),
+        }),
+    };
+    expect(totalIron(forged)).toBeCloseTo(totalIron(limited.world), 7);
+    expect(() => assertExactSourceDebit(forged)).toThrow();
+  });
+
 });
