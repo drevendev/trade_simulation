@@ -11,6 +11,7 @@
 import type { RegionId, StateId, CurrencyId, CohortId, ProductionUnitId, MonetaryAuthorityId, GoodId } from "../domain/id";
 import type { ActorRef } from "../domain/genesisLedger";
 import type { WorldState, PendingTransitions } from "./worldState";
+import type { TradeShipmentState } from "./tradeShipmentState";
 import type { Phase7FrozenImportTariffSnapshot, Phase7FrozenConsumptionTaxSnapshot } from "./phase7LiveWorldPlan";
 import type { Phase7FrozenDirectedTradePermissions } from "./phase7AuthorizedRouteDiscovery";
 import type { TickLedger } from "./ledger";
@@ -60,6 +61,8 @@ export interface TickContext {
   readonly marketClearingAggregates: ReadonlyMap<string, MarketClearingAggregate>;
   /** Only realized Phase-7 dispatch reduces Phase-8 MAIN intentions; absent in M4 ticks. */
   readonly phase7MainIntents?: readonly MarketIntent[];
+  /** Frozen Phase-7 paid dispatch stocks, captured before zero-travel close removes them. */
+  readonly phase7DispatchedShipments?: readonly TradeShipmentState[];
 }
 
 /** Realized MAIN-pass aggregates for one market/good, authoritative regardless of telemetry. */

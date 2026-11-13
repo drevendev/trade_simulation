@@ -7,6 +7,7 @@
  * are all performed by the real stateful tick orchestration.
  */
 import { describe, expect, it } from "vitest";
+import { projectM5TradeTick } from "../diagnostics/m5TradePreview";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
@@ -2498,4 +2499,165 @@ describe("M5 #676: replenishing FX while paid cargo is still in transit", () => 
     expect(() => assertExactSourceDebit(forged)).toThrow();
   });
 
+});
+
+/**
+ * M5 / #677 diagnostic projection must use committed physical and FX stocks,
+ * not inferred shipments, fabricated reserves or a second simulator.
+ */
+describe("M5 #677 Pages projection from actual 16-phase receipts", () => {
+  it("reports both paid FX routes deterministically and rejects missing dispatch evidence", () => {
+    const f = fixture();
+    const before = f.world.shipments;
+    const paid = run(f, f.world);
+    expect(paid.reconciliationErrors).toBeNull();
+    const view = projectM5TradeTick(f.world, paid, 7, f.options.infrastructureFactors);
+    const departures = view.routes.flatMap(route => route.departures);
+    const cargos = [...(paid.world.shipments?.values() ?? [])];
+    expect(view.milestone).toBe("M5");
+    expect(view.tick).toBe(7);
+    expect(departures).toHaveLength(2);
+    expect(cargos).toHaveLength(2);
+    expect(view.routes.filter(route => route.status === "PAID_DISPATCH")).toHaveLength(2);
+    expect(departures.map(shipment => shipment.id).sort())
+      .toEqual(cargos.map(shipment => String(shipment.id)).sort());
+    expect(departures.every(shipment =>
+      shipment.quantity > 0 && shipment.fxSettlementId !== null &&
+      shipment.arrivalTick > 7 && shipment.buyerGoodsPaymentAmount > 0)).toBe(true);
+    expect(view.fxPools.length).toBeGreaterThan(0);
+    expect(view.fxPools.some(pool =>
+      pool.baseReserve > 0 && pool.quoteReserve > 0 &&
+      pool.spotBefore > 0 && pool.spotAfter > 0)).toBe(true);
+    expect(f.world.shipments).toBe(before);
+    expect(f.world.shipments?.size ?? 0).toBe(0);
+
+    // An unordered registry must not change a read-model or consume a random draw.
+    const reorderedOpening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].reverse()),
+      regions: new Map([...f.world.regions].reverse()),
+      monetaryAuthorities: new Map([...f.world.monetaryAuthorities].reverse()),
+    };
+    expect(projectM5TradeTick(reorderedOpening, paid, 7, f.options.infrastructureFactors))
+      .toEqual(view);
+    expect(projectM5TradeTick(f.world, paid, 7, f.options.infrastructureFactors))
+      .toEqual(view);
+
+    // A "pretty" display of unpaid cargo is worse than a visible data error.
+    const missingReceipt = {
+      ...paid,
+      context: {
+        ...paid.context,
+        transactions: paid.context.transactions.filter(tx =>
+          tx.type !== "SHIPMENT_DISPATCH"),
+      },
+    };
+    expect(() => projectM5TradeTick(f.world, missingReceipt, 7, f.options.infrastructureFactors))
+      .toThrow(/without its paid dispatch receipt/);
+  });
+
+  it("shows a real zero-travel paid delivery in the same tick and rejects forged owner receipts", () => {
+    const f = fixture();
+    // Keep one delayed corridor as the positive multi-cargo control. The
+    // instant link still runs the real Phase-7 payment + delivery sequence.
+    const instantWorld: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
+        [id, { ...link, travelTicks: id === f.links[0] ? 0 : 2 }] as const)),
+    };
+    const paid = run(f, instantWorld);
+    expect(paid.reconciliationErrors).toBeNull();
+    const committed = paid.context.phase7DispatchedShipments ?? [];
+    expect(committed).toHaveLength(2);
+    const instant = committed.find(shipment => shipment.arrivalTick === 7)!;
+    const delayed = committed.find(shipment => shipment.arrivalTick > 7)!;
+    expect(instant).toBeDefined();
+    expect(delayed).toBeDefined();
+    expect(paid.world.shipments?.has(instant.id)).toBe(false);
+    expect(paid.world.shipments?.has(delayed.id)).toBe(true);
+    const delivery = paid.context.transactions.find(tx =>
+      tx.type === "SHIPMENT_DELIVERY" && tx.phase === 7)!;
+    expect(delivery).toMatchObject({
+      quantity: instant.quantity, goodId: instant.goodId,
+      destination: instant.beneficialOwner,
+    });
+    const view = projectM5TradeTick(
+      instantWorld, paid, 7, f.options.infrastructureFactors,
+    );
+    expect(view.routes.flatMap(route => route.departures)).toHaveLength(2);
+    expect(view.routes.flatMap(route => route.arrivals)).toHaveLength(1);
+    expect(view.routes.flatMap(route => route.arrivals)[0]!.id).toBe(instant.id);
+    expect(view.routes.find(route => route.linkId === instant.transportLinkId)!
+      .inTransitCount).toBe(0);
+    expect(view.routes.find(route => route.linkId === delayed.transportLinkId)!
+      .inTransitCount).toBe(1);
+    expect(instantWorld.shipments?.size ?? 0).toBe(0);
+
+    const otherBuyer = delayed.beneficialOwner;
+    const dispatch = paid.context.transactions.find(tx =>
+      tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH" &&
+      tx.sourceRegionId === instant.originRegionId &&
+      tx.destinationRegionId === instant.destinationRegionId)!;
+    const tamper = (edit: (tx: typeof delivery) => typeof delivery) => ({
+      ...paid,
+      context: {
+        ...paid.context,
+        transactions: paid.context.transactions.map(tx =>
+          tx.transactionId === editTarget ? edit(tx) : tx),
+      },
+    });
+    let editTarget = dispatch.transactionId;
+    const forgedDispatch = tamper(tx => ({ ...tx, destination: otherBuyer }));
+    expect(() => projectM5TradeTick(
+      instantWorld, forgedDispatch, 7, f.options.infrastructureFactors,
+    )).toThrow(/without its paid dispatch receipt/);
+
+    editTarget = delivery.transactionId;
+    const forgedDeliveryOwner = tamper(tx => ({ ...tx, destination: otherBuyer }));
+    expect(() => projectM5TradeTick(
+      instantWorld, forgedDeliveryOwner, 7, f.options.infrastructureFactors,
+    )).toThrow(/unmatched or duplicate shipment delivery/);
+    const forgedDeliveryGood = tamper(tx => ({ ...tx, goodId: "good:food" as GoodId }));
+    expect(() => projectM5TradeTick(
+      instantWorld, forgedDeliveryGood, 7, f.options.infrastructureFactors,
+    )).toThrow(/unmatched or duplicate shipment delivery/);
+    const duplicatedDelivery = {
+      ...paid,
+      context: {
+        ...paid.context,
+        transactions: [...paid.context.transactions, delivery],
+      },
+    };
+    expect(() => projectM5TradeTick(
+      instantWorld, duplicatedDelivery, 7, f.options.infrastructureFactors,
+    )).toThrow(/unmatched or duplicate shipment delivery/);
+  });
+
+  it("shows an explicit zero-capacity route and finite FX floor without inventing trade", () => {
+    const f = fixture();
+    const zeroFactors = new Map(f.links.map(link => [link, 0] as const));
+    const blocked = executeM5AutonomousRegionalTradeTick(
+      f.world, 7, households, (_phase, current) => current,
+      { ...f.options, infrastructureFactors: zeroFactors },
+    );
+    const view = projectM5TradeTick(f.world, blocked, 7, zeroFactors);
+    expect(blocked.reconciliationErrors).toBeNull();
+    expect(view.routes).toHaveLength(2);
+    expect(view.routes.every(route =>
+      route.capacityWeightUnits === 0 && route.status === "NO_PHYSICAL_CAPACITY" &&
+      route.departures.length === 0)).toBe(true);
+    expect(blocked.context.transactions.filter(tx => tx.phase === 4 &&
+      tx.type === "MARKET_SALE").length).toBeGreaterThan(0);
+
+    const floorWorld = withOutputStock(f, 0);
+    const floor = run(f, floorWorld);
+    const floorView = projectM5TradeTick(
+      floorWorld, floor, 7, f.options.infrastructureFactors,
+    );
+    expect(floor.reconciliationErrors).toBeNull();
+    expect(floorView.routes.every(route => route.departures.length === 0)).toBe(true);
+    expect(floorView.fxPools.some(pool => pool.reserveFloorReached)).toBe(true);
+    expect(floor.context.transactions.filter(tx => tx.phase === 4 &&
+      tx.type === "MARKET_SALE").length).toBeGreaterThan(0);
+  });
 });
