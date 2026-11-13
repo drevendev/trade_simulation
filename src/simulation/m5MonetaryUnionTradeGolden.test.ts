@@ -536,4 +536,142 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     }
   });
 
+  it("attributes union-currency transport shrinkage to one physical loss, not hidden FX or a second owner", () => {
+    const f = fixture();
+    const currency = f.origin.settlementCurrencyId;
+    const link = f.world.transportLinks.get(f.link.linkId)!;
+    const opening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([[f.link.linkId, {
+        ...link,
+        seed: { ...link.seed, routinePhysicalLossRate: 0.2 },
+      }]]),
+    };
+    const openingIron = totalIron(opening);
+    const openingCash = totalCash(opening, currency);
+    const closed = run(f, opening, false, 7);
+    const paid = run(f, opening, true, 7);
+    for (const result of [paid, closed]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(totalCash(result.world, currency)).toBeCloseTo(openingCash, 6);
+      expect(result.world.monetaryAuthorities).toEqual(opening.monetaryAuthorities);
+      expect(result.context.transactions.filter(tx =>
+        tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT")).toHaveLength(0);
+    }
+    const phase7 = paid.context.transactions.filter(tx => tx.phase === 7);
+    const sales = phase7.filter(tx => tx.type === "TRADE_GOODS_SALE");
+    const losses = phase7.filter(tx => tx.type === "GOODS_TRANSPORT_LOSS");
+    const dispatches = phase7.filter(tx => tx.type === "SHIPMENT_DISPATCH");
+    const cargo = [...(paid.world.shipments?.values() ?? [])];
+    expect(sales).toHaveLength(1);
+    expect(losses).toHaveLength(1);
+    expect(dispatches).toHaveLength(1);
+    expect(cargo).toHaveLength(1);
+    expect(closed.world.shipments?.size ?? 0).toBe(0);
+    expect(closed.context.transactions.filter(tx =>
+      tx.type === "GOODS_TRANSPORT_LOSS")).toHaveLength(0);
+    const invoice = sales[0]!;
+    const loss = losses[0]!;
+    const shipment = cargo[0]!;
+    expect(shipment.fxSettlementId).toBeUndefined();
+    expect(shipment.invoiceCurrencyId).toBe(currency);
+    expect(shipment.buyerPaymentCurrencyId).toBe(currency);
+    expect(shipment.arrivalTick).toBe(9);
+    expect(invoice.bundleId).toBe(dispatches[0]!.bundleId);
+    expect(loss.bundleId).toBe(invoice.bundleId);
+    expect(loss).toMatchObject({
+      tick: 7, phase: 7, goodId: IRON,
+      source: shipment.beneficialOwner,
+      reason: "DISPATCH_ROUTINE_PHYSICAL_LOSS:" + shipment.id,
+    });
+    expect(loss.moneyAmount).toBeUndefined();
+    expect(invoice.quantity).toBeGreaterThan(shipment.quantity);
+    expect(loss.quantity).toBeGreaterThan(0);
+    expect(loss.quantity!).toBeCloseTo(invoice.quantity! * 0.2, 7);
+    expect(invoice.quantity!).toBeCloseTo(loss.quantity! + shipment.quantity, 7);
+    expect(dispatches[0]!.quantity).toBeCloseTo(shipment.quantity, 7);
+    expect(totalIron(paid.world)).toBeCloseTo(openingIron - loss.quantity!, 7);
+
+    // Compare with the SAME real Phase-4 local procurement, not the fixture's
+    // opening stock. Only paid foreign dispatch may cause this extra debit.
+    const localSales = (result: typeof paid) => result.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE");
+    expect(localSales(paid).length).toBeGreaterThan(0);
+    expect(localSales(paid)).toEqual(localSales(closed));
+    const sellerId = f.sellerOrigin.productionUnitId;
+    const buyerId = f.buyerDestination.productionUnitId;
+    const assertSellerGrossDebit = (world: WorldState) => {
+      const baseline = closed.world.productionUnits.get(sellerId)!;
+      const actual = world.productionUnits.get(sellerId)!;
+      expect((baseline.inputInventory.get(IRON) ?? 0) -
+        (actual.inputInventory.get(IRON) ?? 0)).toBeCloseTo(invoice.quantity!, 7);
+    };
+    assertSellerGrossDebit(paid.world);
+
+    // Aggregate goods conservation alone cannot detect moving stock to the
+    // wrong owner. Forge a transfer of 0.5 IRON from the seller to the buyer,
+    // keeping the total unchanged; the source-owner assertion must reject it.
+    const actualSeller = paid.world.productionUnits.get(sellerId)!;
+    const actualBuyer = paid.world.productionUnits.get(buyerId)!;
+    const forgedUnits = new Map(paid.world.productionUnits);
+    forgedUnits.set(sellerId, {
+      ...actualSeller,
+      inputInventory: new Map(actualSeller.inputInventory).set(
+        IRON, (actualSeller.inputInventory.get(IRON) ?? 0) - 0.5,
+      ),
+    });
+    forgedUnits.set(buyerId, {
+      ...actualBuyer,
+      inputInventory: new Map(actualBuyer.inputInventory).set(
+        IRON, (actualBuyer.inputInventory.get(IRON) ?? 0) + 0.5,
+      ),
+    });
+    const forged: WorldState = { ...paid.world, productionUnits: forgedUnits };
+    expect(totalIron(forged)).toBeCloseTo(totalIron(paid.world), 7);
+    expect(() => assertSellerGrossDebit(forged)).toThrow();
+
+    const waiting = run(f, paid.world, false, 8);
+    expect(waiting.phaseBoundaryError).toBeUndefined();
+    expect(waiting.reconciliationErrors).toBeNull();
+    expect(waiting.world.shipments).toEqual(paid.world.shipments);
+    expect(waiting.context.transactions.filter(tx =>
+      tx.type === "GOODS_TRANSPORT_LOSS" || tx.type === "SHIPMENT_DELIVERY"))
+      .toHaveLength(0);
+    let phase1Seen = 0;
+    const arrived = executeM5AutonomousRegionalTradeTick(
+      waiting.world, 9, households, (_phase, current) => current,
+      { ...f.options, phase1TradeLawProvider: () => undefined },
+      (phase, before, after, context) => {
+        if (phase !== 1) return;
+        phase1Seen++;
+        const pre = before.productionUnits.get(buyerId)!;
+        const post = after.productionUnits.get(buyerId)!;
+        expect((post.inputInventory.get(IRON) ?? 0) -
+          (pre.inputInventory.get(IRON) ?? 0)).toBeCloseTo(shipment.quantity, 7);
+        expect(context.transactions.filter(tx =>
+          tx.type === "SHIPMENT_DELIVERY" &&
+          tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + shipment.id))
+          .toHaveLength(1);
+      },
+    );
+    expect(phase1Seen).toBe(1);
+    expect(arrived.phaseBoundaryError).toBeUndefined();
+    expect(arrived.reconciliationErrors).toBeNull();
+    expect(arrived.world.shipments?.size ?? 0).toBe(0);
+    expect(totalIron(arrived.world)).toBeCloseTo(openingIron - loss.quantity!, 7);
+    expect(totalCash(arrived.world, currency)).toBeCloseTo(openingCash, 6);
+    expect(arrived.context.transactions.filter(tx =>
+      tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT" ||
+      tx.type === "GOODS_TRANSPORT_LOSS" || tx.type === "IMPORT_TARIFF"))
+      .toHaveLength(0);
+    const next = run(f, arrived.world, false, 10);
+    expect(next.reconciliationErrors).toBeNull();
+    expect(next.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY" || tx.type === "GOODS_TRANSPORT_LOSS"))
+      .toHaveLength(0);
+    expect(totalIron(next.world)).toBeCloseTo(openingIron - loss.quantity!, 7);
+  });
+
 });
