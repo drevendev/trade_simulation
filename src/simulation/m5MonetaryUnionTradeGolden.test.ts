@@ -484,4 +484,56 @@ describe("M5/#676 monetary-union cross-State golden", () => {
   });
 
 
+
+  it("keeps local procurement alive when physical or infrastructure route capacity is zero", () => {
+    const f = fixture();
+    const currency = f.origin.settlementCurrencyId;
+    const open = run(f);
+    const borderBlocked = run(f, f.world, false);
+    // Proving control: this exact world and route must dispatch paid cargo
+    // before either capacity source is disabled.
+    expect(open.world.shipments?.size).toBe(1);
+    const originalLink = f.world.transportLinks.get(f.link.linkId)!;
+    const zeroPhysicalWorld: WorldState = {
+      ...f.world,
+      transportLinks: new Map([[f.link.linkId, {
+        ...originalLink,
+        seed: { ...originalLink.seed, baseCapacity: 0 },
+      }]]),
+    };
+    const zeroInfrastructureFixture: ReturnType<typeof fixture> = {
+      ...f,
+      options: {
+        ...f.options,
+        infrastructureFactors: new Map([[f.link.linkId, 0]]),
+      },
+    };
+    const results = [
+      run(f, zeroPhysicalWorld),
+      run(zeroInfrastructureFixture),
+    ];
+    const localSales = borderBlocked.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE");
+    expect(localSales.length).toBeGreaterThan(0);
+    for (const blocked of results) {
+      expect(blocked.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(blocked.phaseBoundaryError).toBeUndefined();
+      expect(blocked.reconciliationErrors).toBeNull();
+      expect(blocked.world.shipments?.size ?? 0).toBe(0);
+      expect(blocked.context.transactions.filter(tx => tx.phase === 7 &&
+        ["TRADE_GOODS_SALE", "SHIPMENT_DISPATCH", "IMPORT_TARIFF",
+          "TRANSPORT_FEE", "CONSUMPTION_TAX", "FX_INPUT", "FX_OUTPUT"]
+          .includes(tx.type))).toHaveLength(0);
+      // Rejected transport capacity is not a general market shutdown:
+      // actual Phase-4 purchases still transfer goods, money and tax.
+      expect(blocked.context.transactions.filter(tx =>
+        tx.phase === 4 && tx.type === "MARKET_SALE")).toEqual(localSales);
+      expect(blocked.world.productionUnits).toEqual(borderBlocked.world.productionUnits);
+      expect(blocked.world.states).toEqual(borderBlocked.world.states);
+      expect(blocked.world.monetaryAuthorities).toEqual(f.world.monetaryAuthorities);
+      expect(totalCash(blocked.world, currency)).toBeCloseTo(totalCash(f.world, currency), 6);
+      expect(totalIron(blocked.world)).toBeCloseTo(totalIron(f.world), 7);
+    }
+  });
+
 });
