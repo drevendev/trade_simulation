@@ -1,6 +1,9 @@
 /** #677: real 16-phase M5 preview generation, determinism and fail-closed checks. */
 import { describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createM5PreviewScenario, generateM5Preview, serializeM5Preview, M5_PREVIEW_TICK,
@@ -76,6 +79,37 @@ describe("M5 #677 source-backed Pages generator", () => {
     expect(JSON.parse(output).routes.some((route: { departures: readonly unknown[] }) =>
       route.departures.length > 0)).toBe(true);
   }, 90_000);
+
+  it("fails closed on a missing or stale staged receipt, then accepts only canonical bytes", () => {
+    const cli = fileURLToPath(new URL("./generateM5Preview.mjs", import.meta.url));
+    const root = fileURLToPath(new URL("../../", import.meta.url));
+    const directory = mkdtempSync(join(tmpdir(), "m5-preview-receipt-"));
+    const candidate = join(directory, "candidate.json");
+    const check = () => {
+      const processResult = spawnSync(process.execPath, [cli, "--check", candidate], {
+        cwd: root, encoding: "utf8", timeout: 60_000, maxBuffer: 1024 * 1024,
+      });
+      expect(processResult.error).toBeUndefined();
+      return processResult;
+    };
+    try {
+      const missing = check();
+      expect(missing.status).not.toBe(0);
+      expect(missing.stderr).toContain("candidate M5 receipt is missing");
+      // --check must never create either candidate or canonical artifact.
+      writeFileSync(candidate, '{"milestone":"M5","tick":7}\n', "utf8");
+      const stale = check();
+      expect(stale.status).not.toBe(0);
+      expect(stale.stderr).toContain("candidate M5 receipt differs from canonical tick output");
+      writeFileSync(candidate, serializeM5Preview(createM5PreviewScenario()), "utf8");
+      const exact = check();
+      expect(exact.status).toBe(0);
+      expect(exact.stderr).toBe("");
+      expect(exact.stdout).toBe("");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 240_000);
 
   it("does not mutate the opening world or consume an extra economic replay", () => {
     const scenario = createM5PreviewScenario();
