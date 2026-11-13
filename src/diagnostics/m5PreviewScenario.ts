@@ -25,6 +25,77 @@ import { projectM5TradeTick, type M5TradeTickPreview } from "./m5TradePreview";
 
 export const M5_PREVIEW_TICK = 7;
 const IRON = "good:iron" as GoodId;
+const PREVIEW_ISSUER_KEY = "authority:alpha";
+const PREVIEW_POOL_KEY = "fxpool:currency:alpha-currency:beta";
+const RECIPROCAL_POOL_KEY = "fxpool:currency:beta-currency:alpha";
+
+/**
+ * The full baseline has two reciprocal ALP/BET issuer pools. Pin the Alpha
+ * issuer's ALP/BET pool as a deliberate, verified example (never first match).
+ * Remove other pools at seed construction, before genesis ledger accounting.
+ * An unexpected additional issuer pool makes this fixture invalid, not silently
+ * an alternative story dependent on Map insertion order.
+ */
+function singleIssuerFixture() {
+  const isPair = (base: string, quote: string) =>
+    (base === "currency:alpha" && quote === "currency:beta") ||
+    (base === "currency:beta" && quote === "currency:alpha");
+  const pairPools = baselineScenario.monetaryAuthorities.flatMap(authority =>
+    (authority.fxPools ?? []).filter(pool =>
+      isPair(pool.baseCurrencyKey, pool.quoteCurrencyKey),
+    ).map(pool => ({ authority, pool })),
+  );
+  if (pairPools.length !== 2 ||
+      !pairPools.some(({ authority, pool }) =>
+        authority.key === PREVIEW_ISSUER_KEY &&
+        authority.currencyKey === "currency:alpha" &&
+        pool.key === PREVIEW_POOL_KEY &&
+        pool.baseCurrencyKey === "currency:alpha" &&
+        pool.quoteCurrencyKey === "currency:beta") ||
+      !pairPools.some(({ authority, pool }) =>
+        authority.key === "authority:beta" &&
+        authority.currencyKey === "currency:beta" &&
+        pool.key === RECIPROCAL_POOL_KEY &&
+        pool.baseCurrencyKey === "currency:beta" &&
+        pool.quoteCurrencyKey === "currency:alpha")) {
+    throw new Error("M5 preview baseline has unqualified or ambiguous ALP/BET issuer pools");
+  }
+  return {
+    ...baselineScenario,
+    monetaryAuthorities: baselineScenario.monetaryAuthorities.map(authority => ({
+      ...authority,
+      fxPools: authority.key === PREVIEW_ISSUER_KEY
+        ? (authority.fxPools ?? []).filter(pool => pool.key === PREVIEW_POOL_KEY)
+        : [],
+    })),
+  };
+}
+
+/** Reject missing, ambiguous or incorrectly owned FX pools in caller worlds. */
+function requireSinglePreviewIssuer(world: WorldState): void {
+  const source = [...world.regions.values()].find(region => region.seed.key === "region:a4-border");
+  const destination = [...world.regions.values()].find(region => region.seed.key === "region:b4-chokepoint");
+  if (!source || !destination) throw new Error("M5 preview requires its explicit border regions");
+  const matching = [...world.monetaryAuthorities.values()].flatMap(authority =>
+    [...authority.fxPools.values()].filter(pool =>
+      (pool.baseCurrencyId === source.settlementCurrencyId &&
+        pool.quoteCurrencyId === destination.settlementCurrencyId) ||
+      (pool.quoteCurrencyId === source.settlementCurrencyId &&
+        pool.baseCurrencyId === destination.settlementCurrencyId),
+    ).map(pool => ({ authority, pool })),
+  );
+  if (matching.length !== 1) {
+    throw new Error("M5 preview requires exactly one explicit issuer FX pool; missing or ambiguous pair");
+  }
+  const { authority, pool } = matching[0]!;
+  if (authority.seed.key !== PREVIEW_ISSUER_KEY ||
+      authority.currencyId !== source.settlementCurrencyId ||
+      pool.pairId !== PREVIEW_POOL_KEY ||
+      pool.baseCurrencyId !== source.settlementCurrencyId ||
+      pool.quoteCurrencyId !== destination.settlementCurrencyId) {
+    throw new Error("M5 preview issuer FX pool identity, orientation or ownership changed");
+  }
+}
 
 const phase1Jurisdictions: PhaseHandler = (world, context) => {
   if (context.phase === 1) {
@@ -49,7 +120,7 @@ export interface M5PreviewScenario {
 
 export function createM5PreviewScenario(): M5PreviewScenario {
   const initial = buildInitialWorld(
-    baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 42,
+    singleIssuerFixture(), baselineDefinitionPack, createDefaultSimulationConfig(), 42,
   );
   const source = [...initial.regions.values()].find(
     region => region.seed.key === "region:a4-border",
@@ -89,26 +160,6 @@ export function createM5PreviewScenario(): M5PreviewScenario {
     unit(templates[2]!, destination, "ACTIVE", 1_000_000, 0),
     unit(templates[3]!, destination, "CLOSING", 5, 2),
   ];
-  const matchesPair = (base: string, quote: string) =>
-    (base === source.settlementCurrencyId && quote === destination.settlementCurrencyId) ||
-    (quote === source.settlementCurrencyId && base === destination.settlementCurrencyId);
-  const poolIds = [...initial.monetaryAuthorities.values()].flatMap(
-    authority => [...authority.fxPools].filter(
-      ([, pool]) => matchesPair(pool.baseCurrencyId, pool.quoteCurrencyId),
-    ).map(([id]) => id),
-  );
-  if (poolIds.length < 1) throw new Error("M5 preview requires canonical issuer FX liquidity");
-  const selectedPoolId = poolIds[0]!;
-  // There must be exactly one eligible issuer pool; otherwise the canonical
-  // Phase-7 quote owner correctly refuses to trade as ambiguous.
-  const monetaryAuthorities = new Map([...initial.monetaryAuthorities].map(
-    ([id, authority]) => [
-      id, {
-        ...authority,
-        fxPools: new Map([...authority.fxPools].filter(([poolId]) => poolId === selectedPoolId)),
-      },
-    ] as const,
-  ));
   const opening: WorldState = {
     ...initial,
     regions: new Map([
@@ -125,8 +176,8 @@ export function createM5PreviewScenario(): M5PreviewScenario {
     }] as const)),
     productionUnits: new Map(productionUnits.map(item => [item.productionUnitId, item] as const)),
     transportLinks: new Map([[link.linkId, link]]),
-    monetaryAuthorities,
   };
+  requireSinglePreviewIssuer(opening);
   const market = opening.simulationConfig.markets;
   const options: M5AutonomousRegionalTradeOptions = {
     procurement: {
@@ -165,6 +216,7 @@ export function createM5PreviewScenario(): M5PreviewScenario {
 /** One real execution, then one-way projection of actual committed receipts. */
 export function generateM5Preview(scenario: M5PreviewScenario): M5TradeTickPreview {
   const { opening, options } = scenario;
+  requireSinglePreviewIssuer(opening);
   const result = executeM5AutonomousRegionalTradeTick(
     opening, M5_PREVIEW_TICK, phase1Jurisdictions,
     (_phase, current) => current, options,
