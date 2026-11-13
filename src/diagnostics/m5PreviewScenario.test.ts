@@ -67,7 +67,7 @@ describe("M5 #677 source-backed Pages generator", () => {
   });
 
   it("exports the exact canonical JSON through the production CLI without writing a placeholder", () => {
-    const cli = fileURLToPath(new URL("../../scripts/generate-m5-preview.mjs", import.meta.url));
+    const cli = fileURLToPath(new URL("./generateM5Preview.mjs", import.meta.url));
     const root = fileURLToPath(new URL("../../", import.meta.url));
     const output = execFileSync(process.execPath, [cli, "--stdout"], {
       cwd: root, encoding: "utf8", timeout: 60_000, maxBuffer: 1024 * 1024,
