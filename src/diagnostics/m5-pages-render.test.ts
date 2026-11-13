@@ -7,6 +7,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import type { M5TradeTickPreview } from "./m5TradePreview";
 
 const htmlSource = readFileSync(fileURLToPath(new URL("../../docs/m5.html", import.meta.url)), "utf8");
+const dashboardSource = readFileSync(fileURLToPath(new URL("../../docs/index.html", import.meta.url)), "utf8");
 
 const shipment = {
   id: "sh:m5fx:example", good: "Iron", unit: "tonnes", quantity: 2,
@@ -38,7 +39,10 @@ let url: string;
 beforeAll(async () => {
   server = createServer((request, reply) => {
     const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-    if (path === "/" || path === "/m5.html") {
+    if (path === "/" || path === "/index.html") {
+      reply.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      reply.end(dashboardSource);
+    } else if (path === "/m5.html") {
       reply.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       reply.end(htmlSource);
     } else if (path === "/m5-preview.json" && response !== null) {
@@ -72,6 +76,26 @@ async function open(width: number): Promise<Page> {
 }
 
 describe("M5 Pages source-backed shell", () => {
+  it("links the existing milestone dashboard to M5 and back, with no invented data", async () => {
+    response = null;
+    const page = await browser.newPage({ viewport: { width: 360, height: 900 } });
+    try {
+      await page.goto(new URL("/", url).href);
+      const link = page.getByRole("link", { name: /M5.*Trade.*FX preview \(data pending\)/ });
+      expect(await link.count()).toBe(1);
+      await link.click();
+      expect(new URL(page.url()).pathname).toBe("/m5.html");
+      await page.waitForFunction(() =>
+        !(document.getElementById("status")?.textContent ?? "").includes("Loading"));
+      expect(await page.locator("#status").innerText()).toContain("HTTP 404");
+      await page.getByRole("navigation", { name: "Milestone navigation" })
+        .getByRole("link").click();
+      expect(new URL(page.url()).pathname).toBe("/index.html");
+    } finally {
+      await page.close();
+    }
+  });
+
   it("renders paid cargo, named-currency fees and FX reserves without horizontal overflow", async () => {
     const page = await open(1280);
     try {
