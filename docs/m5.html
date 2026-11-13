@@ -54,7 +54,7 @@
   const status = document.getElementById("status");
   const routes = document.getElementById("routes");
   const fx = document.getElementById("fx");
-  const number = value => new Intl.NumberFormat("en", { maximumFractionDigits: 8 }).format(value);
+  const number = value => String(value); // Preserve the exact numeric value in the JSON receipt.
   const string = value => typeof value === "string" && value.length > 0 && value.length <= 250;
   const nonnegative = value => typeof value === "number" && Number.isFinite(value) && value >= 0;
   const positive = value => nonnegative(value) && value > 0;
