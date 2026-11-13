@@ -4,7 +4,7 @@
  *
  * npm run m5:preview         writes docs/m5-preview.json
  * npm run m5:preview:check   fails if the checked-in receipt is stale/missing
- * node scripts/generate-m5-preview.mjs --stdout   streams the exact receipt
+ * node src/diagnostics/generateM5Preview.mjs --stdout   streams the exact receipt
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
