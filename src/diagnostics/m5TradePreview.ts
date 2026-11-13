@@ -6,6 +6,9 @@
  * price, or replay economics with different parameters.
  */
 import type { TransportLinkId } from "../domain/id";
+import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
+import { validateTradeShipmentState } from "../simulation/tradeShipmentState";
+import type { EconomicTransaction } from "../simulation/tickOrchestrator";
 import { effectiveTransportLinkCapacity } from "../simulation/transportCapacity";
 import type { StatefulTickExecutionResult } from "../simulation/statefulTickOrchestrator";
 import type { WorldState } from "../simulation/worldState";
@@ -110,30 +113,174 @@ export function projectM5TradeTick(
   }
 
   const closing = result.world;
-  const departures = [...(closing.shipments?.values() ?? [])].filter(s => s.departureTick === tick);
-  const arrivals = [...(opening.shipments?.values() ?? [])].filter(s => s.arrivalTick === tick);
-  const journalDispatch = result.context.transactions.filter(tx =>
-    tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
-  const journalDelivery = result.context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY");
-  const unmatchedDispatch = [...journalDispatch];
-  for (const shipment of departures) {
-    const index = unmatchedDispatch.findIndex(tx =>
-      tx.sourceRegionId === shipment.originRegionId &&
-      tx.destinationRegionId === shipment.destinationRegionId &&
-      tx.goodId === shipment.goodId && tx.quantity === shipment.quantity);
-    if (index < 0) throw new Error("M5 preview found in-transit cargo without its paid dispatch receipt");
-    unmatchedDispatch.splice(index, 1);
+  // Phase-7 committed stock is captured BEFORE zero-travel delivery removes it.
+  // The snapshot is not an intention and contains the same frozen paid terms
+  // used by the physical settlement. Without it, zero-travel cannot be proved.
+  const departures = result.context.phase7DispatchedShipments;
+  if (!Array.isArray(departures)) {
+    throw new Error("M5 preview requires the Phase-7 committed shipment snapshot");
   }
-  if (unmatchedDispatch.length) throw new Error("M5 preview found a dispatch without in-transit cargo");
+  const oldArrivals = [...(opening.shipments?.values() ?? [])]
+    .filter(shipment => shipment.arrivalTick === tick);
+  const instantArrivals = departures.filter(shipment => shipment.arrivalTick === tick);
+  const arrivals = [...oldArrivals, ...instantArrivals];
+  const journal = result.context.transactions;
+  const journalDispatch = journal.filter(tx =>
+    tx.tick === tick && tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
+  const journalDelivery = journal.filter(tx =>
+    tx.tick === tick && tx.type === "SHIPMENT_DELIVERY");
+  const usedBundleIds = new Set<string>();
+  const seenShipmentIds = new Set<string>();
+
+  // The current M5 prepared settlement issues matching sh:m5[fx]:... and
+  // tb:m5[fx]:... identities. The bundle also owns the sale and FX legs.
+  // A noncanonical name is not permission to guess a shipment from quantity.
+  function dispatchBundle(shipment: TradeShipmentState): string {
+    const id = String(shipment.id);
+    if (!/^sh:m5(?:fx)?:/.test(id)) {
+      throw new Error("M5 preview cannot identify the paid dispatch bundle");
+    }
+    return "tb:" + id.slice(3);
+  }
+  const sameActor = (left: ActorRef | undefined, right: ActorRef): boolean =>
+    left !== undefined && actorRefKey(left) === actorRefKey(right);
+  const moneyEquals = (left: number | undefined, right: number): boolean =>
+    left !== undefined && Number.isFinite(left) && Number.isFinite(right) &&
+    Math.abs(left - right) <= Math.max(1e-8, Math.max(Math.abs(left), Math.abs(right)) * 1e-10);
+  const expectedReceipt = (
+    tx: EconomicTransaction, shipment: TradeShipmentState,
+    source: ActorRef, destination: ActorRef,
+  ): boolean =>
+    tx.sourceRegionId === shipment.originRegionId &&
+    tx.destinationRegionId === shipment.destinationRegionId &&
+    tx.goodId === shipment.goodId &&
+    sameActor(tx.source, source) && sameActor(tx.destination, destination);
+
+  for (const shipment of departures) {
+    validateTradeShipmentState(opening, shipment);
+    if (shipment.departureTick !== tick || seenShipmentIds.has(shipment.id)) {
+      throw new Error("M5 preview found a repeated or off-tick paid shipment");
+    }
+    seenShipmentIds.add(shipment.id);
+    const stored = closing.shipments?.get(shipment.id);
+    if (shipment.arrivalTick === tick ? stored !== undefined : stored === undefined) {
+      throw new Error("M5 preview closing cargo contradicts its delivery tick");
+    }
+    // A later phase cannot alter the dispatch snapshot while the same physical
+    // stock is still in transit.
+    if (stored !== undefined && (
+      stored.transportLinkId !== shipment.transportLinkId ||
+      stored.goodId !== shipment.goodId || stored.quantity !== shipment.quantity ||
+      stored.arrivalTick !== shipment.arrivalTick ||
+      stored.fxSettlementId !== shipment.fxSettlementId ||
+      stored.invoiceCurrencyId !== shipment.invoiceCurrencyId ||
+      stored.buyerPaymentCurrencyId !== shipment.buyerPaymentCurrencyId ||
+      stored.buyerGoodsPaymentAmount !== shipment.buyerGoodsPaymentAmount ||
+      stored.transportFeeAmount !== shipment.transportFeeAmount ||
+      stored.tariffAmount !== shipment.tariffAmount ||
+      stored.consumptionTaxAmount !== shipment.consumptionTaxAmount ||
+      !sameActor(stored.seller, shipment.seller) ||
+      !sameActor(stored.buyer, shipment.buyer) ||
+      !sameActor(stored.beneficialOwner, shipment.beneficialOwner)
+    )) {
+      throw new Error("M5 preview in-transit cargo differs from its paid snapshot");
+    }
+    const bundle = dispatchBundle(shipment);
+    if (usedBundleIds.has(bundle)) {
+      throw new Error("M5 preview reuses a shipment settlement bundle");
+    }
+    usedBundleIds.add(bundle);
+    const dispatches = journalDispatch.filter(tx => tx.bundleId === bundle);
+    if (dispatches.length !== 1 || !expectedReceipt(dispatches[0]!, shipment,
+        shipment.seller, shipment.beneficialOwner) ||
+        dispatches[0]!.quantity !== shipment.quantity ||
+        dispatches[0]!.amount !== shipment.quantity) {
+      throw new Error("M5 preview found in-transit cargo without its paid dispatch receipt");
+    }
+    const sales = journal.filter(tx =>
+      tx.tick === tick && tx.phase === 7 &&
+      tx.type === "TRADE_GOODS_SALE" && tx.bundleId === bundle);
+    if (sales.length !== 1 || !expectedReceipt(sales[0]!, shipment,
+        shipment.buyer, shipment.seller) ||
+        sales[0]!.currencyId !== shipment.invoiceCurrencyId ||
+        sales[0]!.quantity === undefined ||
+        sales[0]!.quantity < shipment.quantity ||
+        !moneyEquals(sales[0]!.moneyAmount,
+          shipment.sellerNetUnitPrice * sales[0]!.quantity) ||
+        !moneyEquals(sales[0]!.amount, sales[0]!.moneyAmount!)) {
+      throw new Error("M5 preview found dispatch without its paid invoice");
+    }
+    if (shipment.fxSettlementId !== undefined) {
+      const fxInput = journal.filter(tx => tx.tick === tick && tx.phase === 7 &&
+        tx.type === "FX_INPUT" && tx.bundleId === bundle);
+      const fxOutput = journal.filter(tx => tx.tick === tick && tx.phase === 7 &&
+        tx.type === "FX_OUTPUT" && tx.bundleId === bundle);
+      if (fxInput.length !== 1 || fxOutput.length !== 1 ||
+          sales[0]!.fxSettlementId !== shipment.fxSettlementId ||
+          fxInput[0]!.fxSettlementId !== shipment.fxSettlementId ||
+          fxOutput[0]!.fxSettlementId !== shipment.fxSettlementId ||
+          fxInput[0]!.currencyId !== shipment.buyerPaymentCurrencyId ||
+          fxOutput[0]!.currencyId !== shipment.invoiceCurrencyId ||
+          !sameActor(fxInput[0]!.source, shipment.buyer) ||
+          !sameActor(fxOutput[0]!.destination, shipment.seller) ||
+          !moneyEquals(fxInput[0]!.moneyAmount, shipment.buyerGoodsPaymentAmount) ||
+          !moneyEquals(fxOutput[0]!.moneyAmount, sales[0]!.moneyAmount!)) {
+        throw new Error("M5 preview found inconsistent FX payment ownership");
+      }
+    } else if (!moneyEquals(sales[0]!.moneyAmount,
+        shipment.buyerGoodsPaymentAmount) ||
+        journal.some(tx => tx.bundleId === bundle &&
+          (tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT"))) {
+      throw new Error("M5 preview found inconsistent same-currency payment");
+    }
+    for (const [kind, expected] of [
+      ["TRANSPORT_FEE", shipment.transportFeeAmount],
+      ["IMPORT_TARIFF", shipment.tariffAmount],
+      ["CONSUMPTION_TAX", shipment.consumptionTaxAmount],
+    ] as const) {
+      const fees = journal.filter(tx =>
+        tx.tick === tick && tx.phase === 7 && tx.bundleId === bundle &&
+        tx.type === kind);
+      if (fees.length !== (expected > 0 ? 1 : 0) ||
+          (expected > 0 && (fees[0]!.currencyId !== shipment.buyerPaymentCurrencyId ||
+            !sameActor(fees[0]!.source, shipment.buyer) ||
+            !moneyEquals(fees[0]!.moneyAmount, expected)))) {
+        throw new Error("M5 preview found a missing or mismatched payment charge");
+      }
+    }
+  }
+  if (journalDispatch.length !== departures.length ||
+      [...(closing.shipments?.values() ?? [])].some(shipment =>
+        shipment.departureTick === tick && !seenShipmentIds.has(shipment.id))) {
+    throw new Error("M5 preview found a dispatch without committed cargo");
+  }
+  const arrivalIds = new Set<string>();
   for (const shipment of arrivals) {
-    if ((closing.shipments?.has(shipment.id) ?? false) ||
-        journalDelivery.filter(tx =>
-          tx.reason?.endsWith(":" + shipment.id) && tx.quantity === shipment.quantity).length !== 1) {
+    validateTradeShipmentState(opening, shipment);
+    if (arrivalIds.has(shipment.id) || closing.shipments?.has(shipment.id)) {
+      throw new Error("M5 preview found an unmatched or duplicate shipment delivery");
+    }
+    arrivalIds.add(shipment.id);
+    const deliveries = journalDelivery.filter(tx =>
+      tx.transactionId === "tx:delivery:" + shipment.id);
+    const expectedPhase = shipment.departureTick === tick ? 7 : 1;
+    if (deliveries.length !== 1 || deliveries[0]!.phase !== expectedPhase ||
+        deliveries[0]!.bundleId !== "tb:delivery:" + shipment.id ||
+        deliveries[0]!.reason !== "IN_TRANSIT_TO_" +
+          shipment.destinationInventoryBucket + "_STOCK:" + shipment.id ||
+        deliveries[0]!.goodId !== shipment.goodId ||
+        deliveries[0]!.sourceRegionId !== shipment.originRegionId ||
+        deliveries[0]!.destinationRegionId !== shipment.destinationRegionId ||
+        !sameActor(deliveries[0]!.destination, shipment.beneficialOwner) ||
+        deliveries[0]!.source !== undefined ||
+        deliveries[0]!.quantity !== shipment.quantity ||
+        deliveries[0]!.amount !== shipment.quantity ||
+        deliveries[0]!.moneyAmount !== undefined) {
       throw new Error("M5 preview found an unmatched or duplicate shipment delivery");
     }
   }
   if (journalDelivery.length !== arrivals.length) {
-    throw new Error("M5 preview found a delivery without an opening in-transit owner");
+    throw new Error("M5 preview found a delivery without committed cargo");
   }
 
   const routes: M5PreviewRoute[] = ordered(opening.transportLinks.values(), link => String(link.linkId))
