@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit",
     "pretest": "playwright install chromium",
     "test": "vitest run",
-    "build": "vite build"
+    "build": "vite build",
+    "m5:preview": "node scripts/generate-m5-preview.mjs",
+    "m5:preview:check": "node scripts/generate-m5-preview.mjs --check"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",
