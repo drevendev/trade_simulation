@@ -2709,5 +2709,5 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(delivered).toEqual(dispatched);
     expect(normal.shipments?.size ?? 0).toBe(0);
     expect(poolOf(f.world).cash).toEqual(originalPairCash);
-  });
+  }, 30_000); // 600 ticks × two full replays; keep the timeout local to this golden.
 });
