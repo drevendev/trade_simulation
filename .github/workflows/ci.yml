@@ -95,6 +95,19 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # #677: obtain a real 16-phase M5 Pages receipt on the runner. The checked-in
+      # artifact will be verified against these exact generator bytes once committed.
+      - name: Generate canonical M5 Pages receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          node src/diagnostics/generateM5Preview.mjs --stdout | tee "$RUNNER_TEMP/m5-preview.json"
+          node src/diagnostics/generateM5Preview.mjs --check "$RUNNER_TEMP/m5-preview.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: m5-preview-receipt
+          path: ${{ runner.temp }}/m5-preview.json
+          if-no-files-found: error
 
   policy-guard:
     name: policy-guard
