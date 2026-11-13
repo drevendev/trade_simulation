@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M5 · Trade and FX | Economic Simulation</title>
+<style>
+  :root { color-scheme:light dark; --bg:#f7f6f2; --surface:#fff; --ink:#171b1d; --muted:#565f65; --border:#d9dfe0; --accent:#275e73; --good:#246b4a; --warn:#9c5423; }
+  @media (prefers-color-scheme:dark) { :root { --bg:#101a1e; --surface:#1b282e; --ink:#ebf1f2; --muted:#b7c6cc; --border:#45535a; --accent:#93d4e6; --good:#a0dbb1; --warn:#ffc080; } }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:clamp(1rem,3vw,2rem) 1rem 4rem; font:16px/1.55 system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:1050px; margin:auto; }
+  a { color:var(--accent); }
+  a:focus-visible { outline:3px solid var(--accent); outline-offset:4px; }
+  h1 { font-size:clamp(1.75rem,4vw,2.6rem); letter-spacing:-.03em; margin:.5rem 0; }
+  h2 { font-size:1.35rem; margin:2rem 0 .6rem; }
+  h3 { font-size:1.05rem; margin:0 0 .5rem; }
+  p { color:var(--muted); margin:.4rem 0 .9rem; }
+  .eyebrow { font-size:.75rem; letter-spacing:.14em; font-weight:750; color:var(--accent); }
+  .panel { border:1px solid var(--border); background:var(--surface); padding:1rem 1.2rem; border-radius:12px; margin:.8rem 0; min-width:0; }
+  .muted { color:var(--muted); }
+  .note { border-left:4px solid var(--accent); padding:.4rem 1rem; background:var(--surface); margin:1.2rem 0; }
+  .problem { border-left-color:var(--warn); }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr)); gap:.55rem; margin:1rem 0; }
+  .stat { padding:.7rem .85rem; border:1px solid var(--border); border-radius:8px; min-width:0; }
+  .stat span { display:block; font-size:.8rem; color:var(--muted); }
+  .stat strong { display:block; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,315px),1fr)); gap:.8rem; }
+  ul { padding-left:1.25rem; }
+  li { margin:.4rem 0; overflow-wrap:anywhere; }
+  .label { font-weight:700; overflow-wrap:anywhere; }
+  .badge { display:inline-block; padding:.05rem .5rem; font-size:.77rem; border-radius:99px; border:1px solid var(--border); color:var(--muted); }
+  .warning { color:var(--warn); font-weight:650; }
+  code { font-family:ui-monospace,monospace; overflow-wrap:anywhere; }
+  footer { margin-top:2.5rem; border-top:1px solid var(--border); padding-top:1rem; color:var(--muted); font-size:.85rem; }
+</style>
+</head>
+<body>
+<main>
+  <nav aria-label="Milestone navigation"><a href="./index.html">← Earlier milestone dashboard</a></nav>
+  <header>
+    <div class="eyebrow">M5 · MILESTONE PREVIEW</div>
+    <h1>Trade routes and currency liquidity</h1>
+    <p>Read-only evidence from a completed canonical simulation tick. No simulated trade is initiated by this page; amounts in different currencies are never added together.</p>
+  </header>
+  <div id="status" class="note" role="status" aria-live="polite">Loading source-backed M5 evidence…</div>
+  <section aria-labelledby="route-title"><h2 id="route-title">Directed routes</h2><div id="routes" class="grid"></div></section>
+  <section aria-labelledby="fx-title"><h2 id="fx-title">Foreign exchange reserves</h2><div id="fx" class="grid"></div></section>
+  <footer>Physical capacity is expressed in cargo weight-units per tick. Reserve balances and payments retain their named currencies. The absence of a paid dispatch does not, alone, establish a border, tariff or FX restriction.</footer>
+</main>
+<script>
+"use strict";
+(function () {
+  const status = document.getElementById("status");
+  const routes = document.getElementById("routes");
+  const fx = document.getElementById("fx");
+  const number = value => String(value); // Preserve the exact numeric value in the JSON receipt.
+  const string = value => typeof value === "string" && value.length > 0 && value.length <= 250;
+  const nonnegative = value => typeof value === "number" && Number.isFinite(value) && value >= 0;
+  const positive = value => nonnegative(value) && value > 0;
+  const integer = value => Number.isSafeInteger(value) && value >= 0;
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  function node(tag, text, parent, cssClass) {
+    const element = document.createElement(tag);
+    if (text !== undefined) element.textContent = text;
+    if (cssClass) element.className = cssClass;
+    if (parent) parent.appendChild(element);
+    return element;
+  }
+  function stat(parent, label, value) {
+    const item = node("div", undefined, parent, "stat");
+    node("span", label, item);
+    node("strong", value, item);
+  }
+  function validateCargo(cargo, label) {
+    assert(cargo && typeof cargo === "object", label + " must be an object");
+    for (const key of ["id", "good", "unit", "invoiceCurrency", "buyerCurrency"]) {
+      assert(string(cargo[key]), label + "." + key + " must have a label");
+    }
+    for (const key of ["quantity", "buyerGoodsPaymentAmount", "transportFeeAmount",
+      "tariffAmount", "consumptionTaxAmount"]) {
+      assert(nonnegative(cargo[key]), label + "." + key + " must be a nonnegative finite number");
+    }
+    assert(integer(cargo.arrivalTick), label + ".arrivalTick is invalid");
+    assert(cargo.fxSettlementId === null || string(cargo.fxSettlementId),
+      label + ".fxSettlementId is invalid");
+  }
+  function validate(data) {
+    assert(data && data.milestone === "M5" && integer(data.tick),
+      "wrong milestone or invalid tick");
+    assert(Array.isArray(data.routes) && data.routes.length <= 1000,
+      "routes must be a bounded array");
+    assert(Array.isArray(data.fxPools) && data.fxPools.length <= 1000,
+      "FX pools must be a bounded array");
+    const linkIds = new Set();
+    for (const route of data.routes) {
+      assert(route && string(route.linkId) && string(route.from) && string(route.to),
+        "route identity is incomplete");
+      assert(!linkIds.has(route.linkId), "duplicate directed route");
+      linkIds.add(route.linkId);
+      assert(nonnegative(route.capacityWeightUnits) && nonnegative(route.dispatchedWeightUnits),
+        "route capacities must be finite and nonnegative");
+      assert(integer(route.inTransitCount), "route transit count must be an integer");
+      assert(["NO_PHYSICAL_CAPACITY","PAID_DISPATCH","NO_PAID_DISPATCH"].includes(route.status),
+        "route status is unknown");
+      assert((route.status === "NO_PHYSICAL_CAPACITY") === (route.capacityWeightUnits === 0),
+        "route capacity and status disagree");
+      assert(Array.isArray(route.departures) && route.departures.length <= 10000 &&
+        Array.isArray(route.arrivals) && route.arrivals.length <= 10000,
+        "route shipments must be bounded arrays");
+      if (route.status === "PAID_DISPATCH") {
+        assert(route.departures.length > 0, "paid route has no dispatch");
+      } else {
+        assert(route.departures.length === 0, "unpaid route has a dispatch");
+      }
+      route.departures.forEach((cargo, index) => {
+        validateCargo(cargo, "departure " + index);
+        assert(cargo.arrivalTick >= data.tick, "departure arrives before its dispatch");
+      });
+      route.arrivals.forEach((cargo, index) => {
+        validateCargo(cargo, "arrival " + index);
+        assert(cargo.arrivalTick === data.tick, "arrival does not belong to this tick");
+      });
+    }
+    for (const pool of data.fxPools) {
+      assert(pool && string(pool.authorityId) && string(pool.poolId) &&
+        string(pool.baseCurrency) && string(pool.quoteCurrency), "FX pool identity is incomplete");
+      for (const key of ["baseReserve","quoteReserve","baseSpendable","quoteSpendable"]) {
+        assert(nonnegative(pool[key]), "FX pool " + key + " must be finite and nonnegative");
+      }
+      assert(positive(pool.spotBefore) && positive(pool.spotAfter) &&
+        typeof pool.reserveFloorReached === "boolean", "FX rate or floor state invalid");
+      assert(pool.baseSpendable <= pool.baseReserve && pool.quoteSpendable <= pool.quoteReserve,
+        "spendable FX reserves exceed physical reserves");
+    }
+    return data;
+  }
+  function shipments(parent, label, cargo) {
+    node("h3", label + " (" + cargo.length + ")", parent);
+    if (cargo.length === 0) {
+      node("p", "No " + label.toLowerCase() + " recorded.", parent);
+      return;
+    }
+    const list = node("ul", undefined, parent);
+    for (const item of cargo) {
+      node("li", item.good + ": " + number(item.quantity) + " " + item.unit +
+        "; arrival tick " + item.arrivalTick + "; buyer paid " +
+        number(item.buyerGoodsPaymentAmount) + " " + item.buyerCurrency +
+        " for goods; transport " + number(item.transportFeeAmount) + " " + item.buyerCurrency +
+        ", tariff " + number(item.tariffAmount) + " " + item.buyerCurrency +
+        ", consumption tax " + number(item.consumptionTaxAmount) + " " + item.buyerCurrency +
+        "; invoice currency " + item.invoiceCurrency +
+        (item.fxSettlementId === null ? "; no FX conversion" :
+          "; FX settlement " + item.fxSettlementId), list);
+    }
+  }
+  function render(data) {
+    routes.replaceChildren();
+    fx.replaceChildren();
+    status.classList.remove("problem");
+    status.textContent = "Canonical M5 tick " + data.tick + " · source-backed data loaded. " +
+      "Trade volumes reflect paid departures, not requested orders.";
+    if (!data.routes.length) node("p", "No directed routes in this completed tick.", routes, "panel");
+    for (const route of data.routes) {
+      const card = node("article", undefined, routes, "panel");
+      node("h3", route.from + " → " + route.to, card);
+      node("div", route.linkId, card, "muted");
+      const badge = node("div", undefined, card);
+      node("span", route.status === "PAID_DISPATCH" ? "Paid dispatch" :
+        route.status === "NO_PHYSICAL_CAPACITY" ? "No physical capacity" :
+        "No paid dispatch", badge, "badge");
+      const metrics = node("div", undefined, card, "stats");
+      stat(metrics, "Capacity / tick", number(route.capacityWeightUnits) + " weight-units");
+      stat(metrics, "Paid departure weight", number(route.dispatchedWeightUnits) + " weight-units");
+      stat(metrics, "Cargo in transit after tick", number(route.inTransitCount) + " shipments");
+      if (route.status === "NO_PHYSICAL_CAPACITY") {
+        node("p", "Physical capacity is zero; this route cannot dispatch goods in this tick.",
+          card, "warning");
+      } else if (route.status === "NO_PAID_DISPATCH") {
+        node("p", "No paid shipment. This read model cannot determine whether demand, " +
+          "law, tariff, cash, or FX prevented trade.", card);
+      }
+      shipments(card, "Departures", route.departures);
+      shipments(card, "Arrivals", route.arrivals);
+    }
+    if (!data.fxPools.length) node("p", "No FX liquidity pools in this completed tick.", fx, "panel");
+    for (const pool of data.fxPools) {
+      const card = node("article", undefined, fx, "panel");
+      node("h3", pool.baseCurrency + " / " + pool.quoteCurrency, card);
+      node("div", "Authority " + pool.authorityId + " · pool " + pool.poolId, card, "muted");
+      const metrics = node("div", undefined, card, "stats");
+      stat(metrics, "Base reserve", number(pool.baseReserve) + " " + pool.baseCurrency);
+      stat(metrics, "Base spendable", number(pool.baseSpendable) + " " + pool.baseCurrency);
+      stat(metrics, "Quote reserve", number(pool.quoteReserve) + " " + pool.quoteCurrency);
+      stat(metrics, "Quote spendable", number(pool.quoteSpendable) + " " + pool.quoteCurrency);
+      stat(metrics, "Spot before", number(pool.spotBefore) + " " +
+        pool.quoteCurrency + "/" + pool.baseCurrency);
+      stat(metrics, "Spot after", number(pool.spotAfter) + " " +
+        pool.quoteCurrency + "/" + pool.baseCurrency);
+      if (pool.reserveFloorReached) node("p",
+        "At least one reserve reached its operational floor. This does not, by itself, " +
+        "prove why a shipment was absent.", card, "warning");
+    }
+  }
+  fetch("./m5-preview.json", { cache:"no-store" })
+    .then(response => {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    })
+    .then(value => render(validate(value)))
+    .catch(error => {
+      routes.replaceChildren();
+      fx.replaceChildren();
+      status.classList.add("problem");
+      status.textContent = "M5 data unavailable: " + error.message +
+        ". No fallback or invented simulation values are displayed.";
+    });
+})();
+</script>
+</body>
+</html>
