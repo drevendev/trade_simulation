@@ -8,6 +8,7 @@ import type { M5TradeTickPreview } from "./m5TradePreview";
 
 const htmlSource = readFileSync(fileURLToPath(new URL("../../docs/m5.html", import.meta.url)), "utf8");
 const dashboardSource = readFileSync(fileURLToPath(new URL("../../docs/index.html", import.meta.url)), "utf8");
+const publishedM5Source = readFileSync(fileURLToPath(new URL("../../docs/m5-preview.json", import.meta.url)), "utf8");
 
 const shipment = {
   id: "sh:m5fx:example", good: "Iron", unit: "tonnes", quantity: 2,
@@ -81,7 +82,7 @@ describe("M5 Pages source-backed shell", () => {
     const page = await browser.newPage({ viewport: { width: 360, height: 900 } });
     try {
       await page.goto(new URL("/", url).href);
-      const link = page.getByRole("link", { name: /M5.*Trade.*FX preview \(data pending\)/ });
+      const link = page.getByRole("link", { name: /M5.*Trade.*FX preview/ });
       expect(await link.count()).toBe(1);
       await link.click();
       expect(new URL(page.url()).pathname).toBe("/m5.html");
@@ -95,6 +96,38 @@ describe("M5 Pages source-backed shell", () => {
       await page.close();
     }
   });
+
+  it.each([1280, 360])(
+    "renders the exact checked-in canonical M5 receipt at %ipx without overflow",
+    async width => {
+      response = publishedM5Source;
+      const committed = JSON.parse(publishedM5Source) as M5TradeTickPreview;
+      const paidRoute = committed.routes.find(route => route.departures.length > 0);
+      const paidCargo = paidRoute?.departures[0];
+      const pool = committed.fxPools[0];
+      expect(paidRoute).toBeDefined();
+      expect(paidCargo?.fxSettlementId).not.toBeNull();
+      expect(pool).toBeDefined();
+      const page = await open(width);
+      try {
+        expect(await page.locator("#status").innerText()).toContain("tick " + committed.tick);
+        expect(await page.locator("#routes").innerText()).toContain(
+          paidRoute!.from + " → " + paidRoute!.to,
+        );
+        expect(await page.locator("#routes").innerText()).toContain(
+          "buyer paid " + paidCargo!.buyerGoodsPaymentAmount + " " + paidCargo!.buyerCurrency,
+        );
+        expect(await page.locator("#fx").innerText()).toContain(
+          pool!.spotAfter + " " + pool!.quoteCurrency + "/" + pool!.baseCurrency,
+        );
+        expect(await page.evaluate(() =>
+          document.documentElement.scrollWidth <= window.innerWidth,
+        )).toBe(true);
+      } finally {
+        await page.close();
+      }
+    },
+  );
 
   it("renders paid cargo, named-currency fees and FX reserves without horizontal overflow", async () => {
     const page = await open(1280);
