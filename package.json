@@ -12,8 +12,8 @@
     "pretest": "playwright install chromium",
     "test": "vitest run",
     "build": "vite build",
-    "m5:preview": "node scripts/generate-m5-preview.mjs",
-    "m5:preview:check": "node scripts/generate-m5-preview.mjs --check"
+    "m5:preview": "node src/diagnostics/generateM5Preview.mjs",
+    "m5:preview:check": "node src/diagnostics/generateM5Preview.mjs --check"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",
