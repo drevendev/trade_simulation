@@ -7,6 +7,7 @@
  * are all performed by the real stateful tick orchestration.
  */
 import { describe, expect, it } from "vitest";
+import { projectM5TradeTick } from "../diagnostics/m5TradePreview";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
@@ -2498,4 +2499,88 @@ describe("M5 #676: replenishing FX while paid cargo is still in transit", () => 
     expect(() => assertExactSourceDebit(forged)).toThrow();
   });
 
+});
+
+/**
+ * M5 / #677 diagnostic projection must use committed physical and FX stocks,
+ * not inferred shipments, fabricated reserves or a second simulator.
+ */
+describe("M5 #677 Pages projection from actual 16-phase receipts", () => {
+  it("reports both paid FX routes deterministically and rejects missing dispatch evidence", () => {
+    const f = fixture();
+    const before = f.world.shipments;
+    const paid = run(f, f.world);
+    expect(paid.reconciliationErrors).toBeNull();
+    const view = projectM5TradeTick(f.world, paid, 7, f.options.infrastructureFactors);
+    const departures = view.routes.flatMap(route => route.departures);
+    const cargos = [...(paid.world.shipments?.values() ?? [])];
+    expect(view.milestone).toBe("M5");
+    expect(view.tick).toBe(7);
+    expect(departures).toHaveLength(2);
+    expect(cargos).toHaveLength(2);
+    expect(view.routes.filter(route => route.status === "PAID_DISPATCH")).toHaveLength(2);
+    expect(departures.map(shipment => shipment.id).sort())
+      .toEqual(cargos.map(shipment => String(shipment.id)).sort());
+    expect(departures.every(shipment =>
+      shipment.quantity > 0 && shipment.fxSettlementId !== null &&
+      shipment.arrivalTick > 7 && shipment.buyerGoodsPaymentAmount > 0)).toBe(true);
+    expect(view.fxPools.length).toBeGreaterThan(0);
+    expect(view.fxPools.some(pool =>
+      pool.baseReserve > 0 && pool.quoteReserve > 0 &&
+      pool.spotBefore > 0 && pool.spotAfter > 0)).toBe(true);
+    expect(f.world.shipments).toBe(before);
+    expect(f.world.shipments?.size ?? 0).toBe(0);
+
+    // An unordered registry must not change a read-model or consume a random draw.
+    const reorderedOpening: WorldState = {
+      ...f.world,
+      transportLinks: new Map([...f.world.transportLinks].reverse()),
+      regions: new Map([...f.world.regions].reverse()),
+      monetaryAuthorities: new Map([...f.world.monetaryAuthorities].reverse()),
+    };
+    expect(projectM5TradeTick(reorderedOpening, paid, 7, f.options.infrastructureFactors))
+      .toEqual(view);
+    expect(projectM5TradeTick(f.world, paid, 7, f.options.infrastructureFactors))
+      .toEqual(view);
+
+    // A "pretty" display of unpaid cargo is worse than a visible data error.
+    const missingReceipt = {
+      ...paid,
+      context: {
+        ...paid.context,
+        transactions: paid.context.transactions.filter(tx =>
+          tx.type !== "SHIPMENT_DISPATCH"),
+      },
+    };
+    expect(() => projectM5TradeTick(f.world, missingReceipt, 7, f.options.infrastructureFactors))
+      .toThrow(/without its paid dispatch receipt/);
+  });
+
+  it("shows an explicit zero-capacity route and finite FX floor without inventing trade", () => {
+    const f = fixture();
+    const zeroFactors = new Map(f.links.map(link => [link, 0] as const));
+    const blocked = executeM5AutonomousRegionalTradeTick(
+      f.world, 7, households, (_phase, current) => current,
+      { ...f.options, infrastructureFactors: zeroFactors },
+    );
+    const view = projectM5TradeTick(f.world, blocked, 7, zeroFactors);
+    expect(blocked.reconciliationErrors).toBeNull();
+    expect(view.routes).toHaveLength(2);
+    expect(view.routes.every(route =>
+      route.capacityWeightUnits === 0 && route.status === "NO_PHYSICAL_CAPACITY" &&
+      route.departures.length === 0)).toBe(true);
+    expect(blocked.context.transactions.filter(tx => tx.phase === 4 &&
+      tx.type === "MARKET_SALE").length).toBeGreaterThan(0);
+
+    const floorWorld = withOutputStock(f, 0);
+    const floor = run(f, floorWorld);
+    const floorView = projectM5TradeTick(
+      floorWorld, floor, 7, f.options.infrastructureFactors,
+    );
+    expect(floor.reconciliationErrors).toBeNull();
+    expect(floorView.routes.every(route => route.departures.length === 0)).toBe(true);
+    expect(floorView.fxPools.some(pool => pool.reserveFloorReached)).toBe(true);
+    expect(floor.context.transactions.filter(tx => tx.phase === 4 &&
+      tx.type === "MARKET_SALE").length).toBeGreaterThan(0);
+  });
 });
