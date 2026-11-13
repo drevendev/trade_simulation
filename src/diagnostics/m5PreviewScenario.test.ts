@@ -4,6 +4,10 @@ import {
   createM5PreviewScenario, generateM5Preview, serializeM5Preview, M5_PREVIEW_TICK,
 } from "./m5PreviewScenario";
 import { executeM5AutonomousRegionalTradeTick } from "../simulation/m5AutonomousRegionalTradeTick";
+import { buildInitialWorld } from "../simulation/worldState";
+import { baselineScenario } from "../config/fixtures/baselineScenario";
+import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
+import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { PhaseHandler } from "../simulation/tickOrchestrator";
 
 function canonical(value: unknown): unknown {
@@ -76,6 +80,45 @@ describe("M5 #677 source-backed Pages generator", () => {
     expect(JSON.stringify(canonical(scenario.opening))).toBe(before);
     expect(canonical(after.world)).toEqual(canonical(control.world));
     expect(canonical(after.context.transactions)).toEqual(canonical(control.context.transactions));
+  });
+
+  it("pins Alpha's explicit issuer and refuses a second real reciprocal FX pool", () => {
+    const scenario = createM5PreviewScenario();
+    const sourceIssuer = [...scenario.opening.monetaryAuthorities.values()].find(
+      authority => authority.seed.key === "authority:alpha",
+    );
+    expect(sourceIssuer?.fxPools.has("fxpool:currency:alpha-currency:beta")).toBe(true);
+    expect([...scenario.opening.monetaryAuthorities.values()].reduce(
+      (sum, authority) => sum + authority.fxPools.size, 0,
+    )).toBe(1);
+
+    // Restore the actual reciprocal Beta-issuer pool from unfiltered baseline
+    // stock, rather than fabricating an arbitrary conflicting pool.
+    const fullBaseline = buildInitialWorld(
+      baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 42,
+    );
+    const baselineBeta = [...fullBaseline.monetaryAuthorities.values()].find(
+      authority => authority.seed.key === "authority:beta",
+    );
+    const reciprocal = baselineBeta?.fxPools.get("fxpool:currency:beta-currency:alpha");
+    const betaEntry = [...scenario.opening.monetaryAuthorities].find(
+      ([, authority]) => authority.seed.key === "authority:beta",
+    );
+    if (!reciprocal || !betaEntry) throw new Error("Expected baseline reciprocal Beta FX pool");
+    const [betaId, beta] = betaEntry;
+    const authorities = new Map(scenario.opening.monetaryAuthorities);
+    authorities.set(betaId, {
+      ...beta,
+      fxPools: new Map(beta.fxPools).set(reciprocal.pairId, reciprocal),
+    });
+    const ambiguous = {
+      ...scenario,
+      opening: { ...scenario.opening, monetaryAuthorities: authorities },
+    };
+    expect(() => generateM5Preview(ambiguous)).toThrow(
+      /exactly one explicit issuer FX pool; missing or ambiguous pair/,
+    );
+    expect(scenario.opening.monetaryAuthorities.get(betaId)?.fxPools.size).toBe(0);
   });
 
   it("refuses to publish an unauthorized route instead of inventing a trade", () => {
