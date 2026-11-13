@@ -474,6 +474,26 @@ export function executeM5LiveQuotedTradeTick(
           };
         }
       }
+      if (phase === 7) {
+        // A zero-travel paid shipment is created and delivered within this
+        // phase: it does not survive in closing WorldState.shipments.
+        // Capture exactly the committed, pre-delivery stock (not planner
+        // intentions) so one-way diagnostics can reconcile both receipts.
+        const dispatched = [...(world.shipments?.values() ?? [])]
+          .filter(shipment => shipment.departureTick === nextContext.tick)
+          .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+          .map(shipment => Object.freeze({
+            ...shipment,
+            seller: Object.freeze({ ...shipment.seller }),
+            buyer: Object.freeze({ ...shipment.buyer }),
+            beneficialOwner: Object.freeze({ ...shipment.beneficialOwner }),
+            routeLinkIds: Object.freeze([...shipment.routeLinkIds]),
+          }));
+        nextContext = {
+          ...nextContext,
+          phase7DispatchedShipments: Object.freeze(dispatched),
+        };
+      }
       if (phase === 1 || phase === 7) {
         const delivered = deliverDueTradeShipments(world, {
           tick: nextContext.tick,
