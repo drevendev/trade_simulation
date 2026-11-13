@@ -1,7 +1,7 @@
 /** #677: real 16-phase M5 preview generation, determinism and fail-closed checks. */
 import { describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,6 +67,16 @@ describe("M5 #677 source-backed Pages generator", () => {
     expect(first).toBe(second);
     expect(first.endsWith("\n")).toBe(true);
     expect(JSON.parse(first)).toEqual(generateM5Preview(createM5PreviewScenario()));
+  });
+
+  it("pins the checked-in Pages artifact to exact canonical execution bytes", () => {
+    const published = readFileSync(
+      fileURLToPath(new URL("../../docs/m5-preview.json", import.meta.url)), "utf8",
+    );
+    expect(published).toBe(serializeM5Preview(createM5PreviewScenario()));
+    const parsed = JSON.parse(published);
+    expect(parsed.routes.some((route: { departures: readonly unknown[] }) =>
+      route.departures.length > 0)).toBe(true);
   });
 
   it("exports the exact canonical JSON through the production CLI without writing a placeholder", () => {
