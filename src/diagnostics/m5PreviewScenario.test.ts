@@ -1,5 +1,7 @@
 /** #677: real 16-phase M5 preview generation, determinism and fail-closed checks. */
 import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   createM5PreviewScenario, generateM5Preview, serializeM5Preview, M5_PREVIEW_TICK,
 } from "./m5PreviewScenario";
@@ -63,6 +65,17 @@ describe("M5 #677 source-backed Pages generator", () => {
     expect(first.endsWith("\n")).toBe(true);
     expect(JSON.parse(first)).toEqual(generateM5Preview(createM5PreviewScenario()));
   });
+
+  it("exports the exact canonical JSON through the production CLI without writing a placeholder", () => {
+    const cli = fileURLToPath(new URL("./generateM5Preview.mjs", import.meta.url));
+    const root = fileURLToPath(new URL("../../", import.meta.url));
+    const output = execFileSync(process.execPath, [cli, "--stdout"], {
+      cwd: root, encoding: "utf8", timeout: 60_000, maxBuffer: 1024 * 1024,
+    });
+    expect(output).toBe(serializeM5Preview(createM5PreviewScenario()));
+    expect(JSON.parse(output).routes.some((route: { departures: readonly unknown[] }) =>
+      route.departures.length > 0)).toBe(true);
+  }, 90_000);
 
   it("does not mutate the opening world or consume an extra economic replay", () => {
     const scenario = createM5PreviewScenario();
