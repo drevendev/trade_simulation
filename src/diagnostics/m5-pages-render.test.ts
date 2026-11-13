@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page } from "playwright";
 import type { M5TradeTickPreview } from "./m5TradePreview";
 
-const document = readFileSync(fileURLToPath(new URL("../../docs/m5.html", import.meta.url)), "utf8");
+const htmlSource = readFileSync(fileURLToPath(new URL("../../docs/m5.html", import.meta.url)), "utf8");
 
 const shipment = {
   id: "sh:m5fx:example", good: "Iron", unit: "tonnes", quantity: 2,
@@ -40,7 +40,7 @@ beforeAll(async () => {
     const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
     if (path === "/" || path === "/m5.html") {
       reply.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      reply.end(document);
+      reply.end(htmlSource);
     } else if (path === "/m5-preview.json" && response !== null) {
       reply.writeHead(200, { "Content-Type": "application/json" });
       reply.end(response);
@@ -66,8 +66,8 @@ beforeEach(() => {
 async function open(width: number): Promise<Page> {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   await page.goto(url);
-  await expect.poll(async () => page.locator("#status").innerText())
-    .not.toContain("Loading");
+  await page.waitForFunction(() =>
+    !(document.getElementById("status")?.textContent ?? "").includes("Loading"));
   return page;
 }
 
@@ -75,13 +75,13 @@ describe("M5 Pages source-backed shell", () => {
   it("renders paid cargo, named-currency fees and FX reserves without horizontal overflow", async () => {
     const page = await open(1280);
     try {
-      await expect(page.locator("#status")).toContainText("tick 7");
-      await expect(page.locator("#routes")).toContainText("Border → Chokepoint");
-      await expect(page.locator("#routes")).toContainText("buyer paid 18 BET");
-      await expect(page.locator("#routes")).toContainText("tariff 1 BET");
-      await expect(page.locator("#routes")).toContainText("Arrivals (1)");
-      await expect(page.locator("#fx")).toContainText("2.2 BET/ALP");
-      await expect(page.locator("#fx")).toContainText("50 ALP");
+      expect(await page.locator("#status").innerText()).toContain("tick 7");
+      expect(await page.locator("#routes").innerText()).toContain("Border → Chokepoint");
+      expect(await page.locator("#routes").innerText()).toContain("buyer paid 18 BET");
+      expect(await page.locator("#routes").innerText()).toContain("tariff 1 BET");
+      expect(await page.locator("#routes").innerText()).toContain("Arrivals (1)");
+      expect(await page.locator("#fx").innerText()).toContain("2.2 BET/ALP");
+      expect(await page.locator("#fx").innerText()).toContain("50 ALP");
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     } finally {
       await page.close();
@@ -105,9 +105,9 @@ describe("M5 Pages source-backed shell", () => {
     response = JSON.stringify(sample);
     const page = await open(360);
     try {
-      await expect(page.locator("#routes")).toContainText("Physical capacity is zero");
-      await expect(page.locator("#routes")).toContainText("cannot determine whether");
-      await expect(page.locator("#fx")).toContainText("operational floor");
+      expect(await page.locator("#routes").innerText()).toContain("Physical capacity is zero");
+      expect(await page.locator("#routes").innerText()).toContain("cannot determine whether");
+      expect(await page.locator("#fx").innerText()).toContain("operational floor");
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     } finally {
       await page.close();
@@ -118,16 +118,16 @@ describe("M5 Pages source-backed shell", () => {
     response = null;
     const missing = await open(360);
     try {
-      await expect(missing.locator("#status")).toContainText("HTTP 404");
-      await expect(missing.locator("#routes article")).toHaveCount(0);
+      expect(await missing.locator("#status").innerText()).toContain("HTTP 404");
+      expect(await missing.locator("#routes article").count()).toBe(0);
     } finally {
       await missing.close();
     }
     response = JSON.stringify({ ...valid, routes: [], fxPools: [] });
     const empty = await open(1280);
     try {
-      await expect(empty.locator("#routes")).toContainText("No directed routes");
-      await expect(empty.locator("#fx")).toContainText("No FX liquidity pools");
+      expect(await empty.locator("#routes").innerText()).toContain("No directed routes");
+      expect(await empty.locator("#fx").innerText()).toContain("No FX liquidity pools");
     } finally {
       await empty.close();
     }
@@ -139,8 +139,8 @@ describe("M5 Pages source-backed shell", () => {
     });
     const invalid = await open(1280);
     try {
-      await expect(invalid.locator("#status")).toContainText("must be finite");
-      await expect(invalid.locator("#routes article")).toHaveCount(0);
+      expect(await invalid.locator("#status").innerText()).toContain("must be finite");
+      expect(await invalid.locator("#routes article").count()).toBe(0);
     } finally {
       await invalid.close();
     }
@@ -149,8 +149,8 @@ describe("M5 Pages source-backed shell", () => {
     });
     const xss = await open(1280);
     try {
-      await expect(xss.locator("#routes")).toContainText('<img src=x onerror="alert(1)">');
-      await expect(xss.locator("#routes img")).toHaveCount(0);
+      expect(await xss.locator("#routes").innerText()).toContain('<img src=x onerror="alert(1)">');
+      expect(await xss.locator("#routes img").count()).toBe(0);
     } finally {
       await xss.close();
     }
