@@ -7,16 +7,22 @@
  * node src/diagnostics/generateM5Preview.mjs --stdout   streams the exact receipt
  */
 import { readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 
 const args = process.argv.slice(2);
-if (args.length > 1 || (args[0] && !["--check", "--stdout"].includes(args[0]))) {
-  throw new Error("Usage: generate-m5-preview.mjs [--check|--stdout]");
+// A candidate file can be checked without editing the checked-in Pages artifact.
+if (args.length > 2 ||
+    (args[0] && !["--check", "--stdout"].includes(args[0])) ||
+    (args.length === 2 && (args[0] !== "--check" || !args[1] || args[1].startsWith("--")))) {
+  throw new Error("Usage: generate-m5-preview.mjs [--check [candidate-path]|--stdout]");
 }
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const artifact = fileURLToPath(new URL("../../docs/m5-preview.json", import.meta.url));
+const checkedArtifact = args[0] === "--check" && args[1] ? resolve(args[1]) : artifact;
+const checkedLabel = args[1] ? "candidate M5 receipt" : "docs/m5-preview.json";
 const server = await createServer({
   root,
   configFile: false,
@@ -45,13 +51,13 @@ try {
   } else if (args[0] === "--check") {
     let published;
     try {
-      published = await readFile(artifact, "utf8");
+      published = await readFile(checkedArtifact, "utf8");
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
-      throw new Error("docs/m5-preview.json is missing; generate and commit the receipt");
+      throw new Error(checkedLabel + " is missing; generate and commit the receipt");
     }
     if (published !== json) {
-      throw new Error("docs/m5-preview.json differs from canonical tick output");
+      throw new Error(checkedLabel + " differs from canonical tick output");
     }
   } else {
     await writeFile(artifact, json, "utf8");
