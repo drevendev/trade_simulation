@@ -53,8 +53,8 @@ beforeAll(async () => {
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Missing server port");
   url = "http://127.0.0.1:" + address.port + "/m5.html";
-  browser = await chromium.launch({ headless: true });
-});
+  browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
+}, 60_000);
 afterAll(async () => {
   await browser?.close();
   await new Promise<void>(resolve => server?.close(() => resolve()));
