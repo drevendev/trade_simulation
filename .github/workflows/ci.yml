@@ -108,6 +108,10 @@ jobs:
           name: m5-preview-receipt
           path: ${{ runner.temp }}/m5-preview.json
           if-no-files-found: error
+      # The Pages artifact is committed, not auto-rewritten on CI. A stale or
+      # missing receipt is a failing gate, including on pushes to master.
+      - name: Refuse missing or stale M5 Pages receipt
+        run: npm run m5:preview:check
 
   policy-guard:
     name: policy-guard
