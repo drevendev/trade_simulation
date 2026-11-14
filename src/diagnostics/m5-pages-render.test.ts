@@ -288,6 +288,36 @@ describe("M5 Pages source-backed shell", () => {
     }
   });
 
+  it.each([
+    ["pool identity", (receipt: M5TradeTickPreview) => ({
+      ...receipt, fxPools: receipt.fxPools.map(pool => ({
+        ...pool, baseCurrency: "FORGED",
+      })),
+    }), "FX pool identity changed between adjacent ticks"],
+    ["opening spot", (receipt: M5TradeTickPreview) => ({
+      ...receipt, fxPools: receipt.fxPools.map(pool => ({
+        ...pool, spotBefore: pool.spotBefore + 0.1,
+      })),
+    }), "next-tick opening FX spot differs from prior closing spot"],
+  ] as const)(
+    "rejects a forged next-tick FX %s despite a genuine matching delivery",
+    async (_case, mutate, error) => {
+      response = publishedM5Source;
+      const arrival = JSON.parse(publishedM5Arrival) as M5TradeTickPreview;
+      arrivalResponse = JSON.stringify(mutate(arrival));
+      const page = await open(360);
+      try {
+        await page.waitForFunction(() =>
+          !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
+        expect(await page.locator("#arrival-status").innerText()).toContain(error);
+        expect(await page.locator("#arrival-routes article").count()).toBe(0);
+        expect(await page.locator("#routes").innerText()).toContain("Paid dispatch");
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
   it("does not call scheduled arrival confirmed when the delivery sidecar is missing", async () => {
     response = publishedM5Source;
     arrivalResponse = null;
