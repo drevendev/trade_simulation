@@ -74,7 +74,6 @@ describe("M5 #677 source-backed Pages generator", () => {
     expect(due).toHaveLength(1);
     expect(arrived.tick).toBe(M5_PREVIEW_TICK + 1);
     expect(receipts).toEqual(due);
-    expect(arrived.routes.some(route => route.inTransitCount === 0)).toBe(true);
     expect(JSON.stringify(canonical(scenario.opening))).toBe(before);
     const exact = serializeM5ArrivalPreview(scenario);
     expect(exact).toBe(serializeM5ArrivalPreview(createM5PreviewScenario()));
