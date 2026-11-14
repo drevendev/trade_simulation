@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  createM5PreviewScenario, generateM5Preview, serializeM5Preview, M5_PREVIEW_TICK,
+  createM5PreviewScenario, generateM5Preview, serializeM5Preview,
+  generateM5ArrivalPreview, serializeM5ArrivalPreview, M5_PREVIEW_TICK,
 } from "./m5PreviewScenario";
 import { executeM5AutonomousRegionalTradeTick } from "../simulation/m5AutonomousRegionalTradeTick";
 import { projectM5TradeTick } from "./m5TradePreview";
@@ -60,6 +61,51 @@ describe("M5 #677 source-backed Pages generator", () => {
       pool.baseReserve > 0 && pool.quoteReserve > 0 &&
       pool.spotBefore > 0 && pool.spotAfter > 0 &&
       pool.spotBefore !== pool.spotAfter)).toBe(true);
+  });
+
+  it("exposes source-backed tick-8 arrival, never a scheduled forecast", () => {
+    const scenario = createM5PreviewScenario();
+    const before = JSON.stringify(canonical(scenario.opening));
+    const dispatch = generateM5Preview(scenario);
+    const arrived = generateM5ArrivalPreview(scenario);
+    const due = dispatch.routes.flatMap(route => route.departures)
+      .filter(shipment => shipment.arrivalTick === M5_PREVIEW_TICK + 1);
+    const receipts = arrived.routes.flatMap(route => route.arrivals);
+    expect(due).toHaveLength(1);
+    expect(arrived.tick).toBe(M5_PREVIEW_TICK + 1);
+    expect(receipts).toEqual(due);
+    expect(arrived.routes.some(route => route.inTransitCount === 0)).toBe(true);
+    expect(JSON.stringify(canonical(scenario.opening))).toBe(before);
+    const exact = serializeM5ArrivalPreview(scenario);
+    expect(exact).toBe(serializeM5ArrivalPreview(createM5PreviewScenario()));
+    expect(JSON.parse(exact)).toEqual(arrived);
+  });
+
+  it("exposes the actual delivery through CLI without changing the published tick-7 receipt", () => {
+    const cli = fileURLToPath(new URL("./generateM5Preview.mjs", import.meta.url));
+    const root = fileURLToPath(new URL("../../", import.meta.url));
+    const delivery = execFileSync(process.execPath, [cli, "--arrival-stdout"], {
+      cwd: root, encoding: "utf8", timeout: 60_000, maxBuffer: 1024 * 1024,
+    });
+    expect(delivery).toBe(serializeM5ArrivalPreview(createM5PreviewScenario()));
+    expect(JSON.parse(delivery).routes.flatMap(
+      (route: { arrivals: readonly unknown[] }) => route.arrivals,
+    )).toHaveLength(1);
+    const published = readFileSync(
+      fileURLToPath(new URL("../../docs/m5-preview.json", import.meta.url)), "utf8",
+    );
+    expect(published).toBe(serializeM5Preview(createM5PreviewScenario()));
+  }, 90_000);
+
+  it("refuses a delivery preview if the source tick never paid for cargo", () => {
+    const scenario = createM5PreviewScenario();
+    const denied = {
+      ...scenario,
+      options: { ...scenario.options, phase1TradeLawProvider: () => undefined },
+    };
+    expect(() => generateM5ArrivalPreview(denied)).toThrow(
+      /no paid cargo due at next tick/,
+    );
   });
 
   it("proves the tick-7 paid shipment arrives exactly once at tick 8", () => {
