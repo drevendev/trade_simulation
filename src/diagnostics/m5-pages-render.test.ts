@@ -201,6 +201,53 @@ describe("M5 Pages source-backed shell", () => {
     }
   });
 
+  it("rejects a paid shipment duplicated across directed routes before displaying trade totals", async () => {
+    const dispatch = JSON.parse(publishedM5Source) as M5TradeTickPreview;
+    const paid = dispatch.routes.find(route => route.departures.length > 0)!;
+    response = JSON.stringify({
+      ...dispatch,
+      routes: [...dispatch.routes, { ...paid, linkId: "tl:forged",
+        from: "Forged origin", to: "Forged destination" }],
+    });
+    arrivalResponse = publishedM5Arrival;
+    const page = await open(360);
+    try {
+      expect(await page.locator("#status").innerText()).toContain(
+        "duplicate paid shipment identity",
+      );
+      expect(await page.locator("#routes article").count()).toBe(0);
+      expect(await page.locator("#fx article").count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("rejects a delivered shipment duplicated under another route without hiding paid dispatch", async () => {
+    response = publishedM5Source;
+    const arrival = JSON.parse(publishedM5Arrival) as M5TradeTickPreview;
+    const delivered = arrival.routes.find(route => route.arrivals.length > 0)!;
+    arrivalResponse = JSON.stringify({
+      ...arrival,
+      routes: [...arrival.routes, {
+        ...delivered, linkId: "tl:forged", from: "Forged origin", to: "Forged destination",
+        status: "NO_PAID_DISPATCH", departures: [], dispatchedWeightUnits: 0,
+        arrivals: delivered.arrivals,
+      }],
+    });
+    const page = await open(360);
+    try {
+      await page.waitForFunction(() =>
+        !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
+      expect(await page.locator("#arrival-status").innerText()).toContain(
+        "duplicate arrival receipt identity",
+      );
+      expect(await page.locator("#arrival-routes article").count()).toBe(0);
+      expect(await page.locator("#routes").innerText()).toContain("Paid dispatch");
+    } finally {
+      await page.close();
+    }
+  });
+
   it("does not call scheduled arrival confirmed when the delivery sidecar is missing", async () => {
     response = publishedM5Source;
     arrivalResponse = null;
