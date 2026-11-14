@@ -118,6 +118,8 @@ describe("M5 Pages source-backed shell", () => {
       expect(pool).toBeDefined();
       const page = await open(width);
       try {
+        await page.waitForFunction(() =>
+          !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
         expect(await page.locator("#status").innerText()).toContain("tick " + committed.tick);
         expect(await page.locator("#arrival-status").innerText()).toContain(
           "Canonical tick " + arrived.tick + " · 1 delivered shipment",
