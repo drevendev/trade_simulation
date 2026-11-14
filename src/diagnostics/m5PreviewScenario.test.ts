@@ -251,14 +251,27 @@ describe("M5 #677 source-backed Pages generator", () => {
       expect(exact.stdout).toBe("");
       writeFileSync(candidate, valid.replace('"tick": 8', '"tick": 9'), "utf8");
       expect(check().status).not.toBe(0);
-      // Temporary diagnostic evidence for publishing only the genuine receipt;
-      // it will be removed before this branch is handed to independent QA.
-      console.log("M5_ARRIVAL_CANONICAL_BASE64=" + Buffer.from(valid, "utf8").toString("base64"));
     } finally {
       expect(readFileSync(dispatchPath, "utf8")).toBe(dispatchBefore);
       rmSync(directory, { recursive: true, force: true });
     }
   }, 240_000);
+
+  it("pins the published tick-8 arrival sidecar to real second-tick execution bytes", () => {
+    const published = readFileSync(
+      fileURLToPath(new URL("../../docs/m5-arrival.json", import.meta.url)), "utf8",
+    );
+    const canonical = serializeM5ArrivalPreview(createM5PreviewScenario());
+    expect(published).toBe(canonical);
+    const parsed = JSON.parse(published);
+    expect(parsed.milestone).toBe("M5");
+    expect(parsed.tick).toBe(M5_PREVIEW_TICK + 1);
+    const receipts = parsed.routes.flatMap((route: { arrivals: readonly unknown[] }) => route.arrivals);
+    expect(receipts).toHaveLength(1);
+    expect(readFileSync(
+      fileURLToPath(new URL("../../docs/m5-preview.json", import.meta.url)), "utf8",
+    )).toBe(serializeM5Preview(createM5PreviewScenario()));
+  });
 
   it("does not mutate the opening world or consume an extra economic replay", () => {
     const scenario = createM5PreviewScenario();
