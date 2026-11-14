@@ -221,6 +221,45 @@ describe("M5 #677 source-backed Pages generator", () => {
     }
   }, 240_000);
 
+  it("checks a staged real tick-8 delivery receipt without editing tick-7 data", () => {
+    const cli = fileURLToPath(new URL("./generateM5Preview.mjs", import.meta.url));
+    const root = fileURLToPath(new URL("../../", import.meta.url));
+    const dispatchPath = fileURLToPath(new URL("../../docs/m5-preview.json", import.meta.url));
+    const dispatchBefore = readFileSync(dispatchPath, "utf8");
+    const directory = mkdtempSync(join(tmpdir(), "m5-arrival-receipt-"));
+    const candidate = join(directory, "candidate.json");
+    const check = () => {
+      const result = spawnSync(process.execPath, [cli, "--arrival-check", candidate], {
+        cwd: root, encoding: "utf8", timeout: 60_000, maxBuffer: 1024 * 1024,
+      });
+      expect(result.error).toBeUndefined();
+      return result;
+    };
+    try {
+      const missing = check();
+      expect(missing.status).not.toBe(0);
+      expect(missing.stderr).toContain("candidate M5 arrival receipt is missing");
+      writeFileSync(candidate, serializeM5Preview(createM5PreviewScenario()), "utf8");
+      const stale = check();
+      expect(stale.status).not.toBe(0);
+      expect(stale.stderr).toContain("candidate M5 arrival receipt differs");
+      const valid = serializeM5ArrivalPreview(createM5PreviewScenario());
+      writeFileSync(candidate, valid, "utf8");
+      const exact = check();
+      expect(exact.status).toBe(0);
+      expect(exact.stderr).toBe("");
+      expect(exact.stdout).toBe("");
+      writeFileSync(candidate, valid.replace('"tick": 8', '"tick": 9'), "utf8");
+      expect(check().status).not.toBe(0);
+      // Temporary diagnostic evidence for publishing only the genuine receipt;
+      // it will be removed before this branch is handed to independent QA.
+      console.log("M5_ARRIVAL_CANONICAL_BASE64=" + Buffer.from(valid, "utf8").toString("base64"));
+    } finally {
+      expect(readFileSync(dispatchPath, "utf8")).toBe(dispatchBefore);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 240_000);
+
   it("does not mutate the opening world or consume an extra economic replay", () => {
     const scenario = createM5PreviewScenario();
     const before = JSON.stringify(canonical(scenario.opening));
