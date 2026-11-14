@@ -9,6 +9,7 @@ import {
   createM5PreviewScenario, generateM5Preview, serializeM5Preview, M5_PREVIEW_TICK,
 } from "./m5PreviewScenario";
 import { executeM5AutonomousRegionalTradeTick } from "../simulation/m5AutonomousRegionalTradeTick";
+import { projectM5TradeTick } from "./m5TradePreview";
 import { buildInitialWorld } from "../simulation/worldState";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
@@ -59,6 +60,60 @@ describe("M5 #677 source-backed Pages generator", () => {
       pool.baseReserve > 0 && pool.quoteReserve > 0 &&
       pool.spotBefore > 0 && pool.spotAfter > 0 &&
       pool.spotBefore !== pool.spotAfter)).toBe(true);
+  });
+
+  it("proves the tick-7 paid shipment arrives exactly once at tick 8", () => {
+    const scenario = createM5PreviewScenario();
+    const first = executeM5AutonomousRegionalTradeTick(
+      scenario.opening, M5_PREVIEW_TICK, upstream,
+      (_phase, world) => world, scenario.options,
+    );
+    const cargo = [...(first.world.shipments?.values() ?? [])].find(shipment =>
+      shipment.departureTick === M5_PREVIEW_TICK &&
+      shipment.arrivalTick === M5_PREVIEW_TICK + 1,
+    );
+    expect(cargo).toBeDefined();
+    expect(first.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY" &&
+      tx.transactionId === "tx:delivery:" + cargo!.id)).toHaveLength(0);
+
+    // The next canonical 16-phase tick, not a forecast or projected receipt,
+    // must settle the same paid cargo into its destination exactly once.
+    const nextTick = M5_PREVIEW_TICK + 1;
+    const second = executeM5AutonomousRegionalTradeTick(
+      first.world, nextTick, upstream,
+      (_phase, world) => world, scenario.options,
+    );
+    const receipt = projectM5TradeTick(
+      first.world, second, nextTick, scenario.options.infrastructureFactors,
+    );
+    const arrivals = receipt.routes.flatMap(route => route.arrivals)
+      .filter(arrival => arrival.id === cargo!.id);
+    expect(arrivals).toHaveLength(1);
+    expect(arrivals[0]).toMatchObject({
+      id: cargo!.id,
+      quantity: cargo!.quantity,
+      arrivalTick: nextTick,
+      fxSettlementId: cargo!.fxSettlementId ?? null,
+    });
+    expect(second.world.shipments?.has(cargo!.id)).toBe(false);
+    expect(second.context.transactions.filter(tx =>
+      tx.type === "SHIPMENT_DELIVERY" &&
+      tx.transactionId === "tx:delivery:" + cargo!.id)).toHaveLength(1);
+
+    // A missing economic delivery receipt cannot be turned into a plausible
+    // Pages arrival by a physical-stock-only projection.
+    const withoutDelivery = {
+      ...second,
+      context: {
+        ...second.context,
+        transactions: second.context.transactions.filter(tx =>
+          tx.transactionId !== "tx:delivery:" + cargo!.id),
+      },
+    };
+    expect(() => projectM5TradeTick(
+      first.world, withoutDelivery, nextTick, scenario.options.infrastructureFactors,
+    )).toThrow(/unmatched or duplicate shipment delivery/);
   });
 
   it("serializes source-backed data byte-for-byte deterministically", () => {
