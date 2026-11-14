@@ -365,6 +365,44 @@ describe("M5 Pages source-backed shell", () => {
     }
   });
 
+  it("rejects a forged same-tick delivery amount before confirming paid cargo", async () => {
+    // The paid and delivered shipment IDs are equal; only the delivery's fees are forged.
+    // A same-tick receipt must satisfy the same exact-term rule as next-tick arrivals.
+    response = JSON.stringify({
+      ...valid,
+      routes: [{
+        ...valid.routes[0]!,
+        arrivals: [{ ...shipment, transportFeeAmount: shipment.transportFeeAmount + 500 }],
+      }],
+    });
+    const page = await open(360);
+    try {
+      expect(await page.locator("#status").innerText()).toContain(
+        "same-tick arrival differs from paid dispatch",
+      );
+      expect(await page.locator("#routes article").count()).toBe(0);
+      expect(await page.locator("#fx article").count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("refuses to call an instantaneous paid shipment delivered without a receipt", async () => {
+    response = JSON.stringify({
+      ...valid,
+      routes: [{ ...valid.routes[0]!, arrivals: [] }],
+    });
+    const page = await open(1280);
+    try {
+      expect(await page.locator("#status").innerText()).toContain(
+        "same-tick paid dispatch missing its delivery receipt",
+      );
+      expect(await page.locator("#routes article").count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
   it("rejects duplicated FX pool reserves before displaying dispatch totals", async () => {
     const dispatch = JSON.parse(publishedM5Source) as M5TradeTickPreview;
     response = JSON.stringify({
