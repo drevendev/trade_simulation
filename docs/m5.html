@@ -97,6 +97,10 @@
     // A null receipt cannot substantiate a paid international conversion.
     assert(cargo.invoiceCurrency === cargo.buyerCurrency || string(cargo.fxSettlementId),
       label + " cross-currency payment has no FX settlement proof");
+    // The canonical shipment contract forbids an FX settlement on a same-currency payment.
+    // Do not present an invented conversion for a payment that did not require one.
+    assert(cargo.invoiceCurrency !== cargo.buyerCurrency || cargo.fxSettlementId === null,
+      label + " same-currency payment has unexpected FX settlement");
   }
   function validate(data) {
     assert(data && data.milestone === "M5" && integer(data.tick),
