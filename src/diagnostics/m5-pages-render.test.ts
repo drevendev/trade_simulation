@@ -179,6 +179,28 @@ describe("M5 Pages source-backed shell", () => {
     }
   });
 
+  it("rejects an arrival with forged route endpoints even when its paid cargo matches", async () => {
+    response = publishedM5Source;
+    const arrival = JSON.parse(publishedM5Arrival) as M5TradeTickPreview;
+    arrivalResponse = JSON.stringify({
+      ...arrival, routes: arrival.routes.map(route => route.arrivals.length
+        ? { ...route, to: "Forged destination" }
+        : route),
+    });
+    const page = await open(360);
+    try {
+      await page.waitForFunction(() =>
+        !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
+      expect(await page.locator("#arrival-status").innerText()).toContain(
+        "unmatched arrival route or shipment",
+      );
+      expect(await page.locator("#arrival-routes article").count()).toBe(0);
+      expect(await page.locator("#routes").innerText()).toContain("Paid dispatch");
+    } finally {
+      await page.close();
+    }
+  });
+
   it("does not call scheduled arrival confirmed when the delivery sidecar is missing", async () => {
     response = publishedM5Source;
     arrivalResponse = null;
