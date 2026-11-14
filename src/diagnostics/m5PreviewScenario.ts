@@ -232,6 +232,53 @@ export function generateM5Preview(scenario: M5PreviewScenario): M5TradeTickPrevi
   return preview;
 }
 
+/**
+ * Source-backed next-tick receipt, kept separate from the published tick-7
+ * dispatch until Pages can consume a versioned two-tick timeline.
+ *
+ * A scheduled arrival is not delivery evidence: only the actual Phase-1
+ * SHIPMENT_DELIVERY journal and its matching stock transition are allowed
+ * through projectM5TradeTick. Do not replay from projected preview data.
+ */
+export function generateM5ArrivalPreview(scenario: M5PreviewScenario): M5TradeTickPreview {
+  const { opening, options } = scenario;
+  requireSinglePreviewIssuer(opening);
+  const dispatched = executeM5AutonomousRegionalTradeTick(
+    opening, M5_PREVIEW_TICK, phase1Jurisdictions,
+    (_phase, current) => current, options,
+  );
+  const first = projectM5TradeTick(
+    opening, dispatched, M5_PREVIEW_TICK, options.infrastructureFactors,
+  );
+  const arrivalTick = M5_PREVIEW_TICK + 1;
+  const expected = new Map(first.routes.flatMap(route =>
+    route.departures.filter(shipment => shipment.arrivalTick === arrivalTick)
+      .map(shipment => [shipment.id, shipment] as const),
+  ));
+  if (expected.size === 0) {
+    throw new Error("M5 arrival preview has no paid cargo due at next tick");
+  }
+  const delivered = executeM5AutonomousRegionalTradeTick(
+    dispatched.world, arrivalTick, phase1Jurisdictions,
+    (_phase, current) => current, options,
+  );
+  const second = projectM5TradeTick(
+    dispatched.world, delivered, arrivalTick, options.infrastructureFactors,
+  );
+  const arrivals = second.routes.flatMap(route => route.arrivals);
+  if (arrivals.length !== expected.size ||
+      arrivals.some(shipment =>
+        JSON.stringify(shipment) !== JSON.stringify(expected.get(shipment.id)))) {
+    throw new Error("M5 next-tick arrival receipt does not match paid dispatch");
+  }
+  return second;
+}
+
+/** Deterministic tick-8 receipt, not yet a published Pages artifact. */
+export function serializeM5ArrivalPreview(scenario: M5PreviewScenario): string {
+  return JSON.stringify(generateM5ArrivalPreview(scenario), null, 2) + "\n";
+}
+
 /** Stable JSON for a later checked-in Pages artifact; never substitute fake data. */
 export function serializeM5Preview(scenario: M5PreviewScenario): string {
   return JSON.stringify(generateM5Preview(scenario), null, 2) + "\n";

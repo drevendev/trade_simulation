@@ -4,7 +4,9 @@
  *
  * npm run m5:preview         writes docs/m5-preview.json
  * npm run m5:preview:check   fails if the checked-in receipt is stale/missing
- * node src/diagnostics/generateM5Preview.mjs --stdout   streams the exact receipt
+ * node src/diagnostics/generateM5Preview.mjs --stdout   streams the exact dispatch receipt
+ * node src/diagnostics/generateM5Preview.mjs --arrival-stdout
+ *   streams the separately verified real tick-8 delivery receipt
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -14,9 +16,9 @@ import { createServer } from "vite";
 const args = process.argv.slice(2);
 // A candidate file can be checked without editing the checked-in Pages artifact.
 if (args.length > 2 ||
-    (args[0] && !["--check", "--stdout"].includes(args[0])) ||
+    (args[0] && !["--check", "--stdout", "--arrival-stdout"].includes(args[0])) ||
     (args.length === 2 && (args[0] !== "--check" || !args[1] || args[1].startsWith("--")))) {
-  throw new Error("Usage: generate-m5-preview.mjs [--check [candidate-path]|--stdout]");
+  throw new Error("Usage: generate-m5-preview.mjs [--check [candidate-path]|--stdout|--arrival-stdout]");
 }
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -32,9 +34,11 @@ const server = await createServer({
 });
 
 try {
-  const { createM5PreviewScenario, serializeM5Preview } =
+  const { createM5PreviewScenario, serializeM5Preview, serializeM5ArrivalPreview } =
     await server.ssrLoadModule("/src/diagnostics/m5PreviewScenario.ts");
-  const json = serializeM5Preview(createM5PreviewScenario());
+  const json = args[0] === "--arrival-stdout"
+    ? serializeM5ArrivalPreview(createM5PreviewScenario())
+    : serializeM5Preview(createM5PreviewScenario());
   const preview = JSON.parse(json);
 
   // The canonical generator itself enforces paid FX cargo, rate movement,
@@ -46,7 +50,7 @@ try {
     throw new Error("Refusing to publish an invalid M5 preview envelope");
   }
 
-  if (args[0] === "--stdout") {
+  if (args[0] === "--stdout" || args[0] === "--arrival-stdout") {
     process.stdout.write(json);
   } else if (args[0] === "--check") {
     let published;
