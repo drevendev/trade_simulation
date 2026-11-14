@@ -117,6 +117,13 @@ describe("M5 Pages source-backed shell", () => {
         expect(await page.locator("#routes").innerText()).toContain(
           "buyer paid " + paidCargo!.buyerGoodsPaymentAmount + " " + paidCargo!.buyerCurrency,
         );
+        expect(await page.locator("#routes").innerText()).toContain(
+          "Arrival is scheduled for tick " + paidCargo!.arrivalTick,
+        );
+        expect(await page.locator("#routes").innerText()).toContain(
+          "A later delivery receipt is required before arrival can be called confirmed.",
+        );
+        expect(await page.locator("#routes").innerText()).toContain("Capacity used");
         expect(await page.locator("#fx").innerText()).toContain(
           pool!.spotAfter + " " + pool!.quoteCurrency + "/" + pool!.baseCurrency,
         );
@@ -137,6 +144,14 @@ describe("M5 Pages source-backed shell", () => {
       expect(await page.locator("#routes").innerText()).toContain("buyer paid 18 BET");
       expect(await page.locator("#routes").innerText()).toContain("tariff 1 BET");
       expect(await page.locator("#routes").innerText()).toContain("Arrivals (1)");
+      expect(await page.locator("#routes").innerText()).toContain("Capacity used");
+      expect(await page.locator("#routes").innerText()).toContain("20.0%");
+      expect(await page.locator("#routes").innerText()).toContain(
+        "The same cargo also has a confirmed delivery receipt in tick 7.",
+      );
+      expect(await page.locator("#routes").innerText()).toContain(
+        "it is not evidence of a second sale or FX conversion.",
+      );
       expect(await page.locator("#fx").innerText()).toContain("2.2 BET/ALP");
       expect(await page.locator("#fx").innerText()).toContain("50 ALP");
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -187,6 +202,34 @@ describe("M5 Pages source-backed shell", () => {
       expect(await empty.locator("#fx").innerText()).toContain("No FX liquidity pools");
     } finally {
       await empty.close();
+    }
+  });
+
+  it("fails closed on impossible capacity use and zero-quantity paid cargo", async () => {
+    response = JSON.stringify({ ...valid, routes: [{
+      ...valid.routes[0], dispatchedWeightUnits: 11,
+    }] });
+    const overCapacity = await open(360);
+    try {
+      expect(await overCapacity.locator("#status").innerText()).toContain(
+        "cargo exceeds actual physical capacity",
+      );
+      expect(await overCapacity.locator("#routes article").count()).toBe(0);
+    } finally {
+      await overCapacity.close();
+    }
+
+    response = JSON.stringify({ ...valid, routes: [{
+      ...valid.routes[0], departures: [{ ...shipment, quantity: 0 }],
+    }] });
+    const zeroCargo = await open(1280);
+    try {
+      expect(await zeroCargo.locator("#status").innerText()).toContain(
+        "quantity must be positive",
+      );
+      expect(await zeroCargo.locator("#routes article").count()).toBe(0);
+    } finally {
+      await zeroCargo.close();
     }
   });
 
