@@ -81,6 +81,7 @@
       "tariffAmount", "consumptionTaxAmount"]) {
       assert(nonnegative(cargo[key]), label + "." + key + " must be a nonnegative finite number");
     }
+    assert(positive(cargo.quantity), label + ".quantity must be positive");
     assert(integer(cargo.arrivalTick), label + ".arrivalTick is invalid");
     assert(cargo.fxSettlementId === null || string(cargo.fxSettlementId),
       label + ".fxSettlementId is invalid");
@@ -101,6 +102,9 @@
       assert(nonnegative(route.capacityWeightUnits) && nonnegative(route.dispatchedWeightUnits),
         "route capacities must be finite and nonnegative");
       assert(integer(route.inTransitCount), "route transit count must be an integer");
+      assert(route.dispatchedWeightUnits <= route.capacityWeightUnits +
+        Math.max(1e-8, route.capacityWeightUnits * 1e-10),
+        "paid route cargo exceeds actual physical capacity");
       assert(["NO_PHYSICAL_CAPACITY","PAID_DISPATCH","NO_PAID_DISPATCH"].includes(route.status),
         "route status is unknown");
       assert((route.status === "NO_PHYSICAL_CAPACITY") === (route.capacityWeightUnits === 0),
@@ -110,6 +114,7 @@
         "route shipments must be bounded arrays");
       if (route.status === "PAID_DISPATCH") {
         assert(route.departures.length > 0, "paid route has no dispatch");
+        assert(route.dispatchedWeightUnits > 0, "paid route has no physical cargo weight");
       } else {
         assert(route.departures.length === 0, "unpaid route has a dispatch");
       }
@@ -154,6 +159,36 @@
           "; FX settlement " + item.fxSettlementId), list);
     }
   }
+  function explainRoute(parent, route, tick) {
+    if (!route.departures.length && !route.arrivals.length) return;
+    const explanation = node("section", undefined, parent, "note");
+    node("h3", "What the recorded tick proves", explanation);
+    for (const cargo of route.departures) {
+      node("p", "Paid dispatch: " + number(cargo.quantity) + " " + cargo.unit + " of " +
+        cargo.good + " was dispatched. Goods payment " +
+        number(cargo.buyerGoodsPaymentAmount) + " " + cargo.buyerCurrency +
+        (cargo.fxSettlementId === null ? " (no currency conversion)." :
+          " was converted via settlement " + cargo.fxSettlementId +
+          " to the seller\u2019s " + cargo.invoiceCurrency + " invoice currency.") +
+        " Separate buyer-currency charges: transport " + number(cargo.transportFeeAmount) +
+        ", import tariff " + number(cargo.tariffAmount) +
+        ", consumption tax " + number(cargo.consumptionTaxAmount) +
+        " " + cargo.buyerCurrency + ".", explanation);
+      if (route.arrivals.some(arrival => arrival.id === cargo.id)) {
+        node("p", "The same cargo also has a confirmed delivery receipt in tick " +
+          tick + ".", explanation);
+      } else {
+        node("p", "Arrival is scheduled for tick " + cargo.arrivalTick +
+          "; this tick records dispatch only. A later delivery receipt is required " +
+          "before arrival can be called confirmed.", explanation);
+      }
+    }
+    if (route.arrivals.length) {
+      node("p", "Confirmed delivered shipments in this tick: " +
+        route.arrivals.length + ". Delivery transfers already-paid goods; " +
+        "it is not evidence of a second sale or FX conversion.", explanation);
+    }
+  }
   function render(data) {
     routes.replaceChildren();
     fx.replaceChildren();
@@ -172,6 +207,8 @@
       const metrics = node("div", undefined, card, "stats");
       stat(metrics, "Capacity / tick", number(route.capacityWeightUnits) + " weight-units");
       stat(metrics, "Paid departure weight", number(route.dispatchedWeightUnits) + " weight-units");
+      stat(metrics, "Capacity used", route.capacityWeightUnits === 0 ? "No capacity" :
+        (100 * route.dispatchedWeightUnits / route.capacityWeightUnits).toFixed(1) + "%");
       stat(metrics, "Cargo in transit after tick", number(route.inTransitCount) + " shipments");
       if (route.status === "NO_PHYSICAL_CAPACITY") {
         node("p", "Physical capacity is zero; this route cannot dispatch goods in this tick.",
@@ -182,6 +219,7 @@
       }
       shipments(card, "Departures", route.departures);
       shipments(card, "Arrivals", route.arrivals);
+      explainRoute(card, route, data.tick);
     }
     if (!data.fxPools.length) node("p", "No FX liquidity pools in this completed tick.", fx, "panel");
     for (const pool of data.fxPools) {
