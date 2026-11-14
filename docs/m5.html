@@ -141,9 +141,12 @@
         assert(cargo.arrivalTick === data.tick, "arrival does not belong to this tick");
       });
     }
+    const fxPoolIds = new Set();
     for (const pool of data.fxPools) {
       assert(pool && string(pool.authorityId) && string(pool.poolId) &&
         string(pool.baseCurrency) && string(pool.quoteCurrency), "FX pool identity is incomplete");
+      assert(!fxPoolIds.has(pool.poolId), "duplicate FX pool identity");
+      fxPoolIds.add(pool.poolId);
       for (const key of ["baseReserve","quoteReserve","baseSpendable","quoteSpendable"]) {
         assert(nonnegative(pool[key]), "FX pool " + key + " must be finite and nonnegative");
       }
