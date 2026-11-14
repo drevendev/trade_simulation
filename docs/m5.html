@@ -259,6 +259,20 @@
   }
   function renderArrival(arrival, dispatch) {
     assert(arrival.tick === dispatch.tick + 1, "arrival receipt has wrong tick");
+    // Adjacent receipts come from consecutive ticks of the same canonical world.
+    // A valid delivery must not be attached to a substituted FX-pool story.
+    const previousPools = new Map(dispatch.fxPools.map(pool => [pool.poolId, pool]));
+    assert(arrival.fxPools.length === previousPools.size,
+      "FX pool registry changed between adjacent ticks");
+    for (const pool of arrival.fxPools) {
+      const previous = previousPools.get(pool.poolId);
+      assert(previous && pool.authorityId === previous.authorityId &&
+        pool.baseCurrency === previous.baseCurrency &&
+        pool.quoteCurrency === previous.quoteCurrency,
+        "FX pool identity changed between adjacent ticks");
+      assert(pool.spotBefore === previous.spotAfter,
+        "next-tick opening FX spot differs from prior closing spot");
+    }
     const due = new Map();
     for (const route of dispatch.routes) {
       for (const cargo of route.departures.filter(item => item.arrivalTick === arrival.tick)) {
