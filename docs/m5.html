@@ -102,6 +102,8 @@
     assert(Array.isArray(data.fxPools) && data.fxPools.length <= 1000,
       "FX pools must be a bounded array");
     const linkIds = new Set();
+    const departureIds = new Set();
+    const arrivalIds = new Set();
     for (const route of data.routes) {
       assert(route && string(route.linkId) && string(route.from) && string(route.to),
         "route identity is incomplete");
@@ -128,10 +130,14 @@
       }
       route.departures.forEach((cargo, index) => {
         validateCargo(cargo, "departure " + index);
+        assert(!departureIds.has(cargo.id), "duplicate paid shipment identity");
+        departureIds.add(cargo.id);
         assert(cargo.arrivalTick >= data.tick, "departure arrives before its dispatch");
       });
       route.arrivals.forEach((cargo, index) => {
         validateCargo(cargo, "arrival " + index);
+        assert(!arrivalIds.has(cargo.id), "duplicate arrival receipt identity");
+        arrivalIds.add(cargo.id);
         assert(cargo.arrivalTick === data.tick, "arrival does not belong to this tick");
       });
     }
