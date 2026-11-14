@@ -294,6 +294,77 @@ describe("M5 Pages source-backed shell", () => {
     }
   });
 
+  it("rejects a same-currency paid dispatch claiming an unnecessary FX settlement", async () => {
+    const dispatch = JSON.parse(publishedM5Source) as M5TradeTickPreview;
+    response = JSON.stringify({
+      ...dispatch,
+      routes: dispatch.routes.map(route => ({
+        ...route,
+        departures: route.departures.map(cargo => ({
+          ...cargo, buyerCurrency: cargo.invoiceCurrency,
+          // Keep the original FX receipt: a same-currency payment cannot have one.
+        })),
+      })),
+    });
+    arrivalResponse = publishedM5Arrival;
+    const page = await open(360);
+    try {
+      expect(await page.locator("#status").innerText()).toContain(
+        "same-currency payment has unexpected FX settlement",
+      );
+      expect(await page.locator("#routes article").count()).toBe(0);
+      expect(await page.locator("#fx article").count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("rejects a forged same-currency arrival with an FX receipt but retains paid dispatch", async () => {
+    response = publishedM5Source;
+    const arrival = JSON.parse(publishedM5Arrival) as M5TradeTickPreview;
+    arrivalResponse = JSON.stringify({
+      ...arrival,
+      routes: arrival.routes.map(route => ({
+        ...route,
+        arrivals: route.arrivals.map(cargo => ({
+          ...cargo, buyerCurrency: cargo.invoiceCurrency,
+        })),
+      })),
+    });
+    const page = await open(360);
+    try {
+      await page.waitForFunction(() =>
+        !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
+      expect(await page.locator("#arrival-status").innerText()).toContain(
+        "same-currency payment has unexpected FX settlement",
+      );
+      expect(await page.locator("#arrival-routes article").count()).toBe(0);
+      expect(await page.locator("#routes").innerText()).toContain("Paid dispatch");
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("still permits a same-currency paid shipment without FX conversion", async () => {
+    const sameCurrency = {
+      ...shipment, buyerCurrency: shipment.invoiceCurrency, fxSettlementId: null,
+    };
+    response = JSON.stringify({
+      ...valid,
+      routes: [{
+        ...valid.routes[0]!, departures: [sameCurrency], arrivals: [sameCurrency],
+      }],
+    });
+    const page = await open(1280);
+    try {
+      expect(await page.locator("#status").innerText()).toContain("source-backed data loaded");
+      expect(await page.locator("#routes").innerText()).toContain("no FX conversion");
+      expect(await page.locator("#routes article").count()).toBe(1);
+    } finally {
+      await page.close();
+    }
+  });
+
   it("rejects duplicated FX pool reserves before displaying dispatch totals", async () => {
     const dispatch = JSON.parse(publishedM5Source) as M5TradeTickPreview;
     response = JSON.stringify({
