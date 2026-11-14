@@ -221,6 +221,58 @@ describe("M5 #677 source-backed Pages generator", () => {
     }
   }, 240_000);
 
+  it("checks a staged real tick-8 delivery receipt without editing tick-7 data", () => {
+    const cli = fileURLToPath(new URL("./generateM5Preview.mjs", import.meta.url));
+    const root = fileURLToPath(new URL("../../", import.meta.url));
+    const dispatchPath = fileURLToPath(new URL("../../docs/m5-preview.json", import.meta.url));
+    const dispatchBefore = readFileSync(dispatchPath, "utf8");
+    const directory = mkdtempSync(join(tmpdir(), "m5-arrival-receipt-"));
+    const candidate = join(directory, "candidate.json");
+    const check = () => {
+      const result = spawnSync(process.execPath, [cli, "--arrival-check", candidate], {
+        cwd: root, encoding: "utf8", timeout: 60_000, maxBuffer: 1024 * 1024,
+      });
+      expect(result.error).toBeUndefined();
+      return result;
+    };
+    try {
+      const missing = check();
+      expect(missing.status).not.toBe(0);
+      expect(missing.stderr).toContain("candidate M5 arrival receipt is missing");
+      writeFileSync(candidate, serializeM5Preview(createM5PreviewScenario()), "utf8");
+      const stale = check();
+      expect(stale.status).not.toBe(0);
+      expect(stale.stderr).toContain("candidate M5 arrival receipt differs");
+      const valid = serializeM5ArrivalPreview(createM5PreviewScenario());
+      writeFileSync(candidate, valid, "utf8");
+      const exact = check();
+      expect(exact.status).toBe(0);
+      expect(exact.stderr).toBe("");
+      expect(exact.stdout).toBe("");
+      writeFileSync(candidate, valid.replace('"tick": 8', '"tick": 9'), "utf8");
+      expect(check().status).not.toBe(0);
+    } finally {
+      expect(readFileSync(dispatchPath, "utf8")).toBe(dispatchBefore);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 240_000);
+
+  it("pins the published tick-8 arrival sidecar to real second-tick execution bytes", () => {
+    const published = readFileSync(
+      fileURLToPath(new URL("../../docs/m5-arrival.json", import.meta.url)), "utf8",
+    );
+    const canonical = serializeM5ArrivalPreview(createM5PreviewScenario());
+    expect(published).toBe(canonical);
+    const parsed = JSON.parse(published);
+    expect(parsed.milestone).toBe("M5");
+    expect(parsed.tick).toBe(M5_PREVIEW_TICK + 1);
+    const receipts = parsed.routes.flatMap((route: { arrivals: readonly unknown[] }) => route.arrivals);
+    expect(receipts).toHaveLength(1);
+    expect(readFileSync(
+      fileURLToPath(new URL("../../docs/m5-preview.json", import.meta.url)), "utf8",
+    )).toBe(serializeM5Preview(createM5PreviewScenario()));
+  });
+
   it("does not mutate the opening world or consume an extra economic replay", () => {
     const scenario = createM5PreviewScenario();
     const before = JSON.stringify(canonical(scenario.opening));
