@@ -248,6 +248,52 @@ describe("M5 Pages source-backed shell", () => {
     }
   });
 
+  it("rejects cross-currency paid dispatch with no FX settlement proof", async () => {
+    const dispatch = JSON.parse(publishedM5Source) as M5TradeTickPreview;
+    response = JSON.stringify({
+      ...dispatch,
+      routes: dispatch.routes.map(route => ({
+        ...route,
+        departures: route.departures.map(cargo => ({ ...cargo, fxSettlementId: null })),
+      })),
+    });
+    arrivalResponse = publishedM5Arrival;
+    const page = await open(360);
+    try {
+      expect(await page.locator("#status").innerText()).toContain(
+        "cross-currency payment has no FX settlement proof",
+      );
+      expect(await page.locator("#routes article").count()).toBe(0);
+      expect(await page.locator("#fx article").count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("rejects a forged delivery with no cross-currency FX proof but keeps paid dispatch", async () => {
+    response = publishedM5Source;
+    const arrival = JSON.parse(publishedM5Arrival) as M5TradeTickPreview;
+    arrivalResponse = JSON.stringify({
+      ...arrival,
+      routes: arrival.routes.map(route => ({
+        ...route,
+        arrivals: route.arrivals.map(cargo => ({ ...cargo, fxSettlementId: null })),
+      })),
+    });
+    const page = await open(360);
+    try {
+      await page.waitForFunction(() =>
+        !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
+      expect(await page.locator("#arrival-status").innerText()).toContain(
+        "cross-currency payment has no FX settlement proof",
+      );
+      expect(await page.locator("#arrival-routes article").count()).toBe(0);
+      expect(await page.locator("#routes").innerText()).toContain("Paid dispatch");
+    } finally {
+      await page.close();
+    }
+  });
+
   it("rejects duplicated FX pool reserves before displaying dispatch totals", async () => {
     const dispatch = JSON.parse(publishedM5Source) as M5TradeTickPreview;
     response = JSON.stringify({

@@ -93,6 +93,10 @@
     assert(integer(cargo.arrivalTick), label + ".arrivalTick is invalid");
     assert(cargo.fxSettlementId === null || string(cargo.fxSettlementId),
       label + ".fxSettlementId is invalid");
+    // Cross-currency payments require an actually recorded finite FX settlement.
+    // A null receipt cannot substantiate a paid international conversion.
+    assert(cargo.invoiceCurrency === cargo.buyerCurrency || string(cargo.fxSettlementId),
+      label + " cross-currency payment has no FX settlement proof");
   }
   function validate(data) {
     assert(data && data.milestone === "M5" && integer(data.tick),
