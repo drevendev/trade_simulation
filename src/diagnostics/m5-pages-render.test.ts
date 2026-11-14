@@ -9,6 +9,7 @@ import type { M5TradeTickPreview } from "./m5TradePreview";
 const htmlSource = readFileSync(fileURLToPath(new URL("../../docs/m5.html", import.meta.url)), "utf8");
 const dashboardSource = readFileSync(fileURLToPath(new URL("../../docs/index.html", import.meta.url)), "utf8");
 const publishedM5Source = readFileSync(fileURLToPath(new URL("../../docs/m5-preview.json", import.meta.url)), "utf8");
+const publishedM5Arrival = readFileSync(fileURLToPath(new URL("../../docs/m5-arrival.json", import.meta.url)), "utf8");
 
 const shipment = {
   id: "sh:m5fx:example", good: "Iron", unit: "tonnes", quantity: 2,
@@ -33,6 +34,7 @@ const valid: M5TradeTickPreview = {
 };
 
 let response: string | null;
+let arrivalResponse: string | null;
 let server: Server;
 let browser: Browser;
 let url: string;
@@ -49,6 +51,9 @@ beforeAll(async () => {
     } else if (path === "/m5-preview.json" && response !== null) {
       reply.writeHead(200, { "Content-Type": "application/json" });
       reply.end(response);
+    } else if (path === "/m5-arrival.json" && arrivalResponse !== null) {
+      reply.writeHead(200, { "Content-Type": "application/json" });
+      reply.end(arrivalResponse);
     } else {
       reply.writeHead(404);
       reply.end("Not found");
@@ -66,6 +71,7 @@ afterAll(async () => {
 });
 beforeEach(() => {
   response = JSON.stringify(valid);
+  arrivalResponse = null;
 });
 
 async function open(width: number): Promise<Page> {
@@ -101,7 +107,9 @@ describe("M5 Pages source-backed shell", () => {
     "renders the exact checked-in canonical M5 receipt at %ipx without overflow",
     async width => {
       response = publishedM5Source;
+      arrivalResponse = publishedM5Arrival;
       const committed = JSON.parse(publishedM5Source) as M5TradeTickPreview;
+      const arrived = JSON.parse(publishedM5Arrival) as M5TradeTickPreview;
       const paidRoute = committed.routes.find(route => route.departures.length > 0);
       const paidCargo = paidRoute?.departures[0];
       const pool = committed.fxPools[0];
@@ -111,6 +119,16 @@ describe("M5 Pages source-backed shell", () => {
       const page = await open(width);
       try {
         expect(await page.locator("#status").innerText()).toContain("tick " + committed.tick);
+        expect(await page.locator("#arrival-status").innerText()).toContain(
+          "Canonical tick " + arrived.tick + " · 1 delivered shipment",
+        );
+        expect(await page.locator("#arrival-routes").innerText()).toContain(
+          "Confirmed arrivals (1)",
+        );
+        expect(await page.locator("#arrival-routes").innerText()).toContain(
+          "buyer paid " + committed.routes[0]!.departures[0]!.buyerGoodsPaymentAmount +
+          " " + committed.routes[0]!.departures[0]!.buyerCurrency,
+        );
         expect(await page.locator("#routes").innerText()).toContain(
           paidRoute!.from + " → " + paidRoute!.to,
         );
@@ -135,6 +153,46 @@ describe("M5 Pages source-backed shell", () => {
       }
     },
   );
+
+  it("refuses a tampered next-tick receipt and keeps genuine paid dispatch visible", async () => {
+    response = publishedM5Source;
+    const source = JSON.parse(publishedM5Arrival) as M5TradeTickPreview;
+    const route = source.routes.find(item => item.arrivals.length > 0)!;
+    arrivalResponse = JSON.stringify({
+      ...source, routes: source.routes.map(item => item.linkId === route.linkId
+        ? { ...item, arrivals: item.arrivals.map(cargo => ({ ...cargo, quantity: cargo.quantity + 1 })) }
+        : item),
+    });
+    const page = await open(360);
+    try {
+      await page.waitForFunction(() =>
+        !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
+      expect(await page.locator("#arrival-status").innerText()).toContain(
+        "arrival differs from paid dispatch",
+      );
+      expect(await page.locator("#arrival-routes article").count()).toBe(0);
+      expect(await page.locator("#routes").innerText()).toContain("Paid dispatch");
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("does not call scheduled arrival confirmed when the delivery sidecar is missing", async () => {
+    response = publishedM5Source;
+    arrivalResponse = null;
+    const page = await open(1280);
+    try {
+      await page.waitForFunction(() =>
+        !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
+      expect(await page.locator("#arrival-status").innerText()).toContain("HTTP 404");
+      expect(await page.locator("#arrival-routes article").count()).toBe(0);
+      expect(await page.locator("#routes").innerText()).toContain(
+        "A later delivery receipt is required before arrival can be called confirmed.",
+      );
+    } finally {
+      await page.close();
+    }
+  });
 
   it("renders paid cargo, named-currency fees and FX reserves without horizontal overflow", async () => {
     const page = await open(1280);
