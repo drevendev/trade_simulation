@@ -7,6 +7,8 @@
  * node src/diagnostics/generateM5Preview.mjs --stdout   streams the exact dispatch receipt
  * node src/diagnostics/generateM5Preview.mjs --arrival-stdout
  *   streams the separately verified real tick-8 delivery receipt
+ * node src/diagnostics/generateM5Preview.mjs --arrival-check [candidate-path]
+ *   verifies the genuine tick-8 receipt without changing either Pages artifact
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -16,15 +18,19 @@ import { createServer } from "vite";
 const args = process.argv.slice(2);
 // A candidate file can be checked without editing the checked-in Pages artifact.
 if (args.length > 2 ||
-    (args[0] && !["--check", "--stdout", "--arrival-stdout"].includes(args[0])) ||
-    (args.length === 2 && (args[0] !== "--check" || !args[1] || args[1].startsWith("--")))) {
-  throw new Error("Usage: generate-m5-preview.mjs [--check [candidate-path]|--stdout|--arrival-stdout]");
+    (args[0] && !["--check", "--stdout", "--arrival-stdout", "--arrival-check"].includes(args[0])) ||
+    (args.length === 2 && (!["--check", "--arrival-check"].includes(args[0]) || !args[1] || args[1].startsWith("--")))) {
+  throw new Error("Usage: generate-m5-preview.mjs [--check [candidate-path]|--arrival-check [candidate-path]|--stdout|--arrival-stdout]");
 }
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const artifact = fileURLToPath(new URL("../../docs/m5-preview.json", import.meta.url));
-const checkedArtifact = args[0] === "--check" && args[1] ? resolve(args[1]) : artifact;
-const checkedLabel = args[1] ? "candidate M5 receipt" : "docs/m5-preview.json";
+const arrivalArtifact = fileURLToPath(new URL("../../docs/m5-arrival.json", import.meta.url));
+const isArrival = args[0] === "--arrival-stdout" || args[0] === "--arrival-check";
+const checkedArtifact = args[1] ? resolve(args[1]) : isArrival ? arrivalArtifact : artifact;
+const checkedLabel = args[1]
+  ? isArrival ? "candidate M5 arrival receipt" : "candidate M5 receipt"
+  : isArrival ? "docs/m5-arrival.json" : "docs/m5-preview.json";
 const server = await createServer({
   root,
   configFile: false,
@@ -36,7 +42,7 @@ const server = await createServer({
 try {
   const { createM5PreviewScenario, serializeM5Preview, serializeM5ArrivalPreview } =
     await server.ssrLoadModule("/src/diagnostics/m5PreviewScenario.ts");
-  const json = args[0] === "--arrival-stdout"
+  const json = isArrival
     ? serializeM5ArrivalPreview(createM5PreviewScenario())
     : serializeM5Preview(createM5PreviewScenario());
   const preview = JSON.parse(json);
@@ -46,13 +52,14 @@ try {
   if (preview.milestone !== "M5" ||
       !Number.isSafeInteger(preview.tick) ||
       !Array.isArray(preview.routes) || !Array.isArray(preview.fxPools) ||
-      !json.endsWith("\n")) {
+      !json.endsWith("\n") ||
+      (isArrival && (preview.tick !== 8 || !preview.routes.some(route => route.arrivals.length > 0)))) {
     throw new Error("Refusing to publish an invalid M5 preview envelope");
   }
 
   if (args[0] === "--stdout" || args[0] === "--arrival-stdout") {
     process.stdout.write(json);
-  } else if (args[0] === "--check") {
+  } else if (args[0] === "--check" || args[0] === "--arrival-check") {
     let published;
     try {
       published = await readFile(checkedArtifact, "utf8");

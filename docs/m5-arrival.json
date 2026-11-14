@@ -1,0 +1,62 @@
+{
+  "milestone": "M5",
+  "tick": 8,
+  "routes": [
+    {
+      "linkId": "tl:9",
+      "from": "Alpha Border Trade Post",
+      "to": "Beta Trade Chokepoint",
+      "capacityWeightUnits": 127.5,
+      "status": "PAID_DISPATCH",
+      "departures": [
+        {
+          "id": "sh:m5fx:8:[\"m5:route\",\"tl:9\",\"good:iron\"]:0",
+          "good": "Iron",
+          "unit": "units",
+          "quantity": 20.97999999999999,
+          "arrivalTick": 9,
+          "invoiceCurrency": "ALP",
+          "buyerCurrency": "BET",
+          "buyerGoodsPaymentAmount": 16.903741030203957,
+          "transportFeeAmount": 12.34117647058823,
+          "tariffAmount": 2.9228030646616165,
+          "consumptionTaxAmount": 0.8443427088013965,
+          "fxSettlementId": "fxs:m5fx:8:[\"m5:route\",\"tl:9\",\"good:iron\"]:0"
+        }
+      ],
+      "arrivals": [
+        {
+          "id": "sh:m5fx:7:[\"m5:route\",\"tl:9\",\"good:iron\"]:0",
+          "good": "Iron",
+          "unit": "units",
+          "quantity": 127.5,
+          "arrivalTick": 8,
+          "invoiceCurrency": "ALP",
+          "buyerCurrency": "BET",
+          "buyerGoodsPaymentAmount": 113.195438037119,
+          "transportFeeAmount": 75,
+          "tariffAmount": 18.808235568143758,
+          "consumptionTaxAmount": 5.654117784071879,
+          "fxSettlementId": "fxs:m5fx:7:[\"m5:route\",\"tl:9\",\"good:iron\"]:0"
+        }
+      ],
+      "inTransitCount": 1,
+      "dispatchedWeightUnits": 20.97999999999999
+    }
+  ],
+  "fxPools": [
+    {
+      "authorityId": "ma:1",
+      "poolId": "fxpool:currency:alpha-currency:beta",
+      "baseCurrency": "ALP",
+      "quoteCurrency": "BET",
+      "baseReserve": 370.4141917933862,
+      "quoteReserve": 730.0991790673229,
+      "baseSpendable": 360.4141917933862,
+      "quoteSpendable": 720.0991790673229,
+      "spotBefore": 1.0232316026156807,
+      "spotAfter": 1.0543936441998516,
+      "reserveFloorReached": false
+    }
+  ]
+}

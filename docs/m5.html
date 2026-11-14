@@ -45,6 +45,12 @@
   </header>
   <div id="status" class="note" role="status" aria-live="polite">Loading source-backed M5 evidence…</div>
   <section aria-labelledby="route-title"><h2 id="route-title">Directed routes</h2><div id="routes" class="grid"></div></section>
+  <section aria-labelledby="arrival-title">
+    <h2 id="arrival-title">Confirmed next-tick arrivals</h2>
+    <p>A scheduled tick-8 delivery is only confirmed when the next canonical tick records its actual delivery receipt. Goods are paid for at dispatch, not sold again upon arrival.</p>
+    <div id="arrival-status" class="note" role="status" aria-live="polite">Loading executed next-tick delivery evidence…</div>
+    <div id="arrival-routes" class="grid"></div>
+  </section>
   <section aria-labelledby="fx-title"><h2 id="fx-title">Foreign exchange reserves</h2><div id="fx" class="grid"></div></section>
   <footer>Physical capacity is expressed in cargo weight-units per tick. Reserve balances and payments retain their named currencies. The absence of a paid dispatch does not, alone, establish a border, tariff or FX restriction.</footer>
 </main>
@@ -54,6 +60,8 @@
   const status = document.getElementById("status");
   const routes = document.getElementById("routes");
   const fx = document.getElementById("fx");
+  const arrivalStatus = document.getElementById("arrival-status");
+  const arrivalRoutes = document.getElementById("arrival-routes");
   const number = value => String(value); // Preserve the exact numeric value in the JSON receipt.
   const string = value => typeof value === "string" && value.length > 0 && value.length <= 250;
   const nonnegative = value => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -240,18 +248,77 @@
         "prove why a shipment was absent.", card, "warning");
     }
   }
-  fetch("./m5-preview.json", { cache:"no-store" })
-    .then(response => {
+  function renderArrival(arrival, dispatch) {
+    assert(arrival.tick === dispatch.tick + 1, "arrival receipt has wrong tick");
+    const due = new Map();
+    for (const route of dispatch.routes) {
+      for (const cargo of route.departures.filter(item => item.arrivalTick === arrival.tick)) {
+        assert(!due.has(cargo.id), "duplicate paid shipment identity");
+        due.set(cargo.id, { linkId: route.linkId, cargo });
+      }
+    }
+    assert(due.size > 0, "no paid shipments due at next tick");
+    const exactKeys = [
+      "id", "good", "unit", "quantity", "arrivalTick", "invoiceCurrency",
+      "buyerCurrency", "buyerGoodsPaymentAmount", "transportFeeAmount",
+      "tariffAmount", "consumptionTaxAmount", "fxSettlementId",
+    ];
+    const found = new Set();
+    for (const route of arrival.routes) {
+      for (const receipt of route.arrivals) {
+        const paid = due.get(receipt.id);
+        assert(paid && paid.linkId === route.linkId, "unmatched arrival route or shipment");
+        assert(!found.has(receipt.id), "duplicate arrival receipt");
+        assert(exactKeys.every(key => receipt[key] === paid.cargo[key]),
+          "arrival differs from paid dispatch");
+        found.add(receipt.id);
+      }
+    }
+    assert(found.size === due.size, "paid due shipment missing its delivery receipt");
+    arrivalRoutes.replaceChildren();
+    arrivalStatus.classList.remove("problem");
+    arrivalStatus.textContent = "Canonical tick " + arrival.tick +
+      " · " + found.size + " delivered shipment(s), matched to tick " +
+      dispatch.tick + " paid dispatch. No second sale or FX conversion at delivery.";
+    for (const route of arrival.routes.filter(item => item.arrivals.length > 0)) {
+      const card = node("article", undefined, arrivalRoutes, "panel");
+      node("h3", route.from + " → " + route.to, card);
+      node("div", route.linkId, card, "muted");
+      shipments(card, "Confirmed arrivals", route.arrivals);
+      node("p", "Delivery confirmed in tick " + arrival.tick +
+        " from the next executed simulation tick; payment, transport and taxes " +
+        "were settled at the earlier dispatch. Cargo is no longer merely in transit.", card);
+      stat(node("div", undefined, card, "stats"), "Remaining in transit after tick " +
+        arrival.tick, number(route.inTransitCount) + " shipments");
+    }
+  }
+  function showArrivalError(error) {
+    arrivalRoutes.replaceChildren();
+    arrivalStatus.classList.add("problem");
+    arrivalStatus.textContent = "Next-tick delivery evidence unavailable: " +
+      error.message + ". No arrival is inferred from a scheduled dispatch.";
+  }
+  function fetchReceipt(path) {
+    return fetch(path, { cache:"no-store" }).then(response => {
       if (!response.ok) throw new Error("HTTP " + response.status);
       return response.json();
+    });
+  }
+  fetchReceipt("./m5-preview.json")
+    .then(value => {
+      const dispatch = validate(value);
+      render(dispatch);
+      return fetchReceipt("./m5-arrival.json")
+        .then(next => renderArrival(validate(next), dispatch))
+        .catch(showArrivalError);
     })
-    .then(value => render(validate(value)))
     .catch(error => {
       routes.replaceChildren();
       fx.replaceChildren();
       status.classList.add("problem");
       status.textContent = "M5 data unavailable: " + error.message +
         ". No fallback or invented simulation values are displayed.";
+      showArrivalError(new Error("source dispatch unavailable"));
     });
 })();
 </script>
