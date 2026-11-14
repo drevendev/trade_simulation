@@ -254,7 +254,7 @@
     for (const route of dispatch.routes) {
       for (const cargo of route.departures.filter(item => item.arrivalTick === arrival.tick)) {
         assert(!due.has(cargo.id), "duplicate paid shipment identity");
-        due.set(cargo.id, { linkId: route.linkId, cargo });
+        due.set(cargo.id, { linkId: route.linkId, from: route.from, to: route.to, cargo });
       }
     }
     assert(due.size > 0, "no paid shipments due at next tick");
@@ -267,7 +267,8 @@
     for (const route of arrival.routes) {
       for (const receipt of route.arrivals) {
         const paid = due.get(receipt.id);
-        assert(paid && paid.linkId === route.linkId, "unmatched arrival route or shipment");
+        assert(paid && paid.linkId === route.linkId && paid.from === route.from && paid.to === route.to,
+          "unmatched arrival route or shipment");
         assert(!found.has(receipt.id), "duplicate arrival receipt");
         assert(exactKeys.every(key => receipt[key] === paid.cargo[key]),
           "arrival differs from paid dispatch");
