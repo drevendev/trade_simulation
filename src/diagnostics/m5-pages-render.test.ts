@@ -179,6 +179,77 @@ describe("M5 Pages source-backed shell", () => {
     }
   });
 
+  it("confirms only prior-tick paid cargo when new same-route instant cargo arrives", async () => {
+    response = publishedM5Source;
+    const nextTick = JSON.parse(publishedM5Arrival) as M5TradeTickPreview;
+    const route = nextTick.routes.find(item => item.arrivals.length > 0)!;
+    const instant = {
+      ...route.arrivals[0]!,
+      id: "sh:independent:tick8:instant", good: "Independent tick-eight copper",
+      invoiceCurrency: route.arrivals[0]!.buyerCurrency, fxSettlementId: null,
+    };
+    expect(route.dispatchedWeightUnits + 1).toBeLessThanOrEqual(route.capacityWeightUnits);
+    arrivalResponse = JSON.stringify({
+      ...nextTick,
+      routes: nextTick.routes.map(item => item.linkId === route.linkId
+        ? {
+          ...item, departures: [...item.departures, instant],
+          arrivals: [...item.arrivals, instant],
+          dispatchedWeightUnits: item.dispatchedWeightUnits + 1,
+        }
+        : item),
+    });
+    const page = await open(360);
+    try {
+      await page.waitForFunction(() =>
+        !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
+      expect(await page.locator("#arrival-status").innerText()).toContain(
+        "1 delivered shipment(s), matched to tick 7 paid dispatch",
+      );
+      const confirmed = await page.locator("#arrival-routes").innerText();
+      expect(confirmed).toContain("Confirmed arrivals (1)");
+      expect(confirmed).toContain(route.arrivals[0]!.good);
+      expect(confirmed).not.toContain("Independent tick-eight copper");
+      expect(await page.locator("#arrival-routes article").count()).toBe(1);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("does not misattribute a carried arrival from earlier ticks to tick-7 payments", async () => {
+    response = publishedM5Source;
+    const nextTick = JSON.parse(publishedM5Arrival) as M5TradeTickPreview;
+    const route = nextTick.routes.find(item => item.arrivals.length > 0)!;
+    const earlier = {
+      ...route.arrivals[0]!, id: "sh:independent:earlier",
+      good: "Unrelated earlier wheat",
+    };
+    const otherRoute: M5TradeTickPreview["routes"][number] = {
+      ...route, linkId: "tl:unrelated:earlier",
+      from: "Earlier origin", to: "Earlier destination",
+      status: "NO_PAID_DISPATCH", capacityWeightUnits: 10, dispatchedWeightUnits: 0,
+      departures: [], arrivals: [earlier], inTransitCount: 0,
+    };
+    arrivalResponse = JSON.stringify({
+      ...nextTick, routes: [...nextTick.routes, otherRoute],
+    });
+    const page = await open(1280);
+    try {
+      await page.waitForFunction(() =>
+        !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
+      expect(await page.locator("#arrival-status").innerText()).toContain(
+        "1 delivered shipment(s), matched to tick 7 paid dispatch",
+      );
+      expect(await page.locator("#arrival-routes article").count()).toBe(1);
+      const confirmed = await page.locator("#arrival-routes").innerText();
+      expect(confirmed).not.toContain("Earlier destination");
+      expect(confirmed).not.toContain("Unrelated earlier wheat");
+      expect(confirmed).toContain(route.arrivals[0]!.good);
+    } finally {
+      await page.close();
+    }
+  });
+
   it("rejects an arrival with forged route endpoints even when its paid cargo matches", async () => {
     response = publishedM5Source;
     const arrival = JSON.parse(publishedM5Arrival) as M5TradeTickPreview;
