@@ -1,5 +1,6 @@
 /** #677: real 16-phase M5 preview generation, determinism and fail-closed checks. */
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -350,4 +351,89 @@ describe("M5 #677 source-backed Pages generator", () => {
     })).toThrow();
     expect(scenario.opening.shipments?.size ?? 0).toBe(0);
   });
+
+  it("keeps content-sensitive two-tick replay unchanged with both M5 Pages projections enabled", () => {
+    const scenario = createM5PreviewScenario();
+    const openingBefore = JSON.stringify(canonical(scenario.opening));
+    const execute = (
+      world: Parameters<typeof executeM5AutonomousRegionalTradeTick>[0],
+      tick: number,
+    ) => executeM5AutonomousRegionalTradeTick(
+      world, tick, upstream, (_phase, current) => current, scenario.options,
+    );
+    // The generic M2 computeTickHash includes only metadata and transaction count.
+    // This test-only fingerprint instead includes actual actor-owned stocks and
+    // ordered economic receipts. It is not a new runtime hash authority.
+    const fingerprint = (
+      tick: number, result: ReturnType<typeof execute>,
+    ): string => createHash("sha256").update(JSON.stringify(canonical({
+      tick,
+      transactions: result.context.transactions,
+      regions: result.world.regions,
+      states: result.world.states,
+      clans: result.world.clans,
+      cohorts: result.world.cohorts,
+      productionUnits: result.world.productionUnits,
+      markets: result.world.markets,
+      monetaryAuthorities: result.world.monetaryAuthorities,
+      transportLinks: result.world.transportLinks,
+      shipments: result.world.shipments,
+      pendingTransitions: result.world.pendingTransitions,
+    }))).digest("hex");
+
+    const control7 = execute(scenario.opening, M5_PREVIEW_TICK);
+    const control8 = execute(control7.world, M5_PREVIEW_TICK + 1);
+    const before = [
+      fingerprint(M5_PREVIEW_TICK, control7),
+      fingerprint(M5_PREVIEW_TICK + 1, control8),
+    ];
+    expect(control7.context.transactions.some(tx => tx.type === "FX_INPUT")).toBe(true);
+    expect(control8.context.transactions.some(tx => tx.type === "SHIPMENT_DELIVERY")).toBe(true);
+
+    // Pages must observe completed real ticks, never write to the scenario or
+    // consume RNG that changes the subsequent replay of those same ticks.
+    const dispatch = generateM5Preview(scenario);
+    const arrival = generateM5ArrivalPreview(scenario);
+    expect(dispatch.routes.some(route => route.departures.length > 0)).toBe(true);
+    expect(arrival.routes.some(route => route.arrivals.length > 0)).toBe(true);
+    expect(JSON.stringify(canonical(scenario.opening))).toBe(openingBefore);
+    const replay7 = execute(scenario.opening, M5_PREVIEW_TICK);
+    const replay8 = execute(replay7.world, M5_PREVIEW_TICK + 1);
+    expect([
+      fingerprint(M5_PREVIEW_TICK, replay7),
+      fingerprint(M5_PREVIEW_TICK + 1, replay8),
+    ]).toEqual(before);
+    expect(before.every(value => /^[a-f0-9]{64}$/.test(value))).toBe(true);
+
+    // Both negative controls retain the same tick and transaction count.
+    // A count-only replay hash would incorrectly accept both forgeries.
+    const paidFx = control7.context.transactions.find(tx =>
+      tx.type === "FX_INPUT" && typeof tx.moneyAmount === "number");
+    expect(paidFx).toBeDefined();
+    const tamperedReceipt = {
+      ...control7,
+      context: {
+        ...control7.context,
+        transactions: control7.context.transactions.map(tx =>
+          tx === paidFx ? { ...tx, moneyAmount: tx.moneyAmount! + 1 } : tx),
+      },
+    };
+    expect(tamperedReceipt.context.transactions).toHaveLength(control7.context.transactions.length);
+    expect(fingerprint(M5_PREVIEW_TICK, tamperedReceipt)).not.toBe(before[0]);
+
+    const [unitId, unit] = [...control8.world.productionUnits][0]!;
+    const [currencyId, balance] = [...unit.wallet][0]!;
+    const tamperedBalance = {
+      ...control8,
+      world: {
+        ...control8.world,
+        productionUnits: new Map(control8.world.productionUnits).set(unitId, {
+          ...unit, wallet: new Map(unit.wallet).set(currencyId, balance + 1),
+        }),
+      },
+    };
+    expect(fingerprint(M5_PREVIEW_TICK + 1, tamperedBalance)).not.toBe(before[1]);
+    expect(JSON.stringify(canonical(scenario.opening))).toBe(openingBefore);
+  });
+
 });
