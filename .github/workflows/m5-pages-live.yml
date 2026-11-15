@@ -1,0 +1,34 @@
+name: Verify published M5 GitHub Pages
+
+# This deliberately runs AFTER a successful Pages deployment, not in PR CI:
+# an unmerged PR cannot be expected to exist on the public Pages URL.
+on:
+  deployment_status:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  published-m5:
+    name: published-m5
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.deployment_status.state == 'success' &&
+       github.event.deployment.environment == 'github-pages' &&
+       github.event.deployment.ref == 'master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Compare public assets to the exact deployed commit rather than
+          # whatever master happens to contain when this job starts.
+          ref: ${{ github.event_name == 'deployment_status' && github.event.deployment.sha || github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+      - name: Exercise missing/stale/redirect negative controls
+        run: node --test scripts/tests/verify_m5_pages_live.checks.mjs
+      - name: Verify public M5 HTML and both canonical receipts
+        run: node scripts/verify_m5_pages_live.mjs
