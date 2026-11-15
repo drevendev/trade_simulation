@@ -149,6 +149,11 @@
           instantDispatch.set(cargo.id, { linkId: route.linkId, cargo });
         }
       });
+      // Every paid shipment with a future arrival is still in physical transit
+      // after this tick. The read model must not claim an empty pipeline.
+      const pendingDispatches = route.departures.filter(cargo => cargo.arrivalTick > data.tick).length;
+      assert(route.inTransitCount >= pendingDispatches,
+        "in-transit count below paid future-due departures");
       route.arrivals.forEach((cargo, index) => {
         validateCargo(cargo, "arrival " + index);
         assert(!arrivalIds.has(cargo.id), "duplicate arrival receipt identity");

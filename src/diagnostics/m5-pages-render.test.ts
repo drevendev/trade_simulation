@@ -559,6 +559,36 @@ describe("M5 Pages source-backed shell", () => {
     }
   });
 
+  it("rejects future-due paid cargo when the closing in-transit count is forged to zero", async () => {
+    const source = JSON.parse(publishedM5Source) as M5TradeTickPreview;
+    const paidRoute = source.routes.find(route =>
+      route.departures.some(cargo => cargo.arrivalTick > source.tick),
+    );
+    expect(paidRoute).toBeDefined();
+    expect(paidRoute!.inTransitCount).toBeGreaterThan(0); // genuine source-backed positive control
+    response = JSON.stringify({
+      ...source,
+      routes: source.routes.map(route => route.linkId === paidRoute!.linkId
+        ? { ...route, inTransitCount: 0 }
+        : route),
+    });
+    arrivalResponse = publishedM5Arrival;
+    const page = await open(360);
+    try {
+      expect(await page.locator("#status").innerText()).toContain(
+        "in-transit count below paid future-due departures",
+      );
+      expect(await page.locator("#routes article").count()).toBe(0);
+      expect(await page.locator("#fx article").count()).toBe(0);
+      expect(await page.locator("#arrival-status").innerText()).toContain(
+        "source dispatch unavailable",
+      );
+      expect(await page.locator("#arrival-routes article").count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
   it("fails closed on impossible capacity use and zero-quantity paid cargo", async () => {
     response = JSON.stringify({ ...valid, routes: [{
       ...valid.routes[0], dispatchedWeightUnits: 11,
