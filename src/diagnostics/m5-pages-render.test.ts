@@ -114,6 +114,30 @@ async function unreadableM5Elements(page: Page): Promise<string[]> {
         const where = selector + "[" + index + "]";
         const rect = element.getBoundingClientRect();
         const style = getComputedStyle(element);
+        // Computed visibility inherits from parents; ancestor opacity and
+        // overflow do not. Check the complete path to the viewport, not only
+        // the critical element's own box, to catch invisible/clipped cards.
+        for (let parent: HTMLElement | null = element; parent; parent = parent.parentElement) {
+          const parentStyle = getComputedStyle(parent);
+          if (parentStyle.visibility !== "visible" ||
+              parentStyle.display === "none" || Number(parentStyle.opacity) <= 0.01) {
+            problems.push(where + " hidden by CSS ancestor");
+            break;
+          }
+          if (parent === element) continue;
+          const bounds = parent.getBoundingClientRect();
+          const left = bounds.left + parent.clientLeft;
+          const top = bounds.top + parent.clientTop;
+          const clipX = ["hidden", "clip", "auto", "scroll"].includes(parentStyle.overflowX);
+          const clipY = ["hidden", "clip", "auto", "scroll"].includes(parentStyle.overflowY);
+          if ((clipX && (rect.left < left - 1 ||
+                         rect.right > left + parent.clientWidth + 1)) ||
+              (clipY && (rect.top < top - 1 ||
+                         rect.bottom > top + parent.clientHeight + 1))) {
+            problems.push(where + " clipped by CSS ancestor");
+            break;
+          }
+        }
         if (!element.textContent?.trim() || rect.width < 1 || rect.height < 1 ||
             rect.left < -1 || rect.right > viewportWidth + 1) {
           problems.push(where + " missing, invisible or outside viewport");
@@ -165,6 +189,28 @@ describe("M5 Pages source-backed shell", () => {
       await page.close();
     }
   });
+
+  it.each([
+    ["invisible routes", "#routes { visibility: hidden !important; }", "hidden by CSS ancestor"],
+    ["clipped routes", "#routes { height: 1px !important; overflow: hidden !important; }", "clipped by CSS ancestor"],
+  ])("rejects %s even without document overflow (readability negative control)",
+    async (_case, css, expected) => {
+      response = publishedM5Source;
+      arrivalResponse = publishedM5Arrival;
+      const page = await open(360);
+      try {
+        await page.waitForFunction(() =>
+          !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
+        expect(await unreadableM5Elements(page)).toEqual([]);
+        await page.addStyleTag({ content: css });
+        expect(await unreadableM5Elements(page)).toEqual(
+          expect.arrayContaining([expect.stringContaining(expected)]),
+        );
+      } finally {
+        await page.close();
+      }
+    },
+  );
 
   it("links the existing milestone dashboard to M5 and back, with no invented data", async () => {
     response = null;
