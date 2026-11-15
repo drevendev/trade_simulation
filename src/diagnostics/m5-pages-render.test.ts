@@ -82,7 +82,136 @@ async function open(width: number): Promise<Page> {
   return page;
 }
 
+// Chromium geometry and computed styles, not just a text/DOM presence check.
+// A page-wide scrollWidth assertion alone can miss locally clipped metrics.
+async function unreadableM5Elements(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const problems: string[] = [];
+    const viewportWidth = window.innerWidth;
+    if (document.documentElement.scrollWidth > viewportWidth + 1 ||
+        document.body.scrollWidth > viewportWidth + 1) {
+      problems.push("horizontal document overflow");
+    }
+
+    const critical: ReadonlyArray<readonly [string, number]> = [
+      ["#status", 14],
+      ["#arrival-status", 14],
+      ["#routes article h3", 14],
+      ["#routes article .stat span", 12],
+      ["#routes article .stat strong", 14],
+      ["#routes article li", 14],
+      ["#arrival-routes article h3", 14],
+      ["#arrival-routes article .stat strong", 14],
+      ["#arrival-routes article li", 14],
+      ["#fx article h3", 14],
+      ["#fx article .stat span", 12],
+      ["#fx article .stat strong", 14],
+    ];
+    for (const [selector, minFontSize] of critical) {
+      const elements = document.querySelectorAll<HTMLElement>(selector);
+      if (!elements.length) problems.push("missing " + selector);
+      elements.forEach((element, index) => {
+        const where = selector + "[" + index + "]";
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        // Computed visibility inherits from parents; ancestor opacity and
+        // overflow do not. Check the complete path to the viewport, not only
+        // the critical element's own box, to catch invisible/clipped cards.
+        for (let parent: HTMLElement | null = element; parent; parent = parent.parentElement) {
+          const parentStyle = getComputedStyle(parent);
+          if (parentStyle.visibility !== "visible" ||
+              parentStyle.display === "none" || Number(parentStyle.opacity) <= 0.01) {
+            problems.push(where + " hidden by CSS ancestor");
+            break;
+          }
+          if (parent === element) continue;
+          const bounds = parent.getBoundingClientRect();
+          const left = bounds.left + parent.clientLeft;
+          const top = bounds.top + parent.clientTop;
+          const clipX = ["hidden", "clip", "auto", "scroll"].includes(parentStyle.overflowX);
+          const clipY = ["hidden", "clip", "auto", "scroll"].includes(parentStyle.overflowY);
+          if ((clipX && (rect.left < left - 1 ||
+                         rect.right > left + parent.clientWidth + 1)) ||
+              (clipY && (rect.top < top - 1 ||
+                         rect.bottom > top + parent.clientHeight + 1))) {
+            problems.push(where + " clipped by CSS ancestor");
+            break;
+          }
+        }
+        if (!element.textContent?.trim() || rect.width < 1 || rect.height < 1 ||
+            rect.left < -1 || rect.right > viewportWidth + 1) {
+          problems.push(where + " missing, invisible or outside viewport");
+        }
+        if (parseFloat(style.fontSize) < minFontSize) {
+          problems.push(where + " has unreadable text size");
+        }
+        if ((style.overflowX === "hidden" || style.overflowX === "clip") &&
+            element.scrollWidth > element.clientWidth + 1) {
+          problems.push(where + " clips its content");
+        }
+      });
+    }
+    return problems;
+  });
+}
+
 describe("M5 Pages source-backed shell", () => {
+  it.each([320, 360, 1280])(
+    "keeps source-backed route, confirmed arrival and FX labels readable at %ipx",
+    async width => {
+      response = publishedM5Source;
+      arrivalResponse = publishedM5Arrival;
+      const page = await open(width);
+      try {
+        await page.waitForFunction(() =>
+          !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
+        expect(await page.locator("#status").innerText()).toContain("source-backed data loaded");
+        expect(await page.locator("#arrival-status").innerText()).toContain("delivered shipment");
+        expect(await unreadableM5Elements(page)).toEqual([]);
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
+  it("rejects a deliberately clipped mobile route card (layout smoke negative control)", async () => {
+    response = publishedM5Source;
+    arrivalResponse = publishedM5Arrival;
+    const page = await open(360);
+    try {
+      await page.waitForFunction(() =>
+        !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
+      expect(await unreadableM5Elements(page)).toEqual([]);
+      // An ordinary source-backed card forced wider than the phone must be detected.
+      await page.addStyleTag({ content: "#routes article:first-child { min-width: 1600px !important; }" });
+      expect(await unreadableM5Elements(page)).toContain("horizontal document overflow");
+    } finally {
+      await page.close();
+    }
+  });
+
+  it.each([
+    ["invisible routes", "#routes { visibility: hidden !important; }", "hidden by CSS ancestor"],
+    ["clipped routes", "#routes { height: 1px !important; overflow: hidden !important; }", "clipped by CSS ancestor"],
+  ])("rejects %s even without document overflow (readability negative control)",
+    async (_case, css, expected) => {
+      response = publishedM5Source;
+      arrivalResponse = publishedM5Arrival;
+      const page = await open(360);
+      try {
+        await page.waitForFunction(() =>
+          !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
+        expect(await unreadableM5Elements(page)).toEqual([]);
+        await page.addStyleTag({ content: css });
+        expect(await unreadableM5Elements(page)).toEqual(
+          expect.arrayContaining([expect.stringContaining(expected)]),
+        );
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
   it("links the existing milestone dashboard to M5 and back, with no invented data", async () => {
     response = null;
     const page = await browser.newPage({ viewport: { width: 360, height: 900 } });
