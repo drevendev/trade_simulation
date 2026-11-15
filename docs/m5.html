@@ -330,7 +330,11 @@
     for (const route of arrival.routes) {
       for (const receipt of route.arrivals) {
         const paid = due.get(receipt.id);
-        assert(paid && paid.linkId === route.linkId && paid.from === route.from && paid.to === route.to,
+        // Tick 8 can also deliver older carried cargo or newly dispatched instant cargo.
+        // Confirm only the tick-7 paid identities that are due now; never attribute
+        // unrelated tick-8 deliveries to the previous tick's payment.
+        if (!paid) continue;
+        assert(paid.linkId === route.linkId && paid.from === route.from && paid.to === route.to,
           "unmatched arrival route or shipment");
         assert(!found.has(receipt.id), "duplicate arrival receipt");
         assert(exactKeys.every(key => receipt[key] === paid.cargo[key]),
@@ -344,11 +348,13 @@
     arrivalStatus.textContent = "Canonical tick " + arrival.tick +
       " · " + found.size + " delivered shipment(s), matched to tick " +
       dispatch.tick + " paid dispatch. No second sale or FX conversion at delivery.";
-    for (const route of arrival.routes.filter(item => item.arrivals.length > 0)) {
+    for (const route of arrival.routes) {
+      const matchedArrivals = route.arrivals.filter(receipt => due.has(receipt.id));
+      if (!matchedArrivals.length) continue;
       const card = node("article", undefined, arrivalRoutes, "panel");
       node("h3", route.from + " → " + route.to, card);
       node("div", route.linkId, card, "muted");
-      shipments(card, "Confirmed arrivals", route.arrivals);
+      shipments(card, "Confirmed arrivals", matchedArrivals);
       node("p", "Delivery confirmed in tick " + arrival.tick +
         " from the next executed simulation tick; payment, transport and taxes " +
         "were settled at the earlier dispatch. Cargo is no longer merely in transit.", card);
