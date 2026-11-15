@@ -324,7 +324,6 @@
         due.set(cargo.id, { linkId: route.linkId, from: route.from, to: route.to, cargo });
       }
     }
-    assert(due.size > 0, "no paid shipments due at next tick");
     const exactKeys = [
       "id", "good", "unit", "quantity", "arrivalTick", "invoiceCurrency",
       "buyerCurrency", "buyerGoodsPaymentAmount", "transportFeeAmount",
@@ -349,6 +348,14 @@
     assert(found.size === due.size, "paid due shipment missing its delivery receipt");
     arrivalRoutes.replaceChildren();
     arrivalStatus.classList.remove("problem");
+    if (due.size === 0) {
+      // A valid adjacent tick can have no next-tick shipments due from this
+      // dispatch. Older carried cargo and new instant deliveries are unrelated.
+      arrivalStatus.textContent = "Canonical tick " + arrival.tick +
+        " · No paid tick-" + dispatch.tick + " shipments were scheduled to arrive. " +
+        "No delivery is attributed to that dispatch.";
+      return;
+    }
     arrivalStatus.textContent = "Canonical tick " + arrival.tick +
       " · " + found.size + " delivered shipment(s), matched to tick " +
       dispatch.tick + " paid dispatch. No second sale or FX conversion at delivery.";
