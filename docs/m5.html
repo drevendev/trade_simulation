@@ -162,6 +162,13 @@
         tickArrivals.set(cargo.id, { linkId: route.linkId, cargo });
       });
     }
+    // Shipment IDs are unique across ticks. A future-due paid departure cannot
+    // also be marked delivered in this tick by forging its arrivalTick to now.
+    // Real carried arrivals from earlier ticks remain allowed under distinct IDs.
+    for (const id of departureIds) {
+      assert(!tickArrivals.has(id) || instantDispatch.has(id),
+        "future-due paid shipment has a premature arrival receipt");
+    }
     const receiptKeys = [
       "id", "good", "unit", "quantity", "arrivalTick", "invoiceCurrency",
       "buyerCurrency", "buyerGoodsPaymentAmount", "transportFeeAmount",
