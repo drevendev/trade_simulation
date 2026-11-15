@@ -156,6 +156,39 @@ describe("M5 Pages source-backed shell", () => {
     },
   );
 
+  it.each([false, true])(
+    "shows a valid zero-due state when unrelated tick-8 arrivals exist=%s",
+    async includeUnrelatedArrival => {
+      // Tick 7 has only a same-tick paid shipment; no paid cargo is due in tick 8.
+      response = JSON.stringify(valid);
+      const route = valid.routes[0]!;
+      const unrelated = { ...shipment, id: "sh:paid-in-earlier-tick", arrivalTick: 8 };
+      arrivalResponse = JSON.stringify({
+        ...valid,
+        tick: 8,
+        routes: [{
+          ...route, status: "NO_PAID_DISPATCH", departures: [],
+          arrivals: includeUnrelatedArrival ? [unrelated] : [],
+          dispatchedWeightUnits: 0, inTransitCount: 0,
+        }],
+        fxPools: valid.fxPools.map(pool => ({ ...pool, spotBefore: pool.spotAfter })),
+      });
+      const page = await open(360);
+      try {
+        await page.waitForFunction(() =>
+          !(document.getElementById("arrival-status")?.textContent ?? "").includes("Loading"));
+        expect(await page.locator("#status").innerText()).toContain("source-backed data loaded");
+        const nextTick = await page.locator("#arrival-status").innerText();
+        expect(nextTick).toContain("No paid tick-7 shipments were scheduled to arrive");
+        expect(nextTick).not.toContain("unavailable");
+        expect(await page.locator("#arrival-routes article").count()).toBe(0);
+        expect(await page.locator("#routes").innerText()).toContain("Paid dispatch");
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
   it("refuses a tampered next-tick receipt and keeps genuine paid dispatch visible", async () => {
     response = publishedM5Source;
     const source = JSON.parse(publishedM5Arrival) as M5TradeTickPreview;
