@@ -13,6 +13,8 @@ const files = new Map([
   ["m5-arrival.json", readFileSync(fileURLToPath(new URL("../../docs/m5-arrival.json", import.meta.url)), "utf8")],
 ]);
 const requestedPaths: string[] = [];
+// Test-only HTTP overrides: null means the deployed artifact is absent (404).
+const receiptOverrides = new Map<string, string | null>();
 let server: Server;
 let browser: Browser;
 let origin: string;
@@ -24,8 +26,10 @@ beforeAll(async () => {
     // Intentionally serve NOTHING at the origin root: a root-absolute asset URL
     // may accidentally work in local tests but fail under /trade_simulation/.
     const relative = pathname.startsWith(basePath) ? pathname.slice(basePath.length) : "";
-    const content = files.get(relative);
-    if (content === undefined) {
+    const content = receiptOverrides.has(relative)
+      ? receiptOverrides.get(relative)
+      : files.get(relative);
+    if (content == null) {
       reply.writeHead(404);
       reply.end("Not found");
       return;
@@ -101,4 +105,71 @@ describe("M5 GitHub Pages repository base path (#677)", () => {
       }
     },
   );
+
+  it("keeps the paid dispatch but never confirms delivery when the arrival artifact is missing", async () => {
+    receiptOverrides.set("m5-arrival.json", null);
+    const page = await browser.newPage({ viewport: { width: 360, height: 900 } });
+    try {
+      expect((await page.goto(origin + basePath + "m5.html"))?.status()).toBe(200);
+      await page.waitForFunction(() =>
+        (document.getElementById("arrival-status")?.textContent ?? "").includes("HTTP 404"),
+      );
+      expect(await page.locator("#status").innerText()).toContain("Canonical M5 tick 7");
+      expect(await page.locator("#routes").innerText()).toContain("Arrival is scheduled for tick 8");
+      expect(await page.locator("#fx").innerText()).toContain("BET/ALP");
+      expect(await page.locator("#arrival-status").innerText()).toContain(
+        "No arrival is inferred from a scheduled dispatch",
+      );
+      expect(await page.locator("#arrival-routes article").count()).toBe(0);
+    } finally {
+      receiptOverrides.clear();
+      await page.close();
+    }
+  });
+
+  it("rejects a tampered next-tick delivery without erasing the genuine paid dispatch", async () => {
+    const tampered = JSON.parse(files.get("m5-arrival.json")!);
+    tampered.routes[0].arrivals[0].quantity += 1;
+    receiptOverrides.set("m5-arrival.json", JSON.stringify(tampered));
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    try {
+      expect((await page.goto(origin + basePath + "m5.html"))?.status()).toBe(200);
+      await page.waitForFunction(() =>
+        (document.getElementById("arrival-status")?.textContent ?? "").includes(
+          "arrival differs from paid dispatch",
+        ),
+      );
+      expect(await page.locator("#status").innerText()).toContain("Canonical M5 tick 7");
+      expect(await page.locator("#routes").innerText()).toContain("127.5 units");
+      expect(await page.locator("#arrival-routes article").count()).toBe(0);
+    } finally {
+      receiptOverrides.clear();
+      await page.close();
+    }
+  });
+
+  it("does not invent route, FX, or arrival evidence when the dispatch artifact is missing", async () => {
+    receiptOverrides.set("m5-preview.json", null);
+    const page = await browser.newPage({ viewport: { width: 360, height: 900 } });
+    try {
+      expect((await page.goto(origin + basePath + "m5.html"))?.status()).toBe(200);
+      await page.waitForFunction(() =>
+        (document.getElementById("status")?.textContent ?? "").includes(
+          "M5 data unavailable: HTTP 404",
+        ),
+      );
+      expect(await page.locator("#status").innerText()).toContain(
+        "No fallback or invented simulation values are displayed",
+      );
+      expect(await page.locator("#arrival-status").innerText()).toContain(
+        "source dispatch unavailable",
+      );
+      expect(await page.locator("#routes").innerText()).toBe("");
+      expect(await page.locator("#fx").innerText()).toBe("");
+      expect(await page.locator("#arrival-routes").innerText()).toBe("");
+    } finally {
+      receiptOverrides.clear();
+      await page.close();
+    }
+  });
 });
