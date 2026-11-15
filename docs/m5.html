@@ -139,6 +139,10 @@
         assert(route.dispatchedWeightUnits > 0, "paid route has no physical cargo weight");
       } else {
         assert(route.departures.length === 0, "unpaid route has a dispatch");
+        // Only paid departures consume capacity. A positive weight without any
+        // corresponding paid cargo is not an executed shipment.
+        assert(route.dispatchedWeightUnits === 0,
+          "unpaid route has paid departure weight");
       }
       route.departures.forEach((cargo, index) => {
         validateCargo(cargo, "departure " + index);

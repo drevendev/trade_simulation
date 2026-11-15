@@ -687,6 +687,43 @@ describe("M5 Pages source-backed shell", () => {
     }
   });
 
+  it.each([
+    ["NO_PAID_DISPATCH", 10, 1],
+    ["NO_PHYSICAL_CAPACITY", 0, 1e-9],
+  ] as const)("refuses phantom paid weight on %s routes but accepts genuine zero weight",
+    async (status, capacityWeightUnits, forgedWeight) => {
+      const noPaidRoute: M5TradeTickPreview["routes"][number] = {
+        ...valid.routes[0]!, status, capacityWeightUnits,
+        departures: [], arrivals: [], inTransitCount: 0,
+        dispatchedWeightUnits: forgedWeight,
+      };
+      response = JSON.stringify({ ...valid, routes: [noPaidRoute] });
+      const forged = await open(360);
+      try {
+        expect(await forged.locator("#status").innerText()).toContain(
+          "unpaid route has paid departure weight",
+        );
+        expect(await forged.locator("#routes article").count()).toBe(0);
+        expect(await forged.locator("#fx article").count()).toBe(0);
+      } finally {
+        await forged.close();
+      }
+
+      // Same status and capacity with no paid weight is a valid idle route.
+      response = JSON.stringify({
+        ...valid, routes: [{ ...noPaidRoute, dispatchedWeightUnits: 0 }],
+      });
+      const genuine = await open(360);
+      try {
+        expect(await genuine.locator("#status").innerText()).toContain("source-backed data loaded");
+        expect(await genuine.locator("#routes article").count()).toBe(1);
+        expect(await genuine.locator("#routes").innerText()).toContain("0 weight-units");
+      } finally {
+        await genuine.close();
+      }
+    },
+  );
+
   it("fails closed on impossible capacity use and zero-quantity paid cargo", async () => {
     response = JSON.stringify({ ...valid, routes: [{
       ...valid.routes[0], dispatchedWeightUnits: 11,
