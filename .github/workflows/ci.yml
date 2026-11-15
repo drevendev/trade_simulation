@@ -93,6 +93,13 @@ jobs:
       - name: Report and guard npm advisory detail (#829)
         run: python3 scripts/npm_audit_report.py
       - run: npm run typecheck
+      # These read-only generator checks bind the checked-in GitHub Pages receipts
+      # to the current canonical tick-7 dispatch and tick-8 delivery output.
+      # Browser smoke alone would pass against two stale but self-consistent JSON files.
+      - name: Verify M5 Pages dispatch receipt matches executed simulation
+        run: npm run m5:preview:check
+      - name: Verify M5 Pages arrival receipt matches executed simulation
+        run: node src/diagnostics/generateM5Preview.mjs --arrival-check
       - run: npm test
       - run: npm run build
 
