@@ -201,6 +201,33 @@ describe("M5 Pages source-backed shell", () => {
     }
   });
 
+  it("rejects a future-due paid dispatch forged as delivered in the same tick", async () => {
+    const dispatch = JSON.parse(publishedM5Source) as M5TradeTickPreview;
+    const route = dispatch.routes.find(item =>
+      item.departures.some(cargo => cargo.arrivalTick > dispatch.tick))!;
+    const paid = route.departures.find(cargo => cargo.arrivalTick > dispatch.tick)!;
+    // This is independently schema-valid as an arrival: only the cross-receipt
+    // identity/timing check can detect that it contradicts the paid future due tick.
+    response = JSON.stringify({
+      ...dispatch,
+      routes: dispatch.routes.map(item => item.linkId === route.linkId
+        ? { ...item, arrivals: [...item.arrivals, { ...paid, arrivalTick: dispatch.tick }] }
+        : item),
+    });
+    arrivalResponse = publishedM5Arrival;
+    const page = await open(360);
+    try {
+      expect(await page.locator("#status").innerText()).toContain(
+        "future-due paid shipment has a premature arrival receipt",
+      );
+      expect(await page.locator("#routes article").count()).toBe(0);
+      expect(await page.locator("#fx article").count()).toBe(0);
+      expect(await page.locator("#arrival-routes article").count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
   it("rejects a paid shipment duplicated across directed routes before displaying trade totals", async () => {
     const dispatch = JSON.parse(publishedM5Source) as M5TradeTickPreview;
     const paid = dispatch.routes.find(route => route.departures.length > 0)!;
