@@ -674,4 +674,190 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     expect(totalIron(next.world)).toBeCloseTo(openingIron - loss.quantity!, 7);
   });
 
+
+  it("replays 120 ticks of intermittent monetary-union trade with owner-bound settlement", () => {
+    const f = fixture();
+    const currency = f.origin.settlementCurrencyId;
+    const openingCash = totalCash(f.world, currency);
+    const openingIron = totalIron(f.world);
+    const reorder = (world: WorldState): WorldState => ({
+      ...world,
+      states: new Map([...world.states].reverse()),
+      regions: new Map([...world.regions].reverse()),
+      markets: new Map([...world.markets].reverse()),
+      cohorts: new Map([...world.cohorts].reverse()),
+      clans: new Map([...world.clans].reverse()),
+      productionUnits: new Map([...world.productionUnits].reverse()),
+      transportLinks: new Map([...world.transportLinks].reverse()),
+      monetaryAuthorities: new Map([...world.monetaryAuthorities].reverse()),
+    });
+    let normalWorld = f.world;
+    let replayWorld = reorder(f.world);
+    const dispatched = new Set<string>();
+    const delivered = new Set<string>();
+    let fundedWindows = 0;
+    let blockedLocalTicks = 0;
+    let negativeTreasuryChecked = false;
+
+    for (let tick = 7; tick < 127; tick++) {
+      const open = (tick - 7) % 12 === 0;
+      const beforeIds = new Set(normalWorld.shipments?.keys());
+      const due = [...(normalWorld.shipments?.values() ?? [])].filter(
+        cargo => cargo.arrivalTick === tick,
+      );
+      let phase1Before: WorldState | undefined;
+      let phase1After: WorldState | undefined;
+      let phase7Before: WorldState | undefined;
+      let phase7After: WorldState | undefined;
+      const options = open ? f.options : {
+        ...f.options, phase1TradeLawProvider: () => undefined,
+      };
+      const normal = executeM5AutonomousRegionalTradeTick(
+        normalWorld, tick, households, (_phase, world) => world, options,
+        (phase, before, after) => {
+          if (phase === 1) {
+            phase1Before = before;
+            phase1After = after;
+          }
+          if (phase === 7) {
+            phase7Before = before;
+            phase7After = after;
+          }
+        },
+      );
+      const replay = run(f, replayWorld, open, tick);
+      for (const result of [normal, replay]) {
+        expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+        expect(result.phaseBoundaryError).toBeUndefined();
+        expect(result.reconciliationErrors).toBeNull();
+        expect(totalCash(result.world, currency)).toBeCloseTo(openingCash, 6);
+        expect(totalIron(result.world)).toBeCloseTo(openingIron, 7);
+        expect(result.world.monetaryAuthorities).toEqual(f.world.monetaryAuthorities);
+        expect(result.context.transactions.filter(tx =>
+          tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT")).toHaveLength(0);
+      }
+      expect(replay.context.transactions).toEqual(normal.context.transactions);
+      expect(replay.world.productionUnits).toEqual(normal.world.productionUnits);
+      expect(replay.world.states).toEqual(normal.world.states);
+      expect(replay.world.shipments).toEqual(normal.world.shipments);
+      expect(replay.world.markets).toEqual(normal.world.markets);
+
+      const fresh = [...(normal.world.shipments?.values() ?? [])].filter(
+        cargo => !beforeIds.has(cargo.id),
+      );
+      const posted = normal.context.transactions;
+      expect(posted.filter(tx => tx.phase === 7 &&
+        tx.type === "SHIPMENT_DISPATCH")).toHaveLength(fresh.length);
+      if (!open) {
+        expect(fresh).toHaveLength(0);
+        if (posted.some(tx => tx.phase === 4 && tx.type === "MARKET_SALE" &&
+          (tx.moneyAmount ?? 0) > 0)) blockedLocalTicks++;
+      }
+      if (fresh.length > 0) fundedWindows++;
+      for (const cargo of fresh) {
+        expect(cargo.invoiceCurrencyId).toBe(currency);
+        expect(cargo.buyerPaymentCurrencyId).toBe(currency);
+        expect(cargo.fxSettlementId).toBeUndefined();
+        expect(cargo.arrivalTick).toBe(tick + 2);
+        expect(cargo.destinationRegionId).toBe(f.destination.regionId);
+        expect(dispatched.has(cargo.id)).toBe(false);
+        dispatched.add(cargo.id);
+      }
+
+      // Phase 7 is the sole writer under examination. Check actual owners'
+      // currency stocks against the frozen cargo, not the journal's payees.
+      expect(phase7Before).toBeDefined();
+      expect(phase7After).toBeDefined();
+      const assertPaidOwners = (settled: WorldState): void => {
+        for (const [id, before] of phase7Before!.productionUnits) {
+          const expected = fresh.reduce((sum, cargo) => {
+            const sellerCredit = cargo.seller.type === "PRODUCTION_UNIT" &&
+              cargo.seller.productionUnitId === id
+                ? cargo.sellerNetUnitPrice * cargo.quantity : 0;
+            const buyerDebit = cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+              cargo.beneficialOwner.productionUnitId === id
+                ? cargo.buyerGoodsPaymentAmount + cargo.transportFeeAmount +
+                  cargo.tariffAmount + cargo.consumptionTaxAmount : 0;
+            return sum + sellerCredit - buyerDebit;
+          }, 0);
+          const paid = (settled.productionUnits.get(id)!.wallet.get(currency) ?? 0) -
+            (before.wallet.get(currency) ?? 0);
+          expect(paid, "tick " + tick + " wallet owner " + id)
+            .toBeCloseTo(expected, 6);
+        }
+        for (const [id, before] of phase7Before!.states) {
+          const expected = fresh.reduce((sum, cargo) => {
+            const importer = phase7Before!.regions
+              .get(cargo.destinationRegionId)!.controllerStateId;
+            const receiver = phase7Before!.transportLinks
+              .get(cargo.transportLinkId)!.feeReceiver;
+            return sum + (importer === id
+              ? cargo.tariffAmount + cargo.consumptionTaxAmount : 0) +
+              (receiver?.type === "STATE" && receiver.stateId === id
+                ? cargo.transportFeeAmount : 0);
+          }, 0);
+          const paid = (settled.states.get(id)!.treasury.get(currency) ?? 0) -
+            (before.treasury.get(currency) ?? 0);
+          expect(paid, "tick " + tick + " treasury owner " + id)
+            .toBeCloseTo(expected, 6);
+        }
+      };
+      assertPaidOwners(phase7After!);
+      if (fresh.length > 0 && !negativeTreasuryChecked) {
+        const importer = f.destination.controllerStateId!;
+        const exporter = f.origin.controllerStateId!;
+        const originalImporter = phase7After!.states.get(importer)!;
+        const originalExporter = phase7After!.states.get(exporter)!;
+        const shifted = new Map(phase7After!.states)
+          .set(importer, {
+            ...originalImporter, treasury: new Map(originalImporter.treasury)
+              .set(currency, (originalImporter.treasury.get(currency) ?? 0) - 1),
+          })
+          .set(exporter, {
+            ...originalExporter, treasury: new Map(originalExporter.treasury)
+              .set(currency, (originalExporter.treasury.get(currency) ?? 0) + 1),
+          });
+        const forged = { ...phase7After!, states: shifted };
+        expect(totalCash(forged, currency))
+          .toBeCloseTo(totalCash(phase7After!, currency), 6);
+        expect(() => assertPaidOwners(forged)).toThrow();
+        negativeTreasuryChecked = true;
+      }
+
+      // Arrival moves only frozen goods into the paid owner's input stock;
+      // neither a second invoice nor a second tariff is permitted at Phase 1.
+      expect(phase1Before).toBeDefined();
+      expect(phase1After).toBeDefined();
+      const receipts = posted.filter(tx => tx.type === "SHIPMENT_DELIVERY");
+      expect(receipts).toHaveLength(due.length);
+      for (const [id, before] of phase1Before!.productionUnits) {
+        const expected = due.reduce((sum, cargo) =>
+          sum + (cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+            cargo.beneficialOwner.productionUnitId === id ? cargo.quantity : 0), 0);
+        const actual = (phase1After!.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0) -
+          (before.inputInventory.get(IRON) ?? 0);
+        expect(actual, "tick " + tick + " delivery owner " + id)
+          .toBeCloseTo(expected, 7);
+      }
+      for (const cargo of due) {
+        expect(receipts.filter(tx =>
+          tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id &&
+          tx.quantity === cargo.quantity &&
+          JSON.stringify(tx.destination) === JSON.stringify(cargo.beneficialOwner) &&
+          tx.moneyAmount === undefined)).toHaveLength(1);
+        expect(dispatched.has(cargo.id)).toBe(true);
+        expect(delivered.has(cargo.id)).toBe(false);
+        delivered.add(cargo.id);
+      }
+      normalWorld = normal.world;
+      replayWorld = reorder(replay.world);
+    }
+    expect(fundedWindows).toBeGreaterThan(1);
+    expect(blockedLocalTicks).toBeGreaterThan(0);
+    expect(negativeTreasuryChecked).toBe(true);
+    expect(dispatched.size).toBeGreaterThanOrEqual(2);
+    expect(delivered).toEqual(dispatched);
+    expect(normalWorld.shipments?.size ?? 0).toBe(0);
+  }, 30_000);
+
 });
