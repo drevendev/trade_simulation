@@ -2578,10 +2578,24 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       ...original,
       options: { ...original.options, closeFxAtPhase11 },
     };
+    // This corridor imports into Beta but pays its fee to the source State.
+    // Separating fee and tax owners makes wrong-recipient routing observable.
+    const divergentLink = f.world.transportLinks.get(f.links[1]!)!;
+    const feeImporter = f.world.regions.get(divergentLink.toRegionId)!.controllerStateId!;
+    const distinctFeeOwner = f.world.regions.get(divergentLink.fromRegionId)!.controllerStateId!;
+    expect(distinctFeeOwner).not.toBe(feeImporter);
     const initial: WorldState = {
       ...f.world,
       transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
-        [id, { ...link, travelTicks: 2 }] as const)),
+        [id, id === f.links[1] ? {
+          ...link,
+          travelTicks: 2,
+          seed: {
+            ...link.seed,
+            feeReceiverStateKey: f.world.states.get(distinctFeeOwner)!.seed.key,
+          },
+          feeReceiver: { type: "STATE" as const, stateId: distinctFeeOwner },
+        } : { ...link, travelTicks: 2 }] as const)),
       // The general baseline contains reverse / unrelated FX fixtures that are
       // not legal active pairs under Phase-11's single-pool-per-pair contract.
       // Keep the ONE real issuer-owned pool used by these two corridors.
@@ -2609,6 +2623,8 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeOwnerChecked = false;
     let negativeTreasuryChecked = false;
     let creditedTreasuryTicks = 0;
+    let divergentFeeTicks = 0;
+    let negativeFeeRoutingChecked = false;
 
     for (let tick = 7; tick < 607; tick++) {
       const open = (tick - 7) % 12 === 0;
@@ -2752,6 +2768,59 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
       };
       assertStateTreasuries(phase7After!);
+      const divergentCargo = fresh.find(cargo =>
+        cargo.transportLinkId === f.links[1] && cargo.transportFeeAmount > 0);
+      if (divergentCargo) {
+        divergentFeeTicks++;
+        const importer = phase7Before!.regions
+          .get(divergentCargo.destinationRegionId)!.controllerStateId!;
+        const feeReceiver = phase7Before!.transportLinks
+          .get(divergentCargo.transportLinkId)!.feeReceiver;
+        expect(importer).toBe(feeImporter);
+        expect(feeReceiver).toEqual({ type: "STATE", stateId: distinctFeeOwner });
+        expect(importer).not.toBe(distinctFeeOwner);
+        const matchingDispatches = departures.filter(tx =>
+          tx.sourceRegionId === divergentCargo.originRegionId &&
+          tx.destinationRegionId === divergentCargo.destinationRegionId);
+        expect(matchingDispatches).toHaveLength(1);
+        const bundleId = matchingDispatches[0]!.bundleId;
+        for (const [type, amount, receiver] of [
+          ["TRANSPORT_FEE", divergentCargo.transportFeeAmount, distinctFeeOwner],
+          ["IMPORT_TARIFF", divergentCargo.tariffAmount, importer],
+          ["CONSUMPTION_TAX", divergentCargo.consumptionTaxAmount, importer],
+        ] as const) {
+          const entries = postings.filter(tx =>
+            tx.phase === 7 && tx.type === type && tx.bundleId === bundleId);
+          expect(entries, `tick ${tick}: ${type} for divergent fee corridor`)
+            .toHaveLength(amount > 0 ? 1 : 0);
+          if (amount > 0) {
+            expect(entries[0]!.destination)
+              .toEqual({ type: "STATE", stateId: receiver });
+            expect(entries[0]!.moneyAmount).toBeCloseTo(amount, 6);
+            expect(entries[0]!.currencyId).toBe(divergentCargo.buyerPaymentCurrencyId);
+          }
+        }
+
+        if (!negativeFeeRoutingChecked) {
+          // Reroute only the exact paid corridor fee to the importer. Total
+          // money, tax receipts, FX balances and cargo remain unchanged.
+          const currency = divergentCargo.buyerPaymentCurrencyId;
+          const states = new Map(phase7After!.states);
+          for (const [stateId, delta] of [
+            [distinctFeeOwner, -divergentCargo.transportFeeAmount],
+            [importer, divergentCargo.transportFeeAmount],
+          ] as const) {
+            const state = states.get(stateId)!;
+            states.set(stateId, { ...state, treasury: new Map(state.treasury)
+              .set(currency, (state.treasury.get(currency) ?? 0) + delta) });
+          }
+          const forgedFeeDestination = { ...phase7After!, states };
+          expect(totalCash(forgedFeeDestination, currency))
+            .toBeCloseTo(totalCash(phase7After!, currency), 6);
+          expect(() => assertStateTreasuries(forgedFeeDestination)).toThrow();
+          negativeFeeRoutingChecked = true;
+        }
+      }
       if (fresh.some(cargo => cargo.tariffAmount + cargo.consumptionTaxAmount > 0)) {
         creditedTreasuryTicks++;
       }
@@ -2903,6 +2972,8 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativePrincipalChecked).toBe(true);
     expect(negativeOwnerChecked).toBe(true);
     expect(negativeTreasuryChecked).toBe(true);
+    expect(negativeFeeRoutingChecked).toBe(true);
+    expect(divergentFeeTicks).toBeGreaterThan(0);
     expect(creditedTreasuryTicks).toBeGreaterThan(0);
     expect(repricedTicks).toBeGreaterThan(0);
     expect(blockedLocalTicks).toBeGreaterThan(0);
