@@ -698,6 +698,7 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     let fundedWindows = 0;
     let blockedLocalTicks = 0;
     let negativeTreasuryChecked = false;
+    let negativeArrivalChecked = false;
 
     for (let tick = 7; tick < 127; tick++) {
       const open = (tick - 7) % 12 === 0;
@@ -830,6 +831,61 @@ describe("M5/#676 monetary-union cross-State golden", () => {
       expect(phase1After).toBeDefined();
       const receipts = posted.filter(tx => tx.type === "SHIPMENT_DELIVERY");
       expect(receipts).toHaveLength(due.length);
+      // Delivery is goods-only in this fixture: neither a new invoice nor
+      // any balanced extra payment may be written during Phase 1.
+      expect(posted.filter(tx =>
+        tx.phase === 1 && tx.moneyAmount !== undefined),
+      "tick " + tick + " unexpected Phase-1 money entry").toHaveLength(0);
+      const assertNoArrivalRepayment = (settled: WorldState): void => {
+        for (const [id, before] of phase1Before!.productionUnits) {
+          expect(settled.productionUnits.get(id)!.wallet,
+            "tick " + tick + " Phase-1 unit wallet " + id).toEqual(before.wallet);
+        }
+        for (const [id, before] of phase1Before!.states) {
+          expect(settled.states.get(id)!.treasury,
+            "tick " + tick + " Phase-1 State treasury " + id).toEqual(before.treasury);
+        }
+        for (const [id, before] of phase1Before!.clans) {
+          expect(settled.clans.get(id)!.treasury,
+            "tick " + tick + " Phase-1 Clan treasury " + id).toEqual(before.treasury);
+        }
+        for (const [id, before] of phase1Before!.cohorts) {
+          expect(settled.cohorts.get(id)!.wallet,
+            "tick " + tick + " Phase-1 Cohort wallet " + id).toEqual(before.wallet);
+        }
+        for (const [id, before] of phase1Before!.monetaryAuthorities) {
+          expect(settled.monetaryAuthorities.get(id)!.fxPools,
+            "tick " + tick + " Phase-1 FX pools " + id).toEqual(before.fxPools);
+        }
+      };
+      assertNoArrivalRepayment(phase1After!);
+      if (due.length > 0 && !negativeArrivalChecked) {
+        const cargo = due[0]!;
+        if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT" ||
+            cargo.seller.type !== "PRODUCTION_UNIT") {
+          throw new Error("Golden fixture expected two ProductionUnit payment owners");
+        }
+        const buyerId = cargo.beneficialOwner.productionUnitId;
+        const sellerId = cargo.seller.productionUnitId;
+        const buyer = phase1After!.productionUnits.get(buyerId)!;
+        const seller = phase1After!.productionUnits.get(sellerId)!;
+        const forgedUnits = new Map(phase1After!.productionUnits);
+        forgedUnits.set(buyerId, {
+          ...buyer, wallet: new Map(buyer.wallet)
+            .set(currency, (buyer.wallet.get(currency) ?? 0) - 1),
+        });
+        forgedUnits.set(sellerId, {
+          ...seller, wallet: new Map(seller.wallet)
+            .set(currency, (seller.wallet.get(currency) ?? 0) + 1),
+        });
+        const forged: WorldState = {
+          ...phase1After!, productionUnits: forgedUnits,
+        };
+        expect(totalCash(forged, currency))
+          .toBeCloseTo(totalCash(phase1After!, currency), 6);
+        expect(() => assertNoArrivalRepayment(forged)).toThrow();
+        negativeArrivalChecked = true;
+      }
       for (const [id, before] of phase1Before!.productionUnits) {
         const expected = due.reduce((sum, cargo) =>
           sum + (cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
@@ -855,6 +911,7 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     expect(fundedWindows).toBeGreaterThan(1);
     expect(blockedLocalTicks).toBeGreaterThan(0);
     expect(negativeTreasuryChecked).toBe(true);
+    expect(negativeArrivalChecked).toBe(true);
     expect(dispatched.size).toBeGreaterThanOrEqual(2);
     expect(delivered).toEqual(dispatched);
     expect(normalWorld.shipments?.size ?? 0).toBe(0);
