@@ -2605,6 +2605,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let liveFxTicks = 0;
     let repricedTicks = 0;
     let blockedLocalTicks = 0;
+    let negativePrincipalChecked = false;
 
     for (let tick = 7; tick < 607; tick++) {
       const open = (tick - 7) % 12 === 0;
@@ -2614,9 +2615,15 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       );
       const beforeIds = new Set(normal.shipments?.keys());
       let observedAtPhase7: number | undefined;
+      let phase7Before: WorldState | undefined;
+      let phase7After: WorldState | undefined;
       let phase11Cash: ReturnType<typeof poolOf>["cash"] | undefined;
-      const actual = run(f, normal, open, tick, (phase, _before, after) => {
-        if (phase === 7) observedAtPhase7 = poolOf(after).spotRateQuotePerBase;
+      const actual = run(f, normal, open, tick, (phase, before, after) => {
+        if (phase === 7) {
+          observedAtPhase7 = poolOf(after).spotRateQuotePerBase;
+          phase7Before = before;
+          phase7After = after;
+        }
         if (phase === 11) phase11Cash = new Map(poolOf(after).cash);
       });
       const replay = run(f, shuffled, open, tick);
@@ -2652,6 +2659,55 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       const fresh = [...(actual.world.shipments?.values() ?? [])].filter(
         cargo => !beforeIds.has(cargo.id),
       );
+
+      // The posting oracle uses actual before/after Phase-7 issuer cash,
+      // independently of the journal it checks. A balanced but misposted FX
+      // receipt must fail even if the aggregate full-tick cash stayed constant.
+      expect(phase7Before, `tick ${tick}: Phase-7 opening stock`).toBeDefined();
+      expect(phase7After, `tick ${tick}: Phase-7 closing stock`).toBeDefined();
+      const poolBefore = poolOf(phase7Before!);
+      const poolAfter = poolOf(phase7After!);
+      const assertPoolJournal = (journal: typeof postings): void => {
+        for (const currency of f.currencies) {
+          const actualDelta = (poolAfter.cash.get(currency) ?? 0) -
+            (poolBefore.cash.get(currency) ?? 0);
+          const postedDelta = journal.filter(tx =>
+            tx.phase === 7 && tx.type === "FX_INPUT" && tx.currencyId === currency,
+          ).reduce((sum, tx) => sum + tx.moneyAmount!, 0) -
+            journal.filter(tx =>
+              tx.phase === 7 && tx.type === "FX_OUTPUT" && tx.currencyId === currency,
+            ).reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+          expect(actualDelta, `tick ${tick}: issuer cash vs FX journal ${currency}`)
+            .toBeCloseTo(postedDelta, 6);
+        }
+      };
+      assertPoolJournal(postings);
+      if (inputs.length > 0 && !negativePrincipalChecked) {
+        const forged = postings.map(tx =>
+          tx === inputs[0] ? { ...tx, moneyAmount: tx.moneyAmount! + 1 } : tx);
+        expect(() => assertPoolJournal(forged)).toThrow();
+        negativePrincipalChecked = true;
+      }
+
+      // Cargo weight, not unit count, consumes each *individual* physical
+      // corridor budget. Combining both routes into one global allowance
+      // would hide a single overbooked link on a long replay.
+      const cargoWeight = baselineDefinitionPack.goods[IRON]!.cargoWeightPerUnit;
+      const loadByLink = new Map<TransportLinkId, number>();
+      for (const cargo of fresh) {
+        expect(cargo.goodId).toBe(IRON);
+        loadByLink.set(cargo.transportLinkId,
+          (loadByLink.get(cargo.transportLinkId) ?? 0) + cargo.quantity * cargoWeight);
+      }
+      for (const [linkId, load] of loadByLink) {
+        const link = normal.transportLinks.get(linkId);
+        expect(link, `tick ${tick}: physical corridor ${linkId}`).toBeDefined();
+        const factor = f.options.infrastructureFactors.get(linkId);
+        expect(factor).toBeDefined();
+        expect(load).toBeLessThanOrEqual(
+          effectiveTransportLinkCapacity(link!, factor!) + 1e-8,
+        );
+      }
 
       expect(close.tick).toBe(tick);
       expect(close.activateTick).toBe(tick + 1);
@@ -2703,6 +2759,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     }
 
     expect(liveFxTicks).toBeGreaterThan(0);
+    expect(negativePrincipalChecked).toBe(true);
     expect(repricedTicks).toBeGreaterThan(0);
     expect(blockedLocalTicks).toBeGreaterThan(0);
     expect(dispatched.size).toBeGreaterThanOrEqual(2);
