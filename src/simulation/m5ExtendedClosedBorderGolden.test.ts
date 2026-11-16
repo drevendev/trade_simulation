@@ -2707,6 +2707,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let creditedTreasuryTicks = 0;
     let divergentFeeTicks = 0;
     let negativeFeeRoutingChecked = false;
+    let negativeDeliveryOwnerChecked = false;
 
     for (let tick = 7; tick < 607; tick++) {
       const open = (tick - 7) % 12 === 0;
@@ -2716,10 +2717,16 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       );
       const beforeIds = new Set(normal.shipments?.keys());
       let observedAtPhase7: number | undefined;
+      let phase1Before: WorldState | undefined;
+      let phase1After: WorldState | undefined;
       let phase7Before: WorldState | undefined;
       let phase7After: WorldState | undefined;
       let phase11Cash: ReturnType<typeof poolOf>["cash"] | undefined;
       const actual = run(f, normal, open, tick, (phase, before, after) => {
+        if (phase === 1) {
+          phase1Before = before;
+          phase1After = after;
+        }
         if (phase === 7) {
           observedAtPhase7 = poolOf(after).spotRateQuotePerBase;
           phase7Before = before;
@@ -3036,6 +3043,52 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         dispatched.add(cargo.id);
       }
       expect(arrivals).toHaveLength(due.length);
+      // An arrival journal addressed to the correct owner is insufficient:
+      // prove the physical INPUT stock moved to that owner in Phase 1,
+      // even when several prepaid cargo vintages arrive together.
+      expect(phase1Before, `tick ${tick}: Phase-1 opening stock`).toBeDefined();
+      expect(phase1After, `tick ${tick}: Phase-1 closing stock`).toBeDefined();
+      const assertDeliveryOwners = (settled: WorldState): void => {
+        for (const [unitId, beforeUnit] of phase1Before!.productionUnits) {
+          const expected = due.reduce((sum, cargo) =>
+            sum + (cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+              cargo.beneficialOwner.productionUnitId === unitId
+              ? cargo.quantity : 0), 0);
+          const afterUnit = settled.productionUnits.get(unitId)!;
+          const observed = (afterUnit.inputInventory.get(IRON) ?? 0) -
+            (beforeUnit.inputInventory.get(IRON) ?? 0);
+          expect(observed, `tick ${tick}: arrival stock owner ${unitId}`)
+            .toBeCloseTo(expected, 6);
+        }
+      };
+      expect(due.every(cargo => cargo.goodId === IRON &&
+        cargo.destinationInventoryBucket === "INPUT" &&
+        cargo.beneficialOwner.type === "PRODUCTION_UNIT")).toBe(true);
+      assertDeliveryOwners(phase1After!);
+      if (due.length > 0 && !negativeDeliveryOwnerChecked) {
+        const recipient = due[0]!.beneficialOwner;
+        if (recipient.type !== "PRODUCTION_UNIT") {
+          throw new Error("Expected ProductionUnit destination in M5 golden");
+        }
+        const otherId = [...phase1After!.productionUnits.keys()]
+          .find(id => id !== recipient.productionUnitId);
+        expect(otherId).toBeDefined();
+        const amount = due[0]!.quantity / 2;
+        expect(amount).toBeGreaterThan(0);
+        const forgedUnits = new Map(phase1After!.productionUnits);
+        for (const [id, delta] of [
+          [recipient.productionUnitId, -amount],
+          [otherId!, amount],
+        ] as const) {
+          const unit = forgedUnits.get(id)!;
+          forgedUnits.set(id, { ...unit, inputInventory: new Map(unit.inputInventory)
+            .set(IRON, (unit.inputInventory.get(IRON) ?? 0) + delta) });
+        }
+        const forged = { ...phase1After!, productionUnits: forgedUnits };
+        expect(totalIron(forged)).toBeCloseTo(totalIron(phase1After!), 6);
+        expect(() => assertDeliveryOwners(forged)).toThrow();
+        negativeDeliveryOwnerChecked = true;
+      }
       for (const cargo of due) {
         expect(arrivals.filter(tx =>
           tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id &&
@@ -3055,6 +3108,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeOwnerChecked).toBe(true);
     expect(negativeTreasuryChecked).toBe(true);
     expect(negativeFeeRoutingChecked).toBe(true);
+    expect(negativeDeliveryOwnerChecked).toBe(true);
     expect(divergentFeeTicks).toBeGreaterThan(0);
     expect(creditedTreasuryTicks).toBeGreaterThan(0);
     expect(repricedTicks).toBeGreaterThan(0);
