@@ -2606,6 +2606,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let repricedTicks = 0;
     let blockedLocalTicks = 0;
     let negativePrincipalChecked = false;
+    let negativeOwnerChecked = false;
 
     for (let tick = 7; tick < 607; tick++) {
       const open = (tick - 7) % 12 === 0;
@@ -2682,6 +2683,95 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
       };
       assertPoolJournal(postings);
+
+      // Independent stock oracle: a balanced FX pool and unchanged aggregate
+      // goods can still conceal a payment or inventory debit to the wrong
+      // ProductionUnit. Compare every owner's Phase-7 stocks (after Phase-4
+      // local purchases), using frozen paid cargo rather than journal payees.
+      const physicalIron = (unit: ProductionUnitState) =>
+        (unit.inputInventory.get(IRON) ?? 0) +
+        (unit.outputInventory.get(IRON) ?? 0) +
+        (unit.investmentInventory.get(IRON) ?? 0);
+      const assertActorStocks = (settled: WorldState): void => {
+        for (const [unitId, openingUnit] of phase7Before!.productionUnits) {
+          const settledUnit = settled.productionUnits.get(unitId)!;
+          const exported = fresh.reduce((sum, cargo) =>
+            sum + (cargo.seller.type === "PRODUCTION_UNIT" &&
+              cargo.seller.productionUnitId === unitId ? cargo.quantity : 0), 0);
+          expect(physicalIron(settledUnit) - physicalIron(openingUnit),
+            `tick ${tick}: paid physical seller ${unitId}`)
+            .toBeCloseTo(-exported, 6);
+          for (const currency of f.currencies) {
+            const expectedDelta = fresh.reduce((sum, cargo) => {
+              const sellerCredit = cargo.seller.type === "PRODUCTION_UNIT" &&
+                cargo.seller.productionUnitId === unitId &&
+                cargo.invoiceCurrencyId === currency
+                  ? cargo.sellerNetUnitPrice * cargo.quantity : 0;
+              const buyerDebit = cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+                cargo.beneficialOwner.productionUnitId === unitId &&
+                cargo.buyerPaymentCurrencyId === currency
+                  ? cargo.buyerGoodsPaymentAmount + cargo.transportFeeAmount +
+                    cargo.tariffAmount + cargo.consumptionTaxAmount : 0;
+              return sum + sellerCredit - buyerDebit;
+            }, 0);
+            const actualDelta = (settledUnit.wallet.get(currency) ?? 0) -
+              (openingUnit.wallet.get(currency) ?? 0);
+            expect(actualDelta, `tick ${tick}: owner ${unitId} ${currency}`)
+              .toBeCloseTo(expectedDelta, 6);
+          }
+        }
+      };
+      assertActorStocks(phase7After!);
+      if (fresh.length >= 2 && !negativeOwnerChecked) {
+        const seller = fresh[0]!.seller;
+        const buyerA = fresh[0]!.beneficialOwner;
+        const buyerB = fresh[1]!.beneficialOwner;
+        expect(seller.type).toBe("PRODUCTION_UNIT");
+        expect(buyerA.type).toBe("PRODUCTION_UNIT");
+        expect(buyerB.type).toBe("PRODUCTION_UNIT");
+        if (seller.type !== "PRODUCTION_UNIT" ||
+            buyerA.type !== "PRODUCTION_UNIT" ||
+            buyerB.type !== "PRODUCTION_UNIT") {
+          throw new Error("Expected production-unit owners in 600-tick golden");
+        }
+        expect(buyerA.productionUnitId).not.toBe(buyerB.productionUnitId);
+        expect(seller.productionUnitId).not.toBe(buyerA.productionUnitId);
+
+        // Move cash between two buyers: the global currency balance and FX
+        // pool are unchanged, but individual paid owners must fail.
+        const currency = fresh[0]!.buyerPaymentCurrencyId;
+        const shiftedWallets = new Map(phase7After!.productionUnits);
+        for (const [id, delta] of [
+          [buyerA.productionUnitId, 1],
+          [buyerB.productionUnitId, -1],
+        ] as const) {
+          const unit = shiftedWallets.get(id)!;
+          shiftedWallets.set(id, { ...unit, wallet: new Map(unit.wallet)
+            .set(currency, (unit.wallet.get(currency) ?? 0) + delta) });
+        }
+        const forgedCashWorld = { ...phase7After!, productionUnits: shiftedWallets };
+        expect(totalCash(forgedCashWorld, currency))
+          .toBeCloseTo(totalCash(phase7After!, currency), 6);
+        expect(() => assertActorStocks(forgedCashWorld)).toThrow();
+
+        // Move goods between seller and buyer without changing aggregate
+        // physical iron or dispatch count. This catches double ownership
+        // even if every journal entry and FX reserve remains untouched.
+        const shiftedGoods = new Map(phase7After!.productionUnits);
+        for (const [id, delta] of [
+          [seller.productionUnitId, -0.25],
+          [buyerA.productionUnitId, 0.25],
+        ] as const) {
+          const unit = shiftedGoods.get(id)!;
+          shiftedGoods.set(id, { ...unit, inputInventory: new Map(unit.inputInventory)
+            .set(IRON, (unit.inputInventory.get(IRON) ?? 0) + delta) });
+        }
+        const forgedGoodsWorld = { ...phase7After!, productionUnits: shiftedGoods };
+        expect(totalIron(forgedGoodsWorld))
+          .toBeCloseTo(totalIron(phase7After!), 6);
+        expect(() => assertActorStocks(forgedGoodsWorld)).toThrow();
+        negativeOwnerChecked = true;
+      }
       if (inputs.length > 0 && !negativePrincipalChecked) {
         const forged = postings.map(tx =>
           tx === inputs[0] ? { ...tx, moneyAmount: tx.moneyAmount! + 1 } : tx);
@@ -2760,6 +2850,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
 
     expect(liveFxTicks).toBeGreaterThan(0);
     expect(negativePrincipalChecked).toBe(true);
+    expect(negativeOwnerChecked).toBe(true);
     expect(repricedTicks).toBeGreaterThan(0);
     expect(blockedLocalTicks).toBeGreaterThan(0);
     expect(dispatched.size).toBeGreaterThanOrEqual(2);
