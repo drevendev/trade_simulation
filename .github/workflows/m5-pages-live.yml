@@ -32,3 +32,11 @@ jobs:
         run: node --test scripts/tests/verify_m5_pages_live.checks.mjs
       - name: Verify public M5 HTML and both canonical receipts
         run: node scripts/verify_m5_pages_live.mjs
+      # Byte-exact publication is necessary but not sufficient: the actual
+      # public page must also render readable source-backed evidence.
+      - name: Install Chromium for post-deployment browser smoke
+        run: |
+          npm ci --ignore-scripts
+          npx playwright install --with-deps chromium
+      - name: Verify live M5 page in Chromium at 320, 360 and 1280px
+        run: node scripts/verify_m5_pages_browser.mjs
