@@ -2394,7 +2394,10 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     expect(physicalCapacity).toBeCloseTo(baselineUse * 0.7, 8);
     const openingIron = totalIron(constrained);
     const openingCash = f.currencies.map(currency => totalCash(constrained, currency));
-    const limited = run(singleCorridor, constrained);
+    const phase7Snapshots: { before: WorldState; after: WorldState }[] = [];
+    const limited = run(singleCorridor, constrained, true, 7, (phase, before, after) => {
+      if (phase === 7) phase7Snapshots.push({ before, after });
+    });
     const reversed = run(singleCorridor, reordered(constrained));
     const cargo = [...(limited.world.shipments?.values() ?? [])];
     expect(cargo).toHaveLength(2);
@@ -2410,6 +2413,85 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     const constrainedUse = cargo.reduce((sum, c) => sum + c.quantity * weight, 0);
     expect(constrainedUse).toBeLessThan(baselineUse);
     expect(constrainedUse).toBeGreaterThan(0);
+
+    // The common link has TWO distinct paid buyers. Physical capacity alone
+    // cannot catch a settlement that charges one buyer for the other's cargo.
+    // Observe actual Phase-7 wallets, after earlier local-market transactions,
+    // and reconcile each actor to frozen paid cargo rather than journal payees.
+    expect(phase7Snapshots).toHaveLength(1);
+    const { before: phase7Before, after: phase7After } = phase7Snapshots[0]!;
+    const buyers = cargo.map(c => {
+      expect(c.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+      return c.beneficialOwner.type === "PRODUCTION_UNIT"
+        ? c.beneficialOwner.productionUnitId : undefined;
+    });
+    expect(new Set(buyers).size).toBe(2);
+    const assertExactCorridorWallets = (settled: WorldState): void => {
+      for (const [unitId, openingUnit] of phase7Before.productionUnits) {
+        const settledUnit = settled.productionUnits.get(unitId)!;
+        for (const currency of f.currencies) {
+          const expectedDelta = cargo.reduce((sum, shipment) => {
+            const sellerCredit = shipment.seller.type === "PRODUCTION_UNIT" &&
+              shipment.seller.productionUnitId === unitId &&
+              shipment.invoiceCurrencyId === currency
+              ? shipment.sellerNetUnitPrice * shipment.quantity : 0;
+            const buyerDebit = shipment.beneficialOwner.type === "PRODUCTION_UNIT" &&
+              shipment.beneficialOwner.productionUnitId === unitId &&
+              shipment.buyerPaymentCurrencyId === currency
+              ? shipment.buyerGoodsPaymentAmount + shipment.transportFeeAmount +
+                shipment.tariffAmount + shipment.consumptionTaxAmount : 0;
+            return sum + sellerCredit - buyerDebit;
+          }, 0);
+          const actualDelta = (settledUnit.wallet.get(currency) ?? 0) -
+            (openingUnit.wallet.get(currency) ?? 0);
+          expect(actualDelta, `shared link paid owner ${unitId} ${currency}`)
+            .toBeCloseTo(expectedDelta, 6);
+        }
+      }
+    };
+    assertExactCorridorWallets(phase7After);
+
+    const fxInputs = limited.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_INPUT");
+    expect(fxInputs).toHaveLength(cargo.length);
+    for (const shipment of cargo) {
+      expect(fxInputs.filter(tx =>
+        tx.fxSettlementId === shipment.fxSettlementId &&
+        tx.source?.type === "PRODUCTION_UNIT" &&
+        shipment.beneficialOwner.type === "PRODUCTION_UNIT" &&
+        tx.source.productionUnitId === shipment.beneficialOwner.productionUnitId,
+      )).toHaveLength(1);
+    }
+
+    // Conserved-money negative control: interchange one unit of the two paid
+    // buyers' debits. Both cargos remain valid, global currency totals stay
+    // identical, but the exact owner oracle must detect the wrong payer.
+    const firstBuyer = buyers[0]!;
+    const secondBuyer = buyers[1]!;
+    const buyerCurrency = destination.settlementCurrencyId;
+    const firstUnit = phase7After.productionUnits.get(firstBuyer)!;
+    const secondUnit = phase7After.productionUnits.get(secondBuyer)!;
+    expect((firstUnit.wallet.get(buyerCurrency) ?? 0)).toBeGreaterThan(1);
+    const forgedWallets: WorldState = {
+      ...phase7After,
+      productionUnits: new Map(phase7After.productionUnits)
+        .set(firstBuyer, {
+          ...firstUnit,
+          wallet: new Map(firstUnit.wallet).set(
+            buyerCurrency, (firstUnit.wallet.get(buyerCurrency) ?? 0) - 1,
+          ),
+        })
+        .set(secondBuyer, {
+          ...secondUnit,
+          wallet: new Map(secondUnit.wallet).set(
+            buyerCurrency, (secondUnit.wallet.get(buyerCurrency) ?? 0) + 1,
+          ),
+        }),
+    };
+    expect(totalCash(forgedWallets, buyerCurrency))
+      .toBeCloseTo(totalCash(phase7After, buyerCurrency), 8);
+    expect(() => assertExactCorridorWallets(forgedWallets)).toThrow();
+
     // Negative control: a second physical budget for either buyer cannot be
     // hidden by individually valid shipments and a correct dispatch count.
     const overbooked = [
