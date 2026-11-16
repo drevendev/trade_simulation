@@ -699,6 +699,7 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     let blockedLocalTicks = 0;
     let negativeTreasuryChecked = false;
     let negativeArrivalChecked = false;
+    let negativeGoodsOwnerChecked = false;
 
     for (let tick = 7; tick < 127; tick++) {
       const open = (tick - 7) % 12 === 0;
@@ -886,14 +887,50 @@ describe("M5/#676 monetary-union cross-State golden", () => {
         expect(() => assertNoArrivalRepayment(forged)).toThrow();
         negativeArrivalChecked = true;
       }
-      for (const [id, before] of phase1Before!.productionUnits) {
-        const expected = due.reduce((sum, cargo) =>
-          sum + (cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
-            cargo.beneficialOwner.productionUnitId === id ? cargo.quantity : 0), 0);
-        const actual = (phase1After!.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0) -
-          (before.inputInventory.get(IRON) ?? 0);
-        expect(actual, "tick " + tick + " delivery owner " + id)
-          .toBeCloseTo(expected, 7);
+      const assertArrivalGoodsOwners = (settled: WorldState): void => {
+        for (const [id, before] of phase1Before!.productionUnits) {
+          const expected = due.reduce((sum, cargo) =>
+            sum + (cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+              cargo.beneficialOwner.productionUnitId === id ? cargo.quantity : 0), 0);
+          const actual = (settled.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0) -
+            (before.inputInventory.get(IRON) ?? 0);
+          expect(actual, "tick " + tick + " delivery owner " + id)
+            .toBeCloseTo(expected, 7);
+        }
+      };
+      assertArrivalGoodsOwners(phase1After!);
+      if (due.length > 0 && !negativeGoodsOwnerChecked) {
+        const cargo = due[0]!;
+        if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") {
+          throw new Error("Golden fixture expected a ProductionUnit delivery owner");
+        }
+        const rightfulId = cargo.beneficialOwner.productionUnitId;
+        const wrongId = [...phase1After!.productionUnits.keys()]
+          .find(id => id !== rightfulId);
+        if (!wrongId) throw new Error("Golden fixture needs a distinct wrong owner");
+        const rightful = phase1After!.productionUnits.get(rightfulId)!;
+        const wrong = phase1After!.productionUnits.get(wrongId)!;
+        const deliveredIron = rightful.inputInventory.get(IRON) ?? 0;
+        expect(deliveredIron).toBeGreaterThanOrEqual(cargo.quantity);
+        const forgedUnits = new Map(phase1After!.productionUnits);
+        forgedUnits.set(rightfulId, {
+          ...rightful,
+          inputInventory: new Map(rightful.inputInventory)
+            .set(IRON, deliveredIron - cargo.quantity),
+        });
+        forgedUnits.set(wrongId, {
+          ...wrong,
+          inputInventory: new Map(wrong.inputInventory)
+            .set(IRON, (wrong.inputInventory.get(IRON) ?? 0) + cargo.quantity),
+        });
+        const forged: WorldState = {
+          ...phase1After!, productionUnits: forgedUnits,
+        };
+        // Aggregate stock and delivery receipts still balance: the owner
+        // oracle must reject a physical delivery to the wrong inventory.
+        expect(totalIron(forged)).toBeCloseTo(totalIron(phase1After!), 7);
+        expect(() => assertArrivalGoodsOwners(forged)).toThrow();
+        negativeGoodsOwnerChecked = true;
       }
       for (const cargo of due) {
         expect(receipts.filter(tx =>
@@ -912,6 +949,7 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     expect(blockedLocalTicks).toBeGreaterThan(0);
     expect(negativeTreasuryChecked).toBe(true);
     expect(negativeArrivalChecked).toBe(true);
+    expect(negativeGoodsOwnerChecked).toBe(true);
     expect(dispatched.size).toBeGreaterThanOrEqual(2);
     expect(delivered).toEqual(dispatched);
     expect(normalWorld.shipments?.size ?? 0).toBe(0);
