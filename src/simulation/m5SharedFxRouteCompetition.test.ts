@@ -2468,9 +2468,9 @@ describe("M5 #676: replenishing FX while paid cargo is still in transit", () => 
         expect(journalDebit).toBeGreaterThan(0);
         expect(before - after).toBeCloseTo(journalDebit, 7);
       }
-
     };
-    assertExactBuyerDebits(limited.world);    expect(inputs.reduce((sum, tx) => sum + tx.moneyAmount!, 0))
+    assertExactBuyerDebits(limited.world);
+    expect(inputs.reduce((sum, tx) => sum + tx.moneyAmount!, 0))
       .toBeGreaterThan(0);
     expect(totalIron(limited.world)).toBeCloseTo(totalIron(opening), 7);
     for (const currency of f.currencies) {
