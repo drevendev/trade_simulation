@@ -2661,7 +2661,7 @@ describe("M5 #677 Pages projection from actual 16-phase receipts", () => {
       tx.type === "MARKET_SALE").length).toBeGreaterThan(0);
   });
 
-  it("keeps zero-capacity and zero-usable-FX routes inert across 24 real ticks", () => {
+  it("observes 24 blocked ticks and proves late eligible-trade counterfactuals", () => {
     const f = fixture();
     // Positive control: identical funded actors can actually trade when both
     // physical capacity and issuer-owned FX output liquidity are available.
@@ -2704,6 +2704,11 @@ describe("M5 #677 Pages projection from actual 16-phase receipts", () => {
       const originalCash = f.currencies.map(currency => totalCash(world, currency));
       let localSaleTicks = 0;
       let negativeOwnerChecked = false;
+      let eligibleLateCheckpoints = 0;
+      // A full first-tick control alone is insufficient: the market might
+      // exhaust its export opportunity during the blocked 24-tick window.
+      // Re-open ONLY the tested restriction on saved, evolved pre-tick worlds.
+      const checkpointTicks = new Set([8, 12, 20, 28]);
       for (let tick = 7; tick < 31; tick++) {
         let phase7Before: WorldState | undefined;
         let phase7After: WorldState | undefined;
@@ -2723,6 +2728,63 @@ describe("M5 #677 Pages projection from actual 16-phase receipts", () => {
         expect(phase7Before, scenario.name).toBeDefined();
         expect(phase7After, scenario.name).toBeDefined();
         assertNoPhase7Settlement(phase7Before!, phase7After!);
+
+        // The matched unrestricted run must start from this SAME evolved
+        // pre-tick world, not from the untouched fixture at tick 7.
+        if (checkpointTicks.has(tick)) {
+          let counterfactualWorld = world;
+          if (scenario.name === "zero-usable-fx") {
+            const outputCurrency = f.currencies[0]!;
+            const donor = [...world.productionUnits.values()].find(unit =>
+              unit.seed.regionKey === "region:a4-border" &&
+              unit.status === "ACTIVE" &&
+              (unit.wallet.get(outputCurrency) ?? 0) >= 100_000);
+            expect(donor, "late FX counterfactual requires a funded real owner").toBeDefined();
+            const authority = world.monetaryAuthorities.get(f.chosen.authorityId)!;
+            const pool = authority.fxPools.get(f.chosen.poolId)!;
+            const replenishment = 100_000;
+            counterfactualWorld = {
+              ...world,
+              productionUnits: new Map(world.productionUnits).set(donor!.productionUnitId, {
+                ...donor!,
+                wallet: new Map(donor!.wallet).set(outputCurrency,
+                  (donor!.wallet.get(outputCurrency) ?? 0) - replenishment),
+              }),
+              monetaryAuthorities: new Map(world.monetaryAuthorities).set(
+                f.chosen.authorityId, {
+                  ...authority,
+                  fxPools: new Map(authority.fxPools).set(f.chosen.poolId, {
+                    ...pool,
+                    cash: new Map(pool.cash).set(outputCurrency,
+                      (pool.cash.get(outputCurrency) ?? 0) + replenishment),
+                  }),
+                },
+              ),
+            };
+            // Liquidity is transferred from a real actor: the controlled
+            // alternative must not mint currency or mutate the blocked world.
+            expect(totalCash(counterfactualWorld, outputCurrency))
+              .toBeCloseTo(totalCash(world, outputCurrency), 6);
+          }
+          // The capacity case changes ONLY the infrastructure factor; the FX
+          // case changes ONLY the real owner/pool cash allocation above.
+          const reopened = executeM5AutonomousRegionalTradeTick(
+            counterfactualWorld, tick, households, (_phase, current) => current,
+            f.options,
+          );
+          expect(reopened.phaseTrace).toEqual([...Array(16).keys()]);
+          expect(reopened.phaseBoundaryError).toBeUndefined();
+          expect(reopened.reconciliationErrors).toBeNull();
+          const paidDispatches = reopened.context.transactions.filter(tx =>
+            tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH" &&
+            (tx.quantity ?? 0) > 0);
+          if (paidDispatches.length > 0) {
+            expect(reopened.context.transactions.some(tx =>
+              tx.phase === 7 && tx.type === "FX_OUTPUT" &&
+              (tx.moneyAmount ?? 0) > 0)).toBe(true);
+            eligibleLateCheckpoints++;
+          }
+        }
         expect(result.world.shipments?.size ?? 0, scenario.name).toBe(0);
         expect(result.context.transactions.filter(tx => tx.phase === 7),
           scenario.name).toHaveLength(0);
@@ -2770,9 +2832,13 @@ describe("M5 #677 Pages projection from actual 16-phase receipts", () => {
           .toEqual(result.world.productionUnits);
         world = result.world;
       }
-      expect(localSaleTicks, scenario.name).toBeGreaterThan(0);
+      // More than one *late*, otherwise matched trade opportunity was real.
+      // Do not claim every blocked tick was causally active: the remaining
+      // ticks are observations of conservation and absent dispatch only.
+      expect(eligibleLateCheckpoints, scenario.name).toBeGreaterThanOrEqual(2);
+      expect(localSaleTicks, scenario.name).toBeGreaterThanOrEqual(2);
       expect(negativeOwnerChecked, scenario.name).toBe(true);
     }
-  }, 30_000); // Two 24-tick scenarios and their deterministic replays.
+  }, 40_000); // Two 24-tick scenarios, deterministic replays and late matched controls.
 
 });
