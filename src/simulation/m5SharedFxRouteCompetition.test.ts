@@ -2456,18 +2456,21 @@ describe("M5 #676: replenishing FX while paid cargo is still in transit", () => 
       }
       return cargo.beneficialOwner.productionUnitId;
     }));
-    for (const buyerId of buyers) {
-      const before = closed.world.productionUnits.get(buyerId)!.wallet.get(f.currencies[1]!) ?? 0;
-      const after = limited.world.productionUnits.get(buyerId)!.wallet.get(f.currencies[1]!) ?? 0;
-      const journalDebit = transactions.filter(tx =>
-        tx.source?.type === "PRODUCTION_UNIT" &&
-        tx.source.productionUnitId === buyerId &&
-        (tx.type === "FX_INPUT" || charges.has(tx.type)))
-        .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
-      expect(journalDebit).toBeGreaterThan(0);
-      expect(before - after).toBeCloseTo(journalDebit, 7);
-    }
-    expect(inputs.reduce((sum, tx) => sum + tx.moneyAmount!, 0))
+    const assertExactBuyerDebits = (actual: WorldState) => {
+      for (const buyerId of buyers) {
+        const before = closed.world.productionUnits.get(buyerId)!.wallet.get(f.currencies[1]!) ?? 0;
+        const after = actual.productionUnits.get(buyerId)!.wallet.get(f.currencies[1]!) ?? 0;
+        const journalDebit = transactions.filter(tx =>
+          tx.source?.type === "PRODUCTION_UNIT" &&
+          tx.source.productionUnitId === buyerId &&
+          (tx.type === "FX_INPUT" || charges.has(tx.type)))
+          .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+        expect(journalDebit).toBeGreaterThan(0);
+        expect(before - after).toBeCloseTo(journalDebit, 7);
+      }
+
+    };
+    assertExactBuyerDebits(limited.world);    expect(inputs.reduce((sum, tx) => sum + tx.moneyAmount!, 0))
       .toBeGreaterThan(0);
     expect(totalIron(limited.world)).toBeCloseTo(totalIron(opening), 7);
     for (const currency of f.currencies) {
@@ -2497,6 +2500,31 @@ describe("M5 #676: replenishing FX while paid cargo is still in transit", () => 
     };
     expect(totalIron(forged)).toBeCloseTo(totalIron(limited.world), 7);
     expect(() => assertExactSourceDebit(forged)).toThrow();
+
+    // A second owner can pay the missing unit without changing total cash.
+    // The Phase-7 invoice must still be charged to the actual cargo buyer.
+    const wrongBuyerId = [...buyers][0]!;
+    const currency = f.currencies[1]!;
+    const oppositePayer = [...limited.world.productionUnits.values()].find(unit =>
+      !buyers.has(unit.productionUnitId) && (unit.wallet.get(currency) ?? 0) >= 1);
+    expect(oppositePayer).toBeDefined();
+    const buyerAfter = limited.world.productionUnits.get(wrongBuyerId)!;
+    const forgedPayer: WorldState = {
+      ...limited.world,
+      productionUnits: new Map(limited.world.productionUnits)
+        .set(wrongBuyerId, {
+          ...buyerAfter,
+          wallet: new Map(buyerAfter.wallet)
+            .set(currency, (buyerAfter.wallet.get(currency) ?? 0) + 1),
+        })
+        .set(oppositePayer!.productionUnitId, {
+          ...oppositePayer!,
+          wallet: new Map(oppositePayer!.wallet)
+            .set(currency, (oppositePayer!.wallet.get(currency) ?? 0) - 1),
+        }),
+    };
+    expect(totalCash(forgedPayer, currency)).toBeCloseTo(totalCash(limited.world, currency), 6);
+    expect(() => assertExactBuyerDebits(forgedPayer)).toThrow();
   });
 
 });
