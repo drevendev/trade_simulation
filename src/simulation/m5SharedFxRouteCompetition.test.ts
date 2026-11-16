@@ -2457,7 +2457,10 @@ describe("M5 #676: replenishing FX while paid cargo is still in transit", () => 
       return cargo.beneficialOwner.productionUnitId;
     }));
     const assertExactBuyerDebits = (actual: WorldState) => {
-      for (const buyerId of buyers) {
+      // Reconcile every ProductionUnit, including nonbuyers. A foreign
+      // settlement must not silently debit an unrelated actor even when
+      // the genuine buyer's invoice and aggregate currency still balance.
+      for (const buyerId of closed.world.productionUnits.keys()) {
         const before = closed.world.productionUnits.get(buyerId)!.wallet.get(f.currencies[1]!) ?? 0;
         const after = actual.productionUnits.get(buyerId)!.wallet.get(f.currencies[1]!) ?? 0;
         const journalDebit = transactions.filter(tx =>
@@ -2465,7 +2468,8 @@ describe("M5 #676: replenishing FX while paid cargo is still in transit", () => 
           tx.source.productionUnitId === buyerId &&
           (tx.type === "FX_INPUT" || charges.has(tx.type)))
           .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
-        expect(journalDebit).toBeGreaterThan(0);
+        if (buyers.has(buyerId)) expect(journalDebit).toBeGreaterThan(0);
+        else expect(journalDebit).toBe(0);
         expect(before - after).toBeCloseTo(journalDebit, 7);
       }
     };
@@ -2525,6 +2529,33 @@ describe("M5 #676: replenishing FX while paid cargo is still in transit", () => 
     };
     expect(totalCash(forgedPayer, currency)).toBeCloseTo(totalCash(limited.world, currency), 6);
     expect(() => assertExactBuyerDebits(forgedPayer)).toThrow();
+
+    // A compensated debit entirely between uninvolved actors leaves every
+    // buyer correct. It must still fail the full per-owner Phase-7 oracle.
+    const otherNonBuyer = [...limited.world.productionUnits.values()].find(unit =>
+      unit.productionUnitId !== oppositePayer!.productionUnitId &&
+      !buyers.has(unit.productionUnitId) && (unit.wallet.get(currency) ?? 0) >= 1);
+    expect(otherNonBuyer).toBeDefined();
+    const unrelatedTransfer: WorldState = {
+      ...limited.world,
+      productionUnits: new Map(limited.world.productionUnits)
+        .set(oppositePayer!.productionUnitId, {
+          ...oppositePayer!,
+          wallet: new Map(oppositePayer!.wallet)
+            .set(currency, (oppositePayer!.wallet.get(currency) ?? 0) - 1),
+        })
+        .set(otherNonBuyer!.productionUnitId, {
+          ...otherNonBuyer!,
+          wallet: new Map(otherNonBuyer!.wallet)
+            .set(currency, (otherNonBuyer!.wallet.get(currency) ?? 0) + 1),
+        }),
+    };
+    expect(totalCash(unrelatedTransfer, currency)).toBeCloseTo(totalCash(limited.world, currency), 6);
+    for (const buyerId of buyers) {
+      expect(unrelatedTransfer.productionUnits.get(buyerId)!.wallet)
+        .toEqual(limited.world.productionUnits.get(buyerId)!.wallet);
+    }
+    expect(() => assertExactBuyerDebits(unrelatedTransfer)).toThrow();
   });
 
 });
