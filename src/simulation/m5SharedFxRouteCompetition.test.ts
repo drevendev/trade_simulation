@@ -2779,9 +2779,12 @@ describe("M5 #677 Pages projection from actual 16-phase receipts", () => {
             tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH" &&
             (tx.quantity ?? 0) > 0);
           if (paidDispatches.length > 0) {
-            expect(reopened.context.transactions.some(tx =>
-              tx.phase === 7 && tx.type === "FX_OUTPUT" &&
-              (tx.moneyAmount ?? 0) > 0)).toBe(true);
+            // A dispatch without its matching persisted cargo and FX input/
+            // output legs does not establish an eligible paid trade. Reuse
+            // the established per-cargo receipt oracle for the reopened tick.
+            const paid = assertPaidCargoReceipts(reopened, undefined, tick);
+            expect(paid.dispatches).toHaveLength(paidDispatches.length);
+            expect(paid.cargos).toHaveLength(paidDispatches.length);
             eligibleLateCheckpoints++;
           }
         }
