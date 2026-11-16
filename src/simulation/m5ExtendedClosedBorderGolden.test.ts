@@ -2607,6 +2607,8 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let blockedLocalTicks = 0;
     let negativePrincipalChecked = false;
     let negativeOwnerChecked = false;
+    let negativeTreasuryChecked = false;
+    let creditedTreasuryTicks = 0;
 
     for (let tick = 7; tick < 607; tick++) {
       const open = (tick - 7) % 12 === 0;
@@ -2722,6 +2724,55 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
       };
       assertActorStocks(phase7After!);
+
+      // Tax receipts are owned by the importing State; corridor fees go to
+      // the link's STATE fee receiver, if any. Use actual pre/post treasury
+      // stocks, not the payee claimed by an accounting journal entry.
+      const assertStateTreasuries = (settled: WorldState): void => {
+        for (const [stateId, openingState] of phase7Before!.states) {
+          for (const currency of f.currencies) {
+            const expectedDelta = fresh.reduce((sum, cargo) => {
+              if (cargo.buyerPaymentCurrencyId !== currency) return sum;
+              const importingStateId = phase7Before!.regions
+                .get(cargo.destinationRegionId)!.controllerStateId;
+              const receiver = phase7Before!.transportLinks
+                .get(cargo.transportLinkId)!.feeReceiver;
+              return sum +
+                (importingStateId === stateId
+                  ? cargo.tariffAmount + cargo.consumptionTaxAmount : 0) +
+                (receiver?.type === "STATE" && receiver.stateId === stateId
+                  ? cargo.transportFeeAmount : 0);
+            }, 0);
+            const settledState = settled.states.get(stateId)!;
+            const actualDelta = (settledState.treasury.get(currency) ?? 0) -
+              (openingState.treasury.get(currency) ?? 0);
+            expect(actualDelta, `tick ${tick}: State ${stateId} tax and fee ownership ${currency}`)
+              .toBeCloseTo(expectedDelta, 6);
+          }
+        }
+      };
+      assertStateTreasuries(phase7After!);
+      if (fresh.some(cargo => cargo.tariffAmount + cargo.consumptionTaxAmount > 0)) {
+        creditedTreasuryTicks++;
+      }
+      if (fresh.length > 0 && !negativeTreasuryChecked) {
+        const stateIds = [...phase7After!.states.keys()];
+        expect(stateIds.length).toBeGreaterThanOrEqual(2);
+        const currency = fresh[0]!.buyerPaymentCurrencyId;
+        const shiftedStates = new Map(phase7After!.states);
+        for (const [id, delta] of [
+          [stateIds[0]!, 1], [stateIds[1]!, -1],
+        ] as const) {
+          const state = shiftedStates.get(id)!;
+          shiftedStates.set(id, { ...state, treasury: new Map(state.treasury)
+            .set(currency, (state.treasury.get(currency) ?? 0) + delta) });
+        }
+        const forgedTreasuries = { ...phase7After!, states: shiftedStates };
+        expect(totalCash(forgedTreasuries, currency))
+          .toBeCloseTo(totalCash(phase7After!, currency), 6);
+        expect(() => assertStateTreasuries(forgedTreasuries)).toThrow();
+        negativeTreasuryChecked = true;
+      }
       if (fresh.length >= 2 && !negativeOwnerChecked) {
         const seller = fresh[0]!.seller;
         const buyerA = fresh[0]!.beneficialOwner;
@@ -2851,6 +2902,8 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(liveFxTicks).toBeGreaterThan(0);
     expect(negativePrincipalChecked).toBe(true);
     expect(negativeOwnerChecked).toBe(true);
+    expect(negativeTreasuryChecked).toBe(true);
+    expect(creditedTreasuryTicks).toBeGreaterThan(0);
     expect(repricedTicks).toBeGreaterThan(0);
     expect(blockedLocalTicks).toBeGreaterThan(0);
     expect(dispatched.size).toBeGreaterThanOrEqual(2);
