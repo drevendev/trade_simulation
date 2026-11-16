@@ -1,0 +1,12 @@
+### FILE: src/simulation/m5SharedFxRouteCompetition.test.ts
+<<<<<<< FIND
+      }
+
+    };
+    assertExactBuyerDebits(limited.world);    expect(inputs.reduce((sum, tx) => sum + tx.moneyAmount!, 0))
+=======
+      }
+    };
+    assertExactBuyerDebits(limited.world);
+    expect(inputs.reduce((sum, tx) => sum + tx.moneyAmount!, 0))
+>>>>>>> REPLACE
