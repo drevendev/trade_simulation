@@ -2660,4 +2660,119 @@ describe("M5 #677 Pages projection from actual 16-phase receipts", () => {
     expect(floor.context.transactions.filter(tx => tx.phase === 4 &&
       tx.type === "MARKET_SALE").length).toBeGreaterThan(0);
   });
+
+  it("keeps zero-capacity and zero-usable-FX routes inert across 24 real ticks", () => {
+    const f = fixture();
+    // Positive control: identical funded actors can actually trade when both
+    // physical capacity and issuer-owned FX output liquidity are available.
+    const permitted = run(f, f.world);
+    expect(permitted.reconciliationErrors).toBeNull();
+    expect(assertPaidCargoReceipts(permitted, f.links).cargos).toHaveLength(2);
+
+    const zeroFactors = new Map(f.links.map(id => [id, 0] as const));
+    const cases = [
+      { name: "zero-link-capacity", opening: f.world,
+        options: { ...f.options, infrastructureFactors: zeroFactors } },
+      { name: "zero-usable-fx", opening: withOutputStock(f, 0),
+        options: f.options },
+    ];
+
+    // Individual owner snapshots are essential: aggregate conservation alone
+    // would miss a balanced payment or cargo transfer across a blocked border.
+    const assertNoPhase7Settlement = (before: WorldState, after: WorldState) => {
+      expect(after.shipments).toEqual(before.shipments);
+      for (const [id, unit] of before.productionUnits) {
+        const actual = after.productionUnits.get(id);
+        expect(actual?.wallet).toEqual(unit.wallet);
+        expect(actual?.inputInventory).toEqual(unit.inputInventory);
+        expect(actual?.outputInventory).toEqual(unit.outputInventory);
+        expect(actual?.investmentInventory).toEqual(unit.investmentInventory);
+      }
+      for (const [id, state] of before.states)
+        expect(after.states.get(id)?.treasury).toEqual(state.treasury);
+      for (const [id, clan] of before.clans)
+        expect(after.clans.get(id)?.treasury).toEqual(clan.treasury);
+      for (const [id, cohort] of before.cohorts)
+        expect(after.cohorts.get(id)?.wallet).toEqual(cohort.wallet);
+      for (const [id, authority] of before.monetaryAuthorities)
+        expect(after.monetaryAuthorities.get(id)?.fxPools).toEqual(authority.fxPools);
+    };
+
+    for (const scenario of cases) {
+      let world = scenario.opening;
+      const originalIron = totalIron(world);
+      const originalCash = f.currencies.map(currency => totalCash(world, currency));
+      let localSaleTicks = 0;
+      let negativeOwnerChecked = false;
+      for (let tick = 7; tick < 31; tick++) {
+        let phase7Before: WorldState | undefined;
+        let phase7After: WorldState | undefined;
+        const result = executeM5AutonomousRegionalTradeTick(
+          world, tick, households, (_phase, current) => current,
+          scenario.options,
+          (phase, before, after) => {
+            if (phase === 7) {
+              phase7Before = before;
+              phase7After = after;
+            }
+          },
+        );
+        expect(result.phaseTrace, scenario.name).toEqual([...Array(16).keys()]);
+        expect(result.phaseBoundaryError, scenario.name).toBeUndefined();
+        expect(result.reconciliationErrors, scenario.name).toBeNull();
+        expect(phase7Before, scenario.name).toBeDefined();
+        expect(phase7After, scenario.name).toBeDefined();
+        assertNoPhase7Settlement(phase7Before!, phase7After!);
+        expect(result.world.shipments?.size ?? 0, scenario.name).toBe(0);
+        expect(result.context.transactions.filter(tx => tx.phase === 7),
+          scenario.name).toHaveLength(0);
+        expect(totalIron(result.world), scenario.name).toBeCloseTo(originalIron, 7);
+        f.currencies.forEach((currency, index) => {
+          expect(totalCash(result.world, currency), scenario.name)
+            .toBeCloseTo(originalCash[index]!, 6);
+        });
+        if (result.context.transactions.some(tx =>
+          tx.phase === 4 && tx.type === "MARKET_SALE" &&
+          (tx.moneyAmount ?? 0) > 0)) localSaleTicks++;
+
+        // Falsifier: shift cash between two Alpha actors without altering
+        // the total. An aggregate-only oracle would silently accept this.
+        if (!negativeOwnerChecked) {
+          const sourceUnits = [...phase7After!.productionUnits.values()]
+            .filter(unit => unit.seed.regionKey === "region:a4-border");
+          expect(sourceUnits.length).toBeGreaterThanOrEqual(2);
+          const [first, second] = sourceUnits;
+          const currency = f.currencies[0]!;
+          const shifted = new Map(phase7After!.productionUnits);
+          shifted.set(first!.productionUnitId, {
+            ...first!, wallet: new Map(first!.wallet)
+              .set(currency, (first!.wallet.get(currency) ?? 0) - 1),
+          });
+          shifted.set(second!.productionUnitId, {
+            ...second!, wallet: new Map(second!.wallet)
+              .set(currency, (second!.wallet.get(currency) ?? 0) + 1),
+          });
+          const forged: WorldState = { ...phase7After!, productionUnits: shifted };
+          expect(totalCash(forged, currency)).toBeCloseTo(
+            totalCash(phase7After!, currency), 6,
+          );
+          expect(() => assertNoPhase7Settlement(phase7Before!, forged)).toThrow();
+          negativeOwnerChecked = true;
+        }
+        // A second complete run from exactly the same input verifies that the
+        // local economy is deterministic even while foreign trade is blocked.
+        const replay = executeM5AutonomousRegionalTradeTick(
+          world, tick, households, (_phase, current) => current, scenario.options,
+        );
+        expect(replay.context.transactions, scenario.name)
+          .toEqual(result.context.transactions);
+        expect(replay.world.productionUnits, scenario.name)
+          .toEqual(result.world.productionUnits);
+        world = result.world;
+      }
+      expect(localSaleTicks, scenario.name).toBeGreaterThan(0);
+      expect(negativeOwnerChecked, scenario.name).toBe(true);
+    }
+  }, 30_000); // Two 24-tick scenarios and their deterministic replays.
+
 });
