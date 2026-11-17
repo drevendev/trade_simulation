@@ -2707,6 +2707,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let creditedTreasuryTicks = 0;
     let divergentFeeTicks = 0;
     let negativeFeeRoutingChecked = false;
+    let negativePassiveWalletChecked = false;
     let negativeDeliveryOwnerChecked = false;
     let negativeFxBundleChecked = false;
 
@@ -2930,6 +2931,62 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
       };
       assertStateTreasuries(phase7After!);
+
+      // Paid Phase-7 cross-border trades in this fixture cannot alter Cohort
+      // wallets or Clan treasuries. A currency-total invariant alone misses
+      // balanced transfers between those unrelated owners.
+      const assertPassiveWallets = (settled: WorldState): void => {
+        expect(settled.cohorts.size).toBe(phase7Before!.cohorts.size);
+        for (const [id, before] of phase7Before!.cohorts) {
+          const after = settled.cohorts.get(id);
+          expect(after, `tick ${tick}: cohort ${id}`).toBeDefined();
+          for (const currency of new Set([...before.wallet.keys(), ...after!.wallet.keys()])) {
+            expect((after!.wallet.get(currency) ?? 0) - (before.wallet.get(currency) ?? 0),
+              `tick ${tick}: passive cohort ${id}/${currency}`).toBeCloseTo(0, 6);
+          }
+        }
+        expect(settled.clans.size).toBe(phase7Before!.clans.size);
+        for (const [id, before] of phase7Before!.clans) {
+          const after = settled.clans.get(id);
+          expect(after, `tick ${tick}: clan ${id}`).toBeDefined();
+          for (const currency of new Set([...before.treasury.keys(), ...after!.treasury.keys()])) {
+            expect((after!.treasury.get(currency) ?? 0) - (before.treasury.get(currency) ?? 0),
+              `tick ${tick}: passive clan ${id}/${currency}`).toBeCloseTo(0, 6);
+          }
+        }
+      };
+      assertPassiveWallets(phase7After!);
+      if (fresh.length > 0 && !negativePassiveWalletChecked) {
+        const donor = [...phase7After!.cohorts].flatMap(([id, cohort]) =>
+          [...cohort.wallet].filter(([, cash]) => cash >= 1)
+            .map(([currency]) => ({ id, currency })))[0];
+        expect(donor, "funded passive cohort for negative control").toBeDefined();
+        const receiver = [...phase7After!.cohorts.keys()].find(id => id !== donor!.id);
+        expect(receiver, "second passive cohort").toBeDefined();
+        const cohorts = new Map(phase7After!.cohorts);
+        for (const [id, delta] of [[donor!.id, -0.25], [receiver!, 0.25]] as const) {
+          const cohort = cohorts.get(id)!;
+          cohorts.set(id, { ...cohort, wallet: new Map(cohort.wallet).set(
+            donor!.currency, (cohort.wallet.get(donor!.currency) ?? 0) + delta,
+          ) });
+        }
+        const forged = { ...phase7After!, cohorts };
+        // Falsification preserves valid nonnegative stocks and physical goods:
+        // only the beneficiary of two passive owner wallets has changed.
+        expect(forged.cohorts.get(donor!.id)!.wallet.get(donor!.currency)!)
+          .toBeGreaterThanOrEqual(0);
+        expect(forged.cohorts.get(receiver!)!.wallet.get(donor!.currency)!)
+          .toBeGreaterThanOrEqual(0);
+        expect(totalIron(forged)).toBeCloseTo(totalIron(phase7After!), 8);
+        expect(totalCash(forged, donor!.currency))
+          .toBeCloseTo(totalCash(phase7After!, donor!.currency), 8);
+        // All existing active payment / tax ownership oracles pass this theft.
+        expect(() => assertActorStocks(forged)).not.toThrow();
+        expect(() => assertStateTreasuries(forged)).not.toThrow();
+        expect(() => assertPassiveWallets(forged)).toThrow();
+        negativePassiveWalletChecked = true;
+      }
+
       const divergentCargo = fresh.find(cargo =>
         cargo.transportLinkId === f.links[1] && cargo.transportFeeAmount > 0);
       if (divergentCargo) {
@@ -3204,6 +3261,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeOwnerChecked).toBe(true);
     expect(negativeTreasuryChecked).toBe(true);
     expect(negativeFeeRoutingChecked).toBe(true);
+    expect(negativePassiveWalletChecked).toBe(true);
     expect(negativeDeliveryOwnerChecked).toBe(true);
     expect(negativeFxBundleChecked).toBe(true);
     expect(divergentFeeTicks).toBeGreaterThan(0);
