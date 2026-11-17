@@ -700,6 +700,7 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     let negativeTreasuryChecked = false;
     let negativeArrivalChecked = false;
     let negativeGoodsOwnerChecked = false;
+    let negativeSellerGoodsChecked = false;
 
     for (let tick = 7; tick < 127; tick++) {
       const open = (tick - 7) % 12 === 0;
@@ -805,6 +806,63 @@ describe("M5/#676 monetary-union cross-State golden", () => {
         }
       };
       assertPaidOwners(phase7After!);
+      // A paid cargo cannot debit a different seller's IRON stock. Compare
+      // actual Phase-7 inventories with independently persisted cargo owners,
+      // using the gross quantity (surviving cargo + recorded physical loss).
+      const assertDispatchSellerGoodsOwners = (settled: WorldState): void => {
+        const sales = posted.filter(tx =>
+          tx.phase === 7 && tx.type === "TRADE_GOODS_SALE");
+        expect(sales).toHaveLength(fresh.length);
+        const grossBySeller = new Map<string, number>();
+        for (const cargo of fresh) {
+          expect(cargo.goodId).toBe(IRON);
+          if (cargo.seller.type !== "PRODUCTION_UNIT") {
+            throw new Error("Union fixture requires a ProductionUnit seller");
+          }
+          const matchingSales = sales.filter(tx =>
+            tx.source?.type === "PRODUCTION_UNIT" &&
+            tx.source.productionUnitId === cargo.seller.productionUnitId);
+          expect(matchingSales).toHaveLength(1);
+          const loss = posted.filter(tx =>
+            tx.phase === 7 && tx.type === "GOODS_TRANSPORT_LOSS" &&
+            tx.reason === "DISPATCH_ROUTINE_PHYSICAL_LOSS:" + cargo.id)
+            .reduce((sum, tx) => sum + (tx.quantity ?? 0), 0);
+          const gross = cargo.quantity + loss;
+          expect(matchingSales[0]!.quantity).toBeCloseTo(gross, 7);
+          grossBySeller.set(cargo.seller.productionUnitId,
+            (grossBySeller.get(cargo.seller.productionUnitId) ?? 0) + gross);
+        }
+        for (const [id, before] of phase7Before!.productionUnits) {
+          const actualDebit = (before.inputInventory.get(IRON) ?? 0) -
+            (settled.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0);
+          expect(actualDebit, "tick " + tick + " seller stock owner " + id)
+            .toBeCloseTo(grossBySeller.get(id) ?? 0, 7);
+        }
+      };
+      assertDispatchSellerGoodsOwners(phase7After!);
+      if (fresh.length > 0 && !negativeSellerGoodsChecked) {
+        const sellerId = f.sellerOrigin.productionUnitId;
+        const wrongId = f.buyerDestination.productionUnitId;
+        const seller = phase7After!.productionUnits.get(sellerId)!;
+        const wrong = phase7After!.productionUnits.get(wrongId)!;
+        const shift = 0.25;
+        expect(seller.inputInventory.get(IRON) ?? 0).toBeGreaterThan(shift);
+        const forgedUnits = new Map(phase7After!.productionUnits)
+          .set(sellerId, {
+            ...seller, inputInventory: new Map(seller.inputInventory).set(
+              IRON, (seller.inputInventory.get(IRON) ?? 0) - shift),
+          })
+          .set(wrongId, {
+            ...wrong, inputInventory: new Map(wrong.inputInventory).set(
+              IRON, (wrong.inputInventory.get(IRON) ?? 0) + shift),
+          });
+        const forged: WorldState = {
+          ...phase7After!, productionUnits: forgedUnits,
+        };
+        expect(totalIron(forged)).toBeCloseTo(totalIron(phase7After!), 7);
+        expect(() => assertDispatchSellerGoodsOwners(forged)).toThrow();
+        negativeSellerGoodsChecked = true;
+      }
       if (fresh.length > 0 && !negativeTreasuryChecked) {
         const importer = f.destination.controllerStateId!;
         const exporter = f.origin.controllerStateId!;
@@ -950,6 +1008,7 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     expect(negativeTreasuryChecked).toBe(true);
     expect(negativeArrivalChecked).toBe(true);
     expect(negativeGoodsOwnerChecked).toBe(true);
+    expect(negativeSellerGoodsChecked).toBe(true);
     expect(dispatched.size).toBeGreaterThanOrEqual(2);
     expect(delivered).toEqual(dispatched);
     expect(normalWorld.shipments?.size ?? 0).toBe(0);
