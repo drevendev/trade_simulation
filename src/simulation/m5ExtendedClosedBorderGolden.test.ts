@@ -2971,6 +2971,13 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
           ) });
         }
         const forged = { ...phase7After!, cohorts };
+        // Falsification preserves valid nonnegative stocks and physical goods:
+        // only the beneficiary of two passive owner wallets has changed.
+        expect(forged.cohorts.get(donor!.id)!.wallet.get(donor!.currency)!)
+          .toBeGreaterThanOrEqual(0);
+        expect(forged.cohorts.get(receiver!)!.wallet.get(donor!.currency)!)
+          .toBeGreaterThanOrEqual(0);
+        expect(totalIron(forged)).toBeCloseTo(totalIron(phase7After!), 8);
         expect(totalCash(forged, donor!.currency))
           .toBeCloseTo(totalCash(phase7After!, donor!.currency), 8);
         // All existing active payment / tax ownership oracles pass this theft.
