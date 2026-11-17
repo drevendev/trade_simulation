@@ -2394,7 +2394,10 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     expect(physicalCapacity).toBeCloseTo(baselineUse * 0.7, 8);
     const openingIron = totalIron(constrained);
     const openingCash = f.currencies.map(currency => totalCash(constrained, currency));
-    const limited = run(singleCorridor, constrained);
+    const phase7Snapshots: { before: WorldState; after: WorldState }[] = [];
+    const limited = run(singleCorridor, constrained, true, 7, (phase, before, after) => {
+      if (phase === 7) phase7Snapshots.push({ before, after });
+    });
     const reversed = run(singleCorridor, reordered(constrained));
     const cargo = [...(limited.world.shipments?.values() ?? [])];
     expect(cargo).toHaveLength(2);
@@ -2410,6 +2413,85 @@ describe("M5 #676: extended multi-tick physical and financial replay", () => {
     const constrainedUse = cargo.reduce((sum, c) => sum + c.quantity * weight, 0);
     expect(constrainedUse).toBeLessThan(baselineUse);
     expect(constrainedUse).toBeGreaterThan(0);
+
+    // The common link has TWO distinct paid buyers. Physical capacity alone
+    // cannot catch a settlement that charges one buyer for the other's cargo.
+    // Observe actual Phase-7 wallets, after earlier local-market transactions,
+    // and reconcile each actor to frozen paid cargo rather than journal payees.
+    expect(phase7Snapshots).toHaveLength(1);
+    const { before: phase7Before, after: phase7After } = phase7Snapshots[0]!;
+    const buyers = cargo.map(c => {
+      expect(c.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+      return c.beneficialOwner.type === "PRODUCTION_UNIT"
+        ? c.beneficialOwner.productionUnitId : undefined;
+    });
+    expect(new Set(buyers).size).toBe(2);
+    const assertExactCorridorWallets = (settled: WorldState): void => {
+      for (const [unitId, openingUnit] of phase7Before.productionUnits) {
+        const settledUnit = settled.productionUnits.get(unitId)!;
+        for (const currency of f.currencies) {
+          const expectedDelta = cargo.reduce((sum, shipment) => {
+            const sellerCredit = shipment.seller.type === "PRODUCTION_UNIT" &&
+              shipment.seller.productionUnitId === unitId &&
+              shipment.invoiceCurrencyId === currency
+              ? shipment.sellerNetUnitPrice * shipment.quantity : 0;
+            const buyerDebit = shipment.beneficialOwner.type === "PRODUCTION_UNIT" &&
+              shipment.beneficialOwner.productionUnitId === unitId &&
+              shipment.buyerPaymentCurrencyId === currency
+              ? shipment.buyerGoodsPaymentAmount + shipment.transportFeeAmount +
+                shipment.tariffAmount + shipment.consumptionTaxAmount : 0;
+            return sum + sellerCredit - buyerDebit;
+          }, 0);
+          const actualDelta = (settledUnit.wallet.get(currency) ?? 0) -
+            (openingUnit.wallet.get(currency) ?? 0);
+          expect(actualDelta, `shared link paid owner ${unitId} ${currency}`)
+            .toBeCloseTo(expectedDelta, 6);
+        }
+      }
+    };
+    assertExactCorridorWallets(phase7After);
+
+    const fxInputs = limited.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_INPUT");
+    expect(fxInputs).toHaveLength(cargo.length);
+    for (const shipment of cargo) {
+      expect(fxInputs.filter(tx =>
+        tx.fxSettlementId === shipment.fxSettlementId &&
+        tx.source?.type === "PRODUCTION_UNIT" &&
+        shipment.beneficialOwner.type === "PRODUCTION_UNIT" &&
+        tx.source.productionUnitId === shipment.beneficialOwner.productionUnitId,
+      )).toHaveLength(1);
+    }
+
+    // Conserved-money negative control: interchange one unit of the two paid
+    // buyers' debits. Both cargos remain valid, global currency totals stay
+    // identical, but the exact owner oracle must detect the wrong payer.
+    const firstBuyer = buyers[0]!;
+    const secondBuyer = buyers[1]!;
+    const buyerCurrency = destination.settlementCurrencyId;
+    const firstUnit = phase7After.productionUnits.get(firstBuyer)!;
+    const secondUnit = phase7After.productionUnits.get(secondBuyer)!;
+    expect((firstUnit.wallet.get(buyerCurrency) ?? 0)).toBeGreaterThan(1);
+    const forgedWallets: WorldState = {
+      ...phase7After,
+      productionUnits: new Map(phase7After.productionUnits)
+        .set(firstBuyer, {
+          ...firstUnit,
+          wallet: new Map(firstUnit.wallet).set(
+            buyerCurrency, (firstUnit.wallet.get(buyerCurrency) ?? 0) - 1,
+          ),
+        })
+        .set(secondBuyer, {
+          ...secondUnit,
+          wallet: new Map(secondUnit.wallet).set(
+            buyerCurrency, (secondUnit.wallet.get(buyerCurrency) ?? 0) + 1,
+          ),
+        }),
+    };
+    expect(totalCash(forgedWallets, buyerCurrency))
+      .toBeCloseTo(totalCash(phase7After, buyerCurrency), 8);
+    expect(() => assertExactCorridorWallets(forgedWallets)).toThrow();
+
     // Negative control: a second physical budget for either buyer cannot be
     // hidden by individually valid shipments and a correct dispatch count.
     const overbooked = [
@@ -2578,10 +2660,24 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       ...original,
       options: { ...original.options, closeFxAtPhase11 },
     };
+    // This corridor imports into Beta but pays its fee to the source State.
+    // Separating fee and tax owners makes wrong-recipient routing observable.
+    const divergentLink = f.world.transportLinks.get(f.links[1]!)!;
+    const feeImporter = f.world.regions.get(divergentLink.toRegionId)!.controllerStateId!;
+    const distinctFeeOwner = f.world.regions.get(divergentLink.fromRegionId)!.controllerStateId!;
+    expect(distinctFeeOwner).not.toBe(feeImporter);
     const initial: WorldState = {
       ...f.world,
       transportLinks: new Map([...f.world.transportLinks].map(([id, link]) =>
-        [id, { ...link, travelTicks: 2 }] as const)),
+        [id, id === f.links[1] ? {
+          ...link,
+          travelTicks: 2,
+          seed: {
+            ...link.seed,
+            feeReceiverStateKey: f.world.states.get(distinctFeeOwner)!.seed.key,
+          },
+          feeReceiver: { type: "STATE" as const, stateId: distinctFeeOwner },
+        } : { ...link, travelTicks: 2 }] as const)),
       // The general baseline contains reverse / unrelated FX fixtures that are
       // not legal active pairs under Phase-11's single-pool-per-pair contract.
       // Keep the ONE real issuer-owned pool used by these two corridors.
@@ -2607,6 +2703,12 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let blockedLocalTicks = 0;
     let negativePrincipalChecked = false;
     let negativeOwnerChecked = false;
+    let negativeTreasuryChecked = false;
+    let creditedTreasuryTicks = 0;
+    let divergentFeeTicks = 0;
+    let negativeFeeRoutingChecked = false;
+    let negativeDeliveryOwnerChecked = false;
+    let negativeFxBundleChecked = false;
 
     for (let tick = 7; tick < 607; tick++) {
       const open = (tick - 7) % 12 === 0;
@@ -2616,10 +2718,16 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       );
       const beforeIds = new Set(normal.shipments?.keys());
       let observedAtPhase7: number | undefined;
+      let phase1Before: WorldState | undefined;
+      let phase1After: WorldState | undefined;
       let phase7Before: WorldState | undefined;
       let phase7After: WorldState | undefined;
       let phase11Cash: ReturnType<typeof poolOf>["cash"] | undefined;
       const actual = run(f, normal, open, tick, (phase, before, after) => {
+        if (phase === 1) {
+          phase1Before = before;
+          phase1After = after;
+        }
         if (phase === 7) {
           observedAtPhase7 = poolOf(after).spotRateQuotePerBase;
           phase7Before = before;
@@ -2684,6 +2792,66 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       };
       assertPoolJournal(postings);
 
+      // A pool-total oracle cannot detect two paid routes exchanging their FX
+      // principals: the aggregate issuer cash delta remains correct. Bind
+      // each receipt to its own persisted cargo, dispatch and settlement.
+      const assertFxCargoBundles = (journal: typeof postings): void => {
+        const phase7 = journal.filter(tx => tx.phase === 7);
+        for (const cargo of fresh) {
+          expect(cargo.fxSettlementId).toBeDefined();
+          const dispatches = phase7.filter(tx =>
+            tx.type === "SHIPMENT_DISPATCH" &&
+            tx.sourceRegionId === cargo.originRegionId &&
+            tx.destinationRegionId === cargo.destinationRegionId &&
+            tx.goodId === cargo.goodId && tx.quantity === cargo.quantity);
+          expect(dispatches, "tick " + tick + ": matching cargo dispatch").toHaveLength(1);
+          const bundleId = dispatches[0]!.bundleId;
+          expect(bundleId).toBeDefined();
+          const one = (type: "FX_INPUT" | "FX_OUTPUT" | "TRADE_GOODS_SALE") => {
+            const entries = phase7.filter(tx =>
+              tx.type === type && tx.bundleId === bundleId);
+            expect(entries, "tick " + tick + ": " + type + " per cargo bundle").toHaveLength(1);
+            expect(entries[0]!.fxSettlementId).toBe(cargo.fxSettlementId);
+            return entries[0]!;
+          };
+          const input = one("FX_INPUT");
+          const output = one("FX_OUTPUT");
+          const invoice = one("TRADE_GOODS_SALE");
+          expect(input.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+          expect(output.currencyId).toBe(cargo.invoiceCurrencyId);
+          expect(invoice.currencyId).toBe(cargo.invoiceCurrencyId);
+          expect(input.source).toEqual(cargo.beneficialOwner);
+          expect(output.destination).toEqual(cargo.seller);
+          expect(input.moneyAmount!).toBeCloseTo(cargo.buyerGoodsPaymentAmount, 6);
+          expect(output.moneyAmount!).toBeCloseTo(
+            cargo.sellerNetUnitPrice * cargo.quantity, 6);
+          expect(invoice.moneyAmount!).toBeCloseTo(output.moneyAmount!, 6);
+          expect(invoice.reason).toBe("PHASE7_FX_INVOICE_REFERENCE_NONPOSTING");
+        }
+      };
+      assertFxCargoBundles(postings);
+      if (fresh.length >= 2 && !negativeFxBundleChecked) {
+        const first = inputs.find(tx => tx.fxSettlementId === fresh[0]!.fxSettlementId)!;
+        const second = inputs.find(tx => tx.fxSettlementId === fresh[1]!.fxSettlementId)!;
+        expect(first).toBeDefined();
+        expect(second).toBeDefined();
+        expect(first.currencyId).toBe(second.currencyId);
+        expect(second.moneyAmount!).toBeGreaterThan(1);
+        // Move one principal unit between receipts of two real cargo
+        // bundles, preserving total FX_INPUT and both physical shipments.
+        const forgedJournal = postings.map(tx =>
+          tx === first ? { ...tx, moneyAmount: tx.moneyAmount! + 1 } :
+          tx === second ? { ...tx, moneyAmount: tx.moneyAmount! - 1 } : tx);
+        const principal = (journal: typeof postings) => journal.filter(tx =>
+          tx.phase === 7 && tx.type === "FX_INPUT" &&
+          tx.currencyId === first.currencyId).reduce(
+          (sum, tx) => sum + tx.moneyAmount!, 0);
+        expect(principal(forgedJournal)).toBeCloseTo(principal(postings), 8);
+        expect(() => assertPoolJournal(forgedJournal)).not.toThrow();
+        expect(() => assertFxCargoBundles(forgedJournal)).toThrow();
+        negativeFxBundleChecked = true;
+      }
+
       // Independent stock oracle: a balanced FX pool and unchanged aggregate
       // goods can still conceal a payment or inventory debit to the wrong
       // ProductionUnit. Compare every owner's Phase-7 stocks (after Phase-4
@@ -2722,6 +2890,108 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
       };
       assertActorStocks(phase7After!);
+
+      // Tax receipts are owned by the importing State; corridor fees go to
+      // the link's STATE fee receiver, if any. Use actual pre/post treasury
+      // stocks, not the payee claimed by an accounting journal entry.
+      const assertStateTreasuries = (settled: WorldState): void => {
+        for (const [stateId, openingState] of phase7Before!.states) {
+          for (const currency of f.currencies) {
+            const expectedDelta = fresh.reduce((sum, cargo) => {
+              if (cargo.buyerPaymentCurrencyId !== currency) return sum;
+              const importingStateId = phase7Before!.regions
+                .get(cargo.destinationRegionId)!.controllerStateId;
+              const receiver = phase7Before!.transportLinks
+                .get(cargo.transportLinkId)!.feeReceiver;
+              return sum +
+                (importingStateId === stateId
+                  ? cargo.tariffAmount + cargo.consumptionTaxAmount : 0) +
+                (receiver?.type === "STATE" && receiver.stateId === stateId
+                  ? cargo.transportFeeAmount : 0);
+            }, 0);
+            const settledState = settled.states.get(stateId)!;
+            const actualDelta = (settledState.treasury.get(currency) ?? 0) -
+              (openingState.treasury.get(currency) ?? 0);
+            expect(actualDelta, `tick ${tick}: State ${stateId} tax and fee ownership ${currency}`)
+              .toBeCloseTo(expectedDelta, 6);
+          }
+        }
+      };
+      assertStateTreasuries(phase7After!);
+      const divergentCargo = fresh.find(cargo =>
+        cargo.transportLinkId === f.links[1] && cargo.transportFeeAmount > 0);
+      if (divergentCargo) {
+        divergentFeeTicks++;
+        const importer = phase7Before!.regions
+          .get(divergentCargo.destinationRegionId)!.controllerStateId!;
+        const feeReceiver = phase7Before!.transportLinks
+          .get(divergentCargo.transportLinkId)!.feeReceiver;
+        expect(importer).toBe(feeImporter);
+        expect(feeReceiver).toEqual({ type: "STATE", stateId: distinctFeeOwner });
+        expect(importer).not.toBe(distinctFeeOwner);
+        const matchingDispatches = departures.filter(tx =>
+          tx.sourceRegionId === divergentCargo.originRegionId &&
+          tx.destinationRegionId === divergentCargo.destinationRegionId);
+        expect(matchingDispatches).toHaveLength(1);
+        const bundleId = matchingDispatches[0]!.bundleId;
+        for (const [type, amount, receiver] of [
+          ["TRANSPORT_FEE", divergentCargo.transportFeeAmount, distinctFeeOwner],
+          ["IMPORT_TARIFF", divergentCargo.tariffAmount, importer],
+          ["CONSUMPTION_TAX", divergentCargo.consumptionTaxAmount, importer],
+        ] as const) {
+          const entries = postings.filter(tx =>
+            tx.phase === 7 && tx.type === type && tx.bundleId === bundleId);
+          expect(entries, `tick ${tick}: ${type} for divergent fee corridor`)
+            .toHaveLength(amount > 0 ? 1 : 0);
+          if (amount > 0) {
+            expect(entries[0]!.destination)
+              .toEqual({ type: "STATE", stateId: receiver });
+            expect(entries[0]!.moneyAmount).toBeCloseTo(amount, 6);
+            expect(entries[0]!.currencyId).toBe(divergentCargo.buyerPaymentCurrencyId);
+          }
+        }
+
+        if (!negativeFeeRoutingChecked) {
+          // Reroute only the exact paid corridor fee to the importer. Total
+          // money, tax receipts, FX balances and cargo remain unchanged.
+          const currency = divergentCargo.buyerPaymentCurrencyId;
+          const states = new Map(phase7After!.states);
+          for (const [stateId, delta] of [
+            [distinctFeeOwner, -divergentCargo.transportFeeAmount],
+            [importer, divergentCargo.transportFeeAmount],
+          ] as const) {
+            const state = states.get(stateId)!;
+            states.set(stateId, { ...state, treasury: new Map(state.treasury)
+              .set(currency, (state.treasury.get(currency) ?? 0) + delta) });
+          }
+          const forgedFeeDestination = { ...phase7After!, states };
+          expect(totalCash(forgedFeeDestination, currency))
+            .toBeCloseTo(totalCash(phase7After!, currency), 6);
+          expect(() => assertStateTreasuries(forgedFeeDestination)).toThrow();
+          negativeFeeRoutingChecked = true;
+        }
+      }
+      if (fresh.some(cargo => cargo.tariffAmount + cargo.consumptionTaxAmount > 0)) {
+        creditedTreasuryTicks++;
+      }
+      if (fresh.length > 0 && !negativeTreasuryChecked) {
+        const stateIds = [...phase7After!.states.keys()];
+        expect(stateIds.length).toBeGreaterThanOrEqual(2);
+        const currency = fresh[0]!.buyerPaymentCurrencyId;
+        const shiftedStates = new Map(phase7After!.states);
+        for (const [id, delta] of [
+          [stateIds[0]!, 1], [stateIds[1]!, -1],
+        ] as const) {
+          const state = shiftedStates.get(id)!;
+          shiftedStates.set(id, { ...state, treasury: new Map(state.treasury)
+            .set(currency, (state.treasury.get(currency) ?? 0) + delta) });
+        }
+        const forgedTreasuries = { ...phase7After!, states: shiftedStates };
+        expect(totalCash(forgedTreasuries, currency))
+          .toBeCloseTo(totalCash(phase7After!, currency), 6);
+        expect(() => assertStateTreasuries(forgedTreasuries)).toThrow();
+        negativeTreasuryChecked = true;
+      }
       if (fresh.length >= 2 && !negativeOwnerChecked) {
         const seller = fresh[0]!.seller;
         const buyerA = fresh[0]!.beneficialOwner;
@@ -2834,6 +3104,52 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         dispatched.add(cargo.id);
       }
       expect(arrivals).toHaveLength(due.length);
+      // An arrival journal addressed to the correct owner is insufficient:
+      // prove the physical INPUT stock moved to that owner in Phase 1,
+      // even when several prepaid cargo vintages arrive together.
+      expect(phase1Before, `tick ${tick}: Phase-1 opening stock`).toBeDefined();
+      expect(phase1After, `tick ${tick}: Phase-1 closing stock`).toBeDefined();
+      const assertDeliveryOwners = (settled: WorldState): void => {
+        for (const [unitId, beforeUnit] of phase1Before!.productionUnits) {
+          const expected = due.reduce((sum, cargo) =>
+            sum + (cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+              cargo.beneficialOwner.productionUnitId === unitId
+              ? cargo.quantity : 0), 0);
+          const afterUnit = settled.productionUnits.get(unitId)!;
+          const observed = (afterUnit.inputInventory.get(IRON) ?? 0) -
+            (beforeUnit.inputInventory.get(IRON) ?? 0);
+          expect(observed, `tick ${tick}: arrival stock owner ${unitId}`)
+            .toBeCloseTo(expected, 6);
+        }
+      };
+      expect(due.every(cargo => cargo.goodId === IRON &&
+        cargo.destinationInventoryBucket === "INPUT" &&
+        cargo.beneficialOwner.type === "PRODUCTION_UNIT")).toBe(true);
+      assertDeliveryOwners(phase1After!);
+      if (due.length > 0 && !negativeDeliveryOwnerChecked) {
+        const recipient = due[0]!.beneficialOwner;
+        if (recipient.type !== "PRODUCTION_UNIT") {
+          throw new Error("Expected ProductionUnit destination in M5 golden");
+        }
+        const otherId = [...phase1After!.productionUnits.keys()]
+          .find(id => id !== recipient.productionUnitId);
+        expect(otherId).toBeDefined();
+        const amount = due[0]!.quantity / 2;
+        expect(amount).toBeGreaterThan(0);
+        const forgedUnits = new Map(phase1After!.productionUnits);
+        for (const [id, delta] of [
+          [recipient.productionUnitId, -amount],
+          [otherId!, amount],
+        ] as const) {
+          const unit = forgedUnits.get(id)!;
+          forgedUnits.set(id, { ...unit, inputInventory: new Map(unit.inputInventory)
+            .set(IRON, (unit.inputInventory.get(IRON) ?? 0) + delta) });
+        }
+        const forged = { ...phase1After!, productionUnits: forgedUnits };
+        expect(totalIron(forged)).toBeCloseTo(totalIron(phase1After!), 6);
+        expect(() => assertDeliveryOwners(forged)).toThrow();
+        negativeDeliveryOwnerChecked = true;
+      }
       for (const cargo of due) {
         expect(arrivals.filter(tx =>
           tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id &&
@@ -2851,6 +3167,12 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(liveFxTicks).toBeGreaterThan(0);
     expect(negativePrincipalChecked).toBe(true);
     expect(negativeOwnerChecked).toBe(true);
+    expect(negativeTreasuryChecked).toBe(true);
+    expect(negativeFeeRoutingChecked).toBe(true);
+    expect(negativeDeliveryOwnerChecked).toBe(true);
+    expect(negativeFxBundleChecked).toBe(true);
+    expect(divergentFeeTicks).toBeGreaterThan(0);
+    expect(creditedTreasuryTicks).toBeGreaterThan(0);
     expect(repricedTicks).toBeGreaterThan(0);
     expect(blockedLocalTicks).toBeGreaterThan(0);
     expect(dispatched.size).toBeGreaterThanOrEqual(2);
