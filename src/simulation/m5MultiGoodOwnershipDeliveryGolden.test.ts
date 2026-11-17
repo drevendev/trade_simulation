@@ -30,6 +30,7 @@ function fixture() {
     baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 37,
   );
   const route = [...root.transportLinks.values()].find(link =>
+    link.fromRegionId !== link.toRegionId &&
     [...root.cohorts.values()].some(cohort =>
       cohort.seed.regionKey === root.regions.get(link.toRegionId)?.seed.key) &&
     [...root.productionUnits.values()].some(unit =>
@@ -164,16 +165,13 @@ describe("M5 #676 multi-good owner-bound delivery through the 16-phase runner", 
       const inTransit = selected.reduce((sum, shipment) => sum + shipment.quantity, 0);
       expect(closingStock).toBeCloseTo(openingStock + inTransit, 9);
     }
-    expect(first.world.states.get(
-      f.stateBuyer.type === "STATE" ? f.stateBuyer.stateId : ""
-    )!.treasury).toEqual(f.forward.states.get(
-      f.stateBuyer.type === "STATE" ? f.stateBuyer.stateId : ""
-    )!.treasury);
-    expect(first.world.cohorts.get(
-      f.cohortBuyer.type === "COHORT" ? f.cohortBuyer.cohortId : ""
-    )!.wallet).toEqual(f.forward.cohorts.get(
-      f.cohortBuyer.type === "COHORT" ? f.cohortBuyer.cohortId : ""
-    )!.wallet);
+    if (f.stateBuyer.type !== "STATE" || f.cohortBuyer.type !== "COHORT") {
+      throw new Error("Unexpected multi-good delivery owner");
+    }
+    expect(first.world.states.get(f.stateBuyer.stateId)!.treasury)
+      .toEqual(f.forward.states.get(f.stateBuyer.stateId)!.treasury);
+    expect(first.world.cohorts.get(f.cohortBuyer.cohortId)!.wallet)
+      .toEqual(f.forward.cohorts.get(f.cohortBuyer.cohortId)!.wallet);
     const next = executeM5ShipmentDeliveryTick(
       first.world, 9, noOpPhaseHandler, noOpTransition);
     expect(next.context.transactions).toEqual([]);
