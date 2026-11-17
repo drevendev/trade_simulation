@@ -266,4 +266,80 @@ describe("M5 #676 multi-good owner-bound delivery through the 16-phase runner", 
     };
     expect(() => assertOwnerGoodBucketDeltas(f.forward, forgedGood, f.cargo)).toThrow();
   });
+
+  it("settles mixed prior-tick and zero-travel cargo at their own phases for all owner classes", () => {
+    const f = fixture();
+    const older = f.cargo.slice(0, 2); // State and Cohort FOOD: due in Phase 1.
+    const instant = f.cargo.slice(2).map(shipment => ({
+      ...shipment, departureTick: 8, arrivalTick: 8, travelTicksAtDispatch: 0,
+    })); // ProductionUnit OUTPUT FOOD and INPUT WOOD: dispatched at Phase 7.
+    const opening = (entries: readonly TradeShipmentState[]): WorldState => ({
+      ...f.forward,
+      shipments: new Map(entries.map(shipment => [shipment.id, shipment] as const)),
+    });
+    const commitAtPhase7 = (entries: readonly TradeShipmentState[]) =>
+      (phase: number, world: WorldState): WorldState =>
+        phase === 7 ? {
+          ...world,
+          shipments: new Map([
+            ...world.shipments,
+            ...entries.map(shipment => [shipment.id, shipment] as const),
+          ]),
+        } : world;
+    const first = executeM5ShipmentDeliveryTick(
+      opening(older), 8, noOpPhaseHandler, commitAtPhase7(instant),
+    );
+    const replay = executeM5ShipmentDeliveryTick(
+      opening([...older].reverse()), 8, noOpPhaseHandler,
+      commitAtPhase7([...instant].reverse()),
+    );
+    for (const result of [first, replay]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(result.world.shipments?.size).toBe(0);
+      expect(result.context.transactions).toHaveLength(f.cargo.length);
+      expect(result.context.transactions.every(tx =>
+        tx.type === "SHIPMENT_DELIVERY" &&
+        tx.moneyAmount === undefined && tx.currencyId === undefined)).toBe(true);
+      const byId = (shipment: TradeShipmentState, phase: 1 | 7) =>
+        result.context.transactions.filter(tx =>
+          tx.phase === phase && tx.goodId === shipment.goodId &&
+          tx.quantity === shipment.quantity &&
+          tx.reason === "IN_TRANSIT_TO_" +
+            shipment.destinationInventoryBucket + "_STOCK:" + shipment.id);
+      for (const shipment of older) expect(byId(shipment, 1)).toHaveLength(1);
+      for (const shipment of instant) expect(byId(shipment, 7)).toHaveLength(1);
+      // All physical inventory endpoints are checked, not just credited owners.
+      assertOwnerGoodBucketDeltas(opening(older), result.world, f.cargo);
+
+      // Phase-7 synthetic committed cargo enters the in-transit ledger at
+      // dispatch, while Phase-1 cargo was already present at tick start.
+      // Whole-world conservation must account for both waves exactly once.
+      const goodsTotal = (world: WorldState, goodId: GoodId) =>
+        [...physicalStockEndpoints(world).values()]
+          .filter(entry => entry.goodId === goodId)
+          .reduce((sum, entry) => sum + entry.quantity, 0) +
+        [...world.shipments.values()]
+          .filter(shipment => shipment.goodId === goodId)
+          .reduce((sum, shipment) => sum + shipment.quantity, 0);
+      for (const goodId of [FOOD, WOOD]) {
+        const introduced = instant.filter(shipment => shipment.goodId === goodId)
+          .reduce((sum, shipment) => sum + shipment.quantity, 0);
+        expect(goodsTotal(result.world, goodId))
+          .toBeCloseTo(goodsTotal(opening(older), goodId) + introduced, 9);
+      }
+    }
+    expect(replay.context.transactions).toEqual(first.context.transactions);
+    expect(replay.world.states).toEqual(first.world.states);
+    expect(replay.world.cohorts).toEqual(first.world.cohorts);
+    expect(replay.world.productionUnits).toEqual(first.world.productionUnits);
+    const next = executeM5ShipmentDeliveryTick(
+      first.world, 9, noOpPhaseHandler, noOpTransition,
+    );
+    expect(next.reconciliationErrors).toBeNull();
+    expect(next.context.transactions).toEqual([]);
+    expect(next.world).toBe(first.world);
+  });
+
 });
