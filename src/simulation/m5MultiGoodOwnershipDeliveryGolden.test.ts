@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
-import type { ActorRef } from "../domain/genesisLedger";
+import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import type { GoodId, ShipmentId } from "../domain/id";
 import { executeM5ShipmentDeliveryTick } from "./m5ShipmentDeliveryTick";
 import { noOpPhaseHandler } from "./tickOrchestrator";
@@ -86,48 +86,54 @@ function fixture() {
   };
 }
 
-function stock(
-  world: WorldState, actor: ActorRef,
-  bucket: ShipmentDestinationInventoryBucket, goodId: GoodId,
-): number {
-  if (actor.type === "STATE") {
-    if (bucket !== "GENERAL") throw new Error("invalid State stock bucket");
-    return world.states.get(actor.stateId)!.publicInventory.get(goodId) ?? 0;
+/** Every authoritative on-hand goods endpoint, including non-recipients. */
+function physicalStockEndpoints(world: WorldState): Map<string, { goodId: GoodId; quantity: number }> {
+  const endpoints = new Map<string, { goodId: GoodId; quantity: number }>();
+  const record = (
+    owner: ActorRef, bucket: ShipmentDestinationInventoryBucket,
+    inventory: ReadonlyMap<GoodId, number>,
+  ) => {
+    for (const [goodId, quantity] of inventory) {
+      const key = JSON.stringify([actorRefKey(owner), bucket, goodId]);
+      if (endpoints.has(key)) throw new Error("Duplicate physical goods endpoint: " + key);
+      endpoints.set(key, { goodId, quantity });
+    }
+  };
+  for (const [stateId, state] of world.states) {
+    record({ type: "STATE", stateId }, "GENERAL", state.publicInventory);
   }
-  if (actor.type === "COHORT") {
-    if (bucket !== "GENERAL") throw new Error("invalid Cohort stock bucket");
-    return world.cohorts.get(actor.cohortId)!.householdInventory.get(goodId) ?? 0;
+  for (const [cohortId, cohort] of world.cohorts) {
+    record({ type: "COHORT", cohortId }, "GENERAL", cohort.householdInventory);
   }
-  if (actor.type === "PRODUCTION_UNIT") {
-    const unit = world.productionUnits.get(actor.productionUnitId)!;
-    if (bucket === "INPUT") return unit.inputInventory.get(goodId) ?? 0;
-    if (bucket === "OUTPUT") return unit.outputInventory.get(goodId) ?? 0;
-    if (bucket === "INVESTMENT") return unit.investmentInventory.get(goodId) ?? 0;
+  for (const [productionUnitId, unit] of world.productionUnits) {
+    const owner: ActorRef = { type: "PRODUCTION_UNIT", productionUnitId };
+    record(owner, "INPUT", unit.inputInventory);
+    record(owner, "OUTPUT", unit.outputInventory);
+    record(owner, "INVESTMENT", unit.investmentInventory);
   }
-  throw new Error("Invalid destination stock owner/bucket");
+  return endpoints;
 }
 
 function assertOwnerGoodBucketDeltas(
   before: WorldState, after: WorldState, cargo: readonly TradeShipmentState[],
 ): void {
-  // Independently project each physical transfer from immutable dispatch
-  // evidence. No aggregate total can substitute for owner+good+bucket identity.
-  const groups = new Map<string, { sample: TradeShipmentState; amount: number }>();
+  // Manifest-derived deltas must match ALL physical stock endpoints. An extra
+  // credit to an unlisted seller or goods bucket is not a harmless no-op.
+  const expected = new Map<string, number>();
   for (const shipment of cargo) {
     const key = JSON.stringify([
-      shipment.beneficialOwner, shipment.goodId, shipment.destinationInventoryBucket,
+      actorRefKey(shipment.beneficialOwner), shipment.destinationInventoryBucket,
+      shipment.goodId,
     ]);
-    const previous = groups.get(key);
-    groups.set(key, {
-      sample: shipment, amount: (previous?.amount ?? 0) + shipment.quantity,
-    });
+    expected.set(key, (expected.get(key) ?? 0) + shipment.quantity);
   }
-  for (const [key, { sample, amount }] of groups) {
-    const initial = stock(before, sample.beneficialOwner,
-      sample.destinationInventoryBucket, sample.goodId);
-    const observed = stock(after, sample.beneficialOwner,
-      sample.destinationInventoryBucket, sample.goodId) - initial;
-    expect(observed, "owner/good/bucket " + key).toBeCloseTo(amount, 9);
+  const opening = physicalStockEndpoints(before);
+  const closing = physicalStockEndpoints(after);
+  const keys = new Set([...opening.keys(), ...closing.keys(), ...expected.keys()]);
+  for (const key of keys) {
+    const observed = (closing.get(key)?.quantity ?? 0) -
+      (opening.get(key)?.quantity ?? 0);
+    expect(observed, "owner/bucket/good " + key).toBeCloseTo(expected.get(key) ?? 0, 9);
   }
 }
 
@@ -154,16 +160,19 @@ describe("M5 #676 multi-good owner-bound delivery through the 16-phase runner", 
       tx.moneyAmount === undefined && tx.currencyId === undefined)).toBe(true);
     assertOwnerGoodBucketDeltas(f.forward, first.world, f.cargo);
 
+    // Independent whole-world per-good conservation, including the cargo
+    // registry that owns goods while in transit (not just listed recipients).
+    const physicalTotal = (world: WorldState, good: GoodId) =>
+      [...physicalStockEndpoints(world).values()]
+        .filter(endpoint => endpoint.goodId === good)
+        .reduce((sum, endpoint) => sum + endpoint.quantity, 0);
+    const transitTotal = (world: WorldState, good: GoodId) =>
+      [...(world.shipments?.values() ?? [])]
+        .filter(shipment => shipment.goodId === good)
+        .reduce((sum, shipment) => sum + shipment.quantity, 0);
     for (const good of [FOOD, WOOD]) {
-      const selected = f.cargo.filter(shipment => shipment.goodId === good);
-      const openingStock = selected.reduce((sum, shipment) =>
-        sum + stock(f.forward, shipment.beneficialOwner,
-          shipment.destinationInventoryBucket, shipment.goodId), 0);
-      const closingStock = selected.reduce((sum, shipment) =>
-        sum + stock(first.world, shipment.beneficialOwner,
-          shipment.destinationInventoryBucket, shipment.goodId), 0);
-      const inTransit = selected.reduce((sum, shipment) => sum + shipment.quantity, 0);
-      expect(closingStock).toBeCloseTo(openingStock + inTransit, 9);
+      expect(physicalTotal(first.world, good) + transitTotal(first.world, good))
+        .toBeCloseTo(physicalTotal(f.forward, good) + transitTotal(f.forward, good), 9);
     }
     if (f.stateBuyer.type !== "STATE" || f.cohortBuyer.type !== "COHORT") {
       throw new Error("Unexpected multi-good delivery owner");
@@ -192,6 +201,27 @@ describe("M5 #676 multi-good owner-bound delivery through the 16-phase runner", 
     const state = first.world.states.get(stateBuyer.stateId)!;
     const cohort = first.world.cohorts.get(cohortBuyer.cohortId)!;
     const unit = first.world.productionUnits.get(unitBuyer.productionUnitId)!;
+    // Positive control: the actual completed delivery satisfies the full oracle.
+    expect(() => assertOwnerGoodBucketDeltas(f.forward, first.world, f.cargo))
+      .not.toThrow();
+
+    // Negative control: unbacked FOOD minted into an unlisted seller State.
+    // Every manifest recipient still has its exact expected credit.
+    const seller = f.cargo[0]!.seller;
+    if (seller.type !== "STATE" || seller.stateId === stateBuyer.stateId) {
+      throw new Error("Expected a distinct unlisted seller State");
+    }
+    const sellerState = first.world.states.get(seller.stateId)!;
+    const forgedSellerCredit: WorldState = {
+      ...first.world,
+      states: new Map(first.world.states).set(seller.stateId, {
+        ...sellerState,
+        publicInventory: new Map(sellerState.publicInventory)
+          .set(FOOD, (sellerState.publicInventory.get(FOOD) ?? 0) + 1),
+      }),
+    };
+    expect(() => assertOwnerGoodBucketDeltas(f.forward, forgedSellerCredit, f.cargo))
+      .toThrow();
 
     // Global FOOD stock unchanged, but credited to the wrong beneficiary.
     const forgedOwners: WorldState = {
