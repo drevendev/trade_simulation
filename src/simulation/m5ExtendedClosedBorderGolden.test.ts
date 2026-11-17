@@ -2869,6 +2869,18 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
           expect(physicalIron(settledUnit) - physicalIron(openingUnit),
             `tick ${tick}: paid physical seller ${unitId}`)
             .toBeCloseTo(-exported, 6);
+          // Owner totals cannot detect changing the inventory category.
+          // This fixture's paid Phase-7 exports draw from INPUT only.
+          for (const [bucket, expectedDelta] of [
+            ["inputInventory", -exported],
+            ["outputInventory", 0],
+            ["investmentInventory", 0],
+          ] as const) {
+            const observed = (settledUnit[bucket].get(IRON) ?? 0) -
+              (openingUnit[bucket].get(IRON) ?? 0);
+            expect(observed, `tick ${tick}: ${unitId}/${bucket}/iron`)
+              .toBeCloseTo(expectedDelta, 6);
+          }
           for (const currency of f.currencies) {
             const expectedDelta = fresh.reduce((sum, cargo) => {
               const sellerCredit = cargo.seller.type === "PRODUCTION_UNIT" &&
@@ -3040,6 +3052,29 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         expect(totalIron(forgedGoodsWorld))
           .toBeCloseTo(totalIron(phase7After!), 6);
         expect(() => assertActorStocks(forgedGoodsWorld)).toThrow();
+
+        // Relabel goods within the same seller. Aggregate goods, seller
+        // ownership, issuer cash and transaction receipts stay identical.
+        // The INPUT-only oracle must detect this independent false-negative.
+        const sellerUnit = phase7After!.productionUnits.get(seller.productionUnitId)!;
+        const misbucketedUnits = new Map(phase7After!.productionUnits);
+        misbucketedUnits.set(seller.productionUnitId, {
+          ...sellerUnit,
+          inputInventory: new Map(sellerUnit.inputInventory).set(
+            IRON, (sellerUnit.inputInventory.get(IRON) ?? 0) - 0.25,
+          ),
+          outputInventory: new Map(sellerUnit.outputInventory).set(
+            IRON, (sellerUnit.outputInventory.get(IRON) ?? 0) + 0.25,
+          ),
+        });
+        const forgedBucketWorld: WorldState = {
+          ...phase7After!, productionUnits: misbucketedUnits,
+        };
+        expect(totalIron(forgedBucketWorld))
+          .toBeCloseTo(totalIron(phase7After!), 6);
+        expect(physicalIron(forgedBucketWorld.productionUnits.get(seller.productionUnitId)!))
+          .toBeCloseTo(physicalIron(sellerUnit), 6);
+        expect(() => assertActorStocks(forgedBucketWorld)).toThrow();
         negativeOwnerChecked = true;
       }
       if (inputs.length > 0 && !negativePrincipalChecked) {
