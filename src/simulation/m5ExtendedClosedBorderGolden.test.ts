@@ -2708,6 +2708,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let divergentFeeTicks = 0;
     let negativeFeeRoutingChecked = false;
     let negativeDeliveryOwnerChecked = false;
+    let negativeFxBundleChecked = false;
 
     for (let tick = 7; tick < 607; tick++) {
       const open = (tick - 7) % 12 === 0;
@@ -2790,6 +2791,66 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
       };
       assertPoolJournal(postings);
+
+      // A pool-total oracle cannot detect two paid routes exchanging their FX
+      // principals: the aggregate issuer cash delta remains correct. Bind
+      // each receipt to its own persisted cargo, dispatch and settlement.
+      const assertFxCargoBundles = (journal: typeof postings): void => {
+        const phase7 = journal.filter(tx => tx.phase === 7);
+        for (const cargo of fresh) {
+          expect(cargo.fxSettlementId).toBeDefined();
+          const dispatches = phase7.filter(tx =>
+            tx.type === "SHIPMENT_DISPATCH" &&
+            tx.sourceRegionId === cargo.originRegionId &&
+            tx.destinationRegionId === cargo.destinationRegionId &&
+            tx.goodId === cargo.goodId && tx.quantity === cargo.quantity);
+          expect(dispatches, "tick " + tick + ": matching cargo dispatch").toHaveLength(1);
+          const bundleId = dispatches[0]!.bundleId;
+          expect(bundleId).toBeDefined();
+          const one = (type: "FX_INPUT" | "FX_OUTPUT" | "TRADE_GOODS_SALE") => {
+            const entries = phase7.filter(tx =>
+              tx.type === type && tx.bundleId === bundleId);
+            expect(entries, "tick " + tick + ": " + type + " per cargo bundle").toHaveLength(1);
+            expect(entries[0]!.fxSettlementId).toBe(cargo.fxSettlementId);
+            return entries[0]!;
+          };
+          const input = one("FX_INPUT");
+          const output = one("FX_OUTPUT");
+          const invoice = one("TRADE_GOODS_SALE");
+          expect(input.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+          expect(output.currencyId).toBe(cargo.invoiceCurrencyId);
+          expect(invoice.currencyId).toBe(cargo.invoiceCurrencyId);
+          expect(input.source).toEqual(cargo.beneficialOwner);
+          expect(output.destination).toEqual(cargo.seller);
+          expect(input.moneyAmount!).toBeCloseTo(cargo.buyerGoodsPaymentAmount, 6);
+          expect(output.moneyAmount!).toBeCloseTo(
+            cargo.sellerNetUnitPrice * cargo.quantity, 6);
+          expect(invoice.moneyAmount!).toBeCloseTo(output.moneyAmount!, 6);
+          expect(invoice.reason).toBe("PHASE7_FX_INVOICE_REFERENCE_NONPOSTING");
+        }
+      };
+      assertFxCargoBundles(postings);
+      if (fresh.length >= 2 && !negativeFxBundleChecked) {
+        const first = inputs.find(tx => tx.fxSettlementId === fresh[0]!.fxSettlementId)!;
+        const second = inputs.find(tx => tx.fxSettlementId === fresh[1]!.fxSettlementId)!;
+        expect(first).toBeDefined();
+        expect(second).toBeDefined();
+        expect(first.currencyId).toBe(second.currencyId);
+        expect(second.moneyAmount!).toBeGreaterThan(1);
+        // Move one principal unit between receipts of two real cargo
+        // bundles, preserving total FX_INPUT and both physical shipments.
+        const forgedJournal = postings.map(tx =>
+          tx === first ? { ...tx, moneyAmount: tx.moneyAmount! + 1 } :
+          tx === second ? { ...tx, moneyAmount: tx.moneyAmount! - 1 } : tx);
+        const principal = (journal: typeof postings) => journal.filter(tx =>
+          tx.phase === 7 && tx.type === "FX_INPUT" &&
+          tx.currencyId === first.currencyId).reduce(
+          (sum, tx) => sum + tx.moneyAmount!, 0);
+        expect(principal(forgedJournal)).toBeCloseTo(principal(postings), 8);
+        expect(() => assertPoolJournal(forgedJournal)).not.toThrow();
+        expect(() => assertFxCargoBundles(forgedJournal)).toThrow();
+        negativeFxBundleChecked = true;
+      }
 
       // Independent stock oracle: a balanced FX pool and unchanged aggregate
       // goods can still conceal a payment or inventory debit to the wrong
@@ -3109,6 +3170,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeTreasuryChecked).toBe(true);
     expect(negativeFeeRoutingChecked).toBe(true);
     expect(negativeDeliveryOwnerChecked).toBe(true);
+    expect(negativeFxBundleChecked).toBe(true);
     expect(divergentFeeTicks).toBeGreaterThan(0);
     expect(creditedTreasuryTicks).toBeGreaterThan(0);
     expect(repricedTicks).toBeGreaterThan(0);
