@@ -819,9 +819,10 @@ describe("M5/#676 monetary-union cross-State golden", () => {
           if (cargo.seller.type !== "PRODUCTION_UNIT") {
             throw new Error("Union fixture requires a ProductionUnit seller");
           }
+          const sellerId = cargo.seller.productionUnitId;
           const matchingSales = sales.filter(tx =>
             tx.source?.type === "PRODUCTION_UNIT" &&
-            tx.source.productionUnitId === cargo.seller.productionUnitId);
+            tx.source.productionUnitId === sellerId);
           expect(matchingSales).toHaveLength(1);
           const loss = posted.filter(tx =>
             tx.phase === 7 && tx.type === "GOODS_TRANSPORT_LOSS" &&
