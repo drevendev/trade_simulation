@@ -282,7 +282,7 @@ describe("M5 #676 multi-good owner-bound delivery through the 16-phase runner", 
         phase === 7 ? {
           ...world,
           shipments: new Map([
-            ...world.shipments,
+            ...(world.shipments?.entries() ?? []),
             ...entries.map(shipment => [shipment.id, shipment] as const),
           ]),
         } : world;
@@ -320,7 +320,7 @@ describe("M5 #676 multi-good owner-bound delivery through the 16-phase runner", 
         [...physicalStockEndpoints(world).values()]
           .filter(entry => entry.goodId === goodId)
           .reduce((sum, entry) => sum + entry.quantity, 0) +
-        [...world.shipments.values()]
+        [...(world.shipments?.values() ?? [])]
           .filter(shipment => shipment.goodId === goodId)
           .reduce((sum, shipment) => sum + shipment.quantity, 0);
       for (const goodId of [FOOD, WOOD]) {
