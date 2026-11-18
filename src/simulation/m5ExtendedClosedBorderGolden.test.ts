@@ -2801,8 +2801,9 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") {
           throw new Error("Expected ProductionUnit transit beneficiary in M5 golden");
         }
+        const beneficiaryId = cargo.beneficialOwner.productionUnitId;
         const wrongId = [...actual.world.productionUnits.keys()].find(id =>
-          id !== cargo.beneficialOwner.productionUnitId);
+          id !== beneficiaryId);
         expect(wrongId).toBeDefined();
         const forged: WorldState = {
           ...actual.world,
