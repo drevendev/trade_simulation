@@ -16,6 +16,7 @@ import type { PhaseHandler } from "./tickOrchestrator";
 import { effectiveTransportLinkCapacity } from "./transportCapacity";
 import { derivePhase7PostProcurementIntents } from "./phase7PostProcurementIntents";
 import { phase7ImportTariffKey } from "./phase7LiveWorldPlan";
+import type { FxLedgerLeg } from "./fxSettlement";
 import { executeM5AutonomousRegionalTradeTick, type M5AutonomousRegionalTradeOptions } from "./m5AutonomousRegionalTradeTick";
 import { buildInitialWorld, type WorldState, type ProductionUnitState, type RegionState } from "./worldState";
 
@@ -2856,8 +2857,10 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       const pairClose = close.pools.find(p => p.pairId === f.chosen.poolId)!;
       const finalPool = poolOf(actual.world);
       const postings = actual.context.transactions;
-      const inputs = postings.filter(tx => tx.phase === 7 && tx.type === "FX_INPUT");
-      const outputs = postings.filter(tx => tx.phase === 7 && tx.type === "FX_OUTPUT");
+      const inputs = postings.filter((tx): tx is FxLedgerLeg =>
+        tx.phase === 7 && tx.type === "FX_INPUT");
+      const outputs = postings.filter((tx): tx is FxLedgerLeg =>
+        tx.phase === 7 && tx.type === "FX_OUTPUT");
       const departures = postings.filter(tx =>
         tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
       const arrivals = postings.filter(tx => tx.type === "SHIPMENT_DELIVERY");
