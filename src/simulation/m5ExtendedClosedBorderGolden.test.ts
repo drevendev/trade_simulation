@@ -10,9 +10,11 @@ import { describe, expect, it } from "vitest";
 import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
+import { actorRefKey } from "../domain/genesisLedger";
 import type { GoodId, TransportLinkId } from "../domain/id";
 import type { PhaseHandler } from "./tickOrchestrator";
 import { effectiveTransportLinkCapacity } from "./transportCapacity";
+import { derivePhase7PostProcurementIntents } from "./phase7PostProcurementIntents";
 import { phase7ImportTariffKey } from "./phase7LiveWorldPlan";
 import { executeM5AutonomousRegionalTradeTick, type M5AutonomousRegionalTradeOptions } from "./m5AutonomousRegionalTradeTick";
 import { buildInitialWorld, type WorldState, type ProductionUnitState, type RegionState } from "./worldState";
@@ -2736,6 +2738,8 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeFxBundleChecked = false;
     let negativeChargeBundleChecked = false;
     let negativeTransitIdentityChecked = false;
+    let negativeResidualChecked = false;
+    let reconciledResidualTicks = 0;
     let zeroCapacityWindows = 0;
     let liveNeighborWhileBlockedTicks = 0;
     let zeroFxWindows = 0;
@@ -2881,6 +2885,111 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         expect(forged.shipments?.size).toBe(actual.world.shipments?.size);
         expect(() => assertTransitRegistry(forged)).toThrow();
         negativeTransitIdentityChecked = true;
+      }
+
+      // Independently derive the post-Phase-4 intent envelopes from the
+      // original planning/allocation evidence. The committed Phase-7 residuals
+      // must debit only *paid* cargo, separately for each owner/region/good.
+      // A global stock or FX conservation oracle cannot catch a buyer's
+      // demand being spent twice or another owner's unused demand being lost.
+      if (actual.context.phase7MainIntents !== undefined) {
+        expect(phase7Before, `tick ${tick}: Phase-7 residual opening`).toBeDefined();
+        const originalIntents = derivePhase7PostProcurementIntents(
+          phase7Before!, { ...actual.context, phase: 7 },
+        ).phase8MainIntents;
+        const originalById = new Map(originalIntents.map(intent =>
+          [intent.id, intent] as const));
+        const afterIntents = actual.context.phase7MainIntents;
+        const ownerKey = (
+          side: string, actor: string, regionId: string, goodId: string,
+        ) => JSON.stringify([side, actor, regionId, goodId]);
+        const assertResidualDebits = (cargoLots: typeof fresh): void => {
+          const paid = new Map<string, { quantity: number; spend: number }>();
+          const add = (key: string, quantity: number, spend: number): void => {
+            const previous = paid.get(key) ?? { quantity: 0, spend: 0 };
+            paid.set(key, {
+              quantity: previous.quantity + quantity,
+              spend: previous.spend + spend,
+            });
+          };
+          for (const cargo of cargoLots) {
+            add(ownerKey("SELL", actorRefKey(cargo.seller),
+              cargo.originRegionId, cargo.goodId), cargo.quantity, 0);
+            add(ownerKey("BUY", actorRefKey(cargo.beneficialOwner),
+              cargo.destinationRegionId, cargo.goodId), cargo.quantity,
+              cargo.buyerGoodsPaymentAmount + cargo.transportFeeAmount +
+              cargo.tariffAmount + cargo.consumptionTaxAmount);
+          }
+
+          const observed = new Map<string, { quantity: number; spend: number }>();
+          expect(afterIntents.length, `tick ${tick}: intent count retained`)
+            .toBe(originalIntents.length);
+          for (const final of afterIntents) {
+            const before = originalById.get(final.id);
+            expect(before, `tick ${tick}: matching prior intent ${final.id}`)
+              .toBeDefined();
+            expect(final.actor).toEqual(before!.actor);
+            expect(final.regionId).toBe(before!.regionId);
+            expect(final.goodId).toBe(before!.goodId);
+            expect(final.side).toBe(before!.side);
+            expect(final.desiredQuantity).toBeGreaterThanOrEqual(0);
+            const quantity = before!.desiredQuantity - final.desiredQuantity;
+            expect(quantity, `tick ${tick}: no intent quantity reversal`)
+              .toBeGreaterThanOrEqual(-1e-9);
+            let spend = 0;
+            if (final.side === "BUY") {
+              expect(before!.maxSpend).toBeDefined();
+              expect(final.maxSpend).toBeDefined();
+              spend = before!.maxSpend! - final.maxSpend!;
+              expect(final.maxSpend).toBeGreaterThanOrEqual(0);
+              expect(spend, `tick ${tick}: no BUY budget reversal`)
+                .toBeGreaterThanOrEqual(-1e-9);
+            }
+            const k = ownerKey(final.side, actorRefKey(final.actor),
+              final.regionId, final.goodId);
+            const old = observed.get(k) ?? { quantity: 0, spend: 0 };
+            observed.set(k, {
+              quantity: old.quantity + quantity, spend: old.spend + spend,
+            });
+          }
+          expect(new Set(afterIntents.map(intent => intent.id)).size)
+            .toBe(afterIntents.length);
+          for (const k of new Set([...paid.keys(), ...observed.keys()])) {
+            const actualDebit = observed.get(k) ?? { quantity: 0, spend: 0 };
+            const paidDebit = paid.get(k) ?? { quantity: 0, spend: 0 };
+            expect(actualDebit.quantity,
+              `tick ${tick}: owner residual physical debit ${k}`)
+              .toBeCloseTo(paidDebit.quantity, 6);
+            expect(actualDebit.spend,
+              `tick ${tick}: owner residual paid debit ${k}`)
+              .toBeCloseTo(paidDebit.spend, 6);
+          }
+        };
+        assertResidualDebits(fresh);
+        reconciledResidualTicks++;
+        if (!negativeResidualChecked && fresh.length >= 2) {
+          const first = fresh[0]!;
+          const second = fresh.find(cargo =>
+            actorRefKey(cargo.beneficialOwner) !==
+            actorRefKey(first.beneficialOwner) && cargo.quantity > 1e-4);
+          if (second) {
+            // Reallocate part of one real buyer's delivery to another:
+            // total shipped quantity, route count, and real WorldState cash
+            // and goods are unchanged, but the buyer-intent debit is false.
+            const shifted = second.quantity / 2;
+            const counterfeit = fresh.map(cargo =>
+              cargo === first ? { ...cargo, quantity: cargo.quantity + shifted } :
+              cargo === second ? { ...cargo, quantity: cargo.quantity - shifted } :
+              cargo);
+            expect(counterfeit.reduce((sum, cargo) => sum + cargo.quantity, 0))
+              .toBeCloseTo(fresh.reduce((sum, cargo) => sum + cargo.quantity, 0), 8);
+            expect(() => assertResidualDebits(counterfeit)).toThrow();
+            negativeResidualChecked = true;
+          }
+        }
+      } else {
+        expect(fresh, `tick ${tick}: dispatch requires committed residuals`)
+          .toHaveLength(0);
       }
 
       // The posting oracle uses actual before/after Phase-7 issuer cash,
@@ -3525,6 +3634,8 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeFxBundleChecked).toBe(true);
     expect(negativeChargeBundleChecked).toBe(true);
     expect(negativeTransitIdentityChecked).toBe(true);
+    expect(negativeResidualChecked).toBe(true);
+    expect(reconciledResidualTicks).toBeGreaterThan(0);
     expect(divergentFeeTicks).toBeGreaterThan(0);
     expect(creditedTreasuryTicks).toBeGreaterThan(0);
     expect(repricedTicks).toBeGreaterThan(0);
