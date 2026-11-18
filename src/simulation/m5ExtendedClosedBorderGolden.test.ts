@@ -2741,6 +2741,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeResidualChecked = false;
     let negativeIntentProvenanceChecked = false;
     let negativeReplayEvidenceChecked = false;
+    let negativeFxReservationBindingChecked = false;
     let reconciledResidualTicks = 0;
     let zeroCapacityWindows = 0;
     let liveNeighborWhileBlockedTicks = 0;
@@ -2863,6 +2864,48 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       const fresh = [...(actual.world.shipments?.values() ?? [])].filter(
         cargo => !beforeIds.has(cargo.id),
       );
+
+      // Do not accept a correct aggregate FX pool balance as evidence that
+      // every paid buyer owned the promise used to fund their own dispatch.
+      // These are the actual Phase-7 reservations, not reconstructed quotes.
+      const assertReservationBindings = (
+        evidence: typeof actual.context.phase7FxReservations,
+      ): void => {
+        const reservations = evidence ?? [];
+        const byRequest = new Map(reservations.map(r => [r.requestId, r] as const));
+        expect(byRequest.size, `tick ${tick}: unique FX reservation IDs`)
+          .toBe(reservations.length);
+        for (const input of inputs) {
+          const reservation = byRequest.get(input.fxReservationRequestId!);
+          expect(reservation, `tick ${tick}: paid FX input has a reservation`)
+            .toBeDefined();
+          expect(input.source).toBeDefined();
+          expect(reservation!.tick).toBe(tick);
+          expect(reservation!.payerKey).toBe(actorRefKey(input.source!));
+          expect(reservation!.quote.pairId).toBe(f.chosen.poolId);
+          expect(reservation!.quote.requiredInputForFeasibleOutput)
+            .toBeCloseTo(input.moneyAmount!, 6);
+          const outputsForInput = outputs.filter(tx =>
+            tx.fxReservationRequestId === input.fxReservationRequestId &&
+            tx.fxSettlementId === input.fxSettlementId);
+          expect(outputsForInput, `tick ${tick}: paired FX output`).toHaveLength(1);
+          expect(reservation!.quote.feasibleOutputAmount)
+            .toBeCloseTo(outputsForInput[0]!.moneyAmount!, 6);
+        }
+      };
+      assertReservationBindings(actual.context.phase7FxReservations);
+      if (!negativeFxReservationBindingChecked && inputs.length > 0) {
+        const original = actual.context.phase7FxReservations!;
+        const paidRequestId = inputs[0]!.fxReservationRequestId;
+        expect(original.some(r => r.requestId === paidRequestId)).toBe(true);
+        const forged = original.map(r => r.requestId === paidRequestId
+          ? { ...r, payerKey: r.payerKey + ":wrong-owner" } : r);
+        // Pool reserves, posted money, cargo and all live actor stocks remain
+        // untouched; a count-only / aggregate cash oracle would accept this.
+        expect(forged.length).toBe(original.length);
+        expect(() => assertReservationBindings(forged)).toThrow();
+        negativeFxReservationBindingChecked = true;
+      }
       if (zeroCapacityWindow) {
         zeroCapacityWindows++;
         const blockedLink = normal.transportLinks.get(f.links[0]!)!;
@@ -3701,6 +3744,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeResidualChecked).toBe(true);
     expect(negativeIntentProvenanceChecked).toBe(true);
     expect(negativeReplayEvidenceChecked).toBe(true);
+    expect(negativeFxReservationBindingChecked).toBe(true);
     expect(reconciledResidualTicks).toBeGreaterThan(0);
     expect(divergentFeeTicks).toBeGreaterThan(0);
     expect(creditedTreasuryTicks).toBeGreaterThan(0);
