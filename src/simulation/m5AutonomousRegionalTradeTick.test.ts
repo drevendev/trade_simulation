@@ -141,9 +141,12 @@ function fixture(keepAmbiguousFx = false) {
   return { world, options, source, destination, link, buyerA, sellerA, buyerB, sellerB };
 }
 
-function run(f: ReturnType<typeof fixture>) {
+function run(
+  f: ReturnType<typeof fixture>,
+  observer?: Parameters<typeof executeM5AutonomousRegionalTradeTick>[5],
+) {
   return executeM5AutonomousRegionalTradeTick(
-    f.world, 7, households, (_phase, world) => world, f.options,
+    f.world, 7, households, (_phase, world) => world, f.options, observer,
   );
 }
 
@@ -1480,7 +1483,10 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     // A strictly smaller available pool reserve must cause a smaller
     // re-quoted, fully paid physical lot, not the original unfunded cargo.
     const scarceOpening = withOutputBudget(originallyPaidOutput / 4);
-    const scarce = run({ ...f, world: scarceOpening });
+    const phase7 = [] as { before: WorldState; after: WorldState }[];
+    const scarce = run({ ...f, world: scarceOpening }, (phase, before, after) => {
+      if (phase === 7) phase7.push({ before, after });
+    });
     expect(scarce.phaseBoundaryError).toBeUndefined();
     expect(scarce.reconciliationErrors).toBeNull();
     expect(scarce.phaseTrace).toEqual([...Array(16).keys()]);
@@ -1488,6 +1494,62 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(scarceCargo).toHaveLength(1);
     expect(scarceCargo[0]!.quantity).toBeGreaterThan(0);
     expect(scarceCargo[0]!.quantity).toBeLessThan(ordinaryCargo[0]!.quantity);
+    // The FX-shortened quantity must be the ONLY physical debit from the
+    // actual post-Phase-4 seller. Global iron conservation and shipment
+    // count alone would miss over-debiting the seller and crediting another.
+    expect(phase7).toHaveLength(1);
+    const shipment = scarceCargo[0]!;
+    expect(shipment.seller.type).toBe("PRODUCTION_UNIT");
+    expect(shipment.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+    if (shipment.seller.type !== "PRODUCTION_UNIT" ||
+        shipment.beneficialOwner.type !== "PRODUCTION_UNIT") {
+      throw new Error("M5 scarcity fixture requires two production-unit owners");
+    }
+    const { before, after } = phase7[0]!;
+    const sellerBefore = before.productionUnits.get(shipment.seller.productionUnitId)!;
+    const sellerAfter = after.productionUnits.get(shipment.seller.productionUnitId)!;
+    const expectedSellerIron =
+      (sellerBefore.inputInventory.get(IRON) ?? 0) - shipment.quantity;
+    const assertActualSellerDebit = (state: WorldState): void => {
+      const current = state.productionUnits.get(shipment.seller.productionUnitId)!;
+      expect(current.inputInventory.get(IRON) ?? 0).toBeCloseTo(expectedSellerIron, 7);
+      expect(current.outputInventory).toEqual(sellerBefore.outputInventory);
+      expect(current.investmentInventory).toEqual(sellerBefore.investmentInventory);
+    };
+    assertActualSellerDebit(after);
+    expect((sellerBefore.inputInventory.get(IRON) ?? 0) -
+      (sellerAfter.inputInventory.get(IRON) ?? 0)).toBeLessThan(ordinaryCargo[0]!.quantity);
+    const buyerBefore = before.productionUnits.get(shipment.beneficialOwner.productionUnitId)!;
+    const buyerAfter = after.productionUnits.get(shipment.beneficialOwner.productionUnitId)!;
+    const paidGross = shipment.buyerGoodsPaymentAmount + shipment.transportFeeAmount +
+      shipment.tariffAmount + shipment.consumptionTaxAmount;
+    expect((buyerBefore.wallet.get(destinationCurrency) ?? 0) -
+      (buyerAfter.wallet.get(destinationCurrency) ?? 0)).toBeCloseTo(paidGross, 6);
+    expect((sellerAfter.wallet.get(sourceCurrency) ?? 0) -
+      (sellerBefore.wallet.get(sourceCurrency) ?? 0))
+      .toBeCloseTo(shipment.quantity * shipment.sellerNetUnitPrice, 6);
+
+    // Balanced counterexample: take the *ordinary* full-lot quantity from
+    // the scarce seller and hide the excess in another unit's INPUT bucket.
+    // The global material stock and actual paid shipment are unchanged.
+    const excessDebit = ordinaryCargo[0]!.quantity - shipment.quantity;
+    expect(excessDebit).toBeGreaterThan(0);
+    const otherId = [...after.productionUnits.keys()].find(id =>
+      id !== shipment.seller.productionUnitId)!;
+    expect(otherId).toBeDefined();
+    const other = after.productionUnits.get(otherId)!;
+    const forgedUnits = new Map(after.productionUnits);
+    forgedUnits.set(shipment.seller.productionUnitId, {
+      ...sellerAfter, inputInventory: new Map(sellerAfter.inputInventory).set(
+        IRON, (sellerAfter.inputInventory.get(IRON) ?? 0) - excessDebit),
+    });
+    forgedUnits.set(otherId, {
+      ...other, inputInventory: new Map(other.inputInventory).set(
+        IRON, (other.inputInventory.get(IRON) ?? 0) + excessDebit),
+    });
+    const forged = { ...after, productionUnits: forgedUnits };
+    expect(totalIron(forged)).toBeCloseTo(totalIron(after), 8);
+    expect(() => assertActualSellerDebit(forged)).toThrow();
     const scarceFxInput = scarce.context.transactions.filter(tx =>
       tx.phase === 7 && tx.type === "FX_INPUT");
     const scarceFxOutput = scarce.context.transactions.filter(tx =>
