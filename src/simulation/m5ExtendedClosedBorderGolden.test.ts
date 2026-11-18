@@ -3047,8 +3047,8 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         // quantities, FX legs and total tariff revenue stay unchanged.
         // The previous issuer/State cash oracles cannot see this fraud.
         const forged = postings.map(tx =>
-          tx === first ? { ...tx, bundleId: second!.bundleId } :
-          tx === second ? { ...tx, bundleId: first!.bundleId } : tx);
+          tx === first ? { ...tx, bundleId: second!.bundleId! } :
+          tx === second ? { ...tx, bundleId: first!.bundleId! } : tx);
         expect(forged.filter(tx => tx.type === "IMPORT_TARIFF")
           .reduce((sum, tx) => sum + tx.moneyAmount!, 0))
           .toBeCloseTo(tariffs.reduce((sum, tx) => sum + tx.moneyAmount!, 0), 8);
