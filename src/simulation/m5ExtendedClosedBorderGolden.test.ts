@@ -2739,6 +2739,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeChargeBundleChecked = false;
     let negativeTransitIdentityChecked = false;
     let negativeResidualChecked = false;
+    let negativeIntentProvenanceChecked = false;
     let reconciledResidualTicks = 0;
     let zeroCapacityWindows = 0;
     let liveNeighborWhileBlockedTicks = 0;
@@ -2899,11 +2900,16 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         ).phase8MainIntents;
         const originalById = new Map(originalIntents.map(intent =>
           [intent.id, intent] as const));
+        expect(originalById.size, `tick ${tick}: unique opening intent IDs`)
+          .toBe(originalIntents.length);
         const afterIntents = actual.context.phase7MainIntents;
         const ownerKey = (
           side: string, actor: string, regionId: string, goodId: string,
         ) => JSON.stringify([side, actor, regionId, goodId]);
-        const assertResidualDebits = (cargoLots: typeof fresh): void => {
+        const assertResidualDebits = (
+          cargoLots: typeof fresh,
+          committedIntents: typeof afterIntents = afterIntents,
+        ): void => {
           const paid = new Map<string, { quantity: number; spend: number }>();
           const add = (key: string, quantity: number, spend: number): void => {
             const previous = paid.get(key) ?? { quantity: 0, spend: 0 };
@@ -2922,9 +2928,9 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
           }
 
           const observed = new Map<string, { quantity: number; spend: number }>();
-          expect(afterIntents.length, `tick ${tick}: intent count retained`)
+          expect(committedIntents.length, `tick ${tick}: intent count retained`)
             .toBe(originalIntents.length);
-          for (const final of afterIntents) {
+          for (const final of committedIntents) {
             const before = originalById.get(final.id);
             expect(before, `tick ${tick}: matching prior intent ${final.id}`)
               .toBeDefined();
@@ -2932,6 +2938,15 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
             expect(final.regionId).toBe(before!.regionId);
             expect(final.goodId).toBe(before!.goodId);
             expect(final.side).toBe(before!.side);
+            // Phase 7 may reduce quantity and BUY spend, but it must never
+            // rewrite an intent's provenance, priority or inventory bucket.
+            // Owner-level debits alone cannot detect such a relabeling.
+            expect({
+              ...final,
+              desiredQuantity: before!.desiredQuantity,
+              maxSpend: before!.maxSpend,
+            }, `tick ${tick}: immutable intent evidence ${final.id}`)
+              .toEqual(before);
             expect(final.desiredQuantity).toBeGreaterThanOrEqual(0);
             const quantity = before!.desiredQuantity - final.desiredQuantity;
             expect(quantity, `tick ${tick}: no intent quantity reversal`)
@@ -2952,8 +2967,8 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
               quantity: old.quantity + quantity, spend: old.spend + spend,
             });
           }
-          expect(new Set(afterIntents.map(intent => intent.id)).size)
-            .toBe(afterIntents.length);
+          expect(new Set(committedIntents.map(intent => intent.id)).size)
+            .toBe(committedIntents.length);
           for (const k of new Set([...paid.keys(), ...observed.keys()])) {
             const actualDebit = observed.get(k) ?? { quantity: 0, spend: 0 };
             const paidDebit = paid.get(k) ?? { quantity: 0, spend: 0 };
@@ -2967,6 +2982,20 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         };
         assertResidualDebits(fresh);
         reconciledResidualTicks++;
+        if (!negativeIntentProvenanceChecked && afterIntents.length > 0) {
+          const unchanged = afterIntents[0]!;
+          const counterfeit = [...afterIntents];
+          counterfeit[0] = {
+            ...unchanged,
+            sourcePlanId: `${unchanged.sourcePlanId}:forged`,
+          };
+          // Identical intent IDs, actors, budgets, shipments and economic
+          // stocks: the previous owner-total oracle accepted this mutation.
+          expect(counterfeit[0]!.desiredQuantity).toBe(unchanged.desiredQuantity);
+          expect(counterfeit[0]!.maxSpend).toBe(unchanged.maxSpend);
+          expect(() => assertResidualDebits(fresh, counterfeit)).toThrow();
+          negativeIntentProvenanceChecked = true;
+        }
         if (!negativeResidualChecked && fresh.length >= 2) {
           const first = fresh[0]!;
           const second = fresh.find(cargo =>
@@ -3635,6 +3664,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeChargeBundleChecked).toBe(true);
     expect(negativeTransitIdentityChecked).toBe(true);
     expect(negativeResidualChecked).toBe(true);
+    expect(negativeIntentProvenanceChecked).toBe(true);
     expect(reconciledResidualTicks).toBeGreaterThan(0);
     expect(divergentFeeTicks).toBeGreaterThan(0);
     expect(creditedTreasuryTicks).toBeGreaterThan(0);
