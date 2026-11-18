@@ -2711,6 +2711,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeDeliveryOwnerChecked = false;
     let negativeDeliveryBucketChecked = false;
     let negativeFxBundleChecked = false;
+    let negativeTransitIdentityChecked = false;
 
     for (let tick = 7; tick < 607; tick++) {
       const open = (tick - 7) % 12 === 0;
@@ -2770,6 +2771,53 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       const fresh = [...(actual.world.shipments?.values() ?? [])].filter(
         cargo => !beforeIds.has(cargo.id),
       );
+
+      // The registry is a persistent ownership stock, not just a count of
+      // shipment IDs. Across each 16-phase tick, precisely the prior unarrived
+      // cargo plus genuinely new paid dispatches must remain in transit.
+      // This catches silent in-flight relabeling, disappearance or duplication
+      // even when the economy's aggregate physical goods still balance.
+      const priorTransit = [...(normal.shipments?.values() ?? [])];
+      expect(priorTransit.every(cargo => cargo.arrivalTick >= tick),
+        `tick ${tick}: no overdue in-transit cargo`).toBe(true);
+      const expectedTransit = new Map([
+        ...priorTransit.filter(cargo => cargo.arrivalTick !== tick)
+          .map(cargo => [cargo.id, cargo] as const),
+        ...fresh.map(cargo => [cargo.id, cargo] as const),
+      ]);
+      const assertTransitRegistry = (world: WorldState): void => {
+        expect(world.shipments?.size ?? 0, `tick ${tick}: live transit count`)
+          .toBe(expectedTransit.size);
+        for (const [id, expected] of expectedTransit) {
+          expect(world.shipments?.get(id), `tick ${tick}: cargo ${id} identity`)
+            .toEqual(expected);
+        }
+      };
+      assertTransitRegistry(actual.world);
+      assertTransitRegistry(replay.world);
+      if (expectedTransit.size > 0 && !negativeTransitIdentityChecked) {
+        const cargo = [...expectedTransit.values()][0]!;
+        expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+        if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") {
+          throw new Error("Expected ProductionUnit transit beneficiary in M5 golden");
+        }
+        const wrongId = [...actual.world.productionUnits.keys()].find(id =>
+          id !== cargo.beneficialOwner.productionUnitId);
+        expect(wrongId).toBeDefined();
+        const forged: WorldState = {
+          ...actual.world,
+          shipments: new Map(actual.world.shipments).set(cargo.id, {
+            ...cargo,
+            beneficialOwner: { type: "PRODUCTION_UNIT", productionUnitId: wrongId! },
+          }),
+        };
+        // Old global conservation and shipment-count oracles cannot detect
+        // assigning a paid in-transit cargo to a different beneficial owner.
+        expect(totalIron(forged)).toBeCloseTo(totalIron(actual.world), 8);
+        expect(forged.shipments?.size).toBe(actual.world.shipments?.size);
+        expect(() => assertTransitRegistry(forged)).toThrow();
+        negativeTransitIdentityChecked = true;
+      }
 
       // The posting oracle uses actual before/after Phase-7 issuer cash,
       // independently of the journal it checks. A balanced but misposted FX
@@ -3320,6 +3368,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeDeliveryOwnerChecked).toBe(true);
     expect(negativeDeliveryBucketChecked).toBe(true);
     expect(negativeFxBundleChecked).toBe(true);
+    expect(negativeTransitIdentityChecked).toBe(true);
     expect(divergentFeeTicks).toBeGreaterThan(0);
     expect(creditedTreasuryTicks).toBeGreaterThan(0);
     expect(repricedTicks).toBeGreaterThan(0);
