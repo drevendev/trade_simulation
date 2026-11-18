@@ -2691,6 +2691,29 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     const poolOf = (state: WorldState) =>
       state.monetaryAuthorities.get(f.chosen.authorityId)!
         .fxPools.get(f.chosen.poolId)!;
+    // A changing issuer reserve *policy* can freeze FX without minting,
+    // destroying or transferring cash. Tightening BOTH floors to the live
+    // balances leaves zero spendable currency in either direction.
+    const withOperationalFxFloor = (world: WorldState, frozen: boolean): WorldState => {
+      const authority = world.monetaryAuthorities.get(f.chosen.authorityId)!;
+      const pool = authority.fxPools.get(f.chosen.poolId)!;
+      const updatedPool = {
+        ...pool,
+        minOperationalReserveBase: frozen
+          ? pool.cash.get(pool.baseCurrencyId)! : f.chosen.pool.minOperationalReserveBase,
+        minOperationalReserveQuote: frozen
+          ? pool.cash.get(pool.quoteCurrencyId)! : f.chosen.pool.minOperationalReserveQuote,
+      };
+      return {
+        ...world,
+        monetaryAuthorities: new Map(world.monetaryAuthorities).set(
+          f.chosen.authorityId, {
+            ...authority,
+            fxPools: new Map(authority.fxPools).set(f.chosen.poolId, updatedPool),
+          },
+        ),
+      };
+    };
     const originalPairCash = new Map(poolOf(f.world).cash);
     const originalIron = totalIron(initial);
     const originalCash = f.currencies.map(currency => totalCash(initial, currency));
@@ -2714,9 +2737,18 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeTransitIdentityChecked = false;
     let zeroCapacityWindows = 0;
     let liveNeighborWhileBlockedTicks = 0;
+    let zeroFxWindows = 0;
+    let nonVacuousFxFreezeChecked = false;
+    let resumedPaidFxAfterFreeze = false;
 
     for (let tick = 7; tick < 607; tick++) {
       const open = (tick - 7) % 12 === 0;
+      // Issuer policy temporarily protects every unit of cash in the pool.
+      // The first freeze coincides with a real, otherwise payable export;
+      // subsequent freezes recur throughout the 600-tick replay.
+      const zeroFxWindow = open && (tick - 7) % 72 === 0;
+      normal = withOperationalFxFloor(normal, zeroFxWindow);
+      shuffled = withOperationalFxFloor(shuffled, zeroFxWindow);
       // Every third reopening independently loses one physical corridor.
       // Previously dispatched cargo must still arrive and the other corridor
       // must remain able to settle against the same finite FX pool.
@@ -2729,6 +2761,11 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
             .set(f.links[0]!, 0),
         },
       } : f;
+      // Same world, same Phase-1 law and same physical corridors: only the
+      // issuer's spendable FX floor differs. Prevent a vacuous no-trade test.
+      const firstWindowCounterfactual = tick === 7
+        ? run(tickFixture, withOperationalFxFloor(normal, false), true, tick)
+        : undefined;
       const priorSpot = poolOf(normal).spotRateQuotePerBase;
       const due = [...(normal.shipments?.values() ?? [])].filter(
         cargo => cargo.arrivalTick === tick,
@@ -2867,6 +2904,38 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
       };
       assertPoolJournal(postings);
+      if (zeroFxWindow) {
+        zeroFxWindows++;
+        expect(poolBefore.minOperationalReserveBase)
+          .toBe(poolBefore.cash.get(poolBefore.baseCurrencyId));
+        expect(poolBefore.minOperationalReserveQuote)
+          .toBe(poolBefore.cash.get(poolBefore.quoteCurrencyId));
+        expect(departures, `tick ${tick}: no cash-funded cross-border dispatch`)
+          .toHaveLength(0);
+        expect(inputs).toHaveLength(0);
+        expect(outputs).toHaveLength(0);
+        expect(poolAfter.cash).toEqual(poolBefore.cash);
+        if (firstWindowCounterfactual) {
+          const payable = firstWindowCounterfactual.context.transactions.filter(tx =>
+            tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
+          expect(payable.length, "unfrozen opening actually exports")
+            .toBeGreaterThan(0);
+          const domesticSales = (transactions: typeof postings) => transactions.filter(tx =>
+            tx.phase === 4 && tx.type === "MARKET_SALE");
+          expect(domesticSales(postings).length).toBeGreaterThan(0);
+          expect(domesticSales(postings))
+            .toEqual(domesticSales(firstWindowCounterfactual.context.transactions));
+          // A forged payout on a frozen pool cannot hide in unchanged cash.
+          const unlawfulPayout = firstWindowCounterfactual.context.transactions.filter(tx =>
+            tx.phase === 7 && tx.type === "FX_OUTPUT");
+          expect(unlawfulPayout.length).toBeGreaterThan(0);
+          expect(() => assertPoolJournal([...postings, ...unlawfulPayout])).toThrow();
+          nonVacuousFxFreezeChecked = true;
+        }
+      }
+      if (open && tick > 7 && !zeroFxWindow && inputs.length > 0) {
+        resumedPaidFxAfterFreeze = true;
+      }
 
       // A pool-total oracle cannot detect two paid routes exchanging their FX
       // principals: the aggregate issuer cash delta remains correct. Bind
@@ -3401,6 +3470,9 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(blockedLocalTicks).toBeGreaterThan(0);
     expect(zeroCapacityWindows).toBeGreaterThan(0);
     expect(liveNeighborWhileBlockedTicks).toBeGreaterThan(0);
+    expect(zeroFxWindows).toBeGreaterThanOrEqual(8);
+    expect(nonVacuousFxFreezeChecked).toBe(true);
+    expect(resumedPaidFxAfterFreeze).toBe(true);
     expect(dispatched.size).toBeGreaterThanOrEqual(2);
     expect(delivered).toEqual(dispatched);
     expect(normal.shipments?.size ?? 0).toBe(0);
