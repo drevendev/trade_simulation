@@ -138,6 +138,77 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
       phase7BuyerActorCashKey(first.intent.actor, currency))).toBe(0);
   });
 
+  it("reconciles each same-owner intent ID across ranked paid plans instead of owner totals", () => {
+    const stock = seller("m5-multi-plan-stock", 4);
+    const primary = buyer("m5-multi-plan-primary", 3, "m5-shared-owner");
+    const secondary = buyer("m5-multi-plan-secondary", 1, "m5-shared-owner");
+    // Two distinct commitments belong to one physical buyer wallet. Only two
+    // units of seller stock and buyer cash exist, although the intents request
+    // four units. Neither ID may spend the other's remaining commitment.
+    const physical = budgets([stock], [primary, secondary], 2, 2);
+    const high = request("a", 1, [stock], [primary, secondary]);
+    const low = request("b", 1, [stock], [primary, secondary]);
+    const actual = match([low, high], physical);
+    const reordered = match([
+      { ...high, buyers: [secondary, primary] },
+      { ...low, buyers: [secondary, primary] },
+    ], physical);
+    expect(reordered).toEqual(actual);
+    expect(actual.lots.map(lot =>
+      [lot.tradePlanId, lot.sellerIntentId, lot.buyerIntentId, lot.quantity])).toEqual([
+      ["a", stock.intent.id, primary.intent.id, 0.75],
+      ["a", stock.intent.id, secondary.intent.id, 0.25],
+      ["b", stock.intent.id, primary.intent.id, 0.75],
+      ["b", stock.intent.id, secondary.intent.id, 0.25],
+    ]);
+    expect(actual.remainingSellerByEndpoint.get(phase7SellerEndpointKey(stock.intent))).toBe(0);
+    expect(actual.remainingBuyerCashByActorCurrency.get(
+      phase7BuyerActorCashKey(primary.intent.actor, currency))).toBe(0);
+    expect(actual.remainingSellerByIntent.get(stock.intent.id)).toBe(2);
+    expect(actual.remainingBuyerByIntent.get(primary.intent.id)).toBe(1.5);
+    expect(actual.remainingBuyerByIntent.get(secondary.intent.id)).toBe(0.5);
+    expect(actual.remainingBuyerSpendByIntent.get(primary.intent.id)).toBe(98.5);
+    expect(actual.remainingBuyerSpendByIntent.get(secondary.intent.id)).toBe(99.5);
+
+    // Independent ledger oracle: a correct owner total is insufficient when
+    // one intent ID absorbs another ID's paid lot or residual debit.
+    const reconcileIds = (
+      lots: typeof actual.lots,
+      remaining: ReadonlyMap<typeof primary.intent.id, number>,
+    ) => {
+      for (const entry of [primary, secondary]) {
+        const committed = lots.filter(lot => lot.buyerIntentId === entry.intent.id)
+          .reduce((sum, lot) => sum + lot.quantity, 0);
+        expect(committed).toBeCloseTo(
+          entry.residualQuantity - remaining.get(entry.intent.id)!, 9,
+        );
+      }
+    };
+    reconcileIds(actual.lots, actual.remainingBuyerByIntent);
+    const falselyReassigned = actual.lots.map((lot, index) =>
+      index === 1 ? { ...lot, buyerIntentId: primary.intent.id } : lot);
+    expect(falselyReassigned.reduce((sum, lot) => sum + lot.quantity, 0))
+      .toBe(actual.lots.reduce((sum, lot) => sum + lot.quantity, 0));
+    // A forged lot still names the same real buyer actor and debits no extra
+    // money or goods; only the individual intent attribution is wrong.
+    expect(falselyReassigned[1]!.buyer).toEqual(actual.lots[1]!.buyer);
+    expect(() => reconcileIds(falselyReassigned, actual.remainingBuyerByIntent)).toThrow();
+    const falselyRebalanced = new Map(actual.remainingBuyerByIntent);
+    falselyRebalanced.set(primary.intent.id, 1.25);
+    falselyRebalanced.set(secondary.intent.id, 0.75);
+    expect([...falselyRebalanced.values()].reduce((a, b) => a + b, 0))
+      .toBe([...actual.remainingBuyerByIntent.values()].reduce((a, b) => a + b, 0));
+    expect(() => reconcileIds(actual.lots, falselyRebalanced)).toThrow();
+
+    // The third plan has plausible intent quantities but no remaining shared
+    // stock or wallet: the matcher must refuse it without mutating the input.
+    expect(() => match([high, low, request("c", 1, [stock], [primary, secondary])], physical))
+      .toThrow("cannot cover aggregate reservation");
+    expect(physical.sellerExportableByEndpoint.get(phase7SellerEndpointKey(stock.intent))).toBe(2);
+    expect(physical.buyerCashByActorCurrency.get(
+      phase7BuyerActorCashKey(primary.intent.actor, currency))).toBe(2);
+  });
+
   it("capacity-bounds unequal shared-stock and shared-wallet shares independent of insertion order", () => {
     const sa = seller("sa", 9, "same-unit"), sb = seller("sb", 3, "same-unit");
     const ba = buyer("ba", 9, "same-cohort"), bb = buyer("bb", 3, "same-cohort");
