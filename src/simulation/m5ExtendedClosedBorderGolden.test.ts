@@ -2734,6 +2734,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeDeliveryOwnerChecked = false;
     let negativeDeliveryBucketChecked = false;
     let negativeFxBundleChecked = false;
+    let negativeChargeBundleChecked = false;
     let negativeTransitIdentityChecked = false;
     let zeroCapacityWindows = 0;
     let liveNeighborWhileBlockedTicks = 0;
@@ -2972,6 +2973,46 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
             cargo.sellerNetUnitPrice * cargo.quantity, 6);
           expect(invoice.moneyAmount!).toBeCloseTo(output.moneyAmount!, 6);
           expect(invoice.reason).toBe("PHASE7_FX_INVOICE_REFERENCE_NONPOSTING");
+
+          // Every charge in the 600-tick replay must belong to this paid
+          // cargo, its real buyer and the Phase-1 importing jurisdiction.
+          // Treasury totals alone cannot expose swapping receipts between
+          // two routes that share a currency and importing State.
+          const importingStateId = phase7Before!.regions
+            .get(cargo.destinationRegionId)!.controllerStateId;
+          expect(importingStateId).not.toBeNull();
+          const feeRecipient = phase7Before!.transportLinks
+            .get(cargo.transportLinkId)!.feeReceiver;
+          const assertCharge = (
+            type: "TRANSPORT_FEE" | "IMPORT_TARIFF" | "CONSUMPTION_TAX",
+            expected: number,
+          ): void => {
+            const entries = phase7.filter(tx =>
+              tx.type === type && tx.bundleId === bundleId);
+            expect(entries, `tick ${tick}: ${type} per paid cargo`)
+              .toHaveLength(expected > 0 ? 1 : 0);
+            if (expected > 0) {
+              const receipt = entries[0]!;
+              expect(receipt.moneyAmount).toBeCloseTo(expected, 6);
+              expect(receipt.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+              expect(receipt.source).toEqual(cargo.beneficialOwner);
+              expect(receipt.destination).toEqual(type === "TRANSPORT_FEE"
+                ? feeRecipient : { type: "STATE", stateId: importingStateId! });
+            }
+          };
+          assertCharge("TRANSPORT_FEE", cargo.transportFeeAmount);
+          assertCharge("IMPORT_TARIFF", cargo.tariffAmount);
+          assertCharge("CONSUMPTION_TAX", cargo.consumptionTaxAmount);
+        }
+        // No extra unbundled or duplicate tax/fee receipt may be posted.
+        for (const [type, amountKey] of [
+          ["TRANSPORT_FEE", "transportFeeAmount"],
+          ["IMPORT_TARIFF", "tariffAmount"],
+          ["CONSUMPTION_TAX", "consumptionTaxAmount"],
+        ] as const) {
+          expect(phase7.filter(tx => tx.type === type),
+            `tick ${tick}: complete ${type} receipt count`)
+            .toHaveLength(fresh.filter(cargo => cargo[amountKey] > 0).length);
         }
       };
       assertFxCargoBundles(postings);
@@ -2995,6 +3036,25 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         expect(() => assertPoolJournal(forgedJournal)).not.toThrow();
         expect(() => assertFxCargoBundles(forgedJournal)).toThrow();
         negativeFxBundleChecked = true;
+      }
+      if (fresh.length >= 2 && !negativeChargeBundleChecked) {
+        const tariffs = postings.filter(tx =>
+          tx.phase === 7 && tx.type === "IMPORT_TARIFF");
+        expect(tariffs).toHaveLength(fresh.length);
+        const [first, second] = tariffs;
+        expect(first!.bundleId).not.toBe(second!.bundleId);
+        // Swap only the two tax receipt bundle IDs. All money, owners,
+        // quantities, FX legs and total tariff revenue stay unchanged.
+        // The previous issuer/State cash oracles cannot see this fraud.
+        const forged = postings.map(tx =>
+          tx === first ? { ...tx, bundleId: second!.bundleId! } :
+          tx === second ? { ...tx, bundleId: first!.bundleId! } : tx);
+        expect(forged.filter(tx => tx.type === "IMPORT_TARIFF")
+          .reduce((sum, tx) => sum + tx.moneyAmount!, 0))
+          .toBeCloseTo(tariffs.reduce((sum, tx) => sum + tx.moneyAmount!, 0), 8);
+        expect(() => assertPoolJournal(forged)).not.toThrow();
+        expect(() => assertFxCargoBundles(forged)).toThrow();
+        negativeChargeBundleChecked = true;
       }
 
       // Independent stock oracle: a balanced FX pool and unchanged aggregate
@@ -3463,6 +3523,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeDeliveryOwnerChecked).toBe(true);
     expect(negativeDeliveryBucketChecked).toBe(true);
     expect(negativeFxBundleChecked).toBe(true);
+    expect(negativeChargeBundleChecked).toBe(true);
     expect(negativeTransitIdentityChecked).toBe(true);
     expect(divergentFeeTicks).toBeGreaterThan(0);
     expect(creditedTreasuryTicks).toBeGreaterThan(0);
