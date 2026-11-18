@@ -220,6 +220,101 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
       phase7BuyerActorCashKey(primary.intent.actor, currency))).toBe(2);
   });
 
+  it("reconciles two shared-stock SELL and shared-wallet BUY IDs across differently priced ranked plans", () => {
+    const sellerA = seller("priced-seller-a", 4, "priced-shared-unit");
+    const sellerB = seller("priced-seller-b", 4, "priced-shared-unit");
+    const buyerA = buyer("priced-buyer-a", 4, "priced-shared-cohort");
+    const buyerB = buyer("priced-buyer-b", 4, "priced-shared-cohort");
+    // Both endpoint IDs are distinct, but there are just three physical
+    // units and four currency units for their shared physical owners.
+    const b = budgets([sellerA, sellerB], [buyerA, buyerB], 3, 4);
+    const cheap = request("a", 2, [sellerB, sellerA], [buyerB, buyerA]);
+    const expensiveBase = request("b", 1, [sellerA, sellerB], [buyerA, buyerB]);
+    const expensive = {
+      ...expensiveBase,
+      landedGrossUnitCostDest: 2,
+      reservation: { ...expensiveBase.reservation, buyerCashReservedDest: 2 },
+    };
+    const result = match([expensive, cheap], b);
+    const reversed = match([
+      { ...cheap, sellers: [sellerA, sellerB], buyers: [buyerA, buyerB] },
+      { ...expensive, sellers: [sellerB, sellerA], buyers: [buyerB, buyerA] },
+    ], b);
+    expect(reversed).toEqual(result);
+    expect(result.lots.map(lot => [
+      lot.tradePlanId, lot.sellerIntentId, lot.buyerIntentId, lot.quantity,
+    ])).toEqual([
+      ["a", sellerA.intent.id, buyerA.intent.id, 1],
+      ["a", sellerB.intent.id, buyerB.intent.id, 1],
+      ["b", sellerA.intent.id, buyerA.intent.id, 0.5],
+      ["b", sellerB.intent.id, buyerB.intent.id, 0.5],
+    ]);
+    const verifyAttribution = (
+      lots: typeof result.lots,
+      sellerResiduals = result.remainingSellerByIntent,
+      buyerResiduals = result.remainingBuyerByIntent,
+      buyerSpend = result.remainingBuyerSpendByIntent,
+    ): void => {
+      for (const s of [sellerA, sellerB]) {
+        const sold = lots.filter(lot => lot.sellerIntentId === s.intent.id)
+          .reduce((sum, lot) => sum + lot.quantity, 0);
+        expect(sold).toBeCloseTo(
+          s.residualQuantity - sellerResiduals.get(s.intent.id)!, 9);
+      }
+      for (const buy of [buyerA, buyerB]) {
+        const bought = lots.filter(lot => lot.buyerIntentId === buy.intent.id)
+          .reduce((sum, lot) => sum + lot.quantity, 0);
+        const charged = lots.filter(lot => lot.buyerIntentId === buy.intent.id)
+          .reduce((sum, lot) => sum + lot.quantity *
+            (lot.tradePlanId === "a" ? 1 : 2), 0);
+        expect(bought).toBeCloseTo(
+          buy.residualQuantity - buyerResiduals.get(buy.intent.id)!, 9);
+        expect(charged).toBeCloseTo(
+          buy.remainingBuyerSpend! - buyerSpend.get(buy.intent.id)!, 9);
+      }
+    };
+    verifyAttribution(result.lots);
+    for (const s of [sellerA, sellerB]) {
+      expect(result.remainingSellerByIntent.get(s.intent.id)).toBe(2.5);
+    }
+    for (const buy of [buyerA, buyerB]) {
+      expect(result.remainingBuyerByIntent.get(buy.intent.id)).toBe(2.5);
+      expect(result.remainingBuyerSpendByIntent.get(buy.intent.id)).toBe(98);
+    }
+    expect(result.remainingSellerByEndpoint.get(phase7SellerEndpointKey(sellerA.intent)))
+      .toBe(0);
+    expect(result.remainingBuyerCashByActorCurrency.get(
+      phase7BuyerActorCashKey(buyerA.intent.actor, currency))).toBe(0);
+
+    // Both forgeries leave physical owners and total goods/cash untouched.
+    // A global-only or actor-only oracle misses these wrong intent IDs.
+    const wrongSeller = result.lots.map((lot, i) =>
+      i === 1 ? { ...lot, sellerIntentId: sellerA.intent.id } : lot);
+    const wrongBuyer = result.lots.map((lot, i) =>
+      i === 3 ? { ...lot, buyerIntentId: buyerA.intent.id } : lot);
+    expect(wrongSeller[1]!.seller).toEqual(result.lots[1]!.seller);
+    expect(wrongBuyer[3]!.buyer).toEqual(result.lots[3]!.buyer);
+    expect(() => verifyAttribution(wrongSeller)).toThrow();
+    expect(() => verifyAttribution(wrongBuyer)).toThrow();
+
+    const corruptSpend = new Map(result.remainingBuyerSpendByIntent);
+    corruptSpend.set(buyerA.intent.id, 97.5);
+    corruptSpend.set(buyerB.intent.id, 98.5);
+    expect([...corruptSpend.values()].reduce((sum, n) => sum + n, 0))
+      .toBe([...result.remainingBuyerSpendByIntent.values()]
+        .reduce((sum, n) => sum + n, 0));
+    expect(() => verifyAttribution(result.lots,
+      result.remainingSellerByIntent, result.remainingBuyerByIntent, corruptSpend)).toThrow();
+
+    expect(() => match([cheap, expensive,
+      request("c", 0.5, [sellerA, sellerB], [buyerA, buyerB])], b))
+      .toThrow("cannot cover aggregate reservation");
+    expect(b.sellerExportableByEndpoint.get(phase7SellerEndpointKey(sellerA.intent)))
+      .toBe(3);
+    expect(b.buyerCashByActorCurrency.get(
+      phase7BuyerActorCashKey(buyerA.intent.actor, currency))).toBe(4);
+  });
+
   it("capacity-bounds unequal shared-stock and shared-wallet shares independent of insertion order", () => {
     const sa = seller("sa", 9, "same-unit"), sb = seller("sb", 3, "same-unit");
     const ba = buyer("ba", 9, "same-cohort"), bb = buyer("bb", 3, "same-cohort");
