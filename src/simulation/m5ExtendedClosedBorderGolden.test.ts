@@ -2709,6 +2709,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeFeeRoutingChecked = false;
     let negativePassiveWalletChecked = false;
     let negativeDeliveryOwnerChecked = false;
+    let negativeDeliveryBucketChecked = false;
     let negativeFxBundleChecked = false;
 
     for (let tick = 7; tick < 607; tick++) {
@@ -3201,23 +3202,31 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       // even when several prepaid cargo vintages arrive together.
       expect(phase1Before, `tick ${tick}: Phase-1 opening stock`).toBeDefined();
       expect(phase1After, `tick ${tick}: Phase-1 closing stock`).toBeDefined();
-      const assertDeliveryOwners = (settled: WorldState): void => {
-        for (const [unitId, beforeUnit] of phase1Before!.productionUnits) {
+      const assertDeliveryOwners = (opening: WorldState, settled: WorldState): void => {
+        for (const [unitId, beforeUnit] of opening.productionUnits) {
           const expected = due.reduce((sum, cargo) =>
             sum + (cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
               cargo.beneficialOwner.productionUnitId === unitId
               ? cargo.quantity : 0), 0);
           const afterUnit = settled.productionUnits.get(unitId)!;
-          const observed = (afterUnit.inputInventory.get(IRON) ?? 0) -
-            (beforeUnit.inputInventory.get(IRON) ?? 0);
-          expect(observed, `tick ${tick}: arrival stock owner ${unitId}`)
-            .toBeCloseTo(expected, 6);
+          // Phase-1 delivery changes INPUT only; aggregate owner stock and
+          // INPUT-only checks would miss compensating OUTPUT/INVESTMENT shifts.
+          for (const [bucket, expectedDelta] of [
+            ["inputInventory", expected],
+            ["outputInventory", 0],
+            ["investmentInventory", 0],
+          ] as const) {
+            const observed = (afterUnit[bucket].get(IRON) ?? 0) -
+              (beforeUnit[bucket].get(IRON) ?? 0);
+            expect(observed, `tick ${tick}: arrival ${unitId}/${bucket}/iron`)
+              .toBeCloseTo(expectedDelta, 6);
+          }
         }
       };
       expect(due.every(cargo => cargo.goodId === IRON &&
         cargo.destinationInventoryBucket === "INPUT" &&
         cargo.beneficialOwner.type === "PRODUCTION_UNIT")).toBe(true);
-      assertDeliveryOwners(phase1After!);
+      assertDeliveryOwners(phase1Before!, phase1After!);
       if (due.length > 0 && !negativeDeliveryOwnerChecked) {
         const recipient = due[0]!.beneficialOwner;
         if (recipient.type !== "PRODUCTION_UNIT") {
@@ -3239,8 +3248,54 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
         const forged = { ...phase1After!, productionUnits: forgedUnits };
         expect(totalIron(forged)).toBeCloseTo(totalIron(phase1After!), 6);
-        expect(() => assertDeliveryOwners(forged)).toThrow();
+        expect(() => assertDeliveryOwners(phase1Before!, forged)).toThrow();
         negativeDeliveryOwnerChecked = true;
+      }
+      if (due.length > 0 && !negativeDeliveryBucketChecked) {
+        const recipient = due[0]!.beneficialOwner;
+        if (recipient.type !== "PRODUCTION_UNIT") {
+          throw new Error("Expected ProductionUnit destination in M5 golden");
+        }
+        const recipientId = recipient.productionUnitId;
+        // Construct a valid, balanced before/after counterexample: INPUT
+        // delivery is unchanged, while 0.25 IRON leaks from INVESTMENT to
+        // OUTPUT in the same owner. The previously used INPUT-only oracle
+        // accepts it, as does global physical conservation.
+        const withExtraBuckets = (world: WorldState, output: number, investment: number):
+          WorldState => {
+          const unit = world.productionUnits.get(recipientId)!;
+          return {
+            ...world,
+            productionUnits: new Map(world.productionUnits).set(recipientId, {
+              ...unit,
+              outputInventory: new Map(unit.outputInventory).set(
+                IRON, (unit.outputInventory.get(IRON) ?? 0) + output),
+              investmentInventory: new Map(unit.investmentInventory).set(
+                IRON, (unit.investmentInventory.get(IRON) ?? 0) + investment),
+            }),
+          };
+        };
+        const forgedBefore = withExtraBuckets(phase1Before!, 1, 1);
+        const forgedAfter = withExtraBuckets(phase1After!, 1.25, 0.75);
+        for (const [unitId] of phase1Before!.productionUnits) {
+          const expected = due.reduce((sum, cargo) =>
+            sum + (cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+              cargo.beneficialOwner.productionUnitId === unitId
+              ? cargo.quantity : 0), 0);
+          const actualInputDelta =
+            (forgedAfter.productionUnits.get(unitId)!.inputInventory.get(IRON) ?? 0) -
+            (forgedBefore.productionUnits.get(unitId)!.inputInventory.get(IRON) ?? 0);
+          expect(actualInputDelta).toBeCloseTo(expected, 6);
+        }
+        expect(totalIron(forgedAfter) - totalIron(forgedBefore))
+          .toBeCloseTo(totalIron(phase1After!) - totalIron(phase1Before!), 8);
+        for (const world of [forgedBefore, forgedAfter]) {
+          const unit = world.productionUnits.get(recipientId)!;
+          expect(unit.outputInventory.get(IRON)).toBeGreaterThanOrEqual(0);
+          expect(unit.investmentInventory.get(IRON)).toBeGreaterThanOrEqual(0);
+        }
+        expect(() => assertDeliveryOwners(forgedBefore, forgedAfter)).toThrow();
+        negativeDeliveryBucketChecked = true;
       }
       for (const cargo of due) {
         expect(arrivals.filter(tx =>
@@ -3263,6 +3318,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeFeeRoutingChecked).toBe(true);
     expect(negativePassiveWalletChecked).toBe(true);
     expect(negativeDeliveryOwnerChecked).toBe(true);
+    expect(negativeDeliveryBucketChecked).toBe(true);
     expect(negativeFxBundleChecked).toBe(true);
     expect(divergentFeeTicks).toBeGreaterThan(0);
     expect(creditedTreasuryTicks).toBeGreaterThan(0);
