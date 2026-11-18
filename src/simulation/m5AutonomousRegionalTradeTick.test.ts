@@ -1505,13 +1505,15 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
         shipment.beneficialOwner.type !== "PRODUCTION_UNIT") {
       throw new Error("M5 scarcity fixture requires two production-unit owners");
     }
+    const sellerId = shipment.seller.productionUnitId;
+    const buyerId = shipment.beneficialOwner.productionUnitId;
     const { before, after } = phase7[0]!;
-    const sellerBefore = before.productionUnits.get(shipment.seller.productionUnitId)!;
-    const sellerAfter = after.productionUnits.get(shipment.seller.productionUnitId)!;
+    const sellerBefore = before.productionUnits.get(sellerId)!;
+    const sellerAfter = after.productionUnits.get(sellerId)!;
     const expectedSellerIron =
       (sellerBefore.inputInventory.get(IRON) ?? 0) - shipment.quantity;
     const assertActualSellerDebit = (state: WorldState): void => {
-      const current = state.productionUnits.get(shipment.seller.productionUnitId)!;
+      const current = state.productionUnits.get(sellerId)!;
       expect(current.inputInventory.get(IRON) ?? 0).toBeCloseTo(expectedSellerIron, 7);
       expect(current.outputInventory).toEqual(sellerBefore.outputInventory);
       expect(current.investmentInventory).toEqual(sellerBefore.investmentInventory);
@@ -1519,8 +1521,8 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     assertActualSellerDebit(after);
     expect((sellerBefore.inputInventory.get(IRON) ?? 0) -
       (sellerAfter.inputInventory.get(IRON) ?? 0)).toBeLessThan(ordinaryCargo[0]!.quantity);
-    const buyerBefore = before.productionUnits.get(shipment.beneficialOwner.productionUnitId)!;
-    const buyerAfter = after.productionUnits.get(shipment.beneficialOwner.productionUnitId)!;
+    const buyerBefore = before.productionUnits.get(buyerId)!;
+    const buyerAfter = after.productionUnits.get(buyerId)!;
     const paidGross = shipment.buyerGoodsPaymentAmount + shipment.transportFeeAmount +
       shipment.tariffAmount + shipment.consumptionTaxAmount;
     expect((buyerBefore.wallet.get(destinationCurrency) ?? 0) -
@@ -1535,11 +1537,11 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     const excessDebit = ordinaryCargo[0]!.quantity - shipment.quantity;
     expect(excessDebit).toBeGreaterThan(0);
     const otherId = [...after.productionUnits.keys()].find(id =>
-      id !== shipment.seller.productionUnitId)!;
+      id !== sellerId)!;
     expect(otherId).toBeDefined();
     const other = after.productionUnits.get(otherId)!;
     const forgedUnits = new Map(after.productionUnits);
-    forgedUnits.set(shipment.seller.productionUnitId, {
+    forgedUnits.set(sellerId, {
       ...sellerAfter, inputInventory: new Map(sellerAfter.inputInventory).set(
         IRON, (sellerAfter.inputInventory.get(IRON) ?? 0) - excessDebit),
     });
