@@ -2712,9 +2712,23 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeDeliveryBucketChecked = false;
     let negativeFxBundleChecked = false;
     let negativeTransitIdentityChecked = false;
+    let zeroCapacityWindows = 0;
+    let liveNeighborWhileBlockedTicks = 0;
 
     for (let tick = 7; tick < 607; tick++) {
       const open = (tick - 7) % 12 === 0;
+      // Every third reopening independently loses one physical corridor.
+      // Previously dispatched cargo must still arrive and the other corridor
+      // must remain able to settle against the same finite FX pool.
+      const zeroCapacityWindow = open && (tick - 7) % 36 === 12;
+      const tickFixture = zeroCapacityWindow ? {
+        ...f,
+        options: {
+          ...f.options,
+          infrastructureFactors: new Map(f.options.infrastructureFactors)
+            .set(f.links[0]!, 0),
+        },
+      } : f;
       const priorSpot = poolOf(normal).spotRateQuotePerBase;
       const due = [...(normal.shipments?.values() ?? [])].filter(
         cargo => cargo.arrivalTick === tick,
@@ -2726,7 +2740,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       let phase7Before: WorldState | undefined;
       let phase7After: WorldState | undefined;
       let phase11Cash: ReturnType<typeof poolOf>["cash"] | undefined;
-      const actual = run(f, normal, open, tick, (phase, before, after) => {
+      const actual = run(tickFixture, normal, open, tick, (phase, before, after) => {
         if (phase === 1) {
           phase1Before = before;
           phase1After = after;
@@ -2738,7 +2752,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
         if (phase === 11) phase11Cash = new Map(poolOf(after).cash);
       });
-      const replay = run(f, shuffled, open, tick);
+      const replay = run(tickFixture, shuffled, open, tick);
       for (const result of [actual, replay]) {
         expect(result.phaseTrace).toEqual([...Array(16).keys()]);
         expect(result.phaseBoundaryError).toBeUndefined();
@@ -2771,6 +2785,17 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       const fresh = [...(actual.world.shipments?.values() ?? [])].filter(
         cargo => !beforeIds.has(cargo.id),
       );
+      if (zeroCapacityWindow) {
+        zeroCapacityWindows++;
+        const blockedLink = normal.transportLinks.get(f.links[0]!)!;
+        expect(effectiveTransportLinkCapacity(blockedLink,
+          tickFixture.options.infrastructureFactors.get(f.links[0]!)!)).toBe(0);
+        expect(fresh.filter(cargo => cargo.transportLinkId === f.links[0]!),
+          `tick ${tick}: no dispatch on physically blocked corridor`).toHaveLength(0);
+        if (fresh.some(cargo => cargo.transportLinkId === f.links[1]!)) {
+          liveNeighborWhileBlockedTicks++;
+        }
+      }
 
       // The registry is a persistent ownership stock, not just a count of
       // shipment IDs. Across each 16-phase tick, precisely the prior unarrived
@@ -3204,7 +3229,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       for (const [linkId, load] of loadByLink) {
         const link = normal.transportLinks.get(linkId);
         expect(link, `tick ${tick}: physical corridor ${linkId}`).toBeDefined();
-        const factor = f.options.infrastructureFactors.get(linkId);
+        const factor = tickFixture.options.infrastructureFactors.get(linkId);
         expect(factor).toBeDefined();
         expect(load).toBeLessThanOrEqual(
           effectiveTransportLinkCapacity(link!, factor!) + 1e-8,
@@ -3374,6 +3399,8 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(creditedTreasuryTicks).toBeGreaterThan(0);
     expect(repricedTicks).toBeGreaterThan(0);
     expect(blockedLocalTicks).toBeGreaterThan(0);
+    expect(zeroCapacityWindows).toBeGreaterThan(0);
+    expect(liveNeighborWhileBlockedTicks).toBeGreaterThan(0);
     expect(dispatched.size).toBeGreaterThanOrEqual(2);
     expect(delivered).toEqual(dispatched);
     expect(normal.shipments?.size ?? 0).toBe(0);
