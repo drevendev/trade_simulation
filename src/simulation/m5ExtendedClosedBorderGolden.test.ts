@@ -2743,6 +2743,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeIntentProvenanceChecked = false;
     let negativeReplayEvidenceChecked = false;
     let negativeFxReservationBindingChecked = false;
+    let negativeFxDoubleSpendChecked = false;
     let reconciledResidualTicks = 0;
     let zeroCapacityWindows = 0;
     let liveNeighborWhileBlockedTicks = 0;
@@ -2873,12 +2874,26 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       // These are the actual Phase-7 reservations, not reconstructed quotes.
       const assertReservationBindings = (
         evidence: typeof actual.context.phase7FxReservations,
+        paidInputs: readonly FxLedgerLeg[] = inputs,
+        paidOutputs: readonly FxLedgerLeg[] = outputs,
       ): void => {
         const reservations = evidence ?? [];
         const byRequest = new Map(reservations.map(r => [r.requestId, r] as const));
         expect(byRequest.size, `tick ${tick}: unique FX reservation IDs`)
           .toBe(reservations.length);
-        for (const input of inputs) {
+        const usedRequests = new Set<string>();
+        const usedSettlements = new Set<string>();
+        for (const input of paidInputs) {
+          expect(input.fxReservationRequestId).toBeDefined();
+          expect(input.fxSettlementId).toBeDefined();
+          // One authoritative reserve may fund only one actual payment.
+          // Correct per-owner balances alone cannot catch duplicate funding.
+          expect(usedRequests.has(input.fxReservationRequestId!),
+            `tick ${tick}: paid FX reservation reused`).toBe(false);
+          usedRequests.add(input.fxReservationRequestId!);
+          expect(usedSettlements.has(input.fxSettlementId!),
+            `tick ${tick}: paid FX settlement reused`).toBe(false);
+          usedSettlements.add(input.fxSettlementId!);
           const reservation = byRequest.get(input.fxReservationRequestId!);
           expect(reservation, `tick ${tick}: paid FX input has a reservation`)
             .toBeDefined();
@@ -2888,13 +2903,15 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
           expect(reservation!.quote.pairId).toBe(f.chosen.poolId);
           expect(reservation!.quote.requiredInputForFeasibleOutput)
             .toBeCloseTo(input.moneyAmount!, 6);
-          const outputsForInput = outputs.filter(tx =>
+          const outputsForInput = paidOutputs.filter(tx =>
             tx.fxReservationRequestId === input.fxReservationRequestId &&
             tx.fxSettlementId === input.fxSettlementId);
           expect(outputsForInput, `tick ${tick}: paired FX output`).toHaveLength(1);
           expect(reservation!.quote.feasibleOutputAmount)
             .toBeCloseTo(outputsForInput[0]!.moneyAmount!, 6);
         }
+        expect(paidOutputs, `tick ${tick}: no orphan paid FX outputs`)
+          .toHaveLength(paidInputs.length);
       };
       assertReservationBindings(actual.context.phase7FxReservations);
       if (!negativeFxReservationBindingChecked && inputs.length > 0) {
@@ -2908,6 +2925,34 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         expect(forged.length).toBe(original.length);
         expect(() => assertReservationBindings(forged)).toThrow();
         negativeFxReservationBindingChecked = true;
+      }
+      if (!negativeFxDoubleSpendChecked && inputs.length >= 2) {
+        const first = inputs[0]!;
+        const firstOutput = outputs.find(tx =>
+          tx.fxReservationRequestId === first.fxReservationRequestId &&
+          tx.fxSettlementId === first.fxSettlementId);
+        expect(firstOutput).toBeDefined();
+        // A second payment for the SAME owner is forged under a different
+        // settlement identity while reusing the first paid FX promise. Each
+        // individual input/output still agrees with that real reservation;
+        // only the one-reservation-one-payment invariant exposes the fraud.
+        const secondSettlementId = inputs[1]!.fxSettlementId!;
+        const forgedInputs: FxLedgerLeg[] = [first, {
+          ...first, fxSettlementId: secondSettlementId,
+        }];
+        const forgedOutputs: FxLedgerLeg[] = [firstOutput!, {
+          ...firstOutput!, fxSettlementId: secondSettlementId,
+        }];
+        expect(new Set(forgedInputs.map(tx => tx.fxSettlementId)).size).toBe(2);
+        expect(new Set(forgedInputs.map(tx => tx.fxReservationRequestId)).size).toBe(1);
+        expect(forgedInputs.every(tx => actual.context.phase7FxReservations!.some(
+          r => r.requestId === tx.fxReservationRequestId &&
+            r.payerKey === actorRefKey(tx.source!),
+        ))).toBe(true);
+        expect(() => assertReservationBindings(
+          actual.context.phase7FxReservations, forgedInputs, forgedOutputs,
+        )).toThrow();
+        negativeFxDoubleSpendChecked = true;
       }
       if (zeroCapacityWindow) {
         zeroCapacityWindows++;
@@ -3748,6 +3793,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeIntentProvenanceChecked).toBe(true);
     expect(negativeReplayEvidenceChecked).toBe(true);
     expect(negativeFxReservationBindingChecked).toBe(true);
+    expect(negativeFxDoubleSpendChecked).toBe(true);
     expect(reconciledResidualTicks).toBeGreaterThan(0);
     expect(divergentFeeTicks).toBeGreaterThan(0);
     expect(creditedTreasuryTicks).toBeGreaterThan(0);
