@@ -2740,6 +2740,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeTransitIdentityChecked = false;
     let negativeResidualChecked = false;
     let negativeIntentProvenanceChecked = false;
+    let negativeReplayEvidenceChecked = false;
     let reconciledResidualTicks = 0;
     let zeroCapacityWindows = 0;
     let liveNeighborWhileBlockedTicks = 0;
@@ -2815,6 +2816,40 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       expect(replay.context.transactions).toEqual(actual.context.transactions);
       expect(economicReplayFingerprint(tick, replay.world, replay.context.transactions))
         .toBe(economicReplayFingerprint(tick, actual.world, actual.context.transactions));
+
+      // The WorldState/receipt replay fingerprint excludes the Phase-6 price
+      // evidence, per-ID Phase-7 residual intents and actual FX reservations.
+      // These remain economically relevant even when paid cargo is blocked.
+      const byIntentId = (intents: typeof actual.context.phase7MainIntents) =>
+        intents === undefined ? undefined : [...intents].sort((a, b) =>
+          a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      const assertReplayEvidence = (observed: typeof actual.context): void => {
+        expect(observed.marketPrices, `tick ${tick}: Phase-6 active quotes`)
+          .toEqual(actual.context.marketPrices);
+        expect(byIntentId(observed.phase7MainIntents),
+          `tick ${tick}: committed per-intent Phase-7 residuals`)
+          .toEqual(byIntentId(actual.context.phase7MainIntents));
+        expect(observed.phase7FxReservations,
+          `tick ${tick}: actual Phase-7 FX reservations`)
+          .toEqual(actual.context.phase7FxReservations);
+      };
+      assertReplayEvidence(replay.context);
+      if (!negativeReplayEvidenceChecked && actual.context.phase7MainIntents?.length) {
+        const forged = {
+          ...replay.context,
+          phase7MainIntents: replay.context.phase7MainIntents!.map((intent, i) =>
+            i === 0 ? {
+              ...intent, sourcePlanId: intent.sourcePlanId + ":diverged",
+            } : intent),
+        };
+        // All stock, paid transactions and the existing economic fingerprint
+        // are unchanged; only one residual intent's causal ID was falsified.
+        expect(forged.transactions).toEqual(actual.context.transactions);
+        expect(economicReplayFingerprint(tick, replay.world, forged.transactions))
+          .toBe(economicReplayFingerprint(tick, actual.world, actual.context.transactions));
+        expect(() => assertReplayEvidence(forged)).toThrow();
+        negativeReplayEvidenceChecked = true;
+      }
 
       const close = actual.context.fxMonetaryClose!;
       const pairClose = close.pools.find(p => p.pairId === f.chosen.poolId)!;
@@ -3665,6 +3700,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeTransitIdentityChecked).toBe(true);
     expect(negativeResidualChecked).toBe(true);
     expect(negativeIntentProvenanceChecked).toBe(true);
+    expect(negativeReplayEvidenceChecked).toBe(true);
     expect(reconciledResidualTicks).toBeGreaterThan(0);
     expect(divergentFeeTicks).toBeGreaterThan(0);
     expect(creditedTreasuryTicks).toBeGreaterThan(0);
