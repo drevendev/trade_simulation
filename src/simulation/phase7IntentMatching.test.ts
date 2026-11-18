@@ -175,12 +175,17 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
     const reconcileIds = (
       lots: typeof actual.lots,
       remaining: ReadonlyMap<typeof primary.intent.id, number>,
+      spend: ReadonlyMap<typeof primary.intent.id, number> =
+        actual.remainingBuyerSpendByIntent,
     ) => {
       for (const entry of [primary, secondary]) {
         const committed = lots.filter(lot => lot.buyerIntentId === entry.intent.id)
           .reduce((sum, lot) => sum + lot.quantity, 0);
         expect(committed).toBeCloseTo(
           entry.residualQuantity - remaining.get(entry.intent.id)!, 9,
+        );
+        expect(committed).toBeCloseTo(
+          entry.remainingBuyerSpend! - spend.get(entry.intent.id)!, 9,
         );
       }
     };
@@ -199,6 +204,12 @@ describe("M5 #670 Phase-7 real owner-intent decomposition", () => {
     expect([...falselyRebalanced.values()].reduce((a, b) => a + b, 0))
       .toBe([...actual.remainingBuyerByIntent.values()].reduce((a, b) => a + b, 0));
     expect(() => reconcileIds(actual.lots, falselyRebalanced)).toThrow();
+    const forgedSpend = new Map(actual.remainingBuyerSpendByIntent);
+    forgedSpend.set(primary.intent.id, 98.25);
+    forgedSpend.set(secondary.intent.id, 99.75);
+    expect([...forgedSpend.values()].reduce((a, b) => a + b, 0))
+      .toBe([...actual.remainingBuyerSpendByIntent.values()].reduce((a, b) => a + b, 0));
+    expect(() => reconcileIds(actual.lots, actual.remainingBuyerByIntent, forgedSpend)).toThrow();
 
     // The third plan has plausible intent quantities but no remaining shared
     // stock or wallet: the matcher must refuse it without mutating the input.
