@@ -95,7 +95,7 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
     expect(beforeDispatch).toBeDefined();
     expect(afterDispatch).toBeDefined();
 
-    const cargoList = [...departed.(world.shipments?.values() ?? [])];
+    const cargoList = [...(departed.world.shipments?.values() ?? [])];
     expect(cargoList).toHaveLength(1);
     const cargo = cargoList[0]!;
     expect(cargo.goodId).toBe(IRON);
