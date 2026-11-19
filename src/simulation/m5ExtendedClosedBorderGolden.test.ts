@@ -4005,7 +4005,12 @@ describe("M5 #676: live same-owner multiple funded BUY intents", () => {
     expect(replay.context.phase7CommittedLots).toEqual(actual.context.phase7CommittedLots);
     expect(replay.context.phase7MainIntents).toEqual(actual.context.phase7MainIntents);
 
-    const original = actual.context.productionMarketIntents!.filter(intent =>
+    // Original Phase-2 bids may have PAID local Phase-4 fills. Phase-7 can
+    // only debit the post-procurement residual, not the entire Phase-2 offer.
+    const phase7Opening = derivePhase7PostProcurementIntents(
+      beforePhase7!, { ...actual.context, phase: 7 },
+    );
+    const original = phase7Opening.phase8MainIntents.filter(intent =>
       intent.side === "BUY" && intent.purpose === "INPUT" &&
       intent.actor.type === "PRODUCTION_UNIT" &&
       intent.actor.productionUnitId === buyer.productionUnitId &&
