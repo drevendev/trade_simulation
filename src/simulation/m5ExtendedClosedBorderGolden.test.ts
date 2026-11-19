@@ -2736,6 +2736,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeFeeRoutingChecked = false;
     let negativePassiveWalletChecked = false;
     let negativePassiveInventoryChecked = false;
+    let negativeOtherGoodChecked = false;
     let negativePublicInventoryChecked = false;
     let negativeDeliveryOwnerChecked = false;
     let negativeDeliveryBucketChecked = false;
@@ -3451,8 +3452,10 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         (unit.inputInventory.get(IRON) ?? 0) +
         (unit.outputInventory.get(IRON) ?? 0) +
         (unit.investmentInventory.get(IRON) ?? 0);
-      const assertActorStocks = (settled: WorldState): void => {
-        for (const [unitId, openingUnit] of phase7Before!.productionUnits) {
+      const assertActorStocks = (
+        settled: WorldState, opening: WorldState = phase7Before!,
+      ): void => {
+        for (const [unitId, openingUnit] of opening.productionUnits) {
           const settledUnit = settled.productionUnits.get(unitId)!;
           const exported = fresh.reduce((sum, cargo) =>
             sum + (cargo.seller.type === "PRODUCTION_UNIT" &&
@@ -3471,6 +3474,17 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
               (openingUnit[bucket].get(IRON) ?? 0);
             expect(observed, `tick ${tick}: ${unitId}/${bucket}/iron`)
               .toBeCloseTo(expectedDelta, 6);
+            // The dispatched good is iron. Every other physical stock must
+            // remain with its original producer and in its original bucket.
+            for (const good of new Set([
+              ...openingUnit[bucket].keys(), ...settledUnit[bucket].keys(),
+            ])) {
+              if (good === IRON) continue;
+              const otherDelta = (settledUnit[bucket].get(good) ?? 0) -
+                (openingUnit[bucket].get(good) ?? 0);
+              expect(otherDelta, `tick ${tick}: ${unitId}/${bucket}/${good}`)
+                .toBeCloseTo(0, 6);
+            }
           }
           for (const currency of f.currencies) {
             const expectedDelta = fresh.reduce((sum, cargo) => {
@@ -3566,6 +3580,37 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
       };
       assertPassiveStocks(phase7Before!, phase7After!);
+      if (fresh.length > 0 && !negativeOtherGoodChecked) {
+        // A balanced theft of an unrelated good between funded producers
+        // leaves iron dispatches, FX payments and total wood unchanged.
+        // Seed the same wood in both Phase-7 boundaries: only the forged
+        // after-state changes its legal ownership.
+        const WOOD = "good:wood" as GoodId;
+        expect(baselineDefinitionPack.goods[WOOD]).toBeDefined();
+        const ids = [...phase7Before!.productionUnits.keys()].slice(0, 2);
+        expect(ids).toHaveLength(2);
+        const withWood = (world: WorldState, a: number, b: number): WorldState => {
+          const productionUnits = new Map(world.productionUnits);
+          for (const [id, amount] of [[ids[0]!, a], [ids[1]!, b]] as const) {
+            const unit = productionUnits.get(id)!;
+            productionUnits.set(id, {
+              ...unit,
+              inputInventory: new Map(unit.inputInventory).set(WOOD, amount),
+            });
+          }
+          return { ...world, productionUnits };
+        };
+        const before = withWood(phase7Before!, 1, 1);
+        const correct = withWood(phase7After!, 1, 1);
+        const stolen = withWood(phase7After!, 0.75, 1.25);
+        const totalWood = (world: WorldState) =>
+          [...world.productionUnits.values()].reduce((sum, unit) =>
+            sum + (unit.inputInventory.get(WOOD) ?? 0), 0);
+        expect(totalWood(stolen)).toBeCloseTo(totalWood(correct), 8);
+        expect(() => assertActorStocks(correct, before)).not.toThrow();
+        expect(() => assertActorStocks(stolen, before)).toThrow();
+        negativeOtherGoodChecked = true;
+      }
       if (fresh.length > 0 && !negativePassiveWalletChecked) {
         const donor = [...phase7After!.cohorts].flatMap(([id, cohort]) =>
           [...cohort.wallet].filter(([, cash]) => cash >= 1)
@@ -3986,6 +4031,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeFeeRoutingChecked).toBe(true);
     expect(negativePassiveWalletChecked).toBe(true);
     expect(negativePassiveInventoryChecked).toBe(true);
+    expect(negativeOtherGoodChecked).toBe(true);
     expect(negativePublicInventoryChecked).toBe(true);
     expect(negativeDeliveryOwnerChecked).toBe(true);
     expect(negativeDeliveryBucketChecked).toBe(true);
