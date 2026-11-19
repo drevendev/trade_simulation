@@ -2735,6 +2735,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let divergentFeeTicks = 0;
     let negativeFeeRoutingChecked = false;
     let negativePassiveWalletChecked = false;
+    let negativePassiveInventoryChecked = false;
     let negativeDeliveryOwnerChecked = false;
     let negativeDeliveryBucketChecked = false;
     let negativeFxBundleChecked = false;
@@ -3520,21 +3521,28 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       };
       assertStateTreasuries(phase7After!);
 
-      // Paid Phase-7 cross-border trades in this fixture cannot alter Cohort
-      // wallets or Clan treasuries. A currency-total invariant alone misses
-      // balanced transfers between those unrelated owners.
-      const assertPassiveWallets = (settled: WorldState): void => {
-        expect(settled.cohorts.size).toBe(phase7Before!.cohorts.size);
-        for (const [id, before] of phase7Before!.cohorts) {
+      // Real Phase-7 cargo in this fixture is exclusively owned by ProductionUnits.
+      // Cohorts and State public inventories must not be silently debited even
+      // when a balanced transfer preserves the economy-wide physical total.
+      const assertPassiveStocks = (opening: WorldState, settled: WorldState): void => {
+        expect(settled.cohorts.size).toBe(opening.cohorts.size);
+        for (const [id, before] of opening.cohorts) {
           const after = settled.cohorts.get(id);
           expect(after, `tick ${tick}: cohort ${id}`).toBeDefined();
           for (const currency of new Set([...before.wallet.keys(), ...after!.wallet.keys()])) {
             expect((after!.wallet.get(currency) ?? 0) - (before.wallet.get(currency) ?? 0),
-              `tick ${tick}: passive cohort ${id}/${currency}`).toBeCloseTo(0, 6);
+              `tick ${tick}: passive cohort cash ${id}/${currency}`).toBeCloseTo(0, 6);
+          }
+          for (const good of new Set([
+            ...before.householdInventory.keys(), ...after!.householdInventory.keys(),
+          ])) {
+            expect((after!.householdInventory.get(good) ?? 0) -
+              (before.householdInventory.get(good) ?? 0),
+              `tick ${tick}: passive cohort goods ${id}/${good}`).toBeCloseTo(0, 6);
           }
         }
-        expect(settled.clans.size).toBe(phase7Before!.clans.size);
-        for (const [id, before] of phase7Before!.clans) {
+        expect(settled.clans.size).toBe(opening.clans.size);
+        for (const [id, before] of opening.clans) {
           const after = settled.clans.get(id);
           expect(after, `tick ${tick}: clan ${id}`).toBeDefined();
           for (const currency of new Set([...before.treasury.keys(), ...after!.treasury.keys()])) {
@@ -3542,8 +3550,21 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
               `tick ${tick}: passive clan ${id}/${currency}`).toBeCloseTo(0, 6);
           }
         }
+        expect(settled.states.size).toBe(opening.states.size);
+        for (const [id, before] of opening.states) {
+          const after = settled.states.get(id);
+          expect(after, `tick ${tick}: State ${id}`).toBeDefined();
+          for (const good of new Set([
+            ...before.publicInventory.keys(), ...after!.publicInventory.keys(),
+          ])) {
+            expect((after!.publicInventory.get(good) ?? 0) -
+              (before.publicInventory.get(good) ?? 0),
+              `tick ${tick}: passive State public goods ${id}/${good}`)
+              .toBeCloseTo(0, 6);
+          }
+        }
       };
-      assertPassiveWallets(phase7After!);
+      assertPassiveStocks(phase7Before!, phase7After!);
       if (fresh.length > 0 && !negativePassiveWalletChecked) {
         const donor = [...phase7After!.cohorts].flatMap(([id, cohort]) =>
           [...cohort.wallet].filter(([, cash]) => cash >= 1)
@@ -3559,8 +3580,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
           ) });
         }
         const forged = { ...phase7After!, cohorts };
-        // Falsification preserves valid nonnegative stocks and physical goods:
-        // only the beneficiary of two passive owner wallets has changed.
+        // Valid, conserved stocks with the wrong passive beneficiary.
         expect(forged.cohorts.get(donor!.id)!.wallet.get(donor!.currency)!)
           .toBeGreaterThanOrEqual(0);
         expect(forged.cohorts.get(receiver!)!.wallet.get(donor!.currency)!)
@@ -3568,11 +3588,43 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         expect(totalIron(forged)).toBeCloseTo(totalIron(phase7After!), 8);
         expect(totalCash(forged, donor!.currency))
           .toBeCloseTo(totalCash(phase7After!, donor!.currency), 8);
-        // All existing active payment / tax ownership oracles pass this theft.
         expect(() => assertActorStocks(forged)).not.toThrow();
         expect(() => assertStateTreasuries(forged)).not.toThrow();
-        expect(() => assertPassiveWallets(forged)).toThrow();
+        expect(() => assertPassiveStocks(phase7Before!, forged)).toThrow();
         negativePassiveWalletChecked = true;
+      }
+      if (fresh.length > 0 && !negativePassiveInventoryChecked) {
+        // Seed matching physical stocks in BOTH oracle boundaries, then
+        // transfer 0.25 iron from one cohort to another ONLY after Phase 7.
+        // The synthetic control is confined to falsifying the oracle; actual
+        // 600-tick simulation state and paid shipment receipts stay untouched.
+        const ids = [...phase7Before!.cohorts.keys()].slice(0, 2);
+        expect(ids).toHaveLength(2);
+        const withCohortIron = (world: WorldState, a: number, b: number): WorldState => {
+          const cohorts = new Map(world.cohorts);
+          for (const [id, amount] of [[ids[0]!, a], [ids[1]!, b]] as const) {
+            const cohort = cohorts.get(id)!;
+            cohorts.set(id, {
+              ...cohort,
+              householdInventory: new Map(cohort.householdInventory).set(IRON, amount),
+            });
+          }
+          return { ...world, cohorts };
+        };
+        const before = withCohortIron(phase7Before!, 1, 1);
+        const correct = withCohortIron(phase7After!, 1, 1);
+        const stolen = withCohortIron(phase7After!, 0.75, 1.25);
+        expect(() => assertPassiveStocks(before, correct)).not.toThrow();
+        expect(totalIron(stolen)).toBeCloseTo(totalIron(correct), 8);
+        expect(stolen.cohorts.get(ids[0]!)!.householdInventory.get(IRON))
+          .toBeGreaterThanOrEqual(0);
+        expect(stolen.cohorts.get(ids[1]!)!.householdInventory.get(IRON))
+          .toBeGreaterThanOrEqual(0);
+        // Active payments and total goods still pass; ownership is wrong.
+        expect(() => assertActorStocks(stolen)).not.toThrow();
+        expect(() => assertStateTreasuries(stolen)).not.toThrow();
+        expect(() => assertPassiveStocks(before, stolen)).toThrow();
+        negativePassiveInventoryChecked = true;
       }
 
       const divergentCargo = fresh.find(cargo =>
@@ -3904,6 +3956,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeTreasuryChecked).toBe(true);
     expect(negativeFeeRoutingChecked).toBe(true);
     expect(negativePassiveWalletChecked).toBe(true);
+    expect(negativePassiveInventoryChecked).toBe(true);
     expect(negativeDeliveryOwnerChecked).toBe(true);
     expect(negativeDeliveryBucketChecked).toBe(true);
     expect(negativeFxBundleChecked).toBe(true);
