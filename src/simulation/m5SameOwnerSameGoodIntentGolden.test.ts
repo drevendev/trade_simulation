@@ -357,4 +357,209 @@ describe("M5 #676 real same-owner same-good cash and goods competition", () => {
       .toEqual(full.context.transactions.filter(tx => tx.phase === 4));
   }, 30_000);
 
+
+  it("shrinks real same-owner iron orders against a shared finite FX output reserve before goods move", () => {
+    const f = fixture();
+    const sellerCurrency = [...f.sellerA.wallet.keys()][0]!;
+    const buyerCurrency = f.destination.settlementCurrencyId;
+    const matching = [...f.world.monetaryAuthorities].flatMap(([authorityId, authority]) =>
+      [...authority.fxPools].filter(([, pool]) =>
+        (pool.baseCurrencyId === sellerCurrency && pool.quoteCurrencyId === buyerCurrency) ||
+        (pool.quoteCurrencyId === sellerCurrency && pool.baseCurrencyId === buyerCurrency),
+      ).map(([poolId, pool]) => ({ authorityId, poolId, pool })),
+    );
+    expect(matching).toHaveLength(1);
+    const selected = matching[0]!;
+    const floor = selected.pool.baseCurrencyId === sellerCurrency
+      ? selected.pool.minOperationalReserveBase
+      : selected.pool.minOperationalReserveQuote;
+    const run = (
+      world: WorldState,
+      observer?: (phase: number, before: WorldState, after: WorldState) => void,
+    ) => executeM5AutonomousRegionalTradeTick(
+      world, TICK, upstream, (_phase, current) => current, f.options, observer,
+    );
+    const fxOutput = (result: ReturnType<typeof run>) =>
+      result.context.transactions.filter(tx =>
+        tx.phase === 7 && tx.type === "FX_OUTPUT" && tx.currencyId === sellerCurrency,
+      ).reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+    const fxInput = (result: ReturnType<typeof run>) =>
+      result.context.transactions.filter(tx =>
+        tx.phase === 7 && tx.type === "FX_INPUT" && tx.currencyId === buyerCurrency,
+      ).reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+    const poolBalance = (world: WorldState, currency: typeof sellerCurrency) =>
+      world.monetaryAuthorities.get(selected.authorityId)!
+        .fxPools.get(selected.poolId)!.cash.get(currency)!;
+    const withBudget = (budget: number): WorldState => ({
+      ...f.world,
+      monetaryAuthorities: new Map([...f.world.monetaryAuthorities].map(([id, authority]) => [
+        id, id === selected.authorityId
+          ? { ...authority, fxPools: new Map(authority.fxPools).set(selected.poolId, {
+            ...selected.pool,
+            cash: new Map(selected.pool.cash).set(sellerCurrency, floor + budget),
+          }) }
+          : authority,
+      ] as const)),
+    });
+
+    const full = run(f.world);
+    expect(full.phaseBoundaryError).toBeUndefined();
+    expect(full.reconciliationErrors).toBeNull();
+    const fullPayout = fxOutput(full);
+    expect(fullPayout).toBeGreaterThan(0);
+    expect((full.context.phase7CommittedLots ?? []).length).toBeGreaterThan(0);
+
+    // The two genuine Phase-2 orders share one finite pool; reduce its OUTPUT
+    // currency stock (not the buyer wallet, seller stock, or a forged FX quote).
+    const scarceWorld = withBudget(fullPayout * 0.65);
+    let beforePhase7: WorldState | undefined;
+    let afterPhase7: WorldState | undefined;
+    const scarce = run(scarceWorld, (phase, before, after) => {
+      if (phase === 7) { beforePhase7 = before; afterPhase7 = after; }
+    });
+    const replay = run(shuffled(scarceWorld));
+    const exhausted = run(withBudget(0));
+    for (const result of [scarce, replay, exhausted]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+    }
+    expect(scarce.context.phase7CommittedLots).toEqual(replay.context.phase7CommittedLots);
+    expect(scarce.context.transactions).toEqual(replay.context.transactions);
+    expect(scarce.world.shipments).toEqual(replay.world.shipments);
+    expect(beforePhase7).toBeDefined();
+    expect(afterPhase7).toBeDefined();
+
+    const paid = scarce.context.phase7CommittedLots ?? [];
+    const paidPayout = fxOutput(scarce);
+    expect(paid).not.toHaveLength(0); // Non-vacuous partial fill.
+    expect(paidPayout).toBeGreaterThan(0);
+    expect(paidPayout).toBeLessThan(fullPayout - 1e-7);
+    expect(paidPayout).toBeLessThanOrEqual(fullPayout * 0.65 + 1e-7);
+    const openingIntents = derivePhase7PostProcurementIntents(
+      beforePhase7!, { ...scarce.context, phase: 7 },
+    ).phase8MainIntents.filter(i =>
+      i.side === "BUY" && i.goodId === IRON &&
+      i.actor.type === "PRODUCTION_UNIT" &&
+      i.actor.productionUnitId === f.buyerB.productionUnitId &&
+      (i.purpose === "INPUT" || i.purpose === "INVESTMENT"));
+    expect(new Set(openingIntents.map(i => i.purpose)))
+      .toEqual(new Set(["INPUT", "INVESTMENT"]));
+    const residualById = new Map(scarce.context.phase7MainIntents!.map(i => [i.id, i] as const));
+    for (const intent of openingIntents) {
+      const residual = residualById.get(intent.id)!;
+      expect(intent.desiredQuantity - residual.desiredQuantity).toBeCloseTo(
+        paid.filter(lot => lot.buyerIntentId === intent.id)
+          .reduce((sum, lot) => sum + lot.dispatchedQuantity, 0), 6);
+      expect(intent.maxSpend! - residual.maxSpend!).toBeCloseTo(
+        paid.filter(lot => lot.buyerIntentId === intent.id)
+          .reduce((sum, lot) => sum + lot.buyerTotalDebitDest, 0), 6);
+    }
+    const buyerBefore = beforePhase7!.productionUnits.get(f.buyerB.productionUnitId)!
+      .wallet.get(buyerCurrency)!;
+    const buyerAfter = afterPhase7!.productionUnits.get(f.buyerB.productionUnitId)!
+      .wallet.get(buyerCurrency)!;
+    expect(buyerBefore - buyerAfter).toBeCloseTo(
+      paid.reduce((sum, lot) => sum + lot.buyerTotalDebitDest, 0), 6);
+    const sellerBefore = beforePhase7!.productionUnits.get(f.sellerA.productionUnitId)!
+      .inputInventory.get(IRON)!;
+    const sellerAfter = afterPhase7!.productionUnits.get(f.sellerA.productionUnitId)!
+      .inputInventory.get(IRON)!;
+    expect(sellerBefore - sellerAfter).toBeCloseTo(
+      paid.reduce((sum, lot) => sum + lot.dispatchedQuantity, 0), 6);
+
+    // Bind every paid real shipment to its actual FX output ledger leg and
+    // the named source-region seller, not just to the pool's aggregate debit.
+    const dispatched = scarce.context.phase7DispatchedShipments ?? [];
+    const outputLegs = scarce.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_OUTPUT" && tx.currencyId === sellerCurrency);
+    expect(dispatched).toHaveLength(paid.length);
+    expect(outputLegs).toHaveLength(paid.length);
+    for (const lot of paid) {
+      const cargo = dispatched.find(shipment => String(shipment.id) === lot.shipmentId);
+      expect(cargo).toBeDefined();
+      expect(cargo!.seller).toEqual({
+        type: "PRODUCTION_UNIT", productionUnitId: f.sellerA.productionUnitId,
+      });
+      expect(cargo!.fxSettlementId).toBeDefined();
+      const receipts = outputLegs.filter(tx => tx.fxSettlementId === cargo!.fxSettlementId);
+      expect(receipts).toHaveLength(1);
+      expect(receipts[0]!.destination).toEqual(cargo!.seller);
+      expect(receipts[0]!.moneyAmount).toBeCloseTo(
+        cargo!.sellerNetUnitPrice * cargo!.quantity, 6,
+      );
+    }
+    const assertSellerReceipt = (candidate: WorldState): void => {
+      const walletBefore = beforePhase7!.productionUnits.get(f.sellerA.productionUnitId)!
+        .wallet.get(sellerCurrency)!;
+      const walletAfter = candidate.productionUnits.get(f.sellerA.productionUnitId)!
+        .wallet.get(sellerCurrency)!;
+      expect(walletAfter - walletBefore).toBeCloseTo(
+        outputLegs.reduce((sum, tx) => sum + tx.moneyAmount!, 0), 6,
+      );
+    };
+    assertSellerReceipt(afterPhase7!);
+    // Balanced wrong-beneficiary corruption leaves all aggregate cash, cargo,
+    // FX pool and seller inventory unchanged; owner-bound receipt must fail.
+    const otherSellerCurrencyUnit = [...afterPhase7!.productionUnits.values()].find(unit =>
+      unit.productionUnitId !== f.sellerA.productionUnitId &&
+      unit.seed.regionKey === f.sellerA.seed.regionKey);
+    expect(otherSellerCurrencyUnit).toBeDefined();
+    const forgedUnits = new Map(afterPhase7!.productionUnits);
+    const stolen = paidPayout / 4;
+    for (const [id, delta] of [
+      [f.sellerA.productionUnitId, -stolen],
+      [otherSellerCurrencyUnit!.productionUnitId, stolen],
+    ] as const) {
+      const unit = forgedUnits.get(id)!;
+      forgedUnits.set(id, { ...unit, wallet: new Map(unit.wallet)
+        .set(sellerCurrency, (unit.wallet.get(sellerCurrency) ?? 0) + delta) });
+    }
+    expect(() => assertSellerReceipt({
+      ...afterPhase7!, productionUnits: forgedUnits,
+    })).toThrow();
+
+    const assertFxReserve = (claimedPayout: number) => {
+      expect(poolBalance(beforePhase7!, sellerCurrency) -
+        poolBalance(afterPhase7!, sellerCurrency)).toBeCloseTo(claimedPayout, 6);
+      expect(poolBalance(afterPhase7!, buyerCurrency) -
+        poolBalance(beforePhase7!, buyerCurrency)).toBeCloseTo(fxInput(scarce), 6);
+    };
+    assertFxReserve(paidPayout);
+    expect(poolBalance(afterPhase7!, sellerCurrency)).toBeGreaterThanOrEqual(floor - 1e-8);
+    // A forged FX output amount cannot pass the reserve-delta assertion.
+    expect(() => assertFxReserve(paidPayout + 1)).toThrow();
+
+    // A floor-only pool cannot sponsor even one of the two valid orders.
+    // Earlier, genuinely paid domestic procurement remains identical.
+    expect(fxOutput(exhausted)).toBe(0);
+    expect(fxInput(exhausted)).toBe(0);
+    expect(exhausted.context.phase7CommittedLots ?? []).toHaveLength(0);
+    expect(exhausted.world.shipments?.size ?? 0).toBe(0);
+    expect(exhausted.context.transactions.filter(tx => tx.phase === 7 &&
+      ["SHIPMENT_DISPATCH", "TRADE_GOODS_SALE", "FX_INPUT", "FX_OUTPUT",
+        "IMPORT_TARIFF", "TRANSPORT_FEE"].includes(tx.type))).toHaveLength(0);
+    const paidDomestic = full.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE" && tx.goodId === IRON &&
+      tx.source?.type === "PRODUCTION_UNIT" &&
+      tx.destination?.type === "PRODUCTION_UNIT" &&
+      (tx.quantity ?? 0) > 0 && (tx.moneyAmount ?? 0) > 0);
+    // A nonempty, paid local allocation with explicit actors, not equality
+    // of two empty Phase-4 transaction lists.
+    expect(paidDomestic.length).toBeGreaterThan(0);
+    for (const sale of paidDomestic) {
+      expect(sale.source).not.toEqual(sale.destination);
+      expect(sale.sourceRegionId).toBe(sale.destinationRegionId);
+      expect(sale.quantity).toBeGreaterThan(0);
+      expect(sale.moneyAmount).toBeGreaterThan(0);
+    }
+    expect(exhausted.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE"))
+      .toEqual(full.context.transactions.filter(tx =>
+        tx.phase === 4 && tx.type === "MARKET_SALE"));
+    expect(exhausted.context.transactions.filter(tx => tx.phase === 4))
+      .toEqual(full.context.transactions.filter(tx => tx.phase === 4));
+    expect(poolBalance(exhausted.world, sellerCurrency)).toBeCloseTo(floor, 8);
+  }, 30_000);
+
 });
