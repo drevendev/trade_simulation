@@ -701,6 +701,7 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     let negativeArrivalChecked = false;
     let negativeGoodsOwnerChecked = false;
     let negativeSellerGoodsChecked = false;
+    let negativePassiveCohortChecked = false;
 
     for (let tick = 7; tick < 607; tick++) {
       const open = (tick - 7) % 12 === 0;
@@ -814,8 +815,48 @@ describe("M5/#676 monetary-union cross-State golden", () => {
           expect(paid, "tick " + tick + " treasury owner " + id)
             .toBeCloseTo(expected, 6);
         }
+        // No union-currency Phase-7 shipment in this fixture has a Cohort
+        // buyer or a private Clan fee owner. These passive wallets must not
+        // be debited or credited while active buyers and treasuries settle.
+        for (const [id, before] of phase7Before!.cohorts) {
+          expect(settled.cohorts.get(id)!.wallet,
+            "tick " + tick + " passive Cohort wallet " + id).toEqual(before.wallet);
+        }
+        for (const [id, before] of phase7Before!.clans) {
+          expect(settled.clans.get(id)!.treasury,
+            "tick " + tick + " passive Clan treasury " + id).toEqual(before.treasury);
+        }
       };
       assertPaidOwners(phase7After!);
+      if (!negativePassiveCohortChecked) {
+        // An equal-and-opposite transfer between two passive Cohorts leaves
+        // total currency, seller receipts and State taxes unchanged. The
+        // owner-bound Phase-7 oracle must still reject it.
+        const cohorts = [...phase7After!.cohorts];
+        expect(cohorts.length).toBeGreaterThanOrEqual(2);
+        const source = cohorts.find(([, cohort]) => (cohort.wallet.get(currency) ?? 0) > 0);
+        expect(source).toBeDefined();
+        const destination = cohorts.find(([id]) => id !== source![0]);
+        expect(destination).toBeDefined();
+        const [fromId, from] = source!;
+        const [toId, to] = destination!;
+        const moved = Math.min(1, (from.wallet.get(currency) ?? 0) / 2);
+        expect(moved).toBeGreaterThan(0);
+        const forgedCohorts = new Map(phase7After!.cohorts);
+        forgedCohorts.set(fromId, {
+          ...from, wallet: new Map(from.wallet).set(
+            currency, (from.wallet.get(currency) ?? 0) - moved),
+        });
+        forgedCohorts.set(toId, {
+          ...to, wallet: new Map(to.wallet).set(
+            currency, (to.wallet.get(currency) ?? 0) + moved),
+        });
+        const forged: WorldState = { ...phase7After!, cohorts: forgedCohorts };
+        expect(totalCash(forged, currency))
+          .toBeCloseTo(totalCash(phase7After!, currency), 6);
+        expect(() => assertPaidOwners(forged)).toThrow();
+        negativePassiveCohortChecked = true;
+      }
       // A paid cargo cannot debit a different seller's IRON stock. Compare
       // actual Phase-7 inventories with independently persisted cargo owners,
       // using the gross quantity (surviving cargo + recorded physical loss).
@@ -1022,6 +1063,7 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     expect(negativeArrivalChecked).toBe(true);
     expect(negativeGoodsOwnerChecked).toBe(true);
     expect(negativeSellerGoodsChecked).toBe(true);
+    expect(negativePassiveCohortChecked).toBe(true);
     expect(dispatched.size).toBeGreaterThanOrEqual(2);
     expect(delivered).toEqual(dispatched);
     expect(normalWorld.shipments?.size ?? 0).toBe(0);
