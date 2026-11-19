@@ -2740,6 +2740,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativePublicInventoryChecked = false;
     let negativeDeliveryOwnerChecked = false;
     let negativeDeliveryBucketChecked = false;
+    let negativeDeliveryOtherGoodChecked = false;
     let negativeFxBundleChecked = false;
     let negativeChargeBundleChecked = false;
     let negativeTransitIdentityChecked = false;
@@ -3924,15 +3925,22 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
           const afterUnit = settled.productionUnits.get(unitId)!;
           // Phase-1 delivery changes INPUT only; aggregate owner stock and
           // INPUT-only checks would miss compensating OUTPUT/INVESTMENT shifts.
-          for (const [bucket, expectedDelta] of [
+          for (const [bucket, ironDelta] of [
             ["inputInventory", expected],
             ["outputInventory", 0],
             ["investmentInventory", 0],
           ] as const) {
-            const observed = (afterUnit[bucket].get(IRON) ?? 0) -
-              (beforeUnit[bucket].get(IRON) ?? 0);
-            expect(observed, `tick ${tick}: arrival ${unitId}/${bucket}/iron`)
-              .toBeCloseTo(expectedDelta, 6);
+            // Phase-1 cargo delivery may change only the paid good's INPUT.
+            // A balanced diversion of an unrelated good between producers
+            // evades an iron-only or aggregate physical-stock oracle.
+            for (const good of new Set([
+              IRON, ...beforeUnit[bucket].keys(), ...afterUnit[bucket].keys(),
+            ])) {
+              const observed = (afterUnit[bucket].get(good) ?? 0) -
+                (beforeUnit[bucket].get(good) ?? 0);
+              expect(observed, `tick ${tick}: arrival ${unitId}/${bucket}/${good}`)
+                .toBeCloseTo(good === IRON ? ironDelta : 0, 6);
+            }
           }
         }
       };
@@ -4010,6 +4018,36 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         expect(() => assertDeliveryOwners(forgedBefore, forgedAfter)).toThrow();
         negativeDeliveryBucketChecked = true;
       }
+      if (due.length > 0 && !negativeDeliveryOtherGoodChecked) {
+        // Falsify the Phase-1 oracle without changing the real 600-tick run:
+        // seed valid wood stocks in both boundaries, then silently move some
+        // wood between two owners while iron, paid cargo and total wood agree.
+        const WOOD = "good:wood" as GoodId;
+        expect(baselineDefinitionPack.goods[WOOD]).toBeDefined();
+        const ids = [...phase1After!.productionUnits.keys()].slice(0, 2);
+        expect(ids).toHaveLength(2);
+        const withWood = (world: WorldState, first: number, second: number): WorldState => {
+          const units = new Map(world.productionUnits);
+          for (const [id, quantity] of [[ids[0]!, first], [ids[1]!, second]] as const) {
+            const unit = units.get(id)!;
+            units.set(id, {
+              ...unit, inputInventory: new Map(unit.inputInventory).set(WOOD, quantity),
+            });
+          }
+          return { ...world, productionUnits: units };
+        };
+        const opening = withWood(phase1Before!, 1, 1);
+        const correct = withWood(phase1After!, 1, 1);
+        const stolen = withWood(phase1After!, 0.75, 1.25);
+        const woodTotal = (world: WorldState) =>
+          [...world.productionUnits.values()].reduce((sum, unit) =>
+            sum + (unit.inputInventory.get(WOOD) ?? 0), 0);
+        expect(woodTotal(stolen)).toBeCloseTo(woodTotal(correct), 8);
+        expect(totalIron(stolen)).toBeCloseTo(totalIron(correct), 8);
+        expect(() => assertDeliveryOwners(opening, correct)).not.toThrow();
+        expect(() => assertDeliveryOwners(opening, stolen)).toThrow();
+        negativeDeliveryOtherGoodChecked = true;
+      }
       for (const cargo of due) {
         expect(arrivals.filter(tx =>
           tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + cargo.id &&
@@ -4035,6 +4073,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativePublicInventoryChecked).toBe(true);
     expect(negativeDeliveryOwnerChecked).toBe(true);
     expect(negativeDeliveryBucketChecked).toBe(true);
+    expect(negativeDeliveryOtherGoodChecked).toBe(true);
     expect(negativeFxBundleChecked).toBe(true);
     expect(negativeChargeBundleChecked).toBe(true);
     expect(negativeTransitIdentityChecked).toBe(true);
