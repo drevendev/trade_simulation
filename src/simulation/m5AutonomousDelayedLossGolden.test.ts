@@ -34,7 +34,7 @@ function allIron(world: WorldState): number {
   }
   for (const state of world.states.values()) total += state.publicInventory.get(IRON) ?? 0;
   for (const cohort of world.cohorts.values()) total += cohort.householdInventory.get(IRON) ?? 0;
-  for (const shipment of world.shipments.values()) {
+  for (const shipment of (world.shipments?.values() ?? [])) {
     if (shipment.goodId === IRON) total += shipment.quantity;
   }
   return total;
@@ -95,7 +95,7 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
     expect(beforeDispatch).toBeDefined();
     expect(afterDispatch).toBeDefined();
 
-    const cargoList = [...departed.world.shipments.values()];
+    const cargoList = [...departed.(world.shipments?.values() ?? [])];
     expect(cargoList).toHaveLength(1);
     const cargo = cargoList[0]!;
     expect(cargo.goodId).toBe(IRON);
@@ -140,7 +140,7 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
     const enRoute = run(changedRoute, M5_PREVIEW_TICK + 1, noNewTrade);
     expect(enRoute.phaseBoundaryError).toBeUndefined();
     expect(enRoute.reconciliationErrors).toBeNull();
-    expect(enRoute.world.shipments.get(cargo.id)).toEqual(cargo);
+    expect(enRoute.world.shipments?.get(cargo.id)).toEqual(cargo);
     expect(enRoute.context.transactions.filter(tx => [
       "SHIPMENT_DELIVERY", "GOODS_TRANSPORT_LOSS",
       "FX_INPUT", "FX_OUTPUT", "IMPORT_TARIFF",
@@ -156,7 +156,7 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
     expect(arrived.reconciliationErrors).toBeNull();
     expect(beforeArrival).toBeDefined();
     expect(afterArrival).toBeDefined();
-    expect(arrived.world.shipments.has(cargo.id)).toBe(false);
+    expect(arrived.world.shipments?.has(cargo.id)).toBe(false);
     expect(arrived.context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY"))
       .toMatchObject([{
         tick: M5_PREVIEW_TICK + 2, phase: 1,
@@ -192,7 +192,7 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
     const next = run(arrived.world, M5_PREVIEW_TICK + 3, noNewTrade);
     expect(next.phaseBoundaryError).toBeUndefined();
     expect(next.reconciliationErrors).toBeNull();
-    expect(next.world.shipments.has(cargo.id)).toBe(false);
+    expect(next.world.shipments?.has(cargo.id)).toBe(false);
     expect(next.context.transactions.filter(tx => [
       "SHIPMENT_DELIVERY", "FX_INPUT", "FX_OUTPUT",
       "GOODS_TRANSPORT_LOSS", "IMPORT_TARIFF",
