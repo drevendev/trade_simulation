@@ -468,6 +468,57 @@ describe("M5 #676 real same-owner same-good cash and goods competition", () => {
     expect(sellerBefore - sellerAfter).toBeCloseTo(
       paid.reduce((sum, lot) => sum + lot.dispatchedQuantity, 0), 6);
 
+    // Bind every paid real shipment to its actual FX output ledger leg and
+    // the named source-region seller, not just to the pool's aggregate debit.
+    const dispatched = scarce.context.phase7DispatchedShipments ?? [];
+    const outputLegs = scarce.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_OUTPUT" && tx.currencyId === sellerCurrency);
+    expect(dispatched).toHaveLength(paid.length);
+    expect(outputLegs).toHaveLength(paid.length);
+    for (const lot of paid) {
+      const cargo = dispatched.find(shipment => String(shipment.id) === lot.shipmentId);
+      expect(cargo).toBeDefined();
+      expect(cargo!.seller).toEqual({
+        type: "PRODUCTION_UNIT", productionUnitId: f.sellerA.productionUnitId,
+      });
+      expect(cargo!.fxSettlementId).toBeDefined();
+      const receipts = outputLegs.filter(tx => tx.fxSettlementId === cargo!.fxSettlementId);
+      expect(receipts).toHaveLength(1);
+      expect(receipts[0]!.destination).toEqual(cargo!.seller);
+      expect(receipts[0]!.moneyAmount).toBeCloseTo(
+        cargo!.sellerNetUnitPrice * cargo!.quantity, 6,
+      );
+    }
+    const assertSellerReceipt = (candidate: WorldState): void => {
+      const walletBefore = beforePhase7!.productionUnits.get(f.sellerA.productionUnitId)!
+        .wallet.get(sellerCurrency)!;
+      const walletAfter = candidate.productionUnits.get(f.sellerA.productionUnitId)!
+        .wallet.get(sellerCurrency)!;
+      expect(walletAfter - walletBefore).toBeCloseTo(
+        outputLegs.reduce((sum, tx) => sum + tx.moneyAmount!, 0), 6,
+      );
+    };
+    assertSellerReceipt(afterPhase7!);
+    // Balanced wrong-beneficiary corruption leaves all aggregate cash, cargo,
+    // FX pool and seller inventory unchanged; owner-bound receipt must fail.
+    const otherSellerCurrencyUnit = [...afterPhase7!.productionUnits.values()].find(unit =>
+      unit.productionUnitId !== f.sellerA.productionUnitId &&
+      unit.seed.regionKey === f.sellerA.seed.regionKey);
+    expect(otherSellerCurrencyUnit).toBeDefined();
+    const forgedUnits = new Map(afterPhase7!.productionUnits);
+    const stolen = paidPayout / 4;
+    for (const [id, delta] of [
+      [f.sellerA.productionUnitId, -stolen],
+      [otherSellerCurrencyUnit!.productionUnitId, stolen],
+    ] as const) {
+      const unit = forgedUnits.get(id)!;
+      forgedUnits.set(id, { ...unit, wallet: new Map(unit.wallet)
+        .set(sellerCurrency, (unit.wallet.get(sellerCurrency) ?? 0) + delta) });
+    }
+    expect(() => assertSellerReceipt({
+      ...afterPhase7!, productionUnits: forgedUnits,
+    })).toThrow();
+
     const assertFxReserve = (claimedPayout: number) => {
       expect(poolBalance(beforePhase7!, sellerCurrency) -
         poolBalance(afterPhase7!, sellerCurrency)).toBeCloseTo(claimedPayout, 6);
@@ -488,6 +539,24 @@ describe("M5 #676 real same-owner same-good cash and goods competition", () => {
     expect(exhausted.context.transactions.filter(tx => tx.phase === 7 &&
       ["SHIPMENT_DISPATCH", "TRADE_GOODS_SALE", "FX_INPUT", "FX_OUTPUT",
         "IMPORT_TARIFF", "TRANSPORT_FEE"].includes(tx.type))).toHaveLength(0);
+    const paidDomestic = full.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE" && tx.goodId === IRON &&
+      tx.source?.type === "PRODUCTION_UNIT" &&
+      tx.destination?.type === "PRODUCTION_UNIT" &&
+      (tx.quantity ?? 0) > 0 && (tx.moneyAmount ?? 0) > 0);
+    // A nonempty, paid local allocation with explicit actors, not equality
+    // of two empty Phase-4 transaction lists.
+    expect(paidDomestic.length).toBeGreaterThan(0);
+    for (const sale of paidDomestic) {
+      expect(sale.source).not.toEqual(sale.destination);
+      expect(sale.sourceRegionId).toBe(sale.destinationRegionId);
+      expect(sale.quantity).toBeGreaterThan(0);
+      expect(sale.moneyAmount).toBeGreaterThan(0);
+    }
+    expect(exhausted.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE"))
+      .toEqual(full.context.transactions.filter(tx =>
+        tx.phase === 4 && tx.type === "MARKET_SALE"));
     expect(exhausted.context.transactions.filter(tx => tx.phase === 4))
       .toEqual(full.context.transactions.filter(tx => tx.phase === 4));
     expect(poolBalance(exhausted.world, sellerCurrency)).toBeCloseTo(floor, 8);
