@@ -3956,6 +3956,11 @@ describe("M5 #676: live same-owner multiple funded BUY intents", () => {
 
     const opening: WorldState = {
       ...f.world,
+      // Two independently priced goods must fit the SAME corridor in one
+      // Phase-7 close; otherwise an iron-only fill is a vacuous witness.
+      transportLinks: new Map([...f.world.transportLinks].map(([id, link]) => [
+        id, { ...link, seed: { ...link.seed, baseCapacity: 1_000 } },
+      ] as const)),
       markets: new Map([...f.world.markets].map(([id, market]) => [
         id,
         {
