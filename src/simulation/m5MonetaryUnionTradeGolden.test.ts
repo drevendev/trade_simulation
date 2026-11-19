@@ -675,7 +675,7 @@ describe("M5/#676 monetary-union cross-State golden", () => {
   });
 
 
-  it("replays 120 ticks of intermittent monetary-union trade with owner-bound settlement", () => {
+  it("replays 600 ticks of intermittent monetary-union trade with owner-bound settlement", () => {
     const f = fixture();
     const currency = f.origin.settlementCurrencyId;
     const openingCash = totalCash(f.world, currency);
@@ -702,7 +702,7 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     let negativeGoodsOwnerChecked = false;
     let negativeSellerGoodsChecked = false;
 
-    for (let tick = 7; tick < 127; tick++) {
+    for (let tick = 7; tick < 607; tick++) {
       const open = (tick - 7) % 12 === 0;
       const beforeIds = new Set(normalWorld.shipments?.keys());
       const due = [...(normalWorld.shipments?.values() ?? [])].filter(
@@ -738,6 +738,16 @@ describe("M5/#676 monetary-union cross-State golden", () => {
         expect(result.world.monetaryAuthorities).toEqual(f.world.monetaryAuthorities);
         expect(result.context.transactions.filter(tx =>
           tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT")).toHaveLength(0);
+        // The 600-tick survivor register must never retain an overdue cargo,
+        // counterfeit FX promise, or cross-currency owner in this monetary union.
+        for (const cargo of result.world.shipments?.values() ?? []) {
+          expect(cargo.quantity, `tick ${tick}: positive surviving cargo`).toBeGreaterThan(0);
+          expect(cargo.arrivalTick, `tick ${tick}: no overdue in-transit ownership`)
+            .toBeGreaterThan(tick);
+          expect(cargo.buyerPaymentCurrencyId).toBe(currency);
+          expect(cargo.invoiceCurrencyId).toBe(currency);
+          expect(cargo.fxSettlementId).toBeUndefined();
+        }
       }
       expect(replay.context.transactions).toEqual(normal.context.transactions);
       expect(replay.world.productionUnits).toEqual(normal.world.productionUnits);
@@ -1015,6 +1025,6 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     expect(dispatched.size).toBeGreaterThanOrEqual(2);
     expect(delivered).toEqual(dispatched);
     expect(normalWorld.shipments?.size ?? 0).toBe(0);
-  }, 30_000);
+  }, 60_000); // 600 ticks × two independent 16-phase replays.
 
 });
