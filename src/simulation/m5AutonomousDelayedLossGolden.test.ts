@@ -5,6 +5,9 @@
  * This is one focused regression, not a complete 600-tick gate.
  */
 import { describe, expect, it } from "vitest";
+import { actorRefKey } from "../domain/genesisLedger";
+import type { EconomicTransaction } from "./tickOrchestrator";
+import type { FxLedgerLeg } from "./fxSettlement";
 import { createM5PreviewScenario, M5_PREVIEW_TICK } from "../diagnostics/m5PreviewScenario";
 import type { GoodId } from "../domain/id";
 import { executeM5AutonomousRegionalTradeTick } from "./m5AutonomousRegionalTradeTick";
@@ -56,6 +59,129 @@ function assertActualArrival(
     expect(observed, "Phase-1 stock credit for " + id)
       .toBeCloseTo(id === recipient ? cargo.quantity : 0, 8);
   }
+}
+
+/**
+ * Independent source-endpoint oracle: this fixture's CLOSING iron exporter
+ * owns its iron in the ProductionUnit INPUT bucket. Gross invoiced quantity
+ * leaves that exact bucket, not another unit or another inventory bucket.
+ */
+function assertActualSellerDeparture(
+  before: WorldState, after: WorldState, cargo: TradeShipmentState, gross: number,
+): void {
+  if (cargo.seller.type !== "PRODUCTION_UNIT") {
+    throw new Error("Fixture requires a ProductionUnit seller");
+  }
+  const sellerId = cargo.seller.productionUnitId;
+  expect(before.productionUnits.has(sellerId)).toBe(true);
+  const buckets = ["inputInventory", "outputInventory", "investmentInventory"] as const;
+  for (const [id, unit] of before.productionUnits) {
+    const next = after.productionUnits.get(id)!;
+    for (const bucket of buckets) {
+      const delta = (next[bucket].get(cargo.goodId) ?? 0) -
+        (unit[bucket].get(cargo.goodId) ?? 0);
+      expect(delta, "Phase-7 physical source " + id + "/" + bucket)
+        .toBeCloseTo(id === sellerId && bucket === "inputInventory" ? -gross : 0, 8);
+    }
+  }
+  for (const [id, state] of before.states) {
+    expect(after.states.get(id)!.publicInventory.get(cargo.goodId) ?? 0)
+      .toBeCloseTo(state.publicInventory.get(cargo.goodId) ?? 0, 8);
+  }
+  for (const [id, cohort] of before.cohorts) {
+    expect(after.cohorts.get(id)!.householdInventory.get(cargo.goodId) ?? 0)
+      .toBeCloseTo(cohort.householdInventory.get(cargo.goodId) ?? 0, 8);
+  }
+}
+
+/**
+ * Independent journal-to-stock oracle for the *same* paid shipment.
+ * An invoice is non-posting: the two FX legs, not the invoice annotation,
+ * must change buyer/seller wallets and the issuer's pairwise pool reserves.
+ */
+function assertPaidFxDeparture(
+  before: WorldState, after: WorldState, cargo: TradeShipmentState,
+  journal: readonly EconomicTransaction[], gross: number,
+): void {
+  if (cargo.buyer.type !== "PRODUCTION_UNIT" ||
+      cargo.seller.type !== "PRODUCTION_UNIT") {
+    throw new Error("Fixture requires production-unit cash endpoints");
+  }
+  const sales = journal.filter(tx => tx.phase === 7 && tx.type === "TRADE_GOODS_SALE");
+  const inputs = journal.filter(tx => tx.phase === 7 && tx.type === "FX_INPUT");
+  const outputs = journal.filter(tx => tx.phase === 7 && tx.type === "FX_OUTPUT");
+  expect(sales).toHaveLength(1);
+  expect(inputs).toHaveLength(1);
+  expect(outputs).toHaveLength(1);
+  const sale = sales[0]!;
+  const input = inputs[0]! as FxLedgerLeg;
+  const output = outputs[0]! as FxLedgerLeg;
+  expect(sale.bundleId).toBeDefined();
+  const bundleId = sale.bundleId;
+  expect(sale.tick).toBe(cargo.departureTick);
+  expect(sale.goodId).toBe(cargo.goodId);
+  expect(sale.quantity).toBeCloseTo(gross, 8);
+  expect(gross).toBeGreaterThan(0);
+  expect(sale.source && actorRefKey(sale.source)).toBe(actorRefKey(cargo.buyer));
+  expect(sale.destination && actorRefKey(sale.destination)).toBe(actorRefKey(cargo.seller));
+  expect(sale.currencyId).toBe(cargo.invoiceCurrencyId);
+  expect(sale.fxSettlementId).toBe(cargo.fxSettlementId);
+  expect(sale.moneyAmount).toBeCloseTo(gross * cargo.sellerNetUnitPrice, 8);
+  expect(sale.moneyAmount).toBeGreaterThan(0);
+
+  for (const leg of [input, output]) {
+    expect(leg.tick).toBe(cargo.departureTick);
+    expect(leg.phase).toBe(7);
+    expect(leg.bundleId).toBe(bundleId);
+    expect(leg.fxSettlementId).toBe(cargo.fxSettlementId);
+    expect(leg.fxReservationRequestId).toBeTruthy();
+    expect(leg.reason).toBe("TRADE_GOODS");
+    expect(leg.moneyAmount).toBeGreaterThan(0);
+  }
+  expect(input.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+  expect(output.currencyId).toBe(cargo.invoiceCurrencyId);
+  expect(input.moneyAmount).toBeCloseTo(cargo.buyerGoodsPaymentAmount, 8);
+  expect(output.moneyAmount).toBeCloseTo(sale.moneyAmount!, 8);
+  expect(input.fxReservationRequestId).toBe(output.fxReservationRequestId);
+  expect(input.source && actorRefKey(input.source)).toBe(actorRefKey(cargo.buyer));
+  expect(output.destination && actorRefKey(output.destination)).toBe(actorRefKey(cargo.seller));
+  expect(input.fromAccount).toEqual({ type: "ACTOR", actor: cargo.buyer });
+  expect(output.toAccount).toEqual({ type: "ACTOR", actor: cargo.seller });
+  expect(input.toAccount.type).toBe("FX_POOL");
+  expect(output.fromAccount).toEqual(input.toAccount);
+  if (input.toAccount.type !== "FX_POOL") throw new Error("Missing FX pool endpoint");
+  const poolRef = input.toAccount;
+  const priorPool = before.monetaryAuthorities
+    .get(poolRef.owningAuthorityId)?.fxPools.get(poolRef.pairId);
+  const currentPool = after.monetaryAuthorities
+    .get(poolRef.owningAuthorityId)?.fxPools.get(poolRef.pairId);
+  expect(priorPool).toBeDefined();
+  expect(currentPool).toBeDefined();
+  expect((currentPool!.cash.get(input.currencyId) ?? 0) -
+    (priorPool!.cash.get(input.currencyId) ?? 0))
+    .toBeCloseTo(input.moneyAmount, 8);
+  expect((priorPool!.cash.get(output.currencyId) ?? 0) -
+    (currentPool!.cash.get(output.currencyId) ?? 0))
+    .toBeCloseTo(output.moneyAmount, 8);
+
+  const payerBefore = before.productionUnits.get(cargo.buyer.productionUnitId)!;
+  const payerAfter = after.productionUnits.get(cargo.buyer.productionUnitId)!;
+  const sellerBefore = before.productionUnits.get(cargo.seller.productionUnitId)!;
+  const sellerAfter = after.productionUnits.get(cargo.seller.productionUnitId)!;
+  const extraCharges = journal.filter(tx => tx.bundleId === bundleId &&
+    ["TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"].includes(tx.type));
+  for (const charge of extraCharges) {
+    expect(charge.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+    expect(charge.source && actorRefKey(charge.source)).toBe(actorRefKey(cargo.buyer));
+    expect(charge.moneyAmount).toBeGreaterThan(0);
+  }
+  const feeAmount = extraCharges.reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+  expect((payerBefore.wallet.get(input.currencyId) ?? 0) -
+    (payerAfter.wallet.get(input.currencyId) ?? 0))
+    .toBeCloseTo(input.moneyAmount + feeAmount, 8);
+  expect((sellerAfter.wallet.get(output.currencyId) ?? 0) -
+    (sellerBefore.wallet.get(output.currencyId) ?? 0))
+    .toBeCloseTo(output.moneyAmount, 8);
 }
 
 describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
@@ -119,10 +245,45 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
     expect(destroyed).toBeCloseTo(gross * 0.25, 8);
     expect(cargo.quantity).toBeCloseTo(gross * 0.75, 8);
     expect(allIron(afterDispatch!)).toBeCloseTo(allIron(beforeDispatch!) - destroyed, 8);
-    expect(departed.context.transactions.filter(tx => tx.type === "FX_INPUT"))
-      .toHaveLength(1);
-    expect(departed.context.transactions.filter(tx => tx.type === "FX_OUTPUT"))
-      .toHaveLength(1);
+    assertActualSellerDeparture(beforeDispatch!, afterDispatch!, cargo, gross);
+    assertPaidFxDeparture(beforeDispatch!, afterDispatch!, cargo, departed.context.transactions, gross);
+
+    // Balanced wrong-source mutation: total iron and the recorded paid cargo
+    // remain unchanged, but part of the real seller debit is shifted onto
+    // a different producer. This MUST fail the exact source bucket oracle.
+    if (cargo.seller.type !== "PRODUCTION_UNIT") throw new Error("No seller");
+    const sellerId = cargo.seller.productionUnitId;
+    const otherSource = [...beforeDispatch!.productionUnits.values()].find(unit =>
+      unit.productionUnitId !== sellerId && (unit.inputInventory.get(IRON) ?? 0) > 0);
+    expect(otherSource).toBeDefined();
+    const shiftSource = Math.min(gross / 4, (otherSource!.inputInventory.get(IRON) ?? 0) / 2);
+    expect(shiftSource).toBeGreaterThan(0);
+    const wrongSourceUnits = new Map(afterDispatch!.productionUnits);
+    for (const [id, delta] of [
+      [sellerId, shiftSource], [otherSource!.productionUnitId, -shiftSource],
+    ] as const) {
+      const unit = wrongSourceUnits.get(id)!;
+      wrongSourceUnits.set(id, {
+        ...unit, inputInventory: new Map(unit.inputInventory).set(
+          IRON, (unit.inputInventory.get(IRON) ?? 0) + delta,
+        ),
+      });
+    }
+    const wrongSource = { ...afterDispatch!, productionUnits: wrongSourceUnits };
+    expect(allIron(wrongSource)).toBeCloseTo(allIron(afterDispatch!), 8);
+    expect(() => assertActualSellerDeparture(beforeDispatch!, wrongSource, cargo, gross))
+      .toThrow();
+
+    // A correct-looking pair of FX records is not enough. Both must belong
+    // to this cargo's settlement, in the proper currencies and cash endpoints.
+    const unrelatedFx = departed.context.transactions.map(tx =>
+      tx.type === "FX_OUTPUT" ? { ...tx, fxSettlementId: "fxs:unrelated" as typeof tx.fxSettlementId } : tx);
+    expect(() => assertPaidFxDeparture(beforeDispatch!, afterDispatch!, cargo, unrelatedFx, gross))
+      .toThrow();
+    const wrongCurrencyFx = departed.context.transactions.map(tx =>
+      tx.type === "FX_INPUT" ? { ...tx, currencyId: cargo.invoiceCurrencyId } : tx);
+    expect(() => assertPaidFxDeparture(beforeDispatch!, afterDispatch!, cargo, wrongCurrencyFx, gross))
+      .toThrow();
 
     // Altering current transport policy after paid dispatch must not undo
     // frozen arrival timing, reprice the invoice, or destroy cargo again.
