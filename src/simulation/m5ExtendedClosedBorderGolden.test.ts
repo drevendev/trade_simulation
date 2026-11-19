@@ -2736,6 +2736,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeFeeRoutingChecked = false;
     let negativePassiveWalletChecked = false;
     let negativePassiveInventoryChecked = false;
+    let negativePublicInventoryChecked = false;
     let negativeDeliveryOwnerChecked = false;
     let negativeDeliveryBucketChecked = false;
     let negativeFxBundleChecked = false;
@@ -3626,6 +3627,34 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         expect(() => assertPassiveStocks(before, stolen)).toThrow();
         negativePassiveInventoryChecked = true;
       }
+      if (fresh.length > 0 && !negativePublicInventoryChecked) {
+        // A different balanced, physically valid theft: reroute public
+        // goods from one State to another while leaving tax receipts and
+        // every private owner untouched. No Phase-7 route in this fixture
+        // legitimately touches State publicInventory.
+        const ids = [...phase7Before!.states.keys()].slice(0, 2);
+        expect(ids).toHaveLength(2);
+        const withPublicIron = (world: WorldState, a: number, b: number): WorldState => {
+          const states = new Map(world.states);
+          for (const [id, amount] of [[ids[0]!, a], [ids[1]!, b]] as const) {
+            const state = states.get(id)!;
+            states.set(id, {
+              ...state,
+              publicInventory: new Map(state.publicInventory).set(IRON, amount),
+            });
+          }
+          return { ...world, states };
+        };
+        const before = withPublicIron(phase7Before!, 1, 1);
+        const correct = withPublicIron(phase7After!, 1, 1);
+        const stolen = withPublicIron(phase7After!, 0.75, 1.25);
+        expect(() => assertPassiveStocks(before, correct)).not.toThrow();
+        expect(totalIron(stolen)).toBeCloseTo(totalIron(correct), 8);
+        expect(() => assertActorStocks(stolen)).not.toThrow();
+        expect(() => assertStateTreasuries(stolen)).not.toThrow();
+        expect(() => assertPassiveStocks(before, stolen)).toThrow();
+        negativePublicInventoryChecked = true;
+      }
 
       const divergentCargo = fresh.find(cargo =>
         cargo.transportLinkId === f.links[1] && cargo.transportFeeAmount > 0);
@@ -3957,6 +3986,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeFeeRoutingChecked).toBe(true);
     expect(negativePassiveWalletChecked).toBe(true);
     expect(negativePassiveInventoryChecked).toBe(true);
+    expect(negativePublicInventoryChecked).toBe(true);
     expect(negativeDeliveryOwnerChecked).toBe(true);
     expect(negativeDeliveryBucketChecked).toBe(true);
     expect(negativeFxBundleChecked).toBe(true);
