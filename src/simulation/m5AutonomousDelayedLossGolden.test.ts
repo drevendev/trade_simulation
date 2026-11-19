@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { actorRefKey } from "../domain/genesisLedger";
-import type { EconomicTransaction } from "./tickOrchestrator";
+import { createFxSettlementId, type EconomicTransaction } from "./tickOrchestrator";
 import type { FxLedgerLeg } from "./fxSettlement";
 import { createM5PreviewScenario, M5_PREVIEW_TICK } from "../diagnostics/m5PreviewScenario";
 import type { GoodId } from "../domain/id";
@@ -277,7 +277,7 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
     // A correct-looking pair of FX records is not enough. Both must belong
     // to this cargo's settlement, in the proper currencies and cash endpoints.
     const unrelatedFx = departed.context.transactions.map(tx =>
-      tx.type === "FX_OUTPUT" ? { ...tx, fxSettlementId: "fxs:unrelated" as typeof tx.fxSettlementId } : tx);
+      tx.type === "FX_OUTPUT" ? { ...tx, fxSettlementId: createFxSettlementId("fxs:unrelated") } : tx);
     expect(() => assertPaidFxDeparture(beforeDispatch!, afterDispatch!, cargo, unrelatedFx, gross))
       .toThrow();
     const wrongCurrencyFx = departed.context.transactions.map(tx =>
