@@ -230,4 +230,131 @@ describe("M5 #676 real same-owner same-good cash and goods competition", () => {
       .toBeCloseTo(totalSpend, 8);
     expect(() => assertDebits(closing, forged)).toThrow();
   }, 30_000);
+
+  it("clamps shared same-good intent spending to one physical corridor's cargo weight", () => {
+    const f = fixture();
+    const [linkId, link] = [...f.world.transportLinks][0]!;
+    expect(link.seed.condition).toBeGreaterThan(0);
+    const weight = baselineDefinitionPack.goods[IRON]!.cargoWeightPerUnit;
+    const run = (
+      world: WorldState,
+      options: M5AutonomousRegionalTradeOptions = f.options,
+      observe?: (phase: number, before: WorldState, after: WorldState) => void,
+    ) => executeM5AutonomousRegionalTradeTick(
+      world, TICK, upstream, (_phase, current) => current, options, observe,
+    );
+
+    // Establish real, non-vacuous autonomous orders and dispatches before
+    // constraining capacity. No receipt or trade intent is injected.
+    const full = run(f.world);
+    expect(full.phaseBoundaryError).toBeUndefined();
+    expect(full.reconciliationErrors).toBeNull();
+    const fullCargo = (full.context.phase7DispatchedShipments ?? [])
+      .filter(cargo => cargo.transportLinkId === linkId);
+    expect(fullCargo.length).toBeGreaterThan(0);
+    expect(fullCargo.every(cargo => cargo.goodId === IRON)).toBe(true);
+    const fullWeight = fullCargo.reduce((sum, cargo) => sum + cargo.quantity * weight, 0);
+    expect(fullWeight).toBeGreaterThan(0);
+
+    // One-half the actually used weight, NOT half the item count. The same
+    // two Phase-2 buyers still share one wallet and a single physical link.
+    const cargoBudget = fullWeight / 2;
+    const narrow: WorldState = {
+      ...f.world,
+      transportLinks: new Map([[linkId, {
+        ...link,
+        seed: { ...link.seed, baseCapacity: cargoBudget / link.seed.condition },
+      }]]),
+    };
+    let beforePhase7: WorldState | undefined;
+    let afterPhase7: WorldState | undefined;
+    const limited = run(narrow, f.options, (phase, before, after) => {
+      if (phase === 7) { beforePhase7 = before; afterPhase7 = after; }
+    });
+    const reversed = run(shuffled(narrow));
+    for (const result of [limited, reversed]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+    }
+    expect(limited.context.phase7CommittedLots).toEqual(reversed.context.phase7CommittedLots);
+    expect(limited.context.transactions).toEqual(reversed.context.transactions);
+    expect(limited.world.shipments).toEqual(reversed.world.shipments);
+    expect(beforePhase7).toBeDefined();
+    expect(afterPhase7).toBeDefined();
+
+    const cargo = (limited.context.phase7DispatchedShipments ?? [])
+      .filter(shipment => shipment.transportLinkId === linkId);
+    const usedWeight = cargo.reduce((sum, shipment) =>
+      sum + shipment.quantity * weight, 0);
+    expect(usedWeight).toBeGreaterThan(0); // A blocked trade is not a bottleneck proof.
+    expect(usedWeight).toBeLessThan(fullWeight - 1e-8);
+    expect(usedWeight).toBeLessThanOrEqual(cargoBudget + 1e-8);
+
+    const originals = derivePhase7PostProcurementIntents(
+      beforePhase7!, { ...limited.context, phase: 7 },
+    ).phase8MainIntents.filter(i =>
+      i.side === "BUY" && i.goodId === IRON &&
+      i.actor.type === "PRODUCTION_UNIT" &&
+      i.actor.productionUnitId === f.buyerB.productionUnitId &&
+      (i.purpose === "INPUT" || i.purpose === "INVESTMENT"));
+    expect(new Set(originals.map(i => i.purpose))).toEqual(new Set(["INPUT", "INVESTMENT"]));
+    expect(new Set(originals.map(i => i.id)).size).toBe(2);
+    const paid = (limited.context.phase7CommittedLots ?? [])
+      .filter(lot => originals.some(i => i.id === lot.buyerIntentId));
+    expect(paid.length).toBeGreaterThan(0);
+
+    // Physical capacity alone cannot prove that competing orders were
+    // decremented under THEIR OWN IDs rather than each other's.
+    const closing = limited.context.phase7MainIntents!;
+    const assertPerIntent = (receipts: typeof paid): void => {
+      const endById = new Map(closing.map(i => [i.id, i] as const));
+      for (const original of originals) {
+        const end = endById.get(original.id)!;
+        expect(original.desiredQuantity - end.desiredQuantity).toBeCloseTo(
+          receipts.filter(lot => lot.buyerIntentId === original.id)
+            .reduce((sum, lot) => sum + lot.dispatchedQuantity, 0), 6);
+        expect(original.maxSpend! - end.maxSpend!).toBeCloseTo(
+          receipts.filter(lot => lot.buyerIntentId === original.id)
+            .reduce((sum, lot) => sum + lot.buyerTotalDebitDest, 0), 6);
+      }
+    };
+    assertPerIntent(paid);
+    const buyerBefore = beforePhase7!.productionUnits.get(f.buyerB.productionUnitId)!
+      .wallet.get(f.destination.settlementCurrencyId)!;
+    const buyerAfter = afterPhase7!.productionUnits.get(f.buyerB.productionUnitId)!
+      .wallet.get(f.destination.settlementCurrencyId)!;
+    expect(buyerBefore - buyerAfter).toBeCloseTo(
+      paid.reduce((sum, lot) => sum + lot.buyerTotalDebitDest, 0), 5);
+    const sellerBefore = beforePhase7!.productionUnits.get(f.sellerA.productionUnitId)!
+      .inputInventory.get(IRON)!;
+    const sellerAfter = afterPhase7!.productionUnits.get(f.sellerA.productionUnitId)!
+      .inputInventory.get(IRON)!;
+    expect(sellerBefore - sellerAfter).toBeCloseTo(
+      paid.reduce((sum, lot) => sum + lot.dispatchedQuantity, 0), 6);
+
+    // Negative control preserves the total goods/cash of the constrained
+    // route while attributing a paid lot to the other valid buyer intent.
+    const alternate = originals.find(i => i.id !== paid[0]!.buyerIntentId)!.id;
+    const misattributed = paid.map((lot, index) =>
+      index === 0 ? { ...lot, buyerIntentId: alternate } : lot);
+    expect(misattributed.reduce((sum, lot) => sum + lot.buyerTotalDebitDest, 0))
+      .toBeCloseTo(paid.reduce((sum, lot) => sum + lot.buyerTotalDebitDest, 0), 8);
+    expect(() => assertPerIntent(misattributed)).toThrow();
+
+    // With the exact same real Phase-2/4 intents, zero usable link capacity
+    // must halt foreign payments without suppressing domestic procurement.
+    const stopped = run(f.world, {
+      ...f.options, infrastructureFactors: new Map([[linkId, 0]]),
+    });
+    expect(stopped.phaseBoundaryError).toBeUndefined();
+    expect(stopped.reconciliationErrors).toBeNull();
+    expect(stopped.context.phase7CommittedLots ?? []).toHaveLength(0);
+    expect(stopped.context.transactions.filter(tx =>
+      tx.phase === 7 && ["SHIPMENT_DISPATCH", "FX_INPUT", "FX_OUTPUT",
+        "IMPORT_TARIFF", "TRANSPORT_FEE"].includes(tx.type))).toHaveLength(0);
+    expect(stopped.context.transactions.filter(tx => tx.phase === 4))
+      .toEqual(full.context.transactions.filter(tx => tx.phase === 4));
+  }, 30_000);
+
 });
