@@ -3932,3 +3932,130 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(poolOf(f.world).cash).toEqual(originalPairCash);
   }, 30_000); // 600 ticks × two full replays; keep the timeout local to this golden.
 });
+
+/**
+ * M5 #676: non-synthetic same-owner competition. The tools-craft recipe
+ * really demands BOTH iron and wood; a single buyer wallet funds both orders.
+ * Adding wood to an existing liquidation seller tests the real Phase-2/4/6/7
+ * pipeline instead of forging extra Phase-7 intents or receipts.
+ */
+describe("M5 #676: live same-owner multiple funded BUY intents", () => {
+  it("charges two distinct paid goods intents to one wallet without cross-intent debit", () => {
+    const f = fixture();
+    const WOOD = "good:wood" as GoodId;
+    const originId = f.world.transportLinks.get(f.links[0]!)!.fromRegionId;
+    const destId = f.world.transportLinks.get(f.links[0]!)!.toRegionId;
+    const origin = f.world.regions.get(originId)!;
+    const destination = f.world.regions.get(destId)!;
+    const seller = [...f.world.productionUnits.values()].find(unit =>
+      unit.seed.regionKey === origin.seed.key && unit.status === "CLOSING")!;
+    const buyer = [...f.world.productionUnits.values()].find(unit =>
+      unit.seed.regionKey === destination.seed.key && unit.status === "ACTIVE")!;
+    expect(seller).toBeDefined();
+    expect(buyer).toBeDefined();
+
+    const opening: WorldState = {
+      ...f.world,
+      markets: new Map([...f.world.markets].map(([id, market]) => [
+        id,
+        {
+          ...market,
+          priceByGood: new Map(market.priceByGood).set(
+            WOOD, market.seed.regionKey === origin.seed.key ? 1 : 100,
+          ),
+        },
+      ] as const)),
+      productionUnits: new Map([...f.world.productionUnits].map(([id, unit]) => [
+        id,
+        unit.productionUnitId === seller.productionUnitId
+          ? { ...unit, inputInventory: new Map(unit.inputInventory).set(WOOD, 1_000) }
+          : unit.productionUnitId === buyer.productionUnitId
+            ? { ...unit, wallet: new Map(unit.wallet).set(destination.settlementCurrencyId, 40_000) }
+            : unit,
+      ] as const)),
+    };
+    const options: M5AutonomousRegionalTradeOptions = {
+      ...f.options,
+      phase1TradeLawProvider: query =>
+        (query.goodId === IRON || query.goodId === WOOD) &&
+          f.links.includes(query.linkId) ? null : undefined,
+      phase1TariffLawProvider: query =>
+        query.goodId === IRON || query.goodId === WOOD ? 0.1 : 0,
+    };
+    const configured = { ...f, options };
+    let beforePhase7: WorldState | undefined;
+    let afterPhase7: WorldState | undefined;
+    const actual = run(configured, opening, true, 7, (phase, before, after) => {
+      if (phase === 7) {
+        beforePhase7 = before;
+        afterPhase7 = after;
+      }
+    });
+    const replay = run(configured, reordered(opening), true, 7);
+    for (const result of [actual, replay]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+    }
+    expect(replay.context.phase7CommittedLots).toEqual(actual.context.phase7CommittedLots);
+    expect(replay.context.phase7MainIntents).toEqual(actual.context.phase7MainIntents);
+
+    const original = actual.context.productionMarketIntents!.filter(intent =>
+      intent.side === "BUY" && intent.purpose === "INPUT" &&
+      intent.actor.type === "PRODUCTION_UNIT" &&
+      intent.actor.productionUnitId === buyer.productionUnitId &&
+      (intent.goodId === IRON || intent.goodId === WOOD));
+    expect(new Set(original.map(intent => intent.goodId))).toEqual(new Set([IRON, WOOD]));
+    expect(new Set(original.map(intent => intent.id)).size).toBe(2);
+    const lots = (actual.context.phase7CommittedLots ?? []).filter(lot =>
+      original.some(intent => intent.id === lot.buyerIntentId));
+    expect(new Set(lots.map(lot => lot.goodId))).toEqual(new Set([IRON, WOOD]));
+    expect(new Set(lots.map(lot => lot.buyerIntentId)).size).toBe(2);
+
+    const closing = actual.context.phase7MainIntents!;
+    const byId = new Map(closing.map(intent => [intent.id, intent] as const));
+    const assertDebits = (evidence: typeof closing): void => {
+      const residual = new Map(evidence.map(intent => [intent.id, intent] as const));
+      for (const intent of original) {
+        const charged = lots.filter(lot => lot.buyerIntentId === intent.id);
+        const quantity = charged.reduce((sum, lot) => sum + lot.dispatchedQuantity, 0);
+        const spend = charged.reduce((sum, lot) => sum + lot.buyerTotalDebitDest, 0);
+        expect(intent.desiredQuantity - residual.get(intent.id)!.desiredQuantity)
+          .toBeCloseTo(quantity, 6);
+        expect(intent.maxSpend! - residual.get(intent.id)!.maxSpend!)
+          .toBeCloseTo(spend, 6);
+      }
+    };
+    assertDebits(closing);
+
+    // Only Phase 7 may charge these committed imports. Phase 4 could also have
+    // consumed local funds, so compare phase-boundary wallets, not tick-open cash.
+    expect(beforePhase7).toBeDefined();
+    expect(afterPhase7).toBeDefined();
+    const beforeCash = beforePhase7!.productionUnits
+      .get(buyer.productionUnitId)!.wallet.get(destination.settlementCurrencyId)!;
+    const afterCash = afterPhase7!.productionUnits
+      .get(buyer.productionUnitId)!.wallet.get(destination.settlementCurrencyId)!;
+    const spent = lots.reduce((sum, lot) => sum + lot.buyerTotalDebitDest, 0);
+    expect(spent).toBeGreaterThan(0);
+    expect(beforeCash - afterCash).toBeCloseTo(spent, 5);
+    expect(afterCash).toBeGreaterThanOrEqual(0);
+
+    // A balanced transfer of paid debit between two IDs of the SAME wallet
+    // preserves owner-level cash, but violates their actual settlement receipts.
+    const first = original[0]!;
+    const second = original[1]!;
+    const firstClose = byId.get(first.id)!;
+    const secondClose = byId.get(second.id)!;
+    const transfer = Math.min(0.01, secondClose.maxSpend! / 2);
+    expect(transfer).toBeGreaterThan(0);
+    const forged = closing.map(intent =>
+      intent.id === first.id ? { ...intent, maxSpend: firstClose.maxSpend! + transfer }
+        : intent.id === second.id ? { ...intent, maxSpend: secondClose.maxSpend! - transfer }
+        : intent);
+    expect(forged.find(intent => intent.id === first.id)!.maxSpend! +
+      forged.find(intent => intent.id === second.id)!.maxSpend!)
+      .toBeCloseTo(firstClose.maxSpend! + secondClose.maxSpend!, 8);
+    expect(() => assertDebits(forged)).toThrow();
+  }, 30_000);
+});
