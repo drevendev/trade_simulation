@@ -162,6 +162,10 @@ export function executeM5PreparedTradeTick(
             ...context,
             transactions: committed.transactions,
             phase7MainIntents: committed.phase8MainIntents,
+            // Preserve authenticated per-intent shipment identity after atomic dispatch.
+            // Detached copies cannot alias executor-owned staged arrays.
+            phase7CommittedLots: Object.freeze(committed.committedLots.map(lot =>
+              Object.freeze({ ...lot }))),
             phase7FxReservations: Object.freeze(
               [...input.fxReservationByLotOrdinal.entries()]
                 .sort(([a], [b]) => a - b)
