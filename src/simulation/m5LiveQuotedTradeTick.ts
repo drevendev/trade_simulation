@@ -462,6 +462,10 @@ export function executeM5LiveQuotedTradeTick(
             ...context,
             transactions: committed.transactions,
             phase7MainIntents: committed.phase8MainIntents,
+            // Preserve authenticated per-intent shipment identity after atomic dispatch.
+            // Detached copies cannot alias executor-owned staged arrays.
+            phase7CommittedLots: Object.freeze(committed.committedLots.map(lot =>
+              Object.freeze({ ...lot }))),
             // Publish the actual promises used by this execution, not rebuilt
             // quotes from the post-settlement reserves or a parallel tick path.
             phase7FxReservations: Object.freeze(
