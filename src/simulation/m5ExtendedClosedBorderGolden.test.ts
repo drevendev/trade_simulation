@@ -3121,7 +3121,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
           `tick ${tick}: executor-owned committed lot evidence`).toBeDefined();
         const committedLots = actual.context.phase7CommittedLots!;
         const assertPerIntentDebits = (lots: typeof committedLots): void => {
-          const cargoById = new Map(fresh.map(cargo => [cargo.id, cargo] as const));
+          const cargoById = new Map(fresh.map(cargo => [String(cargo.id), cargo] as const));
           expect(lots, `tick ${tick}: every physical dispatch has one intent receipt`)
             .toHaveLength(fresh.length);
           expect(new Set(lots.map(lot => lot.shipmentId)).size).toBe(lots.length);
