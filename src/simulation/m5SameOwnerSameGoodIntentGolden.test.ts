@@ -233,7 +233,7 @@ describe("M5 #676 real same-owner same-good cash and goods competition", () => {
 
   it("clamps shared same-good intent spending to one physical corridor's cargo weight", () => {
     const f = fixture();
-    const [[linkId, link]] = [...f.world.transportLinks];
+    const [linkId, link] = [...f.world.transportLinks][0]!;
     expect(link.seed.condition).toBeGreaterThan(0);
     const weight = baselineDefinitionPack.goods[IRON]!.cargoWeightPerUnit;
     const run = (
