@@ -186,8 +186,10 @@ describe("M5 #676 real same-owner same-good cash and goods competition", () => {
     expect(new Set(paid.map(lot => lot.buyerIntentId)))
       .toEqual(new Set(original.map(i => i.id)));
     expect(paid.every(lot => lot.goodId === IRON && lot.dispatchedQuantity > 0)).toBe(true);
-    expect(new Set(paid.map(lot => lot.buyerInventoryBucket)))
-      .toEqual(new Set(["INPUT", "INVESTMENT"]));
+    const dispatched = [...(afterPhase7!.shipments?.values() ?? [])];
+    expect(new Set(paid.map(lot =>
+      dispatched.find(cargo => String(cargo.id) === lot.shipmentId)?.destinationInventoryBucket,
+    ))).toEqual(new Set(["INPUT", "INVESTMENT"]));
 
     const closing = actual.context.phase7MainIntents!;
     const assertDebits = (end: typeof closing, receipts: typeof paid): void => {
