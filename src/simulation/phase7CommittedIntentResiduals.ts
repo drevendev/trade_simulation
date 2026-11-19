@@ -29,6 +29,14 @@ export interface CommittedPhase7ShipmentLot {
   readonly buyerTotalDebitDest: number;
 }
 
+// A tick-local, executor-owned audit trail. This is NOT a persistent stock or a
+// second commitment authority: every entry must match a paid dispatch receipt.
+declare module "./tickOrchestrator" {
+  interface TickContext {
+    readonly phase7CommittedLots?: readonly CommittedPhase7ShipmentLot[];
+  }
+}
+
 function positiveFinite(value: number, field: string): void {
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(`Phase-7 committed residual ${field} must be finite and positive`);

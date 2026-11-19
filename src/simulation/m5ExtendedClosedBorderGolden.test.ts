@@ -15,6 +15,7 @@ import type { GoodId, TransportLinkId } from "../domain/id";
 import type { PhaseHandler } from "./tickOrchestrator";
 import { effectiveTransportLinkCapacity } from "./transportCapacity";
 import { derivePhase7PostProcurementIntents } from "./phase7PostProcurementIntents";
+import { createMarketIntentId, validateMarketIntent, type MarketIntent, type MarketIntentId } from "./marketIntent";
 import { phase7ImportTariffKey } from "./phase7LiveWorldPlan";
 import type { FxLedgerLeg } from "./fxSettlement";
 import { executeM5AutonomousRegionalTradeTick, type M5AutonomousRegionalTradeOptions } from "./m5AutonomousRegionalTradeTick";
@@ -2744,6 +2745,8 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeReplayEvidenceChecked = false;
     let negativeFxReservationBindingChecked = false;
     let negativeFxDoubleSpendChecked = false;
+    let negativePerIntentDebitChecked = false;
+    let perIntentReconciledTicks = 0;
     let reconciledResidualTicks = 0;
     let zeroCapacityWindows = 0;
     let liveNeighborWhileBlockedTicks = 0;
@@ -2835,6 +2838,9 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         expect(observed.phase7FxReservations,
           `tick ${tick}: actual Phase-7 FX reservations`)
           .toEqual(actual.context.phase7FxReservations);
+        expect(observed.phase7CommittedLots,
+          `tick ${tick}: actual paid shipment-to-intent identities`)
+          .toEqual(actual.context.phase7CommittedLots);
       };
       assertReplayEvidence(replay.context);
       if (!negativeReplayEvidenceChecked && actual.context.phase7MainIntents?.length) {
@@ -3108,6 +3114,120 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         };
         assertResidualDebits(fresh);
         reconciledResidualTicks++;
+
+        // Match REAL executor-authenticated lots to physically dispatched
+        // cargo, then reconcile debit by MarketIntent ID, not owner totals.
+        // Two intents sharing one owner/wallet must never swap consumed demand.
+        expect(actual.context.phase7CommittedLots,
+          `tick ${tick}: executor-owned committed lot evidence`).toBeDefined();
+        const committedLots = actual.context.phase7CommittedLots!;
+        // Stage one validates real paid cargo IDs and actor/region/good
+        // ownership, independently of the per-intent debit assertion.
+        const collectPerIntentDebits = (
+          lots: typeof committedLots,
+          beforeById: ReadonlyMap<MarketIntentId, MarketIntent>,
+        ): Map<string, { quantity: number; spend: number }> => {
+          const cargoById = new Map(fresh.map(cargo => [String(cargo.id), cargo] as const));
+          expect(lots, `tick ${tick}: every physical dispatch has one intent receipt`)
+            .toHaveLength(fresh.length);
+          expect(new Set(lots.map(lot => lot.shipmentId)).size).toBe(lots.length);
+          const debits = new Map<string, { quantity: number; spend: number }>();
+          const add = (id: string, quantity: number, spend: number): void => {
+            const prior = debits.get(id) ?? { quantity: 0, spend: 0 };
+            debits.set(id, {
+              quantity: prior.quantity + quantity, spend: prior.spend + spend,
+            });
+          };
+          for (const lot of lots) {
+            const cargo = cargoById.get(lot.shipmentId);
+            expect(cargo, `tick ${tick}: committed receipt names real cargo`)
+              .toBeDefined();
+            const seller = beforeById.get(lot.sellerIntentId);
+            const buyer = beforeById.get(lot.buyerIntentId);
+            expect(seller?.side).toBe("SELL");
+            expect(buyer?.side).toBe("BUY");
+            expect(actorRefKey(seller!.actor)).toBe(actorRefKey(cargo!.seller));
+            expect(actorRefKey(buyer!.actor)).toBe(actorRefKey(cargo!.beneficialOwner));
+            expect(lot.originRegionId).toBe(cargo!.originRegionId);
+            expect(lot.destinationRegionId).toBe(cargo!.destinationRegionId);
+            expect(lot.goodId).toBe(cargo!.goodId);
+            expect(lot.dispatchedQuantity).toBeCloseTo(cargo!.quantity, 6);
+            const charged = cargo!.buyerGoodsPaymentAmount +
+              cargo!.transportFeeAmount + cargo!.tariffAmount +
+              cargo!.consumptionTaxAmount;
+            expect(lot.buyerTotalDebitDest).toBeCloseTo(charged, 6);
+            add(String(lot.sellerIntentId), lot.dispatchedQuantity, 0);
+            add(String(lot.buyerIntentId), lot.dispatchedQuantity,
+              lot.buyerTotalDebitDest);
+          }
+          return debits;
+        };
+        // Stage two is the only check that binds consumption to each intent ID.
+        // Stage-one validation alone MUST pass the same-owner ID-swap witness.
+        const assertPerIntentDeltas = (
+          beforeById: ReadonlyMap<MarketIntentId, MarketIntent>,
+          closing: readonly MarketIntent[],
+          debits: ReadonlyMap<string, { quantity: number; spend: number }>,
+        ): void => {
+          expect(closing.length).toBe(beforeById.size);
+          for (const intent of closing) {
+            const before = beforeById.get(intent.id);
+            expect(before).toBeDefined();
+            const expected = debits.get(String(intent.id)) ?? { quantity: 0, spend: 0 };
+            expect(before!.desiredQuantity - intent.desiredQuantity,
+              `tick ${tick}: debit for intent ${intent.id}`)
+              .toBeCloseTo(expected.quantity, 6);
+            if (intent.side === "BUY") {
+              expect(before!.maxSpend).toBeDefined();
+              expect(intent.maxSpend).toBeDefined();
+              expect(before!.maxSpend! - intent.maxSpend!,
+                `tick ${tick}: spend for intent ${intent.id}`)
+                .toBeCloseTo(expected.spend, 6);
+            }
+          }
+        };
+        assertPerIntentDeltas(originalById, afterIntents,
+          collectPerIntentDebits(committedLots, originalById));
+        perIntentReconciledTicks++;
+        if (!negativePerIntentDebitChecked && committedLots.length > 0) {
+          const first = committedLots[0]!;
+          const realBuyer = originalById.get(first.buyerIntentId)!;
+          expect(realBuyer.side).toBe("BUY");
+          // Add a second VALID BUY intent under the SAME actor, good, region,
+          // wallet and currency. The live 600-tick WorldState is untouched:
+          // this auxiliary fixture only probes the receipt/accounting oracle.
+          const alternateBuyer: MarketIntent = {
+            ...realBuyer,
+            id: createMarketIntentId(`mi:${tick}:same-owner-alternative`),
+            sourcePlanId: `${realBuyer.sourcePlanId}:alternate`,
+          };
+          validateMarketIntent(alternateBuyer);
+          expect(actorRefKey(alternateBuyer.actor)).toBe(actorRefKey(realBuyer.actor));
+          expect(alternateBuyer.regionId).toBe(realBuyer.regionId);
+          expect(alternateBuyer.goodId).toBe(realBuyer.goodId);
+          expect(alternateBuyer.side).toBe("BUY");
+          const withAlternate = new Map(originalById).set(
+            alternateBuyer.id, alternateBuyer);
+          const undebitedAlternative = [...afterIntents, alternateBuyer];
+          // Positive control: two valid, same-owner BUY IDs, with the second
+          // unspent, satisfy BOTH receipt identity and per-ID debit checks.
+          const honestDebits = collectPerIntentDebits(committedLots, withAlternate);
+          assertPerIntentDeltas(withAlternate, undebitedAlternative, honestDebits);
+
+          // Reattribute actual paid cargo to the other valid BUY ID while
+          // changing NO goods, money, receipt quantities, settlement IDs,
+          // cargo ownership, or owner-total debit. Stage one MUST accept this
+          // forgery; only per-ID quantity/spend comparisons may reject it.
+          const forged = committedLots.map((lot, i) => i === 0
+            ? { ...lot, buyerIntentId: alternateBuyer.id } : lot);
+          const misattributedDebits = collectPerIntentDebits(forged, withAlternate);
+          expect(misattributedDebits.get(String(alternateBuyer.id))?.quantity)
+            .toBeCloseTo(first.dispatchedQuantity, 6);
+          expect(() => assertPerIntentDeltas(
+            withAlternate, undebitedAlternative, misattributedDebits,
+          )).toThrow();
+          negativePerIntentDebitChecked = true;
+        }
         if (!negativeIntentProvenanceChecked && afterIntents.length > 0) {
           const unchanged = afterIntents[0]!;
           const counterfeit = [...afterIntents];
@@ -3794,6 +3914,8 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeReplayEvidenceChecked).toBe(true);
     expect(negativeFxReservationBindingChecked).toBe(true);
     expect(negativeFxDoubleSpendChecked).toBe(true);
+    expect(negativePerIntentDebitChecked).toBe(true);
+    expect(perIntentReconciledTicks).toBeGreaterThan(0);
     expect(reconciledResidualTicks).toBeGreaterThan(0);
     expect(divergentFeeTicks).toBeGreaterThan(0);
     expect(creditedTreasuryTicks).toBeGreaterThan(0);
