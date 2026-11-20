@@ -264,6 +264,67 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       .toBe(500);
   });
 
+  it("blocks a physically zero-capacity route without interrupting paid local Phase-4 trade", () => {
+    const f = fixture();
+    // Positive control: the *same* route really carries a paid FX shipment
+    // when its physical capacity is available. A fixture with no possible
+    // export must not make the zero-capacity assertion pass vacuously.
+    const open = run(f);
+    expect(open.reconciliationErrors).toBeNull();
+    expect(open.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH")).toHaveLength(1);
+    expect(open.world.shipments?.size).toBe(1);
+
+    // This is a physical (not legal or monetary) closure: Phase-1 permission,
+    // the seller's stock, buyer's cash and FX pool reserves are unchanged.
+    const blockedFactors = new Map([[f.link.linkId, 0]]);
+    const noCapacity = run({
+      ...f,
+      options: { ...f.options, infrastructureFactors: blockedFactors },
+    });
+    const noPermission = run({
+      ...f,
+      options: { ...f.options, phase1TradeLawProvider: () => undefined },
+    });
+    expect(noCapacity.phaseBoundaryError).toBeUndefined();
+    expect(noCapacity.reconciliationErrors).toBeNull();
+    expect(noCapacity.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(blockedFactors.get(f.link.linkId)).toBe(0);
+
+    // Local Phase-4 still performs physical, paid procurement: an unchanged
+    // allocation list alone is not evidence of a real settlement.
+    const localSales = noCapacity.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE");
+    expect(localSales).toHaveLength(2);
+    for (const sale of localSales) {
+      expect(sale.quantity).toBeGreaterThan(0);
+      expect(sale.moneyAmount).toBeGreaterThan(0);
+    }
+    expect(localSales).toEqual(noPermission.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE"));
+
+    // A capacity-blocked route must leave NO paid cross-border legs, including
+    // FX, tariff, fees and tax, rather than merely suppressing shipment output.
+    const tradeTypes = new Set([
+      "SHIPMENT_DISPATCH", "TRADE_GOODS_SALE", "TRANSPORT_FEE",
+      "FX_INPUT", "FX_OUTPUT", "IMPORT_TARIFF", "CONSUMPTION_TAX",
+    ]);
+    expect(noCapacity.context.transactions.filter(tx =>
+      tx.phase === 7 && tradeTypes.has(tx.type))).toHaveLength(0);
+    expect(noCapacity.world.shipments?.size ?? 0).toBe(0);
+    expect(noCapacity.world.productionUnits).toEqual(noPermission.world.productionUnits);
+    expect(noCapacity.world.states).toEqual(noPermission.world.states);
+    expect(noCapacity.world.monetaryAuthorities).toEqual(noPermission.world.monetaryAuthorities);
+    expect(totalIron(noCapacity.world)).toBeCloseTo(totalIron(f.world), 8);
+    // Both routes through this test must leave the shared opening stock intact.
+    expect(f.world.shipments?.size ?? 0).toBe(0);
+    expect(f.world.productionUnits.get(f.sellerA.productionUnitId)!
+      .inputInventory.get(IRON)).toBe(500);
+    expect(run({
+      ...f, options: { ...f.options, infrastructureFactors: new Map([[f.link.linkId, 0]]) },
+    }).context.transactions).toEqual(noCapacity.context.transactions);
+  });
+
   it("refuses ambiguous issuer-owned FX pools before moving cross-border cargo", () => {
     const f = fixture(true);
     expect(() => run(f)).toThrow(/exactly one live pool/);
