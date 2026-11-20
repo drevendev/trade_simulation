@@ -230,8 +230,9 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
         if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") {
           throw new Error("Expected real FX-paid ProductionUnit beneficiary");
         }
+        const paidOwnerId = cargo.beneficialOwner.productionUnitId;
         const wrongOwner = [...actual.world.productionUnits.keys()].find(
-          id => id !== cargo.beneficialOwner.productionUnitId);
+          id => id !== paidOwnerId);
         expect(wrongOwner).toBeDefined();
         const forged: WorldState = {
           ...actual.world,
