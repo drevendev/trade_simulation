@@ -165,16 +165,38 @@ describe("M5 #673 Phase-1 tariff authority through canonical 16-phase tick", () 
     expect(f.world.shipments?.size).toBe(0);
   });
 
-  it("rejects an invalid law in Phase 1 even if Phase 7 would do no trade", () => {
+  it.each([-0.01, 1.000001, Number.POSITIVE_INFINITY])(
+    "rejects invalid tariff %s in Phase 1 even if Phase 7 would do no trade",
+    (rate) => {
+      const f = fixture();
+      let reachedPhase7 = false;
+      expect(() => executeM5LiveQuotedTradeTick(
+        f.world, 7, f.phase1, unchanged,
+        () => { reachedPhase7 = true; return null; },
+        undefined, () => rate,
+      )).toThrow("finite statutory rate in [0, 1]");
+      expect(reachedPhase7).toBe(false);
+      expect(f.world.shipments?.size).toBe(0);
+    },
+  );
+
+  it("preserves an explicitly authorized 100% tariff at both Phase-1 and Phase-7", () => {
     const f = fixture();
-    let reachedPhase7 = false;
-    expect(() => executeM5LiveQuotedTradeTick(
+    let checked = false;
+    const result = executeM5LiveQuotedTradeTick(
       f.world, 7, f.phase1, unchanged,
-      () => { reachedPhase7 = true; return null; },
-      undefined, () => -0.01,
-    )).toThrow("finite nonnegative statutory rate");
-    expect(reachedPhase7).toBe(false);
-    expect(f.world.shipments?.size).toBe(0);
+      (world, context) => {
+        checked = true;
+        expect(context.phase1ImportTariffs?.ratesByDestinationStateGood.get(f.key)).toBe(1);
+        expect(derivePhase7Phase1ImportTariffs(world, context, [f.quote])[0]
+          ?.estimatedTariffRate).toBe(1);
+        return null;
+      },
+      undefined, () => 1,
+    );
+    expect(checked).toBe(true);
+    expect(result.reconciliationErrors).toBeNull();
+    expect(result.world).toBe(f.world);
   });
 
   it("forwards the same canonical capture through the auto-intake wrapper", () => {
