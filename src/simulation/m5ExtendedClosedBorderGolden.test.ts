@@ -4306,6 +4306,74 @@ describe("M5 #676: live same-owner multiple funded BUY intents", () => {
     expect(new Set(lots.map(lot => lot.goodId))).toEqual(new Set([IRON, WOOD]));
     expect(new Set(lots.map(lot => lot.buyerIntentId)).size).toBe(2);
 
+    // Two different goods sharing one destination wallet must remain distinct
+    // PHYSICAL stocks as well as distinct debits. The earlier spend oracle
+    // would pass even if a seller silently swapped wood for iron while the
+    // combined number of units and the buyer's payment stayed unchanged.
+    const shipped = [...(afterPhase7!.shipments?.values() ?? [])].filter(cargo =>
+      !beforePhase7!.shipments?.has(cargo.id));
+    expect(new Set(shipped.map(cargo => cargo.goodId)))
+      .toEqual(new Set([IRON, WOOD]));
+    expect(new Set(shipped.map(cargo => cargo.id)))
+      .toEqual(new Set(lots.map(lot => lot.shipmentId)));
+    expect(shipped.every(cargo =>
+      cargo.seller.type === "PRODUCTION_UNIT" &&
+      cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+      cargo.beneficialOwner.productionUnitId === buyer.productionUnitId))
+      .toBe(true);
+
+    const assertPerGoodStocks = (settled: WorldState): void => {
+      for (const [unitId, openingUnit] of beforePhase7!.productionUnits) {
+        const endingUnit = settled.productionUnits.get(unitId)!;
+        for (const good of [IRON, WOOD]) {
+          const exported = shipped.reduce((sum, cargo) =>
+            sum + (cargo.goodId === good &&
+              cargo.seller.type === "PRODUCTION_UNIT" &&
+              cargo.seller.productionUnitId === unitId ? cargo.quantity : 0), 0);
+          for (const [bucket, expected] of [
+            ["inputInventory", -exported],
+            ["outputInventory", 0],
+            ["investmentInventory", 0],
+          ] as const) {
+            const observed = (endingUnit[bucket].get(good) ?? 0) -
+              (openingUnit[bucket].get(good) ?? 0);
+            expect(observed, `Phase-7 ${unitId}/${bucket}/${good}`)
+              .toBeCloseTo(expected, 6);
+          }
+        }
+      }
+    };
+    assertPerGoodStocks(afterPhase7!);
+
+    // Negative control: preserve combined iron+wood INPUT stock in one real
+    // producer but counterfeit the good identity. Global unit conservation,
+    // unchanged wallets, paid shipments and per-intent debits all still pass;
+    // only a per-good owner/bucket oracle can detect this corruption.
+    const donor = [...afterPhase7!.productionUnits].find(([, unit]) =>
+      [IRON, WOOD].some(good => (unit.inputInventory.get(good) ?? 0) > 0));
+    expect(donor).toBeDefined();
+    const [donorId, donorUnit] = donor!;
+    const sourceGood = [IRON, WOOD].find(good =>
+      (donorUnit.inputInventory.get(good) ?? 0) > 0)!;
+    const otherGood = sourceGood === IRON ? WOOD : IRON;
+    const moved = Math.min(0.25, (donorUnit.inputInventory.get(sourceGood) ?? 0) / 2);
+    expect(moved).toBeGreaterThan(0);
+    const spoofedInputs = new Map(donorUnit.inputInventory);
+    spoofedInputs.set(sourceGood, (spoofedInputs.get(sourceGood) ?? 0) - moved);
+    spoofedInputs.set(otherGood, (spoofedInputs.get(otherGood) ?? 0) + moved);
+    const forgedStocks: WorldState = {
+      ...afterPhase7!,
+      productionUnits: new Map(afterPhase7!.productionUnits).set(donorId, {
+        ...donorUnit, inputInventory: spoofedInputs,
+      }),
+    };
+    const combinedInput = (world: WorldState) =>
+      [IRON, WOOD].reduce((sum, good) =>
+        sum + (world.productionUnits.get(donorId)!.inputInventory.get(good) ?? 0), 0);
+    expect(combinedInput(forgedStocks))
+      .toBeCloseTo(combinedInput(afterPhase7!), 8);
+    expect(() => assertPerGoodStocks(forgedStocks)).toThrow();
+
     const closing = actual.context.phase7MainIntents!;
     const byId = new Map(closing.map(intent => [intent.id, intent] as const));
     const assertDebits = (evidence: typeof closing): void => {
