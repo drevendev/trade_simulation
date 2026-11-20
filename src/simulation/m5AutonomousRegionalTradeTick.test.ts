@@ -6,6 +6,7 @@ import { createPhase2LaborSupplyPlanningHandler } from "./laborSupplyPlanning";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { GoodId } from "../domain/id";
+import { cargoCapacityUse, effectiveTransportLinkCapacity } from "./transportCapacity";
 import type { PhaseHandler } from "./tickOrchestrator";
 import type { M4ClosedEconomyOptions } from "./m4ClosedEconomyOrchestrator";
 import {
@@ -323,6 +324,97 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(run({
       ...f, options: { ...f.options, infrastructureFactors: new Map([[f.link.linkId, 0]]) },
     }).context.transactions).toEqual(noCapacity.context.transactions);
+  });
+
+  it("shrinks a paid FX shipment to a positive physical link budget without altering local settlement", () => {
+    const f = fixture();
+    const unrestricted = run(f);
+    expect(unrestricted.phaseBoundaryError).toBeUndefined();
+    expect(unrestricted.reconciliationErrors).toBeNull();
+    const fullShipments = [...(unrestricted.world.shipments?.values() ?? [])];
+    expect(fullShipments).toHaveLength(1);
+    const full = fullShipments[0]!;
+    expect(full.quantity).toBeGreaterThan(0);
+
+    // Derive a strictly binding cargo-WEIGHT ceiling from an actually paid
+    // route, rather than guessing a baseline link capacity or item mass.
+    const weight = f.world.definitionRegistry.goods[IRON]!.cargoWeightPerUnit;
+    const unrestrictedCapacity = effectiveTransportLinkCapacity(f.link, 1);
+    const reducedBudget = cargoCapacityUse(full.quantity, weight) / 2;
+    const factor = reducedBudget / unrestrictedCapacity;
+    expect(unrestrictedCapacity).toBeGreaterThan(0);
+    expect(factor).toBeGreaterThan(0);
+    expect(factor).toBeLessThan(1);
+    const reducedOptions = {
+      ...f.options, infrastructureFactors: new Map([[f.link.linkId, factor]]),
+    };
+    let phase7: { before: WorldState; after: WorldState } | undefined;
+    const reduced = run({ ...f, options: reducedOptions }, (phase, before, after) => {
+      if (phase === 7) phase7 = { before, after };
+    });
+    expect(reduced.phaseBoundaryError).toBeUndefined();
+    expect(reduced.reconciliationErrors).toBeNull();
+    expect(reduced.phaseTrace).toEqual([...Array(16).keys()]);
+    const cargos = [...(reduced.world.shipments?.values() ?? [])];
+    expect(cargos).toHaveLength(1);
+    const cargo = cargos[0]!;
+    expect(cargo.transportLinkId).toBe(f.link.linkId);
+    expect(cargo.goodId).toBe(IRON);
+    expect(cargo.quantity).toBeGreaterThan(0);
+    expect(cargo.quantity).toBeLessThan(full.quantity);
+
+    // A paid cargo must fit the shared directed-link budget in physical
+    // cargo units. A forged full-size cargo keeps aggregate stocks intact,
+    // but must fail this independent capacity witness.
+    const capacity = effectiveTransportLinkCapacity(f.link, factor);
+    const assertFits = (quantity: number) =>
+      expect(cargoCapacityUse(quantity, weight)).toBeLessThanOrEqual(
+        capacity + f.world.simulationConfig.numeric.quantityEpsilon!,
+      );
+    assertFits(cargo.quantity);
+    expect(() => assertFits(full.quantity)).toThrow();
+
+    // Capacity shrinkage happens BEFORE seller inventory and buyer cash
+    // mutation; no full-size invoice or other owner's inventory may be used.
+    expect(phase7).toBeDefined();
+    const sellerBefore = phase7!.before.productionUnits.get(f.sellerA.productionUnitId)!;
+    const sellerAfter = phase7!.after.productionUnits.get(f.sellerA.productionUnitId)!;
+    const buyerBefore = phase7!.before.productionUnits.get(f.buyerB.productionUnitId)!;
+    const buyerAfter = phase7!.after.productionUnits.get(f.buyerB.productionUnitId)!;
+    expect(cargo.seller).toEqual({
+      type: "PRODUCTION_UNIT", productionUnitId: f.sellerA.productionUnitId,
+    });
+    expect(cargo.beneficialOwner).toEqual({
+      type: "PRODUCTION_UNIT", productionUnitId: f.buyerB.productionUnitId,
+    });
+    expect((sellerBefore.inputInventory.get(IRON) ?? 0) -
+      (sellerAfter.inputInventory.get(IRON) ?? 0)).toBeCloseTo(cargo.quantity, 7);
+    expect((sellerAfter.wallet.get(f.source.settlementCurrencyId) ?? 0) -
+      (sellerBefore.wallet.get(f.source.settlementCurrencyId) ?? 0))
+      .toBeCloseTo(cargo.quantity * cargo.sellerNetUnitPrice, 6);
+    const gross = cargo.buyerGoodsPaymentAmount + cargo.transportFeeAmount +
+      cargo.tariffAmount + cargo.consumptionTaxAmount;
+    expect((buyerBefore.wallet.get(f.destination.settlementCurrencyId) ?? 0) -
+      (buyerAfter.wallet.get(f.destination.settlementCurrencyId) ?? 0))
+      .toBeCloseTo(gross, 6);
+    for (const type of [
+      "SHIPMENT_DISPATCH", "FX_INPUT", "FX_OUTPUT",
+      "IMPORT_TARIFF", "TRANSPORT_FEE",
+    ]) {
+      expect(reduced.context.transactions.filter(tx => tx.phase === 7 && tx.type === type))
+        .toHaveLength(1);
+    }
+
+    // The bottleneck must not reduce already-paid LOCAL Phase-4 procurement.
+    const local = (result: typeof reduced) => result.context.transactions.filter(
+      tx => tx.phase === 4 && tx.type === "MARKET_SALE",
+    );
+    expect(local(reduced)).toHaveLength(2);
+    expect(local(reduced)).toEqual(local(unrestricted));
+    expect(totalIron(reduced.world)).toBeCloseTo(totalIron(f.world), 8);
+    expect(run({ ...f, options: reducedOptions }).context.transactions)
+      .toEqual(reduced.context.transactions);
+    expect(f.world.shipments?.size ?? 0).toBe(0);
   });
 
   it("refuses ambiguous issuer-owned FX pools before moving cross-border cargo", () => {
