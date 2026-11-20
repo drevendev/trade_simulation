@@ -647,6 +647,129 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       .toEqual(funded.householdInventory);
   });
 
+  it("cannot spend one seller's supply again across real Phase-4, FX Phase-7 and Phase-8 sales", () => {
+    const f = fixture();
+    const cohort = [...f.world.cohorts.values()].find(
+      c => c.seed.regionKey === f.source.seed.key,
+    )!;
+    const funded = {
+      ...cohort,
+      wallet: new Map(cohort.wallet).set(f.source.settlementCurrencyId, 100_000),
+    };
+    const opening: WorldState = {
+      ...f.world,
+      cohorts: new Map(f.world.cohorts).set(funded.cohortId, funded),
+    };
+    const householdDemand: PhaseHandler = (world, context, pending) => {
+      const next = households(world, context, pending);
+      return context.phase !== 2 ? next : {
+        ...next,
+        householdMarketIntents: [{
+          id: createMarketIntentId("mi:m5-three-phase-seller-residual"),
+          actor: { type: "COHORT" as const, cohortId: funded.cohortId },
+          regionId: f.source.regionId,
+          goodId: IRON,
+          side: "BUY" as const,
+          purpose: "CONSUMPTION" as const,
+          desiredQuantity: 1,
+          maxSpend: 10_000,
+          inventoryBucket: "GENERAL" as const,
+          sourcePlanId: "plan:m5-three-phase-seller-residual",
+        }],
+      };
+    };
+    const options = { ...f.options, settleMainMarketInPhase8: true as const };
+    const boundaries = new Map<number, { before: WorldState; after: WorldState }>();
+    const result = executeM5AutonomousRegionalTradeTick(
+      opening, 7, householdDemand, (_phase, world) => world, options,
+      (phase, before, after) => {
+        if (phase === 4 || phase === 7 || phase === 8) {
+          boundaries.set(phase, { before, after });
+        }
+      },
+    );
+    expect(result.phaseBoundaryError).toBeUndefined();
+    expect(result.reconciliationErrors).toBeNull();
+    expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+    expect([...boundaries.keys()].sort((a, b) => a - b)).toEqual([4, 7, 8]);
+
+    const sellerId = f.sellerA.productionUnitId;
+    const sellerStock = (world: WorldState) =>
+      world.productionUnits.get(sellerId)!.inputInventory.get(IRON) ?? 0;
+    const sellerIntents = result.context.productionMarketIntents!.filter(intent =>
+      intent.side === "SELL" && intent.goodId === IRON &&
+      intent.actor.type === "PRODUCTION_UNIT" &&
+      intent.actor.productionUnitId === sellerId);
+    expect(sellerIntents).toHaveLength(1);
+    const originalSell = sellerIntents[0]!;
+    const paidLocal = result.context.phase4MarketAllocations!.filter(
+      allocation => allocation.sellerIntentId === originalSell.id);
+    const paidForeign = (result.context.phase7CommittedLots ?? []).filter(
+      lot => lot.sellerIntentId === originalSell.id);
+    const paidMain = result.context.marketAllocations.filter(
+      allocation => allocation.pass === "MAIN" &&
+        allocation.sellerIntentId === originalSell.id &&
+        allocation.buyer.type === "COHORT" &&
+        allocation.buyer.cohortId === funded.cohortId);
+    // Each phase must really settle a positive quantity from this same seller:
+    // an empty phase must never turn this into a vacuous conservation check.
+    expect(paidLocal.length).toBeGreaterThan(0);
+    expect(paidForeign.length).toBeGreaterThan(0);
+    expect(paidMain).toHaveLength(1);
+    const q4 = paidLocal.reduce((sum, allocation) => sum + allocation.quantity, 0);
+    const q7 = paidForeign.reduce((sum, lot) => sum + lot.dispatchedQuantity, 0);
+    const q8 = paidMain.reduce((sum, allocation) => sum + allocation.quantity, 0);
+    expect(q4).toBeGreaterThan(0);
+    expect(q7).toBeGreaterThan(0);
+    expect(q8).toBeGreaterThan(0);
+
+    const residual = result.context.phase7MainIntents!.find(
+      intent => intent.id === originalSell.id)!;
+    expect(residual).toBeDefined();
+    expect(residual.desiredQuantity).toBeCloseTo(
+      originalSell.desiredQuantity - q4 - q7, 6);
+    expect(q8).toBeLessThanOrEqual(residual.desiredQuantity + 1e-8);
+    const assertActualSellerDebits = (after8: WorldState) => {
+      expect(sellerStock(boundaries.get(4)!.before) -
+        sellerStock(boundaries.get(4)!.after)).toBeCloseTo(q4, 7);
+      expect(sellerStock(boundaries.get(7)!.before) -
+        sellerStock(boundaries.get(7)!.after)).toBeCloseTo(q7, 7);
+      expect(sellerStock(boundaries.get(8)!.before) -
+        sellerStock(after8)).toBeCloseTo(q8, 7);
+      expect(sellerStock(opening) - sellerStock(after8))
+        .toBeCloseTo(q4 + q7 + q8, 7);
+      expect(sellerStock(after8)).toBeGreaterThanOrEqual(-1e-8);
+      expect(q4 + q7 + q8).toBeLessThanOrEqual(
+        originalSell.desiredQuantity + 1e-8);
+    };
+    assertActualSellerDebits(boundaries.get(8)!.after);
+    expect(sellerStock(result.world)).toBeCloseTo(
+      sellerStock(boundaries.get(8)!.after), 8);
+    expect(totalIron(result.world)).toBeCloseTo(totalIron(opening), 8);
+
+    // Balanced corruption: credit iron back to the seller and take the same
+    // amount from the local buyer. Total goods and paid receipts still agree,
+    // but the seller has quietly reused one Phase-8 sale.
+    const otherId = f.buyerA.productionUnitId;
+    const other = boundaries.get(8)!.after.productionUnits.get(otherId)!;
+    expect(other.inputInventory.get(IRON) ?? 0).toBeGreaterThan(q8 / 2);
+    const seller = boundaries.get(8)!.after.productionUnits.get(sellerId)!;
+    const forgedUnits = new Map(boundaries.get(8)!.after.productionUnits);
+    forgedUnits.set(sellerId, {
+      ...seller, inputInventory: new Map(seller.inputInventory).set(
+        IRON, (seller.inputInventory.get(IRON) ?? 0) + q8 / 2),
+    });
+    forgedUnits.set(otherId, {
+      ...other, inputInventory: new Map(other.inputInventory).set(
+        IRON, (other.inputInventory.get(IRON) ?? 0) - q8 / 2),
+    });
+    const forged = { ...boundaries.get(8)!.after, productionUnits: forgedUnits };
+    expect(totalIron(forged)).toBeCloseTo(totalIron(boundaries.get(8)!.after), 8);
+    expect(() => assertActualSellerDebits(forged)).toThrow();
+    expect(opening.productionUnits.get(sellerId)!.inputInventory.get(IRON))
+      .toBe(f.sellerA.inputInventory.get(IRON));
+  });
+
   it("caps two same-cohort Phase-8 purchases against one post-Phase-7 wallet, independent of intent order", () => {
     const f = fixture();
     const cohort = [...f.world.cohorts.values()].find(
