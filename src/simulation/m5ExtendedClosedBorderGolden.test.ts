@@ -233,10 +233,12 @@ function reordered(world: WorldState): WorldState {
         investmentInventory: reverse(unit.investmentInventory),
       }] as const)),
     transportLinks: reverse(world.transportLinks),
-    shipments: world.shipments ? reverse(world.shipments) : world.shipments,
-    outgoingTransportLinkIdsByRegion: world.outgoingTransportLinkIdsByRegion
-      ? reverse(world.outgoingTransportLinkIdsByRegion)
-      : world.outgoingTransportLinkIdsByRegion,
+    // With exactOptionalPropertyTypes, absent optional legacy registries must
+    // stay absent rather than being written as explicit undefined fields.
+    ...(world.shipments ? { shipments: reverse(world.shipments) } : {}),
+    ...(world.outgoingTransportLinkIdsByRegion ? {
+      outgoingTransportLinkIdsByRegion: reverse(world.outgoingTransportLinkIdsByRegion),
+    } : {}),
     monetaryAuthorities: new Map([...world.monetaryAuthorities].reverse().map(
       ([id, authority]) => [id, {
         ...authority,
