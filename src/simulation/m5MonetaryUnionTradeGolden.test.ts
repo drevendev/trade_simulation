@@ -171,7 +171,89 @@ function totalIron(world: WorldState) {
       sum + (cargo.goodId === IRON ? cargo.quantity : 0), 0);
 }
 
+
+/**
+ * Reorder only keyed registries: route path arrays and allocation priority
+ * lists are ordered evidence, not insertion-order aliases.
+ *
+ * A monetary union has no FX pool in this fixture; nested market expectations,
+ * inventories and wallets still affect the real Phase-4/6/7 tick pipeline.
+ */
+function reordered(world: WorldState): WorldState {
+  const reverse = <K, V>(values: ReadonlyMap<K, V>): Map<K, V> =>
+    new Map([...values].reverse());
+  return {
+    ...world,
+    states: new Map([...world.states].reverse().map(([id, state]) =>
+      [id, {
+        ...state,
+        treasury: reverse(state.treasury),
+        publicInventory: reverse(state.publicInventory),
+      }] as const)),
+    regions: new Map([...world.regions].reverse().map(([id, region]) =>
+      [id, { ...region, resourceDeposits: reverse(region.resourceDeposits) }] as const)),
+    currencies: reverse(world.currencies),
+    markets: new Map([...world.markets].reverse().map(([id, market]) =>
+      [id, {
+        ...market,
+        priceByGood: reverse(market.priceByGood),
+        expectationsByGood: reverse(market.expectationsByGood),
+      }] as const)),
+    cohorts: new Map([...world.cohorts].reverse().map(([id, cohort]) =>
+      [id, {
+        ...cohort,
+        wallet: reverse(cohort.wallet),
+        householdInventory: reverse(cohort.householdInventory),
+      }] as const)),
+    clans: new Map([...world.clans].reverse().map(([id, clan]) =>
+      [id, { ...clan, treasury: reverse(clan.treasury) }] as const)),
+    productionUnits: new Map([...world.productionUnits].reverse().map(([id, unit]) =>
+      [id, {
+        ...unit,
+        wallet: reverse(unit.wallet),
+        inputInventory: reverse(unit.inputInventory),
+        outputInventory: reverse(unit.outputInventory),
+        investmentInventory: reverse(unit.investmentInventory),
+      }] as const)),
+    transportLinks: reverse(world.transportLinks),
+    ...(world.shipments ? { shipments: reverse(world.shipments) } : {}),
+    ...(world.outgoingTransportLinkIdsByRegion ? {
+      outgoingTransportLinkIdsByRegion: reverse(world.outgoingTransportLinkIdsByRegion),
+    } : {}),
+    monetaryAuthorities: new Map([...world.monetaryAuthorities].reverse().map(
+      ([id, authority]) => [id, {
+        ...authority,
+        fxPools: new Map([...authority.fxPools].reverse().map(
+          ([poolId, pool]) => [poolId, { ...pool, cash: reverse(pool.cash) }] as const,
+        )),
+      }] as const,
+    )),
+  };
+}
+
 describe("M5/#676 monetary-union cross-State golden", () => {
+
+  it("actually permutes union market prices and expectations without changing values", () => {
+    const original = fixture().world;
+    const permuted = reordered(original);
+    const market = [...original.markets].find(([, value]) =>
+      value.priceByGood.size > 1 && value.expectationsByGood.size > 1);
+    expect(market).toBeDefined();
+    const [id, source] = market!;
+    const changed = permuted.markets.get(id)!;
+    const originalPrices = [...source.priceByGood.keys()];
+    const originalExpectations = [...source.expectationsByGood.keys()];
+    expect([...changed.priceByGood.keys()]).toEqual([...originalPrices].reverse());
+    expect([...changed.expectationsByGood.keys()]).toEqual(
+      [...originalExpectations].reverse());
+    expect([...changed.priceByGood.keys()]).not.toEqual(originalPrices);
+    expect([...changed.expectationsByGood.keys()]).not.toEqual(originalExpectations);
+    expect(changed.priceByGood).toEqual(source.priceByGood);
+    expect(changed.expectationsByGood).toEqual(source.expectationsByGood);
+    expect([...permuted.productionUnits.keys()])
+      .toEqual([...original.productionUnits.keys()].reverse());
+  });
+
   it("pays one real cross-border shipment and destination tariff with no FX authority", () => {
     const f = fixture();
     const currency = f.origin.settlementCurrencyId;
@@ -288,19 +370,8 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     const currency = f.origin.settlementCurrencyId;
     const openingCash = totalCash(f.world, currency);
     const openingIron = totalIron(f.world);
-    const reorder = (world: WorldState): WorldState => ({
-      ...world,
-      states: new Map([...world.states].reverse()),
-      regions: new Map([...world.regions].reverse()),
-      markets: new Map([...world.markets].reverse()),
-      cohorts: new Map([...world.cohorts].reverse()),
-      clans: new Map([...world.clans].reverse()),
-      productionUnits: new Map([...world.productionUnits].reverse()),
-      transportLinks: new Map([...world.transportLinks].reverse()),
-      monetaryAuthorities: new Map([...world.monetaryAuthorities].reverse()),
-    });
     let regular = f.world;
-    let shuffled = reorder(f.world);
+    let shuffled = reordered(f.world);
     let dispatchedCargoId: string | undefined;
     let actualDeliveries = 0;
     for (let tick = 7; tick < 19; tick++) {
@@ -680,19 +751,8 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     const currency = f.origin.settlementCurrencyId;
     const openingCash = totalCash(f.world, currency);
     const openingIron = totalIron(f.world);
-    const reorder = (world: WorldState): WorldState => ({
-      ...world,
-      states: new Map([...world.states].reverse()),
-      regions: new Map([...world.regions].reverse()),
-      markets: new Map([...world.markets].reverse()),
-      cohorts: new Map([...world.cohorts].reverse()),
-      clans: new Map([...world.clans].reverse()),
-      productionUnits: new Map([...world.productionUnits].reverse()),
-      transportLinks: new Map([...world.transportLinks].reverse()),
-      monetaryAuthorities: new Map([...world.monetaryAuthorities].reverse()),
-    });
     let normalWorld = f.world;
-    let replayWorld = reorder(f.world);
+    let replayWorld = reordered(f.world);
     const dispatched = new Set<string>();
     const delivered = new Set<string>();
     let fundedWindows = 0;
@@ -1055,7 +1115,7 @@ describe("M5/#676 monetary-union cross-State golden", () => {
         delivered.add(cargo.id);
       }
       normalWorld = normal.world;
-      replayWorld = reorder(replay.world);
+      replayWorld = reordered(replay.world);
     }
     expect(fundedWindows).toBeGreaterThan(1);
     expect(blockedLocalTicks).toBeGreaterThan(0);
