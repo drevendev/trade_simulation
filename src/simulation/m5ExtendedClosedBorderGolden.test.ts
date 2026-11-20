@@ -4328,6 +4328,69 @@ describe("M5 #676: live same-owner multiple funded BUY intents", () => {
     expect(new Set(thisBuyersCargo.map(cargo => cargo.id)))
       .toEqual(new Set(lots.map(lot => lot.shipmentId)));
 
+    // Every real Phase-7 receipt, on BOTH corridors, must identify one
+    // physical cargo with the same paid seller, buyer, good and quantity.
+    // An ID-only match for the selected buyer does not prove cargo ownership.
+    const allCommittedLots = actual.context.phase7CommittedLots ?? [];
+    const intentsById = new Map(phase7Opening.phase8MainIntents.map(intent =>
+      [intent.id, intent] as const));
+    const assertPaidShipmentOwners = (cargos: typeof shipped): void => {
+      const cargoById = new Map(cargos.map(cargo =>
+        [String(cargo.id), cargo] as const));
+      expect(cargoById.size).toBe(cargos.length);
+      expect(allCommittedLots).toHaveLength(cargos.length);
+      expect(new Set(allCommittedLots.map(lot => lot.shipmentId)).size)
+        .toBe(allCommittedLots.length);
+      expect(new Set(allCommittedLots.map(lot => lot.shipmentId)))
+        .toEqual(new Set(cargos.map(cargo => String(cargo.id))));
+      for (const lot of allCommittedLots) {
+        const cargo = cargoById.get(lot.shipmentId);
+        expect(cargo, `paid receipt ${lot.shipmentId} has a physical cargo`)
+          .toBeDefined();
+        const sellerIntent = intentsById.get(lot.sellerIntentId);
+        const buyerIntent = intentsById.get(lot.buyerIntentId);
+        expect(sellerIntent?.side).toBe("SELL");
+        expect(buyerIntent?.side).toBe("BUY");
+        expect(sellerIntent?.goodId).toBe(lot.goodId);
+        expect(buyerIntent?.goodId).toBe(lot.goodId);
+        expect(actorRefKey(cargo!.seller)).toBe(actorRefKey(sellerIntent!.actor));
+        expect(actorRefKey(cargo!.beneficialOwner)).toBe(actorRefKey(buyerIntent!.actor));
+        expect(cargo!.goodId).toBe(lot.goodId);
+        expect(cargo!.originRegionId).toBe(lot.originRegionId);
+        expect(cargo!.destinationRegionId).toBe(lot.destinationRegionId);
+        expect(lot.dispatchedQuantity).toBeGreaterThan(0);
+        expect(cargo!.quantity).toBeGreaterThan(0);
+        expect(cargo!.quantity).toBeCloseTo(lot.dispatchedQuantity, 6);
+      }
+    };
+    assertPaidShipmentOwners(shipped);
+
+    // Negative control: redirect a REAL cargo on the other corridor to a
+    // different valid producer (not the selected buyer). Do not touch any
+    // shipment IDs, receipts, goods, quantities, wallets or physical stocks.
+    // The selected-buyer ID-set check and seller-stock oracle still pass.
+    const otherCorridorCargo = shipped.find(cargo =>
+      cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+      cargo.beneficialOwner.productionUnitId !== buyer.productionUnitId);
+    expect(otherCorridorCargo).toBeDefined();
+    const rightfulOwner = otherCorridorCargo!.beneficialOwner;
+    if (rightfulOwner.type !== "PRODUCTION_UNIT") {
+      throw new Error("Expected real other-corridor producer beneficiary");
+    }
+    const wrongOwnerId = [...afterPhase7!.productionUnits.keys()].find(id =>
+      id !== rightfulOwner.productionUnitId && id !== buyer.productionUnitId);
+    expect(wrongOwnerId).toBeDefined();
+    const misrouted = shipped.map(cargo => cargo.id === otherCorridorCargo!.id
+      ? { ...cargo, beneficialOwner: {
+        type: "PRODUCTION_UNIT" as const, productionUnitId: wrongOwnerId!,
+      } }
+      : cargo);
+    expect(misrouted.map(cargo =>
+      [cargo.id, cargo.seller, cargo.goodId, cargo.quantity, cargo.fxSettlementId]))
+      .toEqual(shipped.map(cargo =>
+        [cargo.id, cargo.seller, cargo.goodId, cargo.quantity, cargo.fxSettlementId]));
+    expect(() => assertPaidShipmentOwners(misrouted)).toThrow();
+
     const assertPerGoodStocks = (settled: WorldState): void => {
       for (const [unitId, openingUnit] of beforePhase7!.productionUnits) {
         const endingUnit = settled.productionUnits.get(unitId)!;
