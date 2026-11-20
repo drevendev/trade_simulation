@@ -83,8 +83,8 @@ export function capturePhase7ImportTariffsAtPhase1(
         tick: context.tick, destinationStateId, goodId,
       }));
       if (rate === undefined) continue;
-      if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0) {
-        throw new Error("Phase-1 tariff capture requires a finite nonnegative statutory rate");
+      if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0 || rate > 1) {
+        throw new Error("Phase-1 tariff capture requires a finite statutory rate in [0, 1]");
       }
       ratesByDestinationStateGood.set(phase7ImportTariffKey(destinationStateId, goodId), rate);
     }
