@@ -198,29 +198,78 @@ function totalIron(world: WorldState): number {
 }
 
 function reordered(world: WorldState): WorldState {
-  // Map insertion order is not economic priority. Ordered route arrays remain
-  // untouched: changing them would change legal routing evidence.
+  // All keyed registries are semantically unordered, including nested stock
+  // wallets, price maps, and shipments. Ordered route arrays remain untouched:
+  // reversing those would change legal route-priority evidence.
+  const reverse = <K, V>(values: ReadonlyMap<K, V>): Map<K, V> =>
+    new Map([...values].reverse());
   return {
     ...world,
-    states: new Map([...world.states].reverse()),
-    regions: new Map([...world.regions].reverse()),
-    markets: new Map([...world.markets].reverse()),
-    cohorts: new Map([...world.cohorts].reverse()),
-    clans: new Map([...world.clans].reverse()),
-    productionUnits: new Map([...world.productionUnits].reverse()),
-    transportLinks: new Map([...world.transportLinks].reverse()),
+    states: new Map([...world.states].reverse().map(([id, state]) =>
+      [id, {
+        ...state,
+        treasury: reverse(state.treasury),
+        publicInventory: reverse(state.publicInventory),
+      }] as const)),
+    regions: new Map([...world.regions].reverse().map(([id, region]) =>
+      [id, { ...region, resourceDeposits: reverse(region.resourceDeposits) }] as const)),
+    currencies: reverse(world.currencies),
+    markets: new Map([...world.markets].reverse().map(([id, market]) =>
+      [id, { ...market, priceByGood: reverse(market.priceByGood) }] as const)),
+    cohorts: new Map([...world.cohorts].reverse().map(([id, cohort]) =>
+      [id, {
+        ...cohort,
+        wallet: reverse(cohort.wallet),
+        householdInventory: reverse(cohort.householdInventory),
+      }] as const)),
+    clans: new Map([...world.clans].reverse().map(([id, clan]) =>
+      [id, { ...clan, treasury: reverse(clan.treasury) }] as const)),
+    productionUnits: new Map([...world.productionUnits].reverse().map(([id, unit]) =>
+      [id, {
+        ...unit,
+        wallet: reverse(unit.wallet),
+        inputInventory: reverse(unit.inputInventory),
+        outputInventory: reverse(unit.outputInventory),
+        investmentInventory: reverse(unit.investmentInventory),
+      }] as const)),
+    transportLinks: reverse(world.transportLinks),
+    shipments: world.shipments ? reverse(world.shipments) : world.shipments,
+    outgoingTransportLinkIdsByRegion: world.outgoingTransportLinkIdsByRegion
+      ? reverse(world.outgoingTransportLinkIdsByRegion)
+      : world.outgoingTransportLinkIdsByRegion,
     monetaryAuthorities: new Map([...world.monetaryAuthorities].reverse().map(
       ([id, authority]) => [id, {
         ...authority,
         fxPools: new Map([...authority.fxPools].reverse().map(
-          ([poolId, pool]) => [poolId, {
-            ...pool, cash: new Map([...pool.cash].reverse()),
-          }] as const,
+          ([poolId, pool]) => [poolId, { ...pool, cash: reverse(pool.cash) }] as const,
         )),
       }] as const,
     )),
   };
 }
+
+
+// This guard prevents the expensive replay from passing vacuously after a
+// refactor that silently stops permuting nested economic registry maps.
+describe("M5 #676: nested insertion-order adversary", () => {
+  it("really reverses keyed market prices and FX reserves without changing values", () => {
+    const f = fixture();
+    const priced = [...f.world.markets].find(([, market]) => market.priceByGood.size > 1);
+    expect(priced).toBeDefined();
+    const permuted = reordered(f.world);
+    const originalPrices = [...priced![1].priceByGood];
+    const permutedPrices = [...permuted.markets.get(priced![0])!.priceByGood];
+    expect(permutedPrices).toEqual([...originalPrices].reverse());
+    expect(permutedPrices).not.toEqual(originalPrices);
+
+    const originalPool = f.world.monetaryAuthorities
+      .get(f.chosen.authorityId)!.fxPools.get(f.chosen.poolId)!;
+    const permutedPool = permuted.monetaryAuthorities
+      .get(f.chosen.authorityId)!.fxPools.get(f.chosen.poolId)!;
+    expect(originalPool.cash.size).toBeGreaterThan(1);
+    expect([...permutedPool.cash]).toEqual([...originalPool.cash].reverse());
+  });
+});
 
 /**
  * Test-only content-sensitive economic replay fingerprint, NOT the canonical
