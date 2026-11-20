@@ -335,6 +335,108 @@ function economicReplayFingerprint(
 }
 
 describe("M5 #676: extended multi-tick physical and financial replay", () => {
+
+  it("prices real FX cargo under divergent frozen tariffs without changing local procurement", () => {
+    const f = fixture();
+    const runAtTariff = (rate: number, world: WorldState) => run({
+      ...f,
+      options: {
+        ...f.options,
+        phase1TariffLawProvider: query => query.goodId === IRON ? rate : 0,
+      },
+    }, world);
+    const noTariff = runAtTariff(0, f.world);
+    const higherTariff = runAtTariff(0.30, f.world);
+    const reorderedHigher = runAtTariff(0.30, reordered(f.world));
+    const sourceIron = totalIron(f.world);
+    const initialCash = f.currencies.map(id => totalCash(f.world, id));
+    const local = (result: ReturnType<typeof run>) => result.context.transactions
+      .filter(tx => tx.phase === 4 && tx.type === "MARKET_SALE");
+    expect(local(noTariff).length).toBeGreaterThan(0);
+    expect(local(higherTariff)).toEqual(local(noTariff));
+
+    const importing = f.world.regions.get(
+      f.world.transportLinks.get(f.links[0]!)!.toRegionId,
+    )!.controllerStateId!;
+    expect(importing).not.toBeNull();
+    const policyKey = phase7ImportTariffKey(importing, IRON);
+    const spotPool = f.chosen.pool;
+
+    for (const [rate, result] of [
+      [0, noTariff], [0.30, higherTariff], [0.30, reorderedHigher],
+    ] as const) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(result.context.phase1ImportTariffs?.ratesByDestinationStateGood.get(policyKey))
+        .toBe(rate);
+      const cargos = [...(result.world.shipments?.values() ?? [])];
+      expect(cargos).toHaveLength(2);
+      expect(new Set(cargos.map(cargo => cargo.transportLinkId))).toEqual(new Set(f.links));
+      const foreign = result.context.transactions.filter(tx => tx.phase === 7);
+      expect(foreign.filter(tx => tx.type === "SHIPMENT_DISPATCH")).toHaveLength(2);
+      expect(foreign.filter(tx => tx.type === "FX_INPUT")).toHaveLength(2);
+      expect(foreign.filter(tx => tx.type === "FX_OUTPUT")).toHaveLength(2);
+
+      const assertTariff = (journal: typeof foreign, cargo: (typeof cargos)[number]) => {
+        const dispatch = journal.filter(tx =>
+          tx.type === "SHIPMENT_DISPATCH" &&
+          tx.sourceRegionId === cargo.originRegionId &&
+          tx.destinationRegionId === cargo.destinationRegionId &&
+          tx.quantity === cargo.quantity);
+        expect(dispatch).toHaveLength(1);
+        const postings = journal.filter(tx =>
+          tx.type === "IMPORT_TARIFF" && tx.bundleId === dispatch[0]!.bundleId);
+        expect(postings).toHaveLength(cargo.tariffAmount > 0 ? 1 : 0);
+        if (postings.length > 0) {
+          expect(postings[0]!.moneyAmount).toBeCloseTo(cargo.tariffAmount, 6);
+          expect(postings[0]!.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+          expect(postings[0]!.source).toEqual(cargo.beneficialOwner);
+          expect(postings[0]!.destination).toEqual({
+            type: "STATE", stateId: importing,
+          });
+        }
+      };
+      for (const cargo of cargos) {
+        expect(cargo.quantity).toBeGreaterThan(0);
+        const sourceInvoice = cargo.quantity * cargo.sellerNetUnitPrice;
+        const invoiceMidDest = spotPool.baseCurrencyId === cargo.invoiceCurrencyId
+          ? sourceInvoice * spotPool.spotRateQuotePerBase
+          : sourceInvoice / spotPool.spotRateQuotePerBase;
+        // Independently derive the statutory base: MID invoice + actual fee,
+        // not the FX-spread-inclusive buyer payment or caller-supplied quote.
+        expect(cargo.tariffAmount)
+          .toBeCloseTo(rate * (invoiceMidDest + cargo.transportFeeAmount), 6);
+        assertTariff(foreign, cargo);
+      }
+      if (rate === 0) {
+        expect(foreign.filter(tx => tx.type === "IMPORT_TARIFF")).toHaveLength(0);
+      } else {
+        const tariffs = foreign.filter(tx => tx.type === "IMPORT_TARIFF");
+        expect(tariffs).toHaveLength(2);
+        expect(tariffs.every(tx => tx.moneyAmount! > 0)).toBe(true);
+        const forged = foreign.map(tx => tx === tariffs[0]
+          ? { ...tx, destination: { type: "STATE" as const,
+            stateId: f.world.regions.get(cargos[0]!.originRegionId)!.controllerStateId! } }
+          : tx);
+        expect(() => assertTariff(forged, cargos.find(cargo =>
+          foreign.some(tx => tx.type === "SHIPMENT_DISPATCH" &&
+            tx.bundleId === tariffs[0]!.bundleId &&
+            tx.destinationRegionId === cargo.destinationRegionId))!)).toThrow();
+      }
+      expect(totalIron(result.world)).toBeCloseTo(sourceIron, 6);
+      for (const [index, currency] of f.currencies.entries()) {
+        expect(totalCash(result.world, currency)).toBeCloseTo(initialCash[index]!, 5);
+      }
+    }
+    expect(reorderedHigher.context.transactions).toEqual(higherTariff.context.transactions);
+    expect(reorderedHigher.world.shipments).toEqual(higherTariff.world.shipments);
+    expect(reorderedHigher.world.productionUnits).toEqual(higherTariff.world.productionUnits);
+    expect(reorderedHigher.world.monetaryAuthorities)
+      .toEqual(higherTariff.world.monetaryAuthorities);
+  });
+
+
   it("preserves a two-route paid cargo lifecycle across 16 ticks of border closure", () => {
     const f = fixture();
     const opening: WorldState = {
