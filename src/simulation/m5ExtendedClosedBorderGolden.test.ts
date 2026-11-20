@@ -215,7 +215,11 @@ function reordered(world: WorldState): WorldState {
       [id, { ...region, resourceDeposits: reverse(region.resourceDeposits) }] as const)),
     currencies: reverse(world.currencies),
     markets: new Map([...world.markets].reverse().map(([id, market]) =>
-      [id, { ...market, priceByGood: reverse(market.priceByGood) }] as const)),
+      [id, {
+        ...market,
+        priceByGood: reverse(market.priceByGood),
+        expectationsByGood: reverse(market.expectationsByGood),
+      }] as const)),
     cohorts: new Map([...world.cohorts].reverse().map(([id, cohort]) =>
       [id, {
         ...cohort,
@@ -263,6 +267,19 @@ describe("M5 #676: nested insertion-order adversary", () => {
     const permutedPrices = [...permuted.markets.get(priced![0])!.priceByGood];
     expect(permutedPrices).toEqual([...originalPrices].reverse());
     expect(permutedPrices).not.toEqual(originalPrices);
+
+    // Phase 6 reads these live expectation stocks. If their reversal is
+    // removed from reordered(), this focused guard must fail even when prices
+    // and all other registries are still correctly permuted.
+    const originalExpectations = [...priced![1].expectationsByGood];
+    const permutedExpectations = [...permuted.markets.get(priced![0])!.expectationsByGood];
+    expect(originalExpectations.length).toBeGreaterThan(1);
+    expect(permutedExpectations).toEqual([...originalExpectations].reverse());
+    expect(permutedExpectations).not.toEqual(originalExpectations);
+    for (const [goodId, expectation] of originalExpectations) {
+      expect(permuted.markets.get(priced![0])!.expectationsByGood.get(goodId))
+        .toEqual(expectation);
+    }
 
     const originalPool = f.world.monetaryAuthorities
       .get(f.chosen.authorityId)!.fxPools.get(f.chosen.poolId)!;
