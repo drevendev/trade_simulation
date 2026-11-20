@@ -153,6 +153,11 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     let sawWrongTransitReject = false;
     const sentIds = new Set<string>();
     const deliveredIds = new Set<string>();
+    // Evidence must include actual paid, positive-loss dispatch for BOTH policy
+    // values. A 240-tick loop with a single opening shipment is not a witness.
+    const openingWitnesses = new Map<number, {
+      rate: number; paidCargoCount: number; physicalLossQuantity: number;
+    }>();
 
     for (let offset = 0; offset < 240; offset++) {
       const tick = M5_PREVIEW_TICK + offset;
@@ -206,6 +211,12 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
         cargo => !preexisting.has(cargo.id));
       const dispatched = journal.filter(tx =>
         tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
+      if (open) {
+        openingWitnesses.set(tick, {
+          rate, paidCargoCount: fresh.length,
+          physicalLossQuantity: losses.reduce((sum, tx) => sum + tx.quantity!, 0),
+        });
+      }
       const inputs = journal.filter(tx => tx.phase === 7 && tx.type === "FX_INPUT");
       const outputs = journal.filter(tx => tx.phase === 7 && tx.type === "FX_OUTPUT");
       // A count or global iron sum is not a proof of custody: every cargo
@@ -325,6 +336,16 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
       standard = actual.world;
       reverse = shuffled(replay.world);
     }
+    // Non-vacuous witness on distinct real dispatch ticks with the actual
+    // Phase-7 loss journal. No synthetic settlements or cumulative totals.
+    const paidWindows = [...openingWitnesses].filter(([, witness]) =>
+      witness.paidCargoCount > 0 && witness.physicalLossQuantity > 0);
+    for (const policy of [0.25, 0.10]) {
+      expect(paidWindows.filter(([, witness]) => witness.rate === policy).length,
+        `actual FX-paid loss-bearing opening at routine loss rate ${policy}`)
+        .toBeGreaterThan(0);
+    }
+    expect(paidWindows.length).toBeGreaterThanOrEqual(2);
     expect(sent).toBeGreaterThan(0);
     expect(destroyedTotal).toBeGreaterThan(0);
     expect(delivered).toBe(sent);
