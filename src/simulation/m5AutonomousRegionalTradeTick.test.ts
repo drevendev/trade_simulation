@@ -1903,4 +1903,93 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       .toEqual(exhausted.context.transactions);
   });
 
+
+  it("spends one buyer's residual demand only once across paid Phase-4 and FX Phase-7", () => {
+    const f = fixture();
+    const phases = new Map<number, { before: WorldState; after: WorldState }>();
+    const result = run(f, (phase, before, after) => {
+      if (phase === 4 || phase === 7) phases.set(phase, { before, after });
+    });
+    expect(result.phaseBoundaryError).toBeUndefined();
+    expect(result.reconciliationErrors).toBeNull();
+    expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+    expect([...phases.keys()].sort((a, b) => a - b)).toEqual([4, 7]);
+
+    // Buyer B has a real local supplier (small stock) and a separately paid
+    // imported remainder. Both phases must consume its actual Phase-2 BUY.
+    const buyerId = f.buyerB.productionUnitId;
+    const buys = result.context.productionMarketIntents!.filter(intent =>
+      intent.side === "BUY" && intent.goodId === IRON &&
+      intent.actor.type === "PRODUCTION_UNIT" &&
+      intent.actor.productionUnitId === buyerId);
+    expect(buys.length).toBeGreaterThan(0);
+    const buyIds = new Set(buys.map(intent => intent.id));
+    const local = result.context.phase4MarketAllocations!.filter(allocation =>
+      buyIds.has(allocation.buyerIntentId));
+    const foreign = (result.context.phase7CommittedLots ?? []).filter(lot =>
+      buyIds.has(lot.buyerIntentId));
+    expect(local.length).toBeGreaterThan(0);
+    expect(foreign.length).toBeGreaterThan(0);
+    const q4 = local.reduce((sum, allocation) => sum + allocation.quantity, 0);
+    const q7 = foreign.reduce((sum, lot) => sum + lot.dispatchedQuantity, 0);
+    expect(q4).toBeGreaterThan(0);
+    expect(q7).toBeGreaterThan(0);
+
+    const residualById = new Map(result.context.phase7MainIntents!.map(
+      intent => [intent.id, intent] as const,
+    ));
+    const assertBuyerResidual = (residuals: ReadonlyMap<ReturnType<typeof createMarketIntentId>, number>): void => {
+      for (const original of buys) {
+        const localQuantity = local.filter(allocation =>
+          allocation.buyerIntentId === original.id).reduce(
+          (sum, allocation) => sum + allocation.quantity, 0);
+        const importQuantity = foreign.filter(lot =>
+          lot.buyerIntentId === original.id).reduce(
+          (sum, lot) => sum + lot.dispatchedQuantity, 0);
+        const remaining = residuals.get(original.id);
+        expect(remaining).toBeDefined();
+        expect(remaining!).toBeCloseTo(
+          original.desiredQuantity - localQuantity - importQuantity, 6);
+        expect(localQuantity + importQuantity)
+          .toBeLessThanOrEqual(original.desiredQuantity + 1e-8);
+      }
+    };
+    assertBuyerResidual(new Map(buys.map(intent =>
+      [intent.id, residualById.get(intent.id)!.desiredQuantity] as const)));
+
+    const buyerInput = (world: WorldState) =>
+      world.productionUnits.get(buyerId)!.inputInventory.get(IRON) ?? 0;
+    const buyerWallet = (world: WorldState) =>
+      world.productionUnits.get(buyerId)!.wallet.get(f.destination.settlementCurrencyId) ?? 0;
+    const p4 = phases.get(4)!;
+    const p7 = phases.get(7)!;
+    // The local fill credits only the named buyer's stock. The paid import is
+    // still in transit at Phase 7: it must not be credited a second time.
+    expect(buyerInput(p4.after) - buyerInput(p4.before)).toBeCloseTo(q4, 7);
+    expect(buyerInput(p7.after)).toBeCloseTo(buyerInput(p7.before), 7);
+    expect(buyerWallet(p4.before) - buyerWallet(p4.after)).toBeGreaterThan(0);
+    expect(buyerWallet(p7.before) - buyerWallet(p7.after)).toBeCloseTo(
+      foreign.reduce((sum, lot) => sum + lot.buyerTotalDebitDest, 0), 6);
+    const cargos = [...(result.world.shipments?.values() ?? [])].filter(
+      cargo => cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+        cargo.beneficialOwner.productionUnitId === buyerId);
+    expect(cargos).toHaveLength(foreign.length);
+    expect(cargos.reduce((sum, cargo) => sum + cargo.quantity, 0))
+      .toBeCloseTo(q7, 7);
+    expect(totalIron(result.world)).toBeCloseTo(totalIron(f.world), 8);
+
+    // Balanced negative control: lie about the buyer's remaining demand
+    // without moving any goods, money, FX reserves or shipment receipts.
+    // Aggregate accounting alone would miss the replayable extra BUY.
+    const forgedResidual = new Map(buys.map(intent =>
+      [intent.id, residualById.get(intent.id)!.desiredQuantity] as const));
+    const victim = foreign[0]!.buyerIntentId;
+    forgedResidual.set(victim, forgedResidual.get(victim)! +
+      foreign[0]!.dispatchedQuantity / 2);
+    expect(() => assertBuyerResidual(forgedResidual)).toThrow();
+    expect(f.world.productionUnits.get(buyerId)!.inputInventory)
+      .toEqual(f.buyerB.inputInventory);
+    expect(run(f).context.transactions).toEqual(result.context.transactions);
+  });
+
 });
