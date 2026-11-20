@@ -115,10 +115,10 @@ describe("M5 #673 Phase-1 canonical import-tariff capture", () => {
   it("rejects invalid statutory rates and leaves WorldState unchanged", () => {
     const f = fixture();
     const original = [...f.world.states].map(([id, state]) => [id, [...state.treasury]]);
-    for (const rate of [-0.01, Number.NaN, Number.POSITIVE_INFINITY]) {
+    for (const rate of [-0.01, 1.000001, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => capturePhase7ImportTariffsAtPhase1(
         f.world, f.phase1, () => rate,
-      )).toThrow("finite nonnegative statutory rate");
+      )).toThrow("finite statutory rate in [0, 1]");
     }
     expect([...f.world.states].map(([id, state]) => [id, [...state.treasury]])).toEqual(original);
     expect(f.world.shipments?.size).toBe(0);
