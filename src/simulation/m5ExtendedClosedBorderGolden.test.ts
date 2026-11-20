@@ -4312,15 +4312,21 @@ describe("M5 #676: live same-owner multiple funded BUY intents", () => {
     // combined number of units and the buyer's payment stayed unchanged.
     const shipped = [...(afterPhase7!.shipments?.values() ?? [])].filter(cargo =>
       !beforePhase7!.shipments?.has(cargo.id));
+    expect(shipped).toHaveLength(4); // Two goods on both real FX corridors.
     expect(new Set(shipped.map(cargo => cargo.goodId)))
       .toEqual(new Set([IRON, WOOD]));
-    expect(new Set(shipped.map(cargo => cargo.id)))
-      .toEqual(new Set(lots.map(lot => lot.shipmentId)));
     expect(shipped.every(cargo =>
       cargo.seller.type === "PRODUCTION_UNIT" &&
-      cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
-      cargo.beneficialOwner.productionUnitId === buyer.productionUnitId))
+      cargo.beneficialOwner.type === "PRODUCTION_UNIT"))
       .toBe(true);
+    // Only TWO of the four real paid cargos belong to this selected buyer.
+    // Reconcile its intent receipts without dropping the other corridor from
+    // the global per-seller physical stock oracle below.
+    const thisBuyersCargo = shipped.filter(cargo =>
+      cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+      cargo.beneficialOwner.productionUnitId === buyer.productionUnitId);
+    expect(new Set(thisBuyersCargo.map(cargo => cargo.id)))
+      .toEqual(new Set(lots.map(lot => lot.shipmentId)));
 
     const assertPerGoodStocks = (settled: WorldState): void => {
       for (const [unitId, openingUnit] of beforePhase7!.productionUnits) {
