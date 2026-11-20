@@ -1938,7 +1938,7 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     const residualById = new Map(result.context.phase7MainIntents!.map(
       intent => [intent.id, intent] as const,
     ));
-    const assertBuyerResidual = (residuals: ReadonlyMap<string, number>): void => {
+    const assertBuyerResidual = (residuals: ReadonlyMap<ReturnType<typeof createMarketIntentId>, number>): void => {
       for (const original of buys) {
         const localQuantity = local.filter(allocation =>
           allocation.buyerIntentId === original.id).reduce(
