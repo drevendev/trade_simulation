@@ -2740,6 +2740,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativePublicInventoryChecked = false;
     let negativeDeliveryOwnerChecked = false;
     let negativeDeliveryBucketChecked = false;
+    let negativeDeliveryCashChecked = false;
     let negativeDeliveryOtherGoodChecked = false;
     let negativeFxBundleChecked = false;
     let negativeChargeBundleChecked = false;
@@ -2757,6 +2758,29 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let zeroFxWindows = 0;
     let nonVacuousFxFreezeChecked = false;
     let resumedPaidFxAfterFreeze = false;
+
+    // Cargo arrival is a physical movement, NOT a second payment. Preserve
+    // every actor's currency balances and issuer FX pool across Phase 1.
+    const phase1CashOwners = (world: WorldState): Map<string, Map<string, number>> => {
+      const balances = new Map<string, Map<string, number>>();
+      const add = <K,>(owner: string, wallet: ReadonlyMap<K, number>): void => {
+        balances.set(owner, new Map([...wallet].map(([currency, amount]) =>
+          [String(currency), amount] as const)));
+      };
+      for (const [id, state] of world.states) add(`state:${id}`, state.treasury);
+      for (const [id, clan] of world.clans) add(`clan:${id}`, clan.treasury);
+      for (const [id, cohort] of world.cohorts) add(`cohort:${id}`, cohort.wallet);
+      for (const [id, unit] of world.productionUnits) add(`unit:${id}`, unit.wallet);
+      for (const [authorityId, authority] of world.monetaryAuthorities) {
+        for (const [poolId, pool] of authority.fxPools) {
+          add(`fx-pool:${authorityId}:${poolId}`, pool.cash);
+        }
+      }
+      return balances;
+    };
+    const assertPhase1CashOwners = (opening: WorldState, settled: WorldState): void => {
+      expect(phase1CashOwners(settled)).toEqual(phase1CashOwners(opening));
+    };
 
     for (let tick = 7; tick < 607; tick++) {
       const open = (tick - 7) % 12 === 0;
@@ -3948,6 +3972,29 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         cargo.destinationInventoryBucket === "INPUT" &&
         cargo.beneficialOwner.type === "PRODUCTION_UNIT")).toBe(true);
       assertDeliveryOwners(phase1Before!, phase1After!);
+      assertPhase1CashOwners(phase1Before!, phase1After!);
+      if (due.length > 0 && !negativeDeliveryCashChecked) {
+        // A balanced but illegal second payment at delivery escapes both
+        // global currency conservation and all cargo-quantity checks.
+        const currency = f.currencies[0]!;
+        const funded = [...phase1After!.productionUnits]
+          .filter(([, unit]) => (unit.wallet.get(currency) ?? 0) > 0.25);
+        expect(funded.length).toBeGreaterThanOrEqual(2);
+        const [donor, receiver] = funded;
+        const units = new Map(phase1After!.productionUnits);
+        for (const [id, delta] of [[donor![0], -0.25], [receiver![0], 0.25]] as const) {
+          const unit = units.get(id)!;
+          units.set(id, {
+            ...unit,
+            wallet: new Map(unit.wallet).set(currency, unit.wallet.get(currency)! + delta),
+          });
+        }
+        const forged = { ...phase1After!, productionUnits: units };
+        expect(totalCash(forged, currency)).toBeCloseTo(
+          totalCash(phase1After!, currency), 8);
+        expect(() => assertPhase1CashOwners(phase1Before!, forged)).toThrow();
+        negativeDeliveryCashChecked = true;
+      }
       if (due.length > 0 && !negativeDeliveryOwnerChecked) {
         const recipient = due[0]!.beneficialOwner;
         if (recipient.type !== "PRODUCTION_UNIT") {
@@ -4073,6 +4120,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativePublicInventoryChecked).toBe(true);
     expect(negativeDeliveryOwnerChecked).toBe(true);
     expect(negativeDeliveryBucketChecked).toBe(true);
+    expect(negativeDeliveryCashChecked).toBe(true);
     expect(negativeDeliveryOtherGoodChecked).toBe(true);
     expect(negativeFxBundleChecked).toBe(true);
     expect(negativeChargeBundleChecked).toBe(true);
