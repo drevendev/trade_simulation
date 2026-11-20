@@ -745,7 +745,11 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     assertActualSellerDebits(boundaries.get(8)!.after);
     expect(sellerStock(result.world)).toBeCloseTo(
       sellerStock(boundaries.get(8)!.after), 8);
-    expect(totalIron(result.world)).toBeCloseTo(totalIron(opening), 8);
+    const totalIncludingHouseholds = (world: WorldState) =>
+      totalIron(world) + [...world.cohorts.values()].reduce(
+        (sum, c) => sum + (c.householdInventory.get(IRON) ?? 0), 0);
+    expect(totalIncludingHouseholds(result.world))
+      .toBeCloseTo(totalIncludingHouseholds(opening), 8);
 
     // Balanced corruption: credit iron back to the seller and take the same
     // amount from the local buyer. Total goods and paid receipts still agree,
