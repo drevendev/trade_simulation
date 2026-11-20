@@ -150,6 +150,7 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     let blockedWithLocalSale = 0;
     let sawBadLossReject = false;
     let sawWrongDeliveryReject = false;
+    let sawWrongTransitReject = false;
     const sentIds = new Set<string>();
     const deliveredIds = new Set<string>();
 
@@ -207,6 +208,42 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
         tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
       const inputs = journal.filter(tx => tx.phase === 7 && tx.type === "FX_INPUT");
       const outputs = journal.filter(tx => tx.phase === 7 && tx.type === "FX_OUTPUT");
+      // A count or global iron sum is not a proof of custody: every cargo
+      // already in transit must retain its PAID identity, owner and quantity.
+      const expectedTransit = new Map([
+        ...[...start.shipments?.values() ?? []]
+          .filter(cargo => cargo.arrivalTick !== tick)
+          .map(cargo => [cargo.id, cargo] as const),
+        ...fresh.map(cargo => [cargo.id, cargo] as const),
+      ]);
+      const assertTransit = (world: WorldState): void => {
+        expect(world.shipments?.size ?? 0).toBe(expectedTransit.size);
+        for (const [id, expected] of expectedTransit) {
+          expect(world.shipments?.get(id)).toEqual(expected);
+        }
+      };
+      assertTransit(actual.world);
+      assertTransit(replay.world);
+      if (fresh.length && !sawWrongTransitReject) {
+        const cargo = fresh[0]!;
+        expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+        if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") {
+          throw new Error("Expected real FX-paid ProductionUnit beneficiary");
+        }
+        const wrongOwner = [...actual.world.productionUnits.keys()].find(
+          id => id !== cargo.beneficialOwner.productionUnitId);
+        expect(wrongOwner).toBeDefined();
+        const forged: WorldState = {
+          ...actual.world,
+          shipments: new Map(actual.world.shipments).set(cargo.id, {
+            ...cargo,
+            beneficialOwner: { type: "PRODUCTION_UNIT", productionUnitId: wrongOwner! },
+          }),
+        };
+        expect(iron(forged)).toBeCloseTo(iron(actual.world), 8);
+        expect(() => assertTransit(forged)).toThrow();
+        sawWrongTransitReject = true;
+      }
       expect(fresh).toHaveLength(dispatched.length);
       expect(inputs).toHaveLength(fresh.length);
       expect(outputs).toHaveLength(fresh.length);
@@ -295,5 +332,6 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     expect(blockedWithLocalSale).toBeGreaterThan(0);
     expect(sawBadLossReject).toBe(true);
     expect(sawWrongDeliveryReject).toBe(true);
+    expect(sawWrongTransitReject).toBe(true);
   }, 60_000);
 });
