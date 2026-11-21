@@ -318,6 +318,7 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     let destroyedTotal = 0;
     let sent = 0;
     let checkedPaidCapacity = false;
+    let checkedZeroCapacityBlock = false;
     let rejectedOverCapacity = false;
     let delivered = 0;
     let blockedWithLocalSale = 0;
@@ -339,7 +340,11 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
 
     for (let offset = 0; offset < 240; offset++) {
       const tick = M5_PREVIEW_TICK + offset;
-      const open = offset % 12 === 0;
+      const legalOpen = offset % 12 === 0;
+      // Keep border permission OPEN, but physically close the link on some
+      // otherwise-eligible opening ticks. Previously paid cargo may still arrive.
+      const noCapacity = legalOpen && offset % 48 === 0;
+      const open = legalOpen && !noCapacity;
       // The route's present policy must NOT revalue a previously paid shipment.
       const rate = open ? (offset % 24 === 0 ? 0.25 : 0.10) : 0;
       standard = policyAt(standard, rate);
@@ -352,9 +357,11 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
       let afterPhase1: WorldState | undefined;
       let beforePhase7: WorldState | undefined;
       let afterPhase7: WorldState | undefined;
-      const options = open ? fixture.options : {
-        ...fixture.options, phase1TradeLawProvider: () => undefined,
-      };
+      const options = legalOpen
+        ? noCapacity
+          ? { ...fixture.options, infrastructureFactors: new Map([[linkId, 0]]) }
+          : fixture.options
+        : { ...fixture.options, phase1TradeLawProvider: () => undefined };
       const actual = executeM5AutonomousRegionalTradeTick(
         standard, tick, upstream, unchanged, options, (phase, before, after) => {
           if (phase === 1) { beforePhase1 = before; afterPhase1 = after; }
@@ -407,6 +414,36 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
           .toBeLessThanOrEqual(physicalCapacity + 1e-8);
       };
       assertGrossCapacity(sales.map(tx => tx.quantity!));
+      if (noCapacity) {
+        // Legal permission, demand and funded FX are still available. The
+        // physical zero must suppress ALL Phase-7 money, goods and charge legs.
+        expect(physicalCapacity).toBe(0);
+        const paidTypes = new Set([
+          "SHIPMENT_DISPATCH", "TRADE_GOODS_SALE", "TRANSPORT_FEE",
+          "FX_INPUT", "FX_OUTPUT", "IMPORT_TARIFF", "CONSUMPTION_TAX",
+        ]);
+        expect(journal.filter(tx => tx.phase === 7 && paidTypes.has(tx.type)))
+          .toHaveLength(0);
+        expect(() => assertGrossCapacity([1])).toThrow();
+        if (offset === 0) {
+          // Non-vacuity: the exact same opening world CAN dispatch when only
+          // the physical capacity is restored, without changing trade law.
+          const allowed = executeM5AutonomousRegionalTradeTick(
+            start, tick, upstream, unchanged, fixture.options,
+          );
+          expect(allowed.phaseBoundaryError).toBeUndefined();
+          expect(allowed.reconciliationErrors).toBeNull();
+          expect(allowed.context.transactions.filter(tx =>
+            tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH").length)
+            .toBeGreaterThan(0);
+          const localSales = (tx: EconomicTransaction) =>
+            tx.phase === 4 && tx.type === "MARKET_SALE";
+          expect(journal.filter(localSales).length).toBeGreaterThan(0);
+          expect(journal.filter(localSales))
+            .toEqual(allowed.context.transactions.filter(localSales));
+          checkedZeroCapacityBlock = true;
+        }
+      }
       expect(beforePhase7).toBeDefined();
       expect(afterPhase7).toBeDefined();
       assertGrossSellerDebits(beforePhase7!, afterPhase7!, fresh, sales);
@@ -719,5 +756,6 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     expect(sawMispaidActorCashReject).toBe(true);
     expect(checkedPaidCapacity).toBe(true);
     expect(rejectedOverCapacity).toBe(true);
+    expect(checkedZeroCapacityBlock).toBe(true);
   }, 60_000);
 });
