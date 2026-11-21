@@ -1643,13 +1643,17 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(payouts).toHaveLength(2);
     expect(payouts.every(leg => leg.fromAccount.type === "FX_POOL")).toBe(true);
     expect(new Set(payouts.map(leg => leg.fromAccount.type === "FX_POOL"
-      ? leg.fromAccount.owningAuthorityId : "missing"))).toHaveProperty("size", 2);
+      ? leg.fromAccount.owningAuthorityId : "missing")).size).toBe(2);
     assertIssuerPoolPostings(fxLegs);
     // Negative control: misattribute one actual payout to the other valid
     // issuer, leaving payer/recipient, amounts and overall money unchanged.
     // Aggregate currency accounting would accept this forged journal.
     const forgedIssuer = fxLegs.map(leg => leg === payouts[0]
       ? { ...leg, fromAccount: payouts[1]!.fromAccount } : leg);
+    expect(forgedIssuer.map(leg => leg.moneyAmount))
+      .toEqual(fxLegs.map(leg => leg.moneyAmount));
+    expect(forgedIssuer.map(leg => leg.currencyId))
+      .toEqual(fxLegs.map(leg => leg.currencyId));
     expect(() => assertIssuerPoolPostings(forgedIssuer)).toThrow();
     // Each paid cargo must have its *own* dispatch bundle and FX receipt.
     // Global counts and aggregated pool deltas alone let zero-value legs or
