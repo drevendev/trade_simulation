@@ -12,6 +12,7 @@ import type { GoodId } from "../domain/id";
 import { executeM5AutonomousRegionalTradeTick } from "./m5AutonomousRegionalTradeTick";
 import type { PhaseHandler, EconomicTransaction } from "./tickOrchestrator";
 import type { TradeShipmentState } from "./tradeShipmentState";
+import { cargoCapacityUse, effectiveTransportLinkCapacity } from "./transportCapacity";
 import type { WorldState } from "./worldState";
 
 const IRON = "good:iron" as GoodId;
@@ -146,6 +147,8 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     let reverse = shuffled(initial);
     let destroyedTotal = 0;
     let sent = 0;
+    let checkedPaidCapacity = false;
+    let rejectedOverCapacity = false;
     let delivered = 0;
     let blockedWithLocalSale = 0;
     let sawBadLossReject = false;
@@ -211,6 +214,33 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
         cargo => !preexisting.has(cargo.id));
       const dispatched = journal.filter(tx =>
         tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
+      // Capacity is consumed by goods loaded at the origin, BEFORE routine
+      // loss reduces the in-transit cargo. Checking surviving cargo alone
+      // would permit overbooking a damaged route without detecting it.
+      const link = start.transportLinks.get(linkId)!;
+      const factor = options.infrastructureFactors.get(linkId);
+      expect(factor).toBeDefined();
+      const weight = start.definitionRegistry.goods[IRON]?.cargoWeightPerUnit;
+      expect(weight).toBeGreaterThan(0);
+      const physicalCapacity = effectiveTransportLinkCapacity(link, factor!);
+      const sales = journal.filter(tx =>
+        tx.phase === 7 && tx.type === "TRADE_GOODS_SALE");
+      const assertGrossCapacity = (quantities: readonly number[]): void => {
+        const loaded = quantities.reduce((sum, quantity) =>
+          sum + cargoCapacityUse(quantity, weight!), 0);
+        expect(loaded, `tick ${tick}: gross loaded link capacity`)
+          .toBeLessThanOrEqual(physicalCapacity + 1e-8);
+      };
+      assertGrossCapacity(sales.map(tx => tx.quantity!));
+      if (sales.length && !rejectedOverCapacity) {
+        // Negative control: make the sale exceed the real physical ceiling.
+        // A net-of-transport-loss capacity oracle would miss this forgery.
+        const forged = [physicalCapacity / weight! + 1,
+          ...sales.slice(1).map(tx => tx.quantity!)];
+        expect(() => assertGrossCapacity(forged)).toThrow();
+        rejectedOverCapacity = true;
+      }
+      if (sales.length) checkedPaidCapacity = true;
       if (open) {
         openingWitnesses.set(tick, {
           rate, paidCargoCount: fresh.length,
@@ -355,5 +385,7 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     expect(sawBadLossReject).toBe(true);
     expect(sawWrongDeliveryReject).toBe(true);
     expect(sawWrongTransitReject).toBe(true);
+    expect(checkedPaidCapacity).toBe(true);
+    expect(rejectedOverCapacity).toBe(true);
   }, 60_000);
 });
