@@ -441,7 +441,13 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     expect(fresh).toHaveLength(1);
     assertGrossSellerDebits(partial.pre7, partial.post7, fresh, sales);
     assertPaidDispatchCharges(scarce, journal, fresh, []);
-    assertPhase7FxPoolCash(partial.pre7, partial.post7, paidOutputs);
+    // Both settlement directions post to the same pool. A payout-only
+    // journal would falsely report the real buyer-currency FX_INPUT deposit
+    // as an unexplained reserve delta.
+    const fxLegs = journal.filter((tx): tx is FxLedgerLeg =>
+      tx.phase === 7 && (tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT"));
+    expect(fxLegs.filter(tx => tx.type === "FX_INPUT")).toHaveLength(1);
+    assertPhase7FxPoolCash(partial.pre7, partial.post7, fxLegs);
     assertPhase7ActorCash(partial.pre7, partial.post7, journal);
     assertLossReconciliation(scarce, partial.result.world, journal);
     for (const id of scarce.currencies.keys()) {
