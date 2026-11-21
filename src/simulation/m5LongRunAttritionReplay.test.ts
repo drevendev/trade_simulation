@@ -10,6 +10,8 @@ import { describe, expect, it } from "vitest";
 import { createM5PreviewScenario, M5_PREVIEW_TICK } from "../diagnostics/m5PreviewScenario";
 import type { GoodId } from "../domain/id";
 import type { ActorRef } from "../domain/genesisLedger";
+import { actorRefKey } from "../domain/genesisLedger";
+import { readActorWallet } from "./marketSettlementTransition";
 import { executeM5AutonomousRegionalTradeTick } from "./m5AutonomousRegionalTradeTick";
 import type { FxLedgerLeg } from "./fxSettlement";
 import type { PhaseHandler, EconomicTransaction } from "./tickOrchestrator";
@@ -230,6 +232,70 @@ function assertPhase7FxPoolCash(
   }
 }
 
+
+/**
+ * A balanced Phase-7 journal must land on the exact buyer, seller, transporter
+ * and taxing-State wallets. The invoice SALE is informational: FX_INPUT/OUTPUT
+ * are the actual principal postings, with separate fee/tax cash legs.
+ * Aggregate currency and FX-pool conservation cannot catch a wrong recipient.
+ */
+function assertPhase7ActorCash(
+  before: WorldState, after: WorldState, journal: readonly EconomicTransaction[],
+): void {
+  const expectedDeltas = new Map<string, number>();
+  const key = (actor: ActorRef, currency: string): string =>
+    JSON.stringify([actorRefKey(actor), currency]);
+  const stage = (actor: ActorRef, currency: string, delta: number): void => {
+    expect(actor.type).not.toBe("MONETARY_AUTHORITY");
+    expect(actorExists(before, actor)).toBe(true);
+    expect(actorExists(after, actor)).toBe(true);
+    expect(before.currencies.has(currency as never)).toBe(true);
+    const id = key(actor, currency);
+    expectedDeltas.set(id, (expectedDeltas.get(id) ?? 0) + delta);
+  };
+  for (const tx of journal) {
+    if (tx.phase !== 7) continue;
+    if (tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT") {
+      const leg = tx as FxLedgerLeg;
+      const endpoint = leg.type === "FX_INPUT" ? leg.fromAccount : leg.toAccount;
+      expect(endpoint.type).toBe("ACTOR");
+      if (endpoint.type !== "ACTOR") throw new Error("FX principal has no actor endpoint");
+      stage(endpoint.actor, leg.currencyId,
+        leg.type === "FX_INPUT" ? -leg.moneyAmount : leg.moneyAmount);
+    } else if (tx.type === "TRANSPORT_FEE" ||
+               tx.type === "IMPORT_TARIFF" || tx.type === "CONSUMPTION_TAX") {
+      expect(tx.source).toBeDefined();
+      expect(tx.destination).toBeDefined();
+      expect(tx.currencyId).toBeDefined();
+      expect(tx.moneyAmount).toBeGreaterThan(0);
+      if (!tx.source || !tx.destination || !tx.currencyId ||
+          tx.moneyAmount === undefined) throw new Error("Charge has missing cash endpoint");
+      stage(tx.source, tx.currencyId, -tx.moneyAmount);
+      stage(tx.destination, tx.currencyId, tx.moneyAmount);
+    }
+  }
+  const actors: ActorRef[] = [
+    ...[...before.states.keys()].map(stateId => ({ type: "STATE" as const, stateId })),
+    ...[...before.clans.keys()].map(clanId => ({ type: "CLAN" as const, clanId })),
+    ...[...before.cohorts.keys()].map(cohortId => ({ type: "COHORT" as const, cohortId })),
+    ...[...before.productionUnits.keys()].map(productionUnitId =>
+      ({ type: "PRODUCTION_UNIT" as const, productionUnitId })),
+  ];
+  const epsilon = before.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
+  for (const actor of actors) {
+    expect(actorExists(after, actor)).toBe(true);
+    const opening = readActorWallet(before, actor);
+    const closing = readActorWallet(after, actor);
+    for (const currency of before.currencies.keys()) {
+      const observed = (closing.get(currency) ?? 0) - (opening.get(currency) ?? 0);
+      const expected = expectedDeltas.get(key(actor, currency)) ?? 0;
+      expect(Math.abs(observed - expected),
+        "Phase-7 exact actor cash " + actorRefKey(actor) + " / " + currency)
+        .toBeLessThanOrEqual(epsilon);
+    }
+  }
+}
+
 describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () => {
   it("conserves owner-bound paid cargo and cumulative loss across changing border policy", () => {
     const fixture = createM5PreviewScenario();
@@ -262,6 +328,7 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     let sawMispostedPoolCashReject = false;
     let sawPrecisionMispostReject = false;
     let sawFxActorForgeryReject = false;
+    let sawMispaidActorCashReject = false;
     const sentIds = new Set<string>();
     const deliveredIds = new Set<string>();
     // Evidence must include actual paid, positive-loss dispatch for BOTH policy
@@ -390,6 +457,35 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
       const fxLegs = journal.filter((tx): tx is FxLedgerLeg =>
         tx.phase === 7 && (tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT"));
       assertPhase7FxPoolCash(beforePhase7!, afterPhase7!, fxLegs);
+      assertPhase7ActorCash(beforePhase7!, afterPhase7!, journal);
+      if (outputs.length && !sawMispaidActorCashReject) {
+        // A balanced seller-to-other-producer transfer keeps each currency
+        // total and every FX pool unchanged, but pays the wrong actual owner.
+        const payout = fxLegs.find(leg => leg.type === "FX_OUTPUT")!;
+        if (payout.destination?.type !== "PRODUCTION_UNIT") {
+          throw new Error("Expected a real paid exporter");
+        }
+        const sellerId = payout.destination.productionUnitId;
+        const otherId = [...afterPhase7!.productionUnits.keys()].find(id => id !== sellerId);
+        expect(otherId).toBeDefined();
+        if (!otherId) throw new Error("Missing distinct actor for wrong-owner control");
+        const seller = afterPhase7!.productionUnits.get(sellerId)!;
+        const other = afterPhase7!.productionUnits.get(otherId)!;
+        const sellerCash = seller.wallet.get(payout.currencyId) ?? 0;
+        const shift = Math.min(payout.moneyAmount / 4, sellerCash / 4);
+        expect(shift).toBeGreaterThan(0);
+        const units = new Map(afterPhase7!.productionUnits);
+        units.set(sellerId, { ...seller, wallet: new Map(seller.wallet).set(
+          payout.currencyId, sellerCash - shift) });
+        units.set(otherId, { ...other, wallet: new Map(other.wallet).set(
+          payout.currencyId, (other.wallet.get(payout.currencyId) ?? 0) + shift) });
+        const forged = { ...afterPhase7!, productionUnits: units };
+        expect(currencyTotal(forged, payout.currencyId))
+          .toBeCloseTo(currencyTotal(afterPhase7!, payout.currencyId), 6);
+        expect(forged.monetaryAuthorities).toEqual(afterPhase7!.monetaryAuthorities);
+        expect(() => assertPhase7ActorCash(beforePhase7!, forged, journal)).toThrow();
+        sawMispaidActorCashReject = true;
+      }
       if (inputs.length && outputs.length && !sawFxActorForgeryReject) {
         // Forging only the named account endpoint (not the journal owner or
         // money amounts) must fail for both directions, for a real wrong actor
@@ -620,6 +716,7 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     expect(sawMispostedPoolCashReject).toBe(true);
     expect(sawPrecisionMispostReject).toBe(true);
     expect(sawFxActorForgeryReject).toBe(true);
+    expect(sawMispaidActorCashReject).toBe(true);
     expect(checkedPaidCapacity).toBe(true);
     expect(rejectedOverCapacity).toBe(true);
   }, 60_000);
