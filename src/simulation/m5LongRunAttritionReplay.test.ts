@@ -459,6 +459,77 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     expect(journal.filter(localSales)).toEqual(
       full.result.context.transactions.filter(localSales));
     expect(journal.filter(localSales).length).toBeGreaterThan(0);
+    // Combined M5 gate: scarce-FX-paid cargo remains the buyer's in-transit
+    // property after the border closes and tariffs change. Delivery is a
+    // physical transfer, not a second invoice, fee, tariff or FX conversion.
+    const paidCargo = fresh[0]!;
+    expect(paidCargo.tariffAmount).toBeGreaterThan(0);
+    expect(paidCargo.arrivalTick).toBeGreaterThan(M5_PREVIEW_TICK);
+    expect(paidCargo.arrivalTick).toBeLessThanOrEqual(M5_PREVIEW_TICK + 4);
+    const paidTariff = journal.find(tx => tx.phase === 7 &&
+      tx.type === "IMPORT_TARIFF" &&
+      tx.bundleId === "tb:" + String(paidCargo.id).slice(3));
+    expect(paidTariff).toBeDefined();
+    const closed = {
+      ...options,
+      phase1TradeLawProvider: () => undefined,
+      phase1TariffLawProvider: () => 0.90,
+    };
+    let inFlight = partial.result.world;
+    let deliveryCount = 0;
+    let localSalesAfterClosure = 0;
+    for (let tick = M5_PREVIEW_TICK + 1; tick <= paidCargo.arrivalTick + 1; tick++) {
+      let beforePhase1: WorldState | undefined;
+      let afterPhase1: WorldState | undefined;
+      const next = executeM5AutonomousRegionalTradeTick(
+        inFlight, tick, upstream, unchanged, closed,
+        (phase, before, after) => {
+          if (phase === 1) { beforePhase1 = before; afterPhase1 = after; }
+        },
+      );
+      expect(next.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(next.phaseBoundaryError).toBeUndefined();
+      expect(next.reconciliationErrors).toBeNull();
+      const due = tick === paidCargo.arrivalTick ? [paidCargo] : [];
+      const deliveries = next.context.transactions.filter(tx =>
+        tx.type === "SHIPMENT_DELIVERY" &&
+        tx.reason === "IN_TRANSIT_TO_INPUT_STOCK:" + paidCargo.id);
+      expect(deliveries).toHaveLength(due.length);
+      expect(beforePhase1).toBeDefined();
+      expect(afterPhase1).toBeDefined();
+      assertDeliveryOwners(beforePhase1!, afterPhase1!, due);
+      if (due.length) {
+        expect(deliveries[0]).toMatchObject({
+          phase: 1, tick, goodId: paidCargo.goodId, quantity: paidCargo.quantity,
+          destination: paidCargo.beneficialOwner,
+        });
+        deliveryCount += deliveries.length;
+        // Negative control: a repeated tariff on arrival must be rejected,
+        // even though its old amount, buyer and recipient were once valid.
+        expect(() => assertPaidDispatchCharges(
+          inFlight, [...next.context.transactions, { ...paidTariff!, tick }], [], due,
+        )).toThrow();
+      }
+      if (tick < paidCargo.arrivalTick) {
+        expect(next.world.shipments?.get(paidCargo.id)).toEqual(paidCargo);
+      } else {
+        expect(next.world.shipments?.has(paidCargo.id)).toBe(false);
+      }
+      assertPaidDispatchCharges(inFlight, next.context.transactions, [], due);
+      expect(next.context.transactions.filter(tx => tx.phase === 7 &&
+        ["TRADE_GOODS_SALE", "SHIPMENT_DISPATCH", "FX_INPUT", "FX_OUTPUT",
+          "TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"].includes(tx.type)))
+        .toHaveLength(0);
+      localSalesAfterClosure += next.context.transactions.filter(tx =>
+        tx.phase === 4 && tx.type === "MARKET_SALE").length;
+      expect(iron(next.world)).toBeCloseTo(iron(inFlight), 6);
+      for (const id of scarce.currencies.keys()) {
+        expect(currencyTotal(next.world, id)).toBeCloseTo(currencyTotal(inFlight, id), 5);
+      }
+      inFlight = next.world;
+    }
+    expect(deliveryCount).toBe(1);
+    expect(localSalesAfterClosure).toBeGreaterThan(0);
   }, 60_000);
 
   it("conserves owner-bound paid cargo and cumulative loss across changing border policy", () => {
