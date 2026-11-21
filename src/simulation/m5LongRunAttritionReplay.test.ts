@@ -366,6 +366,101 @@ function assertPaidDispatchCharges(
 }
 
 describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () => {
+  it("shrinks a funded shipment before seller stock mutation when FX headroom is positive but scarce", () => {
+    // This is not the zero-FX refusal case: a real paid export is permitted,
+    // but the only issuer's SOURCE-currency payout liquidity is deliberately
+    // smaller than that export's settled invoice.
+    const { opening, options } = createM5PreviewScenario();
+    const run = (start: WorldState) => {
+      let pre7: WorldState | undefined;
+      let post7: WorldState | undefined;
+      const result = executeM5AutonomousRegionalTradeTick(
+        start, M5_PREVIEW_TICK, upstream, unchanged, options,
+        (phase, before, after) => {
+          if (phase === 7) { pre7 = before; post7 = after; }
+        },
+      );
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(pre7).toBeDefined();
+      expect(post7).toBeDefined();
+      return { result, pre7: pre7!, post7: post7! };
+    };
+    const full = run(opening);
+    const fullOutputs = full.result.context.transactions.filter(
+      (tx): tx is FxLedgerLeg => tx.phase === 7 && tx.type === "FX_OUTPUT");
+    expect(fullOutputs).toHaveLength(1);
+    const output = fullOutputs[0]!;
+    if (output.fromAccount.type !== "FX_POOL") {
+      throw new Error("Actual baseline export must be funded by an issuer FX pool");
+    }
+    const { owningAuthorityId, pairId } = output.fromAccount;
+    const authority = opening.monetaryAuthorities.get(owningAuthorityId)!;
+    const pool = authority.fxPools.get(pairId)!;
+    const currency = output.currencyId;
+    const floor = currency === pool.baseCurrencyId
+      ? pool.minOperationalReserveBase : pool.minOperationalReserveQuote;
+    expect(pool.cash.get(currency)).toBeGreaterThan(floor + output.moneyAmount);
+    const allowedOutput = output.moneyAmount / 2;
+    const scarce: WorldState = {
+      ...opening,
+      monetaryAuthorities: new Map(opening.monetaryAuthorities).set(
+        owningAuthorityId, {
+          ...authority,
+          fxPools: new Map(authority.fxPools).set(pairId, {
+            ...pool, cash: new Map(pool.cash).set(currency, floor + allowedOutput),
+          }),
+        },
+      ),
+    };
+    const partial = run(scarce);
+    const shuffledPartial = run(shuffled(scarce));
+    const journal = partial.result.context.transactions;
+    expect(shuffledPartial.result.context.transactions).toEqual(journal);
+    expect(replayHash(shuffledPartial.result.world, shuffledPartial.result.context.transactions))
+      .toBe(replayHash(partial.result.world, journal));
+    const paidOutputs = journal.filter(
+      (tx): tx is FxLedgerLeg => tx.phase === 7 && tx.type === "FX_OUTPUT");
+    expect(paidOutputs).toHaveLength(1);
+    const paid = paidOutputs[0]!;
+    const epsilon = scarce.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
+    expect(paid.moneyAmount).toBeGreaterThan(0);
+    expect(paid.moneyAmount).toBeLessThan(output.moneyAmount);
+    expect(paid.moneyAmount).toBeLessThanOrEqual(allowedOutput + epsilon);
+    const sales = journal.filter(tx => tx.phase === 7 && tx.type === "TRADE_GOODS_SALE");
+    const fullSales = full.result.context.transactions.filter(
+      tx => tx.phase === 7 && tx.type === "TRADE_GOODS_SALE");
+    expect(sales).toHaveLength(1);
+    expect(fullSales).toHaveLength(1);
+    expect(sales[0]!.quantity).toBeGreaterThan(0);
+    expect(sales[0]!.quantity).toBeLessThan(fullSales[0]!.quantity!);
+    // The gross quantity, not the loss-reduced cargo, must be debited from
+    // the seller's source inventory. Verify actual Phase-7 before/after states.
+    const fresh = [...partial.post7.shipments?.values() ?? []];
+    expect(fresh).toHaveLength(1);
+    assertGrossSellerDebits(partial.pre7, partial.post7, fresh, sales);
+    assertPaidDispatchCharges(scarce, journal, fresh, []);
+    // Both settlement directions post to the same pool. A payout-only
+    // journal would falsely report the real buyer-currency FX_INPUT deposit
+    // as an unexplained reserve delta.
+    const fxLegs = journal.filter((tx): tx is FxLedgerLeg =>
+      tx.phase === 7 && (tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT"));
+    expect(fxLegs.filter(tx => tx.type === "FX_INPUT")).toHaveLength(1);
+    assertPhase7FxPoolCash(partial.pre7, partial.post7, fxLegs);
+    assertPhase7ActorCash(partial.pre7, partial.post7, journal);
+    assertLossReconciliation(scarce, partial.result.world, journal);
+    for (const id of scarce.currencies.keys()) {
+      expect(currencyTotal(partial.result.world, id))
+        .toBeCloseTo(currencyTotal(scarce, id), 5);
+    }
+    const localSales = (tx: EconomicTransaction) =>
+      tx.phase === 4 && tx.type === "MARKET_SALE";
+    expect(journal.filter(localSales)).toEqual(
+      full.result.context.transactions.filter(localSales));
+    expect(journal.filter(localSales).length).toBeGreaterThan(0);
+  }, 60_000);
+
   it("conserves owner-bound paid cargo and cumulative loss across changing border policy", () => {
     const fixture = createM5PreviewScenario();
     const [linkId, link] = [...fixture.opening.transportLinks][0]!;
