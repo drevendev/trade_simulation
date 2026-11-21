@@ -319,6 +319,7 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     let sent = 0;
     let checkedPaidCapacity = false;
     let checkedZeroCapacityBlock = false;
+    let checkedZeroFxBlock = false;
     let rejectedOverCapacity = false;
     let delivered = 0;
     let blockedWithLocalSale = 0;
@@ -442,6 +443,62 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
           expect(journal.filter(localSales))
             .toEqual(allowed.context.transactions.filter(localSales));
           checkedZeroCapacityBlock = true;
+
+          // Independent zero-USABLE-FX fork of the same legally open,
+          // physically available, locally trading opening world. Deplete the
+          // actual paid leg's output reserve to its operational floor, not an
+          // arbitrary pool, currency or artificially closed trade permission.
+          const paidOutput = allowed.context.transactions.find((tx): tx is FxLedgerLeg =>
+            tx.phase === 7 && tx.type === "FX_OUTPUT");
+          expect(paidOutput).toBeDefined();
+          if (!paidOutput || paidOutput.fromAccount.type !== "FX_POOL") {
+            throw new Error("Positive trade witness must have a real issuer FX payout");
+          }
+          const { owningAuthorityId, pairId } = paidOutput.fromAccount;
+          const authority = start.monetaryAuthorities.get(owningAuthorityId)!;
+          const pool = authority.fxPools.get(pairId)!;
+          const outputCurrency = paidOutput.currencyId;
+          const floor = outputCurrency === pool.baseCurrencyId
+            ? pool.minOperationalReserveBase : pool.minOperationalReserveQuote;
+          expect([pool.baseCurrencyId, pool.quoteCurrencyId]).toContain(outputCurrency);
+          expect(pool.cash.get(outputCurrency)).toBeGreaterThan(floor);
+          const drained: WorldState = {
+            ...start,
+            monetaryAuthorities: new Map(start.monetaryAuthorities).set(
+              owningAuthorityId, {
+                ...authority,
+                fxPools: new Map(authority.fxPools).set(pairId, {
+                  ...pool, cash: new Map(pool.cash).set(outputCurrency, floor),
+                }),
+              },
+            ),
+          };
+          const dry = executeM5AutonomousRegionalTradeTick(
+            drained, tick, upstream, unchanged, fixture.options,
+          );
+          const dryReplay = executeM5AutonomousRegionalTradeTick(
+            shuffled(drained), tick, upstream, unchanged, fixture.options,
+          );
+          for (const result of [dry, dryReplay]) {
+            expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+            expect(result.phaseBoundaryError).toBeUndefined();
+            expect(result.reconciliationErrors).toBeNull();
+            expect(result.context.transactions.filter(tx =>
+              tx.phase === 7 && paidTypes.has(tx.type))).toHaveLength(0);
+            expect(result.world.shipments?.size ?? 0).toBe(0);
+            expect(iron(result.world)).toBeCloseTo(iron(drained), 6);
+            for (const currency of drained.currencies.keys()) {
+              expect(currencyTotal(result.world, currency))
+                .toBeCloseTo(currencyTotal(drained, currency), 5);
+            }
+            // Lack of FX must not turn off the Phase-4 domestic market.
+            expect(result.context.transactions.filter(localSales))
+              .toEqual(allowed.context.transactions.filter(localSales));
+          }
+          expect(dryReplay.context.transactions).toEqual(dry.context.transactions);
+          expect(replayHash(dryReplay.world, dryReplay.context.transactions))
+            .toBe(replayHash(dry.world, dry.context.transactions));
+          checkedZeroFxBlock = true;
         }
       }
       expect(beforePhase7).toBeDefined();
@@ -757,5 +814,6 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     expect(checkedPaidCapacity).toBe(true);
     expect(rejectedOverCapacity).toBe(true);
     expect(checkedZeroCapacityBlock).toBe(true);
+    expect(checkedZeroFxBlock).toBe(true);
   }, 60_000);
 });
