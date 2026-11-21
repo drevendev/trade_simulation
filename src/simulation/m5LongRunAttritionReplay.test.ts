@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { createM5PreviewScenario, M5_PREVIEW_TICK } from "../diagnostics/m5PreviewScenario";
 import type { GoodId } from "../domain/id";
 import { executeM5AutonomousRegionalTradeTick } from "./m5AutonomousRegionalTradeTick";
+import type { FxLedgerLeg } from "./fxSettlement";
 import type { PhaseHandler, EconomicTransaction } from "./tickOrchestrator";
 import type { TradeShipmentState } from "./tradeShipmentState";
 import { cargoCapacityUse, effectiveTransportLinkCapacity } from "./transportCapacity";
@@ -161,6 +162,53 @@ function assertGrossSellerDebits(
   }
 }
 
+
+/**
+ * Every Phase-7 FX leg must post to its named physical issuer pool, in the
+ * correct currency and direction. Global currency conservation alone cannot
+ * detect money moved from a seller wallet into the wrong reserve account.
+ */
+function assertPhase7FxPoolCash(
+  before: WorldState, after: WorldState, legs: readonly FxLedgerLeg[],
+): void {
+  for (const leg of legs) {
+    expect(leg.phase).toBe(7);
+    expect(leg.moneyAmount).toBeGreaterThan(0);
+    const endpoint = leg.type === "FX_INPUT" ? leg.toAccount : leg.fromAccount;
+    const counterparty = leg.type === "FX_INPUT" ? leg.fromAccount : leg.toAccount;
+    expect(endpoint.type).toBe("FX_POOL");
+    expect(counterparty.type).toBe("ACTOR");
+    if (endpoint.type !== "FX_POOL") throw new Error("FX leg has no physical pool endpoint");
+    const pool = before.monetaryAuthorities.get(endpoint.owningAuthorityId)
+      ?.fxPools.get(endpoint.pairId);
+    expect(pool, "FX journal must name an existing authority-owned pool").toBeDefined();
+    expect(pool!.cash.has(leg.currencyId)).toBe(true);
+  }
+  for (const [authorityId, authority] of before.monetaryAuthorities) {
+    const nextAuthority = after.monetaryAuthorities.get(authorityId);
+    expect(nextAuthority).toBeDefined();
+    expect(nextAuthority!.fxPools.size).toBe(authority.fxPools.size);
+    for (const [pairId, pool] of authority.fxPools) {
+      const nextPool = nextAuthority!.fxPools.get(pairId);
+      expect(nextPool).toBeDefined();
+      for (const currencyId of new Set([...pool.cash.keys(), ...nextPool!.cash.keys()])) {
+        const postedDelta = legs.reduce((sum, leg) => {
+          const endpoint = leg.type === "FX_INPUT" ? leg.toAccount : leg.fromAccount;
+          return endpoint.type === "FX_POOL" &&
+            endpoint.owningAuthorityId === authorityId &&
+            endpoint.pairId === pairId && leg.currencyId === currencyId
+            ? sum + (leg.type === "FX_INPUT" ? leg.moneyAmount : -leg.moneyAmount)
+            : sum;
+        }, 0);
+        const observedDelta = (nextPool!.cash.get(currencyId) ?? 0) -
+          (pool.cash.get(currencyId) ?? 0);
+        expect(observedDelta, "Phase-7 issuer pool " + pairId + " / " + currencyId)
+          .toBeCloseTo(postedDelta, 6);
+      }
+    }
+  }
+}
+
 describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () => {
   it("conserves owner-bound paid cargo and cumulative loss across changing border policy", () => {
     const fixture = createM5PreviewScenario();
@@ -190,6 +238,7 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     let sawWrongDeliveryReject = false;
     let sawWrongTransitReject = false;
     let sawWrongSellerDebitReject = false;
+    let sawMispostedPoolCashReject = false;
     const sentIds = new Set<string>();
     const deliveredIds = new Set<string>();
     // Evidence must include actual paid, positive-loss dispatch for BOTH policy
@@ -314,6 +363,49 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
       }
       const inputs = journal.filter(tx => tx.phase === 7 && tx.type === "FX_INPUT");
       const outputs = journal.filter(tx => tx.phase === 7 && tx.type === "FX_OUTPUT");
+
+      const fxLegs = journal.filter((tx): tx is FxLedgerLeg =>
+        tx.phase === 7 && (tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT"));
+      assertPhase7FxPoolCash(beforePhase7!, afterPhase7!, fxLegs);
+      if (outputs.length && !sawMispostedPoolCashReject) {
+        // Preserve every currency total while misposting part of an issuer's
+        // output reserve to a seller's account. Exact pool-ledger accounting,
+        // not aggregate conservation, must detect the theft.
+        const output = fxLegs.find(leg => leg.type === "FX_OUTPUT")!;
+        if (output.fromAccount.type !== "FX_POOL" ||
+            output.destination?.type !== "PRODUCTION_UNIT") {
+          throw new Error("Expected pool-funded payment to a physical exporter");
+        }
+        const { owningAuthorityId, pairId } = output.fromAccount;
+        const authority = afterPhase7!.monetaryAuthorities.get(owningAuthorityId)!;
+        const pool = authority.fxPools.get(pairId)!;
+        const sellerId = output.destination.productionUnitId;
+        const seller = afterPhase7!.productionUnits.get(sellerId)!;
+        const sellerCash = seller.wallet.get(output.currencyId) ?? 0;
+        const shift = Math.min(output.moneyAmount / 4, sellerCash / 4);
+        expect(shift).toBeGreaterThan(0);
+        const forged: WorldState = {
+          ...afterPhase7!,
+          monetaryAuthorities: new Map(afterPhase7!.monetaryAuthorities).set(
+            owningAuthorityId, {
+              ...authority, fxPools: new Map(authority.fxPools).set(pairId, {
+                ...pool, cash: new Map(pool.cash).set(
+                  output.currencyId, (pool.cash.get(output.currencyId) ?? 0) + shift,
+                ),
+              }),
+            },
+          ),
+          productionUnits: new Map(afterPhase7!.productionUnits).set(sellerId, {
+            ...seller, wallet: new Map(seller.wallet).set(
+              output.currencyId, sellerCash - shift,
+            ),
+          }),
+        };
+        expect(currencyTotal(forged, output.currencyId))
+          .toBeCloseTo(currencyTotal(afterPhase7!, output.currencyId), 6);
+        expect(() => assertPhase7FxPoolCash(beforePhase7!, forged, fxLegs)).toThrow();
+        sawMispostedPoolCashReject = true;
+      }
       // A count or global iron sum is not a proof of custody: every cargo
       // already in transit must retain its PAID identity, owner and quantity.
       const expectedTransit = new Map([
@@ -451,6 +543,7 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     expect(sawWrongDeliveryReject).toBe(true);
     expect(sawWrongTransitReject).toBe(true);
     expect(sawWrongSellerDebitReject).toBe(true);
+    expect(sawMispostedPoolCashReject).toBe(true);
     expect(checkedPaidCapacity).toBe(true);
     expect(rejectedOverCapacity).toBe(true);
   }, 60_000);
