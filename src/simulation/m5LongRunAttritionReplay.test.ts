@@ -447,13 +447,13 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
         .toBe(replayHash(actual.world, actual.context.transactions));
       const journal = actual.context.transactions;
       assertLossReconciliation(start, actual.world, journal);
-      assertPaidDispatchCharges(start, journal, fresh, due);
       const losses = journal.filter(tx => tx.type === "GOODS_TRANSPORT_LOSS");
       destroyedTotal += losses.reduce((sum, tx) => sum + tx.quantity!, 0);
       expect(iron(actual.world)).toBeCloseTo(iron(initial) - destroyedTotal, 6);
       const incoming = journal.filter(tx => tx.type === "SHIPMENT_DELIVERY");
       const fresh = [...actual.world.shipments?.values() ?? []].filter(
         cargo => !preexisting.has(cargo.id));
+      assertPaidDispatchCharges(start, journal, fresh, due);
       const dispatched = journal.filter(tx =>
         tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH");
       // Capacity is consumed by goods loaded at the origin, BEFORE routine
