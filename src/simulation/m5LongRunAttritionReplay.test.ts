@@ -296,6 +296,62 @@ function assertPhase7ActorCash(
   }
 }
 
+
+/**
+ * Reconcile every departing cargo's FROZEN buyer-currency fee/tax snapshot to
+ * its real Phase-7 payment bundle. Later arrivals must never charge that old
+ * bundle again, even while new dispatches and tax policy continue to change.
+ */
+function assertPaidDispatchCharges(
+  opening: WorldState, journal: readonly EconomicTransaction[],
+  fresh: readonly TradeShipmentState[], due: readonly TradeShipmentState[],
+): void {
+  const kinds = ["TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"] as const;
+  const epsilon = opening.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
+  const bundle = (cargo: TradeShipmentState): string => {
+    if (!String(cargo.id).startsWith("sh:m5fx:")) {
+      throw new Error("Paid M5 cargo must have a canonical FX dispatch ID");
+    }
+    return "tb:" + String(cargo.id).slice(3);
+  };
+  let positiveCharges = 0;
+  for (const cargo of fresh) {
+    const destinationState = opening.regions.get(cargo.destinationRegionId)?.controllerStateId;
+    for (const [type, amount] of [
+      ["TRANSPORT_FEE", cargo.transportFeeAmount],
+      ["IMPORT_TARIFF", cargo.tariffAmount],
+      ["CONSUMPTION_TAX", cargo.consumptionTaxAmount],
+    ] as const) {
+      const legs = journal.filter(tx =>
+        tx.phase === 7 && tx.bundleId === bundle(cargo) && tx.type === type);
+      expect(legs, "dispatch " + cargo.id + " " + type)
+        .toHaveLength(amount > 0 ? 1 : 0);
+      if (amount <= 0) continue;
+      positiveCharges++;
+      const leg = legs[0]!;
+      expect(leg.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+      expect(leg.source).toEqual(cargo.buyer);
+      expect(leg.moneyAmount).toBeDefined();
+      expect(Math.abs(leg.moneyAmount! - amount)).toBeLessThanOrEqual(epsilon);
+      if (type !== "TRANSPORT_FEE") {
+        expect(destinationState).not.toBeNull();
+        expect(destinationState).toBeDefined();
+        expect(leg.destination).toEqual({ type: "STATE", stateId: destinationState });
+      }
+    }
+  }
+  // Reject unowned extra charges not matched to ANY fresh shipment, as well
+  // as duplicate legs or silently missing charge snapshots.
+  expect(journal.filter(tx => tx.phase === 7 &&
+    kinds.some(kind => kind === tx.type))).toHaveLength(positiveCharges);
+  for (const cargo of due) {
+    expect(journal.filter(tx => tx.phase === 7 && tx.bundleId === bundle(cargo) &&
+      (kinds.some(kind => kind === tx.type) ||
+       tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT")))
+      .toHaveLength(0);
+  }
+}
+
 describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () => {
   it("conserves owner-bound paid cargo and cumulative loss across changing border policy", () => {
     const fixture = createM5PreviewScenario();
@@ -331,6 +387,8 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     let sawPrecisionMispostReject = false;
     let sawFxActorForgeryReject = false;
     let sawMispaidActorCashReject = false;
+    let sawTariffSnapshotReject = false;
+    let sawWrongTariffRecipientReject = false;
     const sentIds = new Set<string>();
     const deliveredIds = new Set<string>();
     // Evidence must include actual paid, positive-loss dispatch for BOTH policy
@@ -389,6 +447,7 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
         .toBe(replayHash(actual.world, actual.context.transactions));
       const journal = actual.context.transactions;
       assertLossReconciliation(start, actual.world, journal);
+      assertPaidDispatchCharges(start, journal, fresh, due);
       const losses = journal.filter(tx => tx.type === "GOODS_TRANSPORT_LOSS");
       destroyedTotal += losses.reduce((sum, tx) => sum + tx.quantity!, 0);
       expect(iron(actual.world)).toBeCloseTo(iron(initial) - destroyedTotal, 6);
@@ -504,6 +563,32 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
       expect(beforePhase7).toBeDefined();
       expect(afterPhase7).toBeDefined();
       assertGrossSellerDebits(beforePhase7!, afterPhase7!, fresh, sales);
+      if (!sawTariffSnapshotReject) {
+        const tariffed = fresh.find(cargo => cargo.tariffAmount > 0);
+        if (tariffed) {
+          // A forged frozen tariff can preserve every cash/goods balance yet
+          // misrepresent the actual amount paid at dispatch.
+          const forged = fresh.map(cargo => cargo === tariffed
+            ? { ...cargo, tariffAmount: cargo.tariffAmount + 0.01 } : cargo);
+          expect(() => assertPaidDispatchCharges(start, journal, forged, due)).toThrow();
+          sawTariffSnapshotReject = true;
+
+          const tariffBundle = "tb:" + String(tariffed.id).slice(3);
+          const tariffLeg = journal.find(tx => tx.phase === 7 &&
+            tx.type === "IMPORT_TARIFF" && tx.bundleId === tariffBundle);
+          expect(tariffLeg).toBeDefined();
+          const expectedState = start.regions.get(tariffed.destinationRegionId)!.controllerStateId;
+          const wrongState = [...start.states.keys()].find(id => id !== expectedState);
+          expect(wrongState).toBeDefined();
+          if (!tariffLeg || !wrongState) throw new Error("Need real tax payer/receiver");
+          const misrouted = journal.map(tx => tx === tariffLeg
+            ? { ...tx, destination: { type: "STATE" as const, stateId: wrongState } }
+            : tx);
+          expect(() => assertPaidDispatchCharges(start, misrouted, fresh, due)).toThrow();
+          sawWrongTariffRecipientReject = true;
+        }
+      }
+
       if (fresh.length && !sawWrongSellerDebitReject) {
         // Forged seller/cargo split leaves global iron and all money totals
         // unchanged. Gross origin-debit validation must still reject it.
@@ -811,6 +896,8 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     expect(sawPrecisionMispostReject).toBe(true);
     expect(sawFxActorForgeryReject).toBe(true);
     expect(sawMispaidActorCashReject).toBe(true);
+    expect(sawTariffSnapshotReject).toBe(true);
+    expect(sawWrongTariffRecipientReject).toBe(true);
     expect(checkedPaidCapacity).toBe(true);
     expect(rejectedOverCapacity).toBe(true);
     expect(checkedZeroCapacityBlock).toBe(true);
