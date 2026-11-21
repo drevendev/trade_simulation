@@ -316,6 +316,10 @@ function assertPaidDispatchCharges(
   };
   let positiveCharges = 0;
   for (const cargo of fresh) {
+    const link = opening.transportLinks.get(cargo.transportLinkId);
+    expect(link, "dispatched cargo must reference an existing link").toBeDefined();
+    expect(link!.fromRegionId).toBe(cargo.originRegionId);
+    expect(link!.toRegionId).toBe(cargo.destinationRegionId);
     const destinationState = opening.regions.get(cargo.destinationRegionId)?.controllerStateId;
     for (const [type, amount] of [
       ["TRANSPORT_FEE", cargo.transportFeeAmount],
@@ -333,7 +337,16 @@ function assertPaidDispatchCharges(
       expect(leg.source).toEqual(cargo.buyer);
       expect(leg.moneyAmount).toBeDefined();
       expect(Math.abs(leg.moneyAmount! - amount)).toBeLessThanOrEqual(epsilon);
-      if (type !== "TRANSPORT_FEE") {
+      if (type === "TRANSPORT_FEE") {
+        const receiver = link!.feeReceiver;
+        expect(receiver, "positive transport fee requires a configured link receiver")
+          .toBeDefined();
+        expect(receiver).not.toBeNull();
+        if (!receiver) throw new Error("Paid transport link has no fee receiver");
+        expect(actorExists(opening, receiver), "fee receiver must exist in opening world")
+          .toBe(true);
+        expect(leg.destination).toEqual(receiver);
+      } else {
         expect(destinationState).not.toBeNull();
         expect(destinationState).toBeDefined();
         expect(leg.destination).toEqual({ type: "STATE", stateId: destinationState });
@@ -389,6 +402,7 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     let sawMispaidActorCashReject = false;
     let sawTariffSnapshotReject = false;
     let sawWrongTariffRecipientReject = false;
+    let sawWrongFeeReceiverReject = false;
     const sentIds = new Set<string>();
     const deliveredIds = new Set<string>();
     // Evidence must include actual paid, positive-loss dispatch for BOTH policy
@@ -563,6 +577,34 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
       expect(beforePhase7).toBeDefined();
       expect(afterPhase7).toBeDefined();
       assertGrossSellerDebits(beforePhase7!, afterPhase7!, fresh, sales);
+      if (!sawWrongFeeReceiverReject) {
+        const feeCargo = fresh.find(cargo => cargo.transportFeeAmount > 0);
+        if (feeCargo) {
+          const correctReceiver = start.transportLinks.get(feeCargo.transportLinkId)?.feeReceiver;
+          expect(correctReceiver).toBeDefined();
+          if (!correctReceiver) throw new Error("Need a real transport fee receiver");
+          const candidates: ActorRef[] = [
+            ...[...start.states.keys()].map(stateId => ({ type: "STATE" as const, stateId })),
+            ...[...start.productionUnits.keys()].map(productionUnitId =>
+              ({ type: "PRODUCTION_UNIT" as const, productionUnitId })),
+          ];
+          const wrongReceiver = candidates.find(actor =>
+            actorRefKey(actor) !== actorRefKey(correctReceiver));
+          expect(wrongReceiver, "need a distinct existing actor for fee diversion")
+            .toBeDefined();
+          const feeBundle = "tb:" + String(feeCargo.id).slice(3);
+          const feeLeg = journal.find(tx => tx.phase === 7 &&
+            tx.type === "TRANSPORT_FEE" && tx.bundleId === feeBundle);
+          expect(feeLeg).toBeDefined();
+          if (!feeLeg || !wrongReceiver) throw new Error("Need a paid fee and alternate actor");
+          // Same real paid bundle, currency, amount and payer; redirect ONLY
+          // the named cash beneficiary. Aggregate money remains balanced.
+          const misrouted = journal.map(tx => tx === feeLeg
+            ? { ...tx, destination: wrongReceiver } : tx);
+          expect(() => assertPaidDispatchCharges(start, misrouted, fresh, due)).toThrow();
+          sawWrongFeeReceiverReject = true;
+        }
+      }
       if (!sawTariffSnapshotReject) {
         const tariffed = fresh.find(cargo => cargo.tariffAmount > 0);
         if (tariffed) {
@@ -898,6 +940,7 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     expect(sawMispaidActorCashReject).toBe(true);
     expect(sawTariffSnapshotReject).toBe(true);
     expect(sawWrongTariffRecipientReject).toBe(true);
+    expect(sawWrongFeeReceiverReject).toBe(true);
     expect(checkedPaidCapacity).toBe(true);
     expect(rejectedOverCapacity).toBe(true);
     expect(checkedZeroCapacityBlock).toBe(true);
