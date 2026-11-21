@@ -365,6 +365,92 @@ describe("M5/#676 monetary-union cross-State golden", () => {
       .toEqual(arrived.context.transactions);
   });
 
+  it("keeps real monetary-union payments independent of available foreign FX reserves", () => {
+    const f = fixture();
+    const currency = f.origin.settlementCurrencyId;
+    // Contrast no pools with real issuer-owned pools whose balances are
+    // available but must never be touched by shared-currency foreign trade.
+    const genesis = buildInitialWorld(
+      baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 42,
+    );
+    const withPools: WorldState = {
+      ...f.world, monetaryAuthorities: genesis.monetaryAuthorities,
+    };
+    const poolOwners = [...withPools.monetaryAuthorities].flatMap(
+      ([authorityId, authority]) => [...authority.fxPools].map(
+        ([poolId, pool]) => ({ authorityId, poolId, pool }),
+      ),
+    );
+    const funded = poolOwners.find(
+      entry => (entry.pool.cash.get(currency) ?? 0) > 1,
+    );
+    expect(funded).toBeDefined(); // A no-pool test would miss an accidental FX debit.
+
+    const noPool = run(f);
+    expect(noPool.world.shipments?.size ?? 0).toBe(1);
+    const sameCurrency = run(f, withPools);
+    const shuffled = run(f, reordered(withPools));
+    const initialMoney = [...withPools.currencies.keys()].map(id =>
+      [id, totalCash(withPools, id)] as const);
+    const assertNoFxUse = (actual: WorldState): void => {
+      // A balanced transfer from an FX pool to another owner is still an
+      // impermissible ownership change even when global M_tx is conserved.
+      expect(actual.monetaryAuthorities).toEqual(withPools.monetaryAuthorities);
+    };
+    for (const result of [sameCurrency, shuffled]) {
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(result.context.transactions.filter(tx =>
+        tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT")).toHaveLength(0);
+      const cargos = [...(result.world.shipments?.values() ?? [])];
+      expect(cargos).toHaveLength(1);
+      expect(cargos[0]!.quantity).toBeGreaterThan(0);
+      expect(cargos[0]!.fxSettlementId).toBeUndefined();
+      expect(cargos[0]!.invoiceCurrencyId).toBe(currency);
+      expect(cargos[0]!.buyerPaymentCurrencyId).toBe(currency);
+      expect(result.context.transactions.filter(tx =>
+        tx.phase === 7 && tx.type === "TRADE_GOODS_SALE")).toHaveLength(1);
+      expect(result.context.transactions.filter(tx =>
+        tx.phase === 7 && tx.type === "IMPORT_TARIFF")).toHaveLength(1);
+      expect(result.context.transactions).toEqual(noPool.context.transactions);
+      expect(result.world.productionUnits).toEqual(noPool.world.productionUnits);
+      expect(result.world.states).toEqual(noPool.world.states);
+      expect(result.world.shipments).toEqual(noPool.world.shipments);
+      assertNoFxUse(result.world);
+      for (const [id, opening] of initialMoney) {
+        expect(totalCash(result.world, id)).toBeCloseTo(opening, 6);
+      }
+    }
+
+    const authority = sameCurrency.world.monetaryAuthorities.get(funded!.authorityId)!;
+    const pool = authority.fxPools.get(funded!.poolId)!;
+    const recipientId = f.destination.controllerStateId!;
+    const recipient = sameCurrency.world.states.get(recipientId)!;
+    const forged: WorldState = {
+      ...sameCurrency.world,
+      monetaryAuthorities: new Map(sameCurrency.world.monetaryAuthorities).set(
+        funded!.authorityId, {
+          ...authority, fxPools: new Map(authority.fxPools).set(funded!.poolId, {
+            ...pool, cash: new Map(pool.cash).set(
+              currency, pool.cash.get(currency)! - 1,
+            ),
+          }),
+        },
+      ),
+      states: new Map(sameCurrency.world.states).set(recipientId, {
+        ...recipient, treasury: new Map(recipient.treasury).set(
+          currency, (recipient.treasury.get(currency) ?? 0) + 1,
+        ),
+      }),
+    };
+    // The transfer fabricates an FX owner debit and a matching State credit:
+    // the ordinary global-money invariant passes but the owner-bound test fails.
+    expect(totalCash(forged, currency))
+      .toBeCloseTo(totalCash(sameCurrency.world, currency), 6);
+    expect(() => assertNoFxUse(forged)).toThrow();
+  });
+
   it("retains exactly one paid shared-currency cargo over 12 blocked ticks and shuffled registries", () => {
     const f = fixture();
     const currency = f.origin.settlementCurrencyId;
