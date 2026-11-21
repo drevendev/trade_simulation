@@ -126,6 +126,41 @@ function assertLossReconciliation(
   }
 }
 
+
+/**
+ * Phase-7 seller custody must lose the GROSS invoice quantity, not merely
+ * surviving cargo after dispatch loss. In this fixture CLOSING producers sell
+ * their INPUT stock; check every producer, including non-sellers, each tick.
+ */
+function assertGrossSellerDebits(
+  before: WorldState, after: WorldState,
+  fresh: readonly TradeShipmentState[], sales: readonly EconomicTransaction[],
+): void {
+  expect(sales).toHaveLength(fresh.length);
+  const bySeller = new Map<string, number>();
+  for (const cargo of fresh) {
+    expect(cargo.seller.type).toBe("PRODUCTION_UNIT");
+    if (cargo.seller.type !== "PRODUCTION_UNIT") {
+      throw new Error("Expected a physical producer seller");
+    }
+    const matched = sales.filter(tx => tx.fxSettlementId === cargo.fxSettlementId);
+    expect(matched).toHaveLength(1);
+    expect(matched[0]!.destination).toEqual(cargo.seller);
+    expect(matched[0]!.goodId).toBe(IRON);
+    expect(matched[0]!.quantity).toBeGreaterThan(0);
+    const id = cargo.seller.productionUnitId;
+    bySeller.set(id, (bySeller.get(id) ?? 0) + matched[0]!.quantity!);
+  }
+  for (const [id, seller] of before.productionUnits) {
+    const next = after.productionUnits.get(id);
+    expect(next).toBeDefined();
+    const debit = (seller.inputInventory.get(IRON) ?? 0) -
+      (next!.inputInventory.get(IRON) ?? 0);
+    expect(debit, "Phase-7 gross stock debit for producer " + id)
+      .toBeCloseTo(bySeller.get(id) ?? 0, 6);
+  }
+}
+
 describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () => {
   it("conserves owner-bound paid cargo and cumulative loss across changing border policy", () => {
     const fixture = createM5PreviewScenario();
@@ -154,6 +189,7 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     let sawBadLossReject = false;
     let sawWrongDeliveryReject = false;
     let sawWrongTransitReject = false;
+    let sawWrongSellerDebitReject = false;
     const sentIds = new Set<string>();
     const deliveredIds = new Set<string>();
     // Evidence must include actual paid, positive-loss dispatch for BOTH policy
@@ -232,6 +268,35 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
           .toBeLessThanOrEqual(physicalCapacity + 1e-8);
       };
       assertGrossCapacity(sales.map(tx => tx.quantity!));
+      expect(beforePhase7).toBeDefined();
+      expect(afterPhase7).toBeDefined();
+      assertGrossSellerDebits(beforePhase7!, afterPhase7!, fresh, sales);
+      if (fresh.length && !sawWrongSellerDebitReject) {
+        // Forged seller/cargo split leaves global iron and all money totals
+        // unchanged. Gross origin-debit validation must still reject it.
+        const cargo = fresh[0]!;
+        if (cargo.seller.type !== "PRODUCTION_UNIT") {
+          throw new Error("Expected a physical producer seller");
+        }
+        const id = cargo.seller.productionUnitId;
+        const unit = afterPhase7!.productionUnits.get(id)!;
+        const shift = cargo.quantity / 4;
+        const units = new Map(afterPhase7!.productionUnits).set(id, {
+          ...unit, inputInventory: new Map(unit.inputInventory).set(
+            IRON, (unit.inputInventory.get(IRON) ?? 0) + shift,
+          ),
+        });
+        const shipments = new Map(afterPhase7!.shipments).set(cargo.id, {
+          ...cargo, quantity: cargo.quantity - shift,
+        });
+        const forged: WorldState = {
+          ...afterPhase7!, productionUnits: units, shipments,
+        };
+        expect(iron(forged)).toBeCloseTo(iron(afterPhase7!), 8);
+        expect(() => assertGrossSellerDebits(beforePhase7!, forged, fresh, sales))
+          .toThrow();
+        sawWrongSellerDebitReject = true;
+      }
       if (sales.length && !rejectedOverCapacity) {
         // Negative control: make the sale exceed the real physical ceiling.
         // A net-of-transport-loss capacity oracle would miss this forgery.
@@ -385,6 +450,7 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     expect(sawBadLossReject).toBe(true);
     expect(sawWrongDeliveryReject).toBe(true);
     expect(sawWrongTransitReject).toBe(true);
+    expect(sawWrongSellerDebitReject).toBe(true);
     expect(checkedPaidCapacity).toBe(true);
     expect(rejectedOverCapacity).toBe(true);
   }, 60_000);
