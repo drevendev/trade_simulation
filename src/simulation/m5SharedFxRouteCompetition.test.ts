@@ -159,10 +159,14 @@ function fixture() {
   return { world, options, chosen, reserveFloor, currencies, links };
 }
 
-function run(f: ReturnType<typeof fixture>, world: WorldState, allowed = true, tick = 7) {
+function run(
+  f: ReturnType<typeof fixture>, world: WorldState, allowed = true, tick = 7,
+  observer?: Parameters<typeof executeM5AutonomousRegionalTradeTick>[5],
+) {
   return executeM5AutonomousRegionalTradeTick(
     world, tick, households, (_phase, current) => current,
     allowed ? f.options : { ...f.options, phase1TradeLawProvider: () => undefined },
+    observer,
   );
 }
 
@@ -325,7 +329,10 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     const standaloneTotal = standalonePaid.reduce((sum, value) => sum + value, 0);
     expect(standaloneTotal).toBeGreaterThan(cap + 1e-8);
 
-    const constrained = run(f, opening);
+    let phase7: { before: WorldState; after: WorldState } | undefined;
+    const constrained = run(f, opening, true, 7, (phase, before, after) => {
+      if (phase === 7) phase7 = { before, after };
+    });
     expect(constrained.phaseBoundaryError).toBeUndefined();
     expect(constrained.reconciliationErrors).toBeNull();
     const { cargos, outputs, inputs, dispatches, paidByLink, paid } =
@@ -345,6 +352,56 @@ describe("M5 #676: competing autonomous routes share ONE finite FX reserve", () 
     }
     expect(dispatches).toHaveLength(cargos.length);
     expect(outputs).toHaveLength(cargos.length);
+
+    // FX scarcity must shrink the REAL stock debit, not just the invoice and
+    // in-transit shipment. Compare Phase-7-only state: Phase-4 local sales and
+    // Phase-8 residual purchases must not be mistaken for export consumption.
+    expect(phase7).toBeDefined();
+    const shippedBySeller = new Map<ProductionUnitState["productionUnitId"], number>();
+    for (const cargo of cargos) {
+      if (cargo.seller.type !== "PRODUCTION_UNIT") {
+        throw new Error("Golden requires a ProductionUnit exporting stock");
+      }
+      shippedBySeller.set(cargo.seller.productionUnitId,
+        (shippedBySeller.get(cargo.seller.productionUnitId) ?? 0) + cargo.quantity);
+    }
+    expect(shippedBySeller.size).toBe(1);
+    const assertSellerStockDebit = (actual: WorldState) => {
+      for (const [sellerId, paidQuantity] of shippedBySeller) {
+        const before = phase7!.before.productionUnits.get(sellerId)!;
+        const after = actual.productionUnits.get(sellerId)!;
+        const debit = (before.inputInventory.get(IRON) ?? 0) -
+          (after.inputInventory.get(IRON) ?? 0);
+        expect(debit).toBeCloseTo(paidQuantity, 7);
+      }
+    };
+    assertSellerStockDebit(phase7!.after);
+
+    // Negative control: aggregate iron and FX receipts remain unchanged, but
+    // one extra unit is wrongly debited from the exporter and credited to a
+    // different production owner. The owner-bound oracle must catch it.
+    const sellerId = [...shippedBySeller.keys()][0]!;
+    const otherId = [...phase7!.after.productionUnits.keys()].find(
+      id => id !== sellerId)!;
+    const seller = phase7!.after.productionUnits.get(sellerId)!;
+    const other = phase7!.after.productionUnits.get(otherId)!;
+    const remaining = seller.inputInventory.get(IRON) ?? 0;
+    expect(remaining).toBeGreaterThan(1);
+    const forged: WorldState = {
+      ...phase7!.after,
+      productionUnits: new Map(phase7!.after.productionUnits)
+        .set(sellerId, {
+          ...seller,
+          inputInventory: new Map(seller.inputInventory).set(IRON, remaining - 1),
+        })
+        .set(otherId, {
+          ...other,
+          inputInventory: new Map(other.inputInventory)
+            .set(IRON, (other.inputInventory.get(IRON) ?? 0) + 1),
+        }),
+    };
+    expect(totalIron(forged)).toBeCloseTo(totalIron(phase7!.after), 7);
+    expect(() => assertSellerStockDebit(forged)).toThrow();
     const finalPool = constrained.world.monetaryAuthorities.get(f.chosen.authorityId)!
       .fxPools.get(f.chosen.poolId)!;
     expect(finalPool.cash.get(f.currencies[0]!)! - startingPool.cash.get(f.currencies[0]!)!)
