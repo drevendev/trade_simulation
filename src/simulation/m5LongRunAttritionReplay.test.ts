@@ -9,7 +9,9 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createM5PreviewScenario, M5_PREVIEW_TICK } from "../diagnostics/m5PreviewScenario";
 import type { GoodId } from "../domain/id";
+import type { ActorRef } from "../domain/genesisLedger";
 import { executeM5AutonomousRegionalTradeTick } from "./m5AutonomousRegionalTradeTick";
+import type { FxLedgerLeg } from "./fxSettlement";
 import type { PhaseHandler, EconomicTransaction } from "./tickOrchestrator";
 import type { TradeShipmentState } from "./tradeShipmentState";
 import { cargoCapacityUse, effectiveTransportLinkCapacity } from "./transportCapacity";
@@ -161,6 +163,73 @@ function assertGrossSellerDebits(
   }
 }
 
+
+/**
+ * Every Phase-7 FX leg must post to its named physical issuer pool, in the
+ * correct currency and direction. Global currency conservation alone cannot
+ * detect money moved from a seller wallet into the wrong reserve account.
+ */
+function actorExists(world: WorldState, actor: ActorRef): boolean {
+  switch (actor.type) {
+    case "COHORT": return world.cohorts.has(actor.cohortId);
+    case "CLAN": return world.clans.has(actor.clanId);
+    case "STATE": return world.states.has(actor.stateId);
+    case "PRODUCTION_UNIT": return world.productionUnits.has(actor.productionUnitId);
+    case "MONETARY_AUTHORITY": return world.monetaryAuthorities.has(actor.authorityId);
+  }
+}
+
+function assertPhase7FxPoolCash(
+  before: WorldState, after: WorldState, legs: readonly FxLedgerLeg[],
+): void {
+  for (const leg of legs) {
+    expect(leg.phase).toBe(7);
+    expect(leg.moneyAmount).toBeGreaterThan(0);
+    const endpoint = leg.type === "FX_INPUT" ? leg.toAccount : leg.fromAccount;
+    const counterparty = leg.type === "FX_INPUT" ? leg.fromAccount : leg.toAccount;
+    expect(endpoint.type).toBe("FX_POOL");
+    expect(counterparty.type).toBe("ACTOR");
+    if (endpoint.type !== "FX_POOL") throw new Error("FX leg has no physical pool endpoint");
+    if (counterparty.type !== "ACTOR") throw new Error("FX leg has no physical actor endpoint");
+    const owner = leg.type === "FX_INPUT" ? leg.source : leg.destination;
+    expect(owner, "FX journal must name its actual payer/recipient").toBeDefined();
+    if (!owner) throw new Error("FX leg has no journal actor");
+    expect(counterparty.actor, "FX account must name the actual journal actor").toEqual(owner);
+    expect(actorExists(before, owner), "FX payer/recipient must exist before Phase 7").toBe(true);
+    expect(actorExists(after, owner), "FX payer/recipient must exist after Phase 7").toBe(true);
+    const pool = before.monetaryAuthorities.get(endpoint.owningAuthorityId)
+      ?.fxPools.get(endpoint.pairId);
+    expect(pool, "FX journal must name an existing authority-owned pool").toBeDefined();
+    expect(pool!.cash.has(leg.currencyId)).toBe(true);
+  }
+  for (const [authorityId, authority] of before.monetaryAuthorities) {
+    const nextAuthority = after.monetaryAuthorities.get(authorityId);
+    expect(nextAuthority).toBeDefined();
+    expect(nextAuthority!.fxPools.size).toBe(authority.fxPools.size);
+    for (const [pairId, pool] of authority.fxPools) {
+      const nextPool = nextAuthority!.fxPools.get(pairId);
+      expect(nextPool).toBeDefined();
+      for (const currencyId of new Set([...pool.cash.keys(), ...nextPool!.cash.keys()])) {
+        const postedDelta = legs.reduce((sum, leg) => {
+          const endpoint = leg.type === "FX_INPUT" ? leg.toAccount : leg.fromAccount;
+          return endpoint.type === "FX_POOL" &&
+            endpoint.owningAuthorityId === authorityId &&
+            endpoint.pairId === pairId && leg.currencyId === currencyId
+            ? sum + (leg.type === "FX_INPUT" ? leg.moneyAmount : -leg.moneyAmount)
+            : sum;
+        }, 0);
+        const observedDelta = (nextPool!.cash.get(currencyId) ?? 0) -
+          (pool.cash.get(currencyId) ?? 0);
+        // settleFx uses this absolute (not relative) money posting bound.
+        const epsilon = before.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
+        expect(Math.abs(observedDelta - postedDelta),
+          "Phase-7 issuer pool " + pairId + " / " + currencyId + " posting error")
+          .toBeLessThanOrEqual(epsilon);
+      }
+    }
+  }
+}
+
 describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () => {
   it("conserves owner-bound paid cargo and cumulative loss across changing border policy", () => {
     const fixture = createM5PreviewScenario();
@@ -190,6 +259,9 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     let sawWrongDeliveryReject = false;
     let sawWrongTransitReject = false;
     let sawWrongSellerDebitReject = false;
+    let sawMispostedPoolCashReject = false;
+    let sawPrecisionMispostReject = false;
+    let sawFxActorForgeryReject = false;
     const sentIds = new Set<string>();
     const deliveredIds = new Set<string>();
     // Evidence must include actual paid, positive-loss dispatch for BOTH policy
@@ -314,6 +386,100 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
       }
       const inputs = journal.filter(tx => tx.phase === 7 && tx.type === "FX_INPUT");
       const outputs = journal.filter(tx => tx.phase === 7 && tx.type === "FX_OUTPUT");
+
+      const fxLegs = journal.filter((tx): tx is FxLedgerLeg =>
+        tx.phase === 7 && (tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT"));
+      assertPhase7FxPoolCash(beforePhase7!, afterPhase7!, fxLegs);
+      if (inputs.length && outputs.length && !sawFxActorForgeryReject) {
+        // Forging only the named account endpoint (not the journal owner or
+        // money amounts) must fail for both directions, for a real wrong actor
+        // and an actor that has never existed in the world registry.
+        const forgeActor = (leg: FxLedgerLeg, missing: boolean): void => {
+          const owner = leg.type === "FX_INPUT" ? leg.source : leg.destination;
+          if (owner?.type !== "PRODUCTION_UNIT") {
+            throw new Error("Expected real producer buyer/exporter on paid FX leg");
+          }
+          const wrongId = missing
+            ? ("pu:missing-fx-actor" as typeof owner.productionUnitId)
+            : [...beforePhase7!.productionUnits.keys()].find(id => id !== owner.productionUnitId);
+          expect(wrongId).toBeDefined();
+          if (!wrongId) throw new Error("Missing distinct producer for negative control");
+          expect(beforePhase7!.productionUnits.has(wrongId)).toBe(!missing);
+          const badAccount = { type: "ACTOR" as const,
+            actor: { type: "PRODUCTION_UNIT" as const, productionUnitId: wrongId } };
+          const forged = fxLegs.map(item => item === leg
+            ? leg.type === "FX_INPUT"
+              ? { ...item, fromAccount: badAccount }
+              : { ...item, toAccount: badAccount }
+            : item);
+          expect(() => assertPhase7FxPoolCash(beforePhase7!, afterPhase7!, forged))
+            .toThrow();
+        };
+        const input = fxLegs.find(leg => leg.type === "FX_INPUT")!;
+        const output = fxLegs.find(leg => leg.type === "FX_OUTPUT")!;
+        forgeActor(input, false);
+        forgeActor(input, true);
+        forgeActor(output, false);
+        forgeActor(output, true);
+        sawFxActorForgeryReject = true;
+      }
+      if (outputs.length && !sawMispostedPoolCashReject) {
+        // Preserve every currency total while misposting part of an issuer's
+        // output reserve to a seller's account. Exact pool-ledger accounting,
+        // not aggregate conservation, must detect the theft.
+        const output = fxLegs.find(leg => leg.type === "FX_OUTPUT")!;
+        if (output.fromAccount.type !== "FX_POOL" ||
+            output.destination?.type !== "PRODUCTION_UNIT") {
+          throw new Error("Expected pool-funded payment to a physical exporter");
+        }
+        const { owningAuthorityId, pairId } = output.fromAccount;
+        const authority = afterPhase7!.monetaryAuthorities.get(owningAuthorityId)!;
+        const pool = authority.fxPools.get(pairId)!;
+        const sellerId = output.destination.productionUnitId;
+        const seller = afterPhase7!.productionUnits.get(sellerId)!;
+        const sellerCash = seller.wallet.get(output.currencyId) ?? 0;
+        const shift = Math.min(output.moneyAmount / 4, sellerCash / 4);
+        expect(shift).toBeGreaterThan(0);
+        const forgePoolMispost = (divert: number): WorldState => ({
+          ...afterPhase7!,
+          monetaryAuthorities: new Map(afterPhase7!.monetaryAuthorities).set(
+            owningAuthorityId, {
+              ...authority, fxPools: new Map(authority.fxPools).set(pairId, {
+                ...pool, cash: new Map(pool.cash).set(
+                  output.currencyId, (pool.cash.get(output.currencyId) ?? 0) + divert,
+                ),
+              }),
+            },
+          ),
+          productionUnits: new Map(afterPhase7!.productionUnits).set(sellerId, {
+            ...seller, wallet: new Map(seller.wallet).set(
+              output.currencyId, sellerCash - divert,
+            ),
+          }),
+        });
+        const forged = forgePoolMispost(shift);
+        expect(currencyTotal(forged, output.currencyId))
+          .toBeCloseTo(currencyTotal(afterPhase7!, output.currencyId), 6);
+        expect(() => assertPhase7FxPoolCash(beforePhase7!, forged, fxLegs)).toThrow();
+        sawMispostedPoolCashReject = true;
+        // A 1e-7 balanced micro-mispost was accepted by the old 6-decimal
+        // oracle. It exceeds the settlement contract's 1e-9 precision.
+        const epsilon = beforePhase7!.simulationConfig.numeric.moneyEpsilon ?? 1e-9;
+        const tinyShift = 1e-7;
+        expect(tinyShift).toBeGreaterThan(epsilon);
+        expect(sellerCash).toBeGreaterThan(tinyShift);
+        const fineForged = forgePoolMispost(tinyShift);
+        const changedPool = fineForged.monetaryAuthorities.get(owningAuthorityId)!
+          .fxPools.get(pairId)!;
+        expect(Math.abs((changedPool.cash.get(output.currencyId) ?? 0) -
+          (pool.cash.get(output.currencyId) ?? 0))).toBeGreaterThan(epsilon);
+        expect(Math.abs(currencyTotal(fineForged, output.currencyId) -
+          currencyTotal(afterPhase7!, output.currencyId)))
+          .toBeLessThanOrEqual(epsilon);
+        expect(() => assertPhase7FxPoolCash(beforePhase7!, fineForged, fxLegs))
+          .toThrow();
+        sawPrecisionMispostReject = true;
+      }
       // A count or global iron sum is not a proof of custody: every cargo
       // already in transit must retain its PAID identity, owner and quantity.
       const expectedTransit = new Map([
@@ -451,6 +617,9 @@ describe("M5 #676: 240-tick paid FX attrition and delayed-arrival replay", () =>
     expect(sawWrongDeliveryReject).toBe(true);
     expect(sawWrongTransitReject).toBe(true);
     expect(sawWrongSellerDebitReject).toBe(true);
+    expect(sawMispostedPoolCashReject).toBe(true);
+    expect(sawPrecisionMispostReject).toBe(true);
+    expect(sawFxActorForgeryReject).toBe(true);
     expect(checkedPaidCapacity).toBe(true);
     expect(rejectedOverCapacity).toBe(true);
   }, 60_000);
