@@ -2516,6 +2516,8 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     for (let nextTick = 8; nextTick <= cargo.arrivalTick + 1; nextTick++) {
       let beforeArrival: WorldState | undefined;
       let afterArrival: WorldState | undefined;
+      let replayBeforeArrival: WorldState | undefined;
+      let replayAfterArrival: WorldState | undefined;
       const actual = executeM5AutonomousRegionalTradeTick(
         normalWorld, nextTick, households, (_phase, current) => current,
         closedOptions, (phase, before, after) => {
@@ -2527,7 +2529,12 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       );
       const orderedReplay = executeM5AutonomousRegionalTradeTick(
         shuffledWorld, nextTick, households, (_phase, current) => current,
-        closedOptions,
+        closedOptions, (phase, before, after) => {
+          if (phase === 1) {
+            replayBeforeArrival = before;
+            replayAfterArrival = after;
+          }
+        },
       );
       for (const step of [actual, orderedReplay]) {
         expect(step.phaseTrace).toEqual([...Array(16).keys()]);
@@ -2544,6 +2551,8 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       expect(actual.world.shipments).toEqual(orderedReplay.world.shipments);
       expect(beforeArrival).toBeDefined();
       expect(afterArrival).toBeDefined();
+      expect(replayBeforeArrival).toBeDefined();
+      expect(replayAfterArrival).toBeDefined();
       // Cargo movement cannot charge either sovereign or touch issuer FX cash.
       for (const sovereign of [exporterId, importerId]) {
         expect(treasuryCash(afterArrival!, sovereign))
@@ -2556,6 +2565,18 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
         tx.phase === 1 && tx.type === "SHIPMENT_DELIVERY");
       expect(receipts).toHaveLength(isDue ? 1 : 0);
       assertPhase1Owner(beforeArrival!, afterArrival!, isDue);
+      // The shuffled-registry execution needs its OWN paid-owner oracle.
+      // Equal journals and shipments alone cannot detect a wrong INPUT credit.
+      assertPhase1Owner(replayBeforeArrival!, replayAfterArrival!, isDue);
+      for (const buyerId of [f.buyerB.productionUnitId, f.buyerA.productionUnitId]) {
+        expect(stock(replayBeforeArrival!, buyerId))
+          .toBeCloseTo(stock(beforeArrival!, buyerId), 7);
+        expect(stock(replayAfterArrival!, buyerId))
+          .toBeCloseTo(stock(afterArrival!, buyerId), 7);
+        // The full tick must not redistribute ownership after Phase 1 either.
+        expect(stock(orderedReplay.world, buyerId))
+          .toBeCloseTo(stock(actual.world, buyerId), 7);
+      }
       if (isDue) {
         delivered++;
         expect(receipts[0]!.quantity).toBeCloseTo(cargo.quantity, 7);
