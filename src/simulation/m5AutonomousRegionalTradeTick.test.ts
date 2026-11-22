@@ -2481,6 +2481,132 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(replay.reconciliationErrors).toBeNull();
     expect(replay.context.transactions).toEqual(journal);
     expect(replay.world.shipments).toEqual(result.world.shipments);
+
+    // The first sovereign trade is already paid. Closing this border must not
+    // revoke the buyer's property or make a shared-currency delivery taxable
+    // again; Phase 1 is the only legal arrival/ownership transition.
+    expect(cargo.arrivalTick).toBeGreaterThan(7);
+    expect(cargo.arrivalTick).toBeLessThanOrEqual(12);
+    const closedOptions: M5AutonomousRegionalTradeOptions = {
+      ...f.options,
+      phase1TradeLawProvider: () => undefined,
+      phase1TariffLawProvider: () => 0.9,
+      infrastructureFactors: new Map([[f.link.linkId, 0]]),
+    };
+    const reverseRegistries = (w: WorldState): WorldState => ({
+      ...w,
+      regions: new Map([...w.regions].reverse()),
+      states: new Map([...w.states].reverse()),
+      productionUnits: new Map([...w.productionUnits].reverse()),
+      monetaryAuthorities: new Map([...w.monetaryAuthorities].reverse()),
+      ...(w.shipments ? { shipments: new Map([...w.shipments].reverse()) } : {}),
+    });
+    const stock = (w: WorldState, id: typeof f.buyerB.productionUnitId) =>
+      w.productionUnits.get(id)!.inputInventory.get(IRON) ?? 0;
+    const assertPhase1Owner = (before: WorldState, after: WorldState, due: boolean): void => {
+      expect(stock(after, f.buyerB.productionUnitId) -
+        stock(before, f.buyerB.productionUnitId))
+        .toBeCloseTo(due ? cargo.quantity : 0, 7);
+      expect(stock(after, f.buyerA.productionUnitId) -
+        stock(before, f.buyerA.productionUnitId)).toBeCloseTo(0, 7);
+    };
+    let normalWorld = result.world;
+    let shuffledWorld = reverseRegistries(replay.world);
+    let delivered = 0;
+    for (let nextTick = 8; nextTick <= cargo.arrivalTick + 1; nextTick++) {
+      let beforeArrival: WorldState | undefined;
+      let afterArrival: WorldState | undefined;
+      let replayBeforeArrival: WorldState | undefined;
+      let replayAfterArrival: WorldState | undefined;
+      const actual = executeM5AutonomousRegionalTradeTick(
+        normalWorld, nextTick, households, (_phase, current) => current,
+        closedOptions, (phase, before, after) => {
+          if (phase === 1) {
+            beforeArrival = before;
+            afterArrival = after;
+          }
+        },
+      );
+      const orderedReplay = executeM5AutonomousRegionalTradeTick(
+        shuffledWorld, nextTick, households, (_phase, current) => current,
+        closedOptions, (phase, before, after) => {
+          if (phase === 1) {
+            replayBeforeArrival = before;
+            replayAfterArrival = after;
+          }
+        },
+      );
+      for (const step of [actual, orderedReplay]) {
+        expect(step.phaseTrace).toEqual([...Array(16).keys()]);
+        expect(step.phaseBoundaryError).toBeUndefined();
+        expect(step.reconciliationErrors).toBeNull();
+        expect(step.context.phase7FxReservations ?? []).toHaveLength(0);
+        expect(step.context.transactions.filter(tx =>
+          tx.phase === 7 && [
+            "SHIPMENT_DISPATCH", "FX_INPUT", "FX_OUTPUT",
+            "IMPORT_TARIFF", "TRANSPORT_FEE", "CONSUMPTION_TAX",
+          ].includes(tx.type))).toHaveLength(0);
+      }
+      expect(actual.context.transactions).toEqual(orderedReplay.context.transactions);
+      expect(actual.world.shipments).toEqual(orderedReplay.world.shipments);
+      expect(beforeArrival).toBeDefined();
+      expect(afterArrival).toBeDefined();
+      expect(replayBeforeArrival).toBeDefined();
+      expect(replayAfterArrival).toBeDefined();
+      // Cargo movement cannot charge either sovereign or touch issuer FX cash.
+      for (const sovereign of [exporterId, importerId]) {
+        expect(treasuryCash(afterArrival!, sovereign))
+          .toBe(treasuryCash(beforeArrival!, sovereign));
+      }
+      expect(afterArrival!.monetaryAuthorities).toEqual(beforeArrival!.monetaryAuthorities);
+      expect(totalIron(afterArrival!)).toBeCloseTo(totalIron(beforeArrival!), 8);
+      const isDue = nextTick === cargo.arrivalTick;
+      const receipts = actual.context.transactions.filter(tx =>
+        tx.phase === 1 && tx.type === "SHIPMENT_DELIVERY");
+      expect(receipts).toHaveLength(isDue ? 1 : 0);
+      assertPhase1Owner(beforeArrival!, afterArrival!, isDue);
+      // The shuffled-registry execution needs its OWN paid-owner oracle.
+      // Equal journals and shipments alone cannot detect a wrong INPUT credit.
+      assertPhase1Owner(replayBeforeArrival!, replayAfterArrival!, isDue);
+      for (const buyerId of [f.buyerB.productionUnitId, f.buyerA.productionUnitId]) {
+        expect(stock(replayBeforeArrival!, buyerId))
+          .toBeCloseTo(stock(beforeArrival!, buyerId), 7);
+        expect(stock(replayAfterArrival!, buyerId))
+          .toBeCloseTo(stock(afterArrival!, buyerId), 7);
+        // The full tick must not redistribute ownership after Phase 1 either.
+        expect(stock(orderedReplay.world, buyerId))
+          .toBeCloseTo(stock(actual.world, buyerId), 7);
+      }
+      if (isDue) {
+        delivered++;
+        expect(receipts[0]!.quantity).toBeCloseTo(cargo.quantity, 7);
+        expect(receipts[0]!.moneyAmount).toBeUndefined();
+        expect(receipts[0]!.destination).toEqual(cargo.beneficialOwner);
+        // Negative control: conserve aggregate iron while stealing the
+        // already-paid arrival from Beta's buyer into Alpha's other wallet.
+        const transfer = cargo.quantity / 2;
+        const paidBuyer = afterArrival!.productionUnits.get(f.buyerB.productionUnitId)!;
+        const wrongBuyer = afterArrival!.productionUnits.get(f.buyerA.productionUnitId)!;
+        const forged: WorldState = {
+          ...afterArrival!,
+          productionUnits: new Map(afterArrival!.productionUnits)
+            .set(f.buyerB.productionUnitId, {
+              ...paidBuyer, inputInventory: new Map(paidBuyer.inputInventory)
+                .set(IRON, stock(afterArrival!, f.buyerB.productionUnitId) - transfer),
+            })
+            .set(f.buyerA.productionUnitId, {
+              ...wrongBuyer, inputInventory: new Map(wrongBuyer.inputInventory)
+                .set(IRON, stock(afterArrival!, f.buyerA.productionUnitId) + transfer),
+            }),
+        };
+        expect(totalIron(forged)).toBeCloseTo(totalIron(afterArrival!), 8);
+        expect(() => assertPhase1Owner(beforeArrival!, forged, true)).toThrow();
+      }
+      expect(actual.world.shipments?.has(cargo.id) ?? false).toBe(!isDue && nextTick < cargo.arrivalTick);
+      normalWorld = actual.world;
+      shuffledWorld = reverseRegistries(orderedReplay.world);
+    }
+    expect(delivered).toBe(1);
   });
 
 });
