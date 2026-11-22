@@ -2425,11 +2425,19 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(fiscalReceipts.every(tx => tx.currencyId === currency &&
       tx.moneyAmount !== undefined && tx.moneyAmount > 0)).toBe(true);
     const creditedAmount = fiscalReceipts.reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+    const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon!;
+    const assertMoneyDelta = (actual: number, expected: number, owner: string): void => {
+      const mismatch = actual - expected;
+      if (!Number.isFinite(mismatch) || Math.abs(mismatch) > moneyEpsilon) {
+        throw new Error("MONETARY_UNION_TAX_OWNER_MISMATCH " + owner +
+          ": actual=" + actual + ", expected=" + expected);
+      }
+    };
     const assertSovereignTaxOwner = (after: WorldState): void => {
-      expect(treasuryCash(after, importerId) -
-        treasuryCash(phase7States!.before, importerId)).toBeCloseTo(creditedAmount, 7);
-      expect(treasuryCash(after, exporterId) -
-        treasuryCash(phase7States!.before, exporterId)).toBeCloseTo(0, 7);
+      assertMoneyDelta(treasuryCash(after, importerId) -
+        treasuryCash(phase7States!.before, importerId), creditedAmount, "importer");
+      assertMoneyDelta(treasuryCash(after, exporterId) -
+        treasuryCash(phase7States!.before, exporterId), 0, "exporter");
     };
     assertSovereignTaxOwner(phase7States!.after);
     // Balanced fraud: shift an actual fiscal credit from importer to exporter.
@@ -2448,7 +2456,7 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(treasuryCash(forged, importerId) + treasuryCash(forged, exporterId))
       .toBeCloseTo(treasuryCash(phase7States!.after, importerId) +
         treasuryCash(phase7States!.after, exporterId), 8);
-    expect(() => assertSovereignTaxOwner(forged)).toThrow();
+    expect(() => assertSovereignTaxOwner(forged)).toThrow(/MONETARY_UNION_TAX_OWNER_MISMATCH/);
     expect(result.world.monetaryAuthorities).toEqual(world.monetaryAuthorities);
     expect(totalIron(result.world)).toBeCloseTo(totalIron(world), 8);
     // Different registries must not change a same-currency route's payment order.
