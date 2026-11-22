@@ -2160,8 +2160,24 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(limited.reconciliationErrors).toBeNull();
     expect(limited.phaseTrace).toEqual([...Array(16).keys()]);
     const paidCargos = [...(limited.world.shipments?.values() ?? [])];
-    expect(paidCargos.length).toBeGreaterThan(0);
-    expect(paidCargos.length).toBeLessThanOrEqual(2);
+    // The constrained dispatch itself must contain real, positive cargo for
+    // BOTH buyers. The unconstrained control alone cannot prove this later
+    // two-buyer transit/delivery lifecycle covers both beneficial owners.
+    const assertBothPaidBuyers = (cargos: typeof paidCargos): void => {
+      expect(cargos).toHaveLength(2);
+      expect(cargos.every(cargo =>
+        cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+        cargo.quantity > 0)).toBe(true);
+      expect(new Set(cargos.map(cargo =>
+        cargo.beneficialOwner.type === "PRODUCTION_UNIT"
+          ? cargo.beneficialOwner.productionUnitId : "",
+      ))).toEqual(new Set([
+        f.buyerB.productionUnitId, buyerTwo.productionUnitId,
+      ]));
+    };
+    assertBothPaidBuyers(paidCargos);
+    // Negative control: a repeated owner must never masquerade as two buyers.
+    expect(() => assertBothPaidBuyers([paidCargos[0]!, paidCargos[0]!])).toThrow();
     expect(paidCargos.every(cargo =>
       cargo.transportLinkId === f.link.linkId && cargo.quantity > 0)).toBe(true);
     const epsilon = opening.simulationConfig.numeric.quantityEpsilon!;
