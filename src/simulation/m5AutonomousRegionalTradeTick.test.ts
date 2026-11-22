@@ -2329,4 +2329,98 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(totalIron(afterArrival.world)).toBeCloseTo(totalIron(limitedOpening), 8);
   });
 
+  it("settles cross-State shared tender without reserving an FX pool", () => {
+    const f = fixture();
+    const currency = f.source.settlementCurrencyId;
+    const betaId = f.destination.controllerStateId!;
+    const beta = f.world.states.get(betaId)!;
+    const alphaAuthorityId = f.world.currencies.get(currency)!.issuerAuthorityId!;
+    const authority = f.world.monetaryAuthorities.get(alphaAuthorityId)!;
+    const dest = {
+      ...f.destination,
+      settlementCurrencyId: currency,
+      seed: {
+        ...f.destination.seed,
+        settlementCurrencyKey: f.source.seed.settlementCurrencyKey,
+      },
+    };
+    // Two sovereign controllers retain their own tax receipts while sharing
+    // one legal tender and its policy authority. This is not an intra-State route.
+    expect(betaId).not.toBe(f.source.controllerStateId);
+    const betaInUnion = {
+      ...beta,
+      effectiveCurrencyId: currency,
+      memberAuthorityId: alphaAuthorityId,
+      seed: {
+        ...beta.seed,
+        effectiveCurrencyRegime: {
+          currencyKey: f.source.seed.settlementCurrencyKey,
+          regimeType: "MONETARY_UNION" as const,
+          policyAuthorityKey: authority.seed.key,
+        },
+      },
+    };
+    const redirectWallet = (unit: ProductionUnitState): ProductionUnitState => ({
+      ...unit,
+      wallet: new Map([[currency, unit.wallet.get(f.destination.settlementCurrencyId) ?? 0]]),
+    });
+    const world: WorldState = {
+      ...f.world,
+      regions: new Map(f.world.regions).set(dest.regionId, dest),
+      states: new Map(f.world.states).set(betaId, betaInUnion),
+      productionUnits: new Map(f.world.productionUnits)
+        .set(f.buyerB.productionUnitId, redirectWallet(f.buyerB))
+        .set(f.sellerB.productionUnitId, redirectWallet(f.sellerB)),
+      monetaryAuthorities: new Map(f.world.monetaryAuthorities).set(
+        alphaAuthorityId, {
+          ...authority,
+          memberStateIds: [...new Set([...authority.memberStateIds, betaId])],
+        },
+      ),
+    };
+    const result = run({ ...f, world, destination: dest });
+    expect(result.phaseBoundaryError).toBeUndefined();
+    expect(result.reconciliationErrors).toBeNull();
+    const cargos = [...(result.world.shipments?.values() ?? [])];
+    expect(cargos).toHaveLength(1);
+    const cargo = cargos[0]!;
+    expect(cargo.originRegionId).toBe(f.source.regionId);
+    expect(cargo.destinationRegionId).toBe(dest.regionId);
+    expect(cargo.quantity).toBeGreaterThan(0);
+    expect(cargo.invoiceCurrencyId).toBe(currency);
+    expect(cargo.buyerPaymentCurrencyId).toBe(currency);
+    expect(cargo.fxSettlementId).toBeUndefined();
+    expect(cargo.tariffAmount).toBeGreaterThan(0);
+    expect(cargo.beneficialOwner).toEqual({
+      type: "PRODUCTION_UNIT", productionUnitId: f.buyerB.productionUnitId,
+    });
+    const journal = result.context.transactions;
+    const assertNoFx = (transactions: typeof journal): void => {
+      expect(transactions.filter(tx =>
+        tx.type === "FX_INPUT" || tx.type === "FX_OUTPUT")).toHaveLength(0);
+    };
+    assertNoFx(journal);
+    // A forged FX leg must be caught even if the cargo itself looks valid.
+    expect(() => assertNoFx([
+      ...journal, { ...journal.find(tx => tx.type === "SHIPMENT_DISPATCH")!,
+        type: "FX_INPUT" },
+    ])).toThrow();
+    expect(result.context.phase7FxReservations ?? []).toHaveLength(0);
+    expect(journal.some(tx => tx.type === "SHIPMENT_DISPATCH")).toBe(true);
+    expect(journal.filter(tx => tx.type === "IMPORT_TARIFF")).toHaveLength(1);
+    expect(result.world.monetaryAuthorities).toEqual(world.monetaryAuthorities);
+    expect(totalIron(result.world)).toBeCloseTo(totalIron(world), 8);
+    // Different registries must not change a same-currency route's payment order.
+    const replay = run({ ...f, world: {
+      ...world,
+      states: new Map([...world.states].reverse()),
+      productionUnits: new Map([...world.productionUnits].reverse()),
+      regions: new Map([...world.regions].reverse()),
+    }, destination: dest });
+    expect(replay.phaseBoundaryError).toBeUndefined();
+    expect(replay.reconciliationErrors).toBeNull();
+    expect(replay.context.transactions).toEqual(journal);
+    expect(replay.world.shipments).toEqual(result.world.shipments);
+  });
+
 });
