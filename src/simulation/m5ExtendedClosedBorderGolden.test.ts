@@ -2909,6 +2909,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeOtherGoodChecked = false;
     let negativePublicInventoryChecked = false;
     let negativeDeliveryOwnerChecked = false;
+    let negativeReplayPhase1OwnerChecked = false;
     let negativeDeliveryBucketChecked = false;
     let negativeDeliveryCashChecked = false;
     let negativeDeliveryOtherGoodChecked = false;
@@ -2985,6 +2986,8 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       let observedAtPhase7: number | undefined;
       let phase1Before: WorldState | undefined;
       let phase1After: WorldState | undefined;
+      let replayPhase1Before: WorldState | undefined;
+      let replayPhase1After: WorldState | undefined;
       let phase7Before: WorldState | undefined;
       let phase7After: WorldState | undefined;
       let phase11Cash: ReturnType<typeof poolOf>["cash"] | undefined;
@@ -3000,7 +3003,12 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
         if (phase === 11) phase11Cash = new Map(poolOf(after).cash);
       });
-      const replay = run(tickFixture, shuffled, open, tick);
+      const replay = run(tickFixture, shuffled, open, tick, (phase, before, after) => {
+        if (phase === 1) {
+          replayPhase1Before = before;
+          replayPhase1After = after;
+        }
+      });
       for (const result of [actual, replay]) {
         expect(result.phaseTrace).toEqual([...Array(16).keys()]);
         expect(result.phaseBoundaryError).toBeUndefined();
@@ -4143,6 +4151,54 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         cargo.beneficialOwner.type === "PRODUCTION_UNIT")).toBe(true);
       assertDeliveryOwners(phase1Before!, phase1After!);
       assertPhase1CashOwners(phase1Before!, phase1After!);
+      // A matching end-of-tick fingerprint cannot prove that the shuffled
+      // replay preserved Phase-1 ownership or did not briefly repay the cargo.
+      expect(replayPhase1Before, `tick ${tick}: replay Phase-1 opening`).toBeDefined();
+      expect(replayPhase1After, `tick ${tick}: replay Phase-1 closing`).toBeDefined();
+      assertDeliveryOwners(replayPhase1Before!, replayPhase1After!);
+      assertPhase1CashOwners(replayPhase1Before!, replayPhase1After!);
+      const sortedStocks = (inventory: ReadonlyMap<GoodId, number>) =>
+        [...inventory].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+      for (const [unitId, unit] of phase1After!.productionUnits) {
+        const replayUnit = replayPhase1After!.productionUnits.get(unitId)!;
+        for (const bucket of [
+          "inputInventory", "outputInventory", "investmentInventory",
+        ] as const) {
+          expect(sortedStocks(replayUnit[bucket]),
+            `tick ${tick}: shuffled Phase-1 ${unitId}/${bucket}`)
+            .toEqual(sortedStocks(unit[bucket]));
+        }
+      }
+      expect(phase1CashOwners(replayPhase1After!))
+        .toEqual(phase1CashOwners(phase1After!));
+      if (due.length > 0 && !negativeReplayPhase1OwnerChecked) {
+        const cargo = due[0]!;
+        if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") {
+          throw new Error("Expected paid production-unit beneficiary in shuffled M5 replay");
+        }
+        const paidId = cargo.beneficialOwner.productionUnitId;
+        const wrongId = [...replayPhase1After!.productionUnits.keys()]
+          .find(id => id !== paidId);
+        expect(wrongId).toBeDefined();
+        const diverted = cargo.quantity / 2;
+        expect(diverted).toBeGreaterThan(0);
+        const altered = new Map(replayPhase1After!.productionUnits);
+        for (const [id, delta] of [
+          [paidId, -diverted], [wrongId!, diverted],
+        ] as const) {
+          const unit = altered.get(id)!;
+          altered.set(id, {
+            ...unit, inputInventory: new Map(unit.inputInventory)
+              .set(IRON, (unit.inputInventory.get(IRON) ?? 0) + delta),
+          });
+        }
+        const forged = { ...replayPhase1After!, productionUnits: altered };
+        // Both global iron and the normal run remain untouched: only an
+        // independent shuffled-run owner oracle catches this misdelivery.
+        expect(totalIron(forged)).toBeCloseTo(totalIron(replayPhase1After!), 8);
+        expect(() => assertDeliveryOwners(replayPhase1Before!, forged)).toThrow();
+        negativeReplayPhase1OwnerChecked = true;
+      }
       if (due.length > 0 && !negativeDeliveryCashChecked) {
         // A balanced but illegal second payment at delivery escapes both
         // global currency conservation and all cargo-quantity checks.
@@ -4289,6 +4345,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeOtherGoodChecked).toBe(true);
     expect(negativePublicInventoryChecked).toBe(true);
     expect(negativeDeliveryOwnerChecked).toBe(true);
+    expect(negativeReplayPhase1OwnerChecked).toBe(true);
     expect(negativeDeliveryBucketChecked).toBe(true);
     expect(negativeDeliveryCashChecked).toBe(true);
     expect(negativeDeliveryOtherGoodChecked).toBe(true);
