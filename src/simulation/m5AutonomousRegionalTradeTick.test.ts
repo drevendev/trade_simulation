@@ -2079,6 +2079,8 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     };
     const opening: WorldState = {
       ...f.world,
+      // Both allocations remain paid cargo for two full ticks before Phase-1 arrival.
+      transportLinks: new Map([[f.link.linkId, { ...f.link, travelTicks: 2 }]]),
       productionUnits: new Map(f.world.productionUnits).set(
         buyerTwo.productionUnitId, buyerTwo,
       ),
@@ -2158,8 +2160,24 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(limited.reconciliationErrors).toBeNull();
     expect(limited.phaseTrace).toEqual([...Array(16).keys()]);
     const paidCargos = [...(limited.world.shipments?.values() ?? [])];
-    expect(paidCargos.length).toBeGreaterThan(0);
-    expect(paidCargos.length).toBeLessThanOrEqual(2);
+    // The constrained dispatch itself must contain real, positive cargo for
+    // BOTH buyers. The unconstrained control alone cannot prove this later
+    // two-buyer transit/delivery lifecycle covers both beneficial owners.
+    const assertBothPaidBuyers = (cargos: typeof paidCargos): void => {
+      expect(cargos).toHaveLength(2);
+      expect(cargos.every(cargo =>
+        cargo.beneficialOwner.type === "PRODUCTION_UNIT" &&
+        cargo.quantity > 0)).toBe(true);
+      expect(new Set(cargos.map(cargo =>
+        cargo.beneficialOwner.type === "PRODUCTION_UNIT"
+          ? cargo.beneficialOwner.productionUnitId : "",
+      ))).toEqual(new Set([
+        f.buyerB.productionUnitId, buyerTwo.productionUnitId,
+      ]));
+    };
+    assertBothPaidBuyers(paidCargos);
+    // Negative control: a repeated owner must never masquerade as two buyers.
+    expect(() => assertBothPaidBuyers([paidCargos[0]!, paidCargos[0]!])).toThrow();
     expect(paidCargos.every(cargo =>
       cargo.transportLinkId === f.link.linkId && cargo.quantity > 0)).toBe(true);
     const epsilon = opening.simulationConfig.numeric.quantityEpsilon!;
@@ -2216,6 +2234,99 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(limitedOpening.monetaryAuthorities.get(selected.authorityId)!
       .fxPools.get(selected.pairId)!.cash.get(sourceCurrency))
       .toBe(reserveFloor + fxBudget);
+
+    // The constrained shared budget must remain settled when both buyers'
+    // in-transit goods face a later closed border, zero new-link capacity,
+    // and a changed tariff. Delivery is a physical owner credit, not a sale.
+    expect(paidCargos.every(cargo =>
+      cargo.departureTick === 7 && cargo.arrivalTick === 9 &&
+      cargo.status === "IN_TRANSIT")).toBe(true);
+    const deliveredByBuyer = new Map<string, number>();
+    for (const cargo of paidCargos) {
+      expect(cargo.beneficialOwner.type).toBe("PRODUCTION_UNIT");
+      if (cargo.beneficialOwner.type !== "PRODUCTION_UNIT") {
+        throw new Error("M5 fixture requires production-unit ownership");
+      }
+      const owner = cargo.beneficialOwner.productionUnitId;
+      deliveredByBuyer.set(owner, (deliveredByBuyer.get(owner) ?? 0) + cargo.quantity);
+    }
+    const observeStocks = new Map<number, ReadonlyMap<string, number>>();
+    const observeHouseholds: PhaseHandler = (world, context, pending) => {
+      if (context.phase === 2) {
+        observeStocks.set(context.tick, new Map([...deliveredByBuyer.keys()].map(
+          id => [id, world.productionUnits.get(id as typeof f.buyerB.productionUnitId)!
+            .inputInventory.get(IRON) ?? 0] as const,
+        )));
+      }
+      return households(world, context, pending);
+    };
+    const laterOptions: M5AutonomousRegionalTradeOptions = {
+      ...f.options,
+      phase1TradeLawProvider: () => undefined,
+      phase1TariffLawProvider: () => 0.9,
+      infrastructureFactors: new Map([[f.link.linkId, 0]]),
+    };
+    const advance = (world: WorldState, tickNumber: number) =>
+      executeM5AutonomousRegionalTradeTick(
+        world, tickNumber, observeHouseholds, (_phase, current) => current,
+        laterOptions,
+      );
+    const prohibitNewSettlement = (journal: typeof limited.context.transactions): void => {
+      expect(journal.filter(tx => [
+        "FX_INPUT", "FX_OUTPUT", "IMPORT_TARIFF", "SHIPMENT_DISPATCH",
+      ].includes(tx.type))).toHaveLength(0);
+    };
+    const assertFrozenPool = (world: WorldState): void => {
+      expect(world.monetaryAuthorities.get(selected.authorityId)!
+        .fxPools.get(selected.pairId)!.cash).toEqual(endingPool.cash);
+    };
+    const enRoute = advance(limited.world, 8);
+    expect(enRoute.phaseBoundaryError).toBeUndefined();
+    expect(enRoute.reconciliationErrors).toBeNull();
+    prohibitNewSettlement(enRoute.context.transactions);
+    expect([...enRoute.world.shipments!.keys()].sort())
+      .toEqual([...limited.world.shipments!.keys()].sort());
+    expect(enRoute.context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY"))
+      .toHaveLength(0);
+    assertFrozenPool(enRoute.world);
+    expect(totalIron(enRoute.world)).toBeCloseTo(totalIron(limitedOpening), 8);
+
+    const arrived = advance(enRoute.world, 9);
+    expect(arrived.phaseBoundaryError).toBeUndefined();
+    expect(arrived.reconciliationErrors).toBeNull();
+    prohibitNewSettlement(arrived.context.transactions);
+    for (const cargo of paidCargos) expect(arrived.world.shipments?.has(cargo.id)).toBe(false);
+    const deliveries = arrived.context.transactions.filter(
+      tx => tx.type === "SHIPMENT_DELIVERY",
+    );
+    const assertExactlyOnce = (journal: typeof deliveries): void => {
+      expect(journal).toHaveLength(paidCargos.length);
+      expect(journal.reduce((sum, tx) => sum + (tx.quantity ?? 0), 0))
+        .toBeCloseTo(totalDispatched, 8);
+    };
+    assertExactlyOnce(deliveries);
+    expect(deliveries.every(tx => tx.tick === 9 && tx.phase === 1 &&
+      tx.moneyAmount === undefined)).toBe(true);
+    // Negative control: an otherwise plausible duplicate arrival must fail.
+    expect(() => assertExactlyOnce([...deliveries, deliveries[0]!])).toThrow();
+    for (const [owner, quantity] of deliveredByBuyer) {
+      const previous = enRoute.world.productionUnits.get(
+        owner as typeof f.buyerB.productionUnitId,
+      )!.inputInventory.get(IRON) ?? 0;
+      expect(observeStocks.get(9)!.get(owner)).toBeCloseTo(previous + quantity, 7);
+    }
+    assertFrozenPool(arrived.world);
+    expect(totalIron(arrived.world)).toBeCloseTo(totalIron(limitedOpening), 8);
+
+    const afterArrival = advance(arrived.world, 10);
+    expect(afterArrival.phaseBoundaryError).toBeUndefined();
+    expect(afterArrival.reconciliationErrors).toBeNull();
+    prohibitNewSettlement(afterArrival.context.transactions);
+    expect(afterArrival.context.transactions.filter(tx => tx.type === "SHIPMENT_DELIVERY"))
+      .toHaveLength(0);
+    for (const cargo of paidCargos) expect(afterArrival.world.shipments?.has(cargo.id)).toBe(false);
+    assertFrozenPool(afterArrival.world);
+    expect(totalIron(afterArrival.world)).toBeCloseTo(totalIron(limitedOpening), 8);
   });
 
 });
