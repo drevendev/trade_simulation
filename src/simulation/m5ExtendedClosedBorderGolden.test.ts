@@ -2911,6 +2911,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeDeliveryOwnerChecked = false;
     let negativeReplayPhase1OwnerChecked = false;
     let negativeReplayPhase7PoolChecked = false;
+    let negativeShuffledCapacityChecked = false;
     let negativeDeliveryBucketChecked = false;
     let negativeDeliveryCashChecked = false;
     let negativeDeliveryOtherGoodChecked = false;
@@ -4112,24 +4113,49 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         negativePrincipalChecked = true;
       }
 
-      // Cargo weight, not unit count, consumes each *individual* physical
-      // corridor budget. Combining both routes into one global allowance
-      // would hide a single overbooked link on a long replay.
+      // Independently verify each run's actual Phase-7 cargo against the
+      // physical budget of its OWN directed corridor. A replay fingerprint
+      // or a shared total capacity cannot prove the shuffled dispatch was legal.
       const cargoWeight = baselineDefinitionPack.goods[IRON]!.cargoWeightPerUnit;
-      const loadByLink = new Map<TransportLinkId, number>();
-      for (const cargo of fresh) {
-        expect(cargo.goodId).toBe(IRON);
-        loadByLink.set(cargo.transportLinkId,
-          (loadByLink.get(cargo.transportLinkId) ?? 0) + cargo.quantity * cargoWeight);
-      }
-      for (const [linkId, load] of loadByLink) {
-        const link = normal.transportLinks.get(linkId);
-        expect(link, `tick ${tick}: physical corridor ${linkId}`).toBeDefined();
-        const factor = tickFixture.options.infrastructureFactors.get(linkId);
-        expect(factor).toBeDefined();
-        expect(load).toBeLessThanOrEqual(
-          effectiveTransportLinkCapacity(link!, factor!) + 1e-8,
-        );
+      const assertCorridorCapacity = (
+        paidCargo: ReadonlyArray<(typeof fresh)[number]>,
+        opening: WorldState,
+      ): void => {
+        const loadByLink = new Map<TransportLinkId, number>();
+        for (const cargo of paidCargo) {
+          expect(cargo.goodId).toBe(IRON);
+          expect(opening.transportLinks.has(cargo.transportLinkId),
+            `tick ${tick}: paid dispatch must use an existing directed link`).toBe(true);
+          loadByLink.set(cargo.transportLinkId,
+            (loadByLink.get(cargo.transportLinkId) ?? 0) + cargo.quantity * cargoWeight);
+        }
+        for (const [linkId, link] of opening.transportLinks) {
+          const factor = tickFixture.options.infrastructureFactors.get(linkId);
+          expect(factor, `tick ${tick}: link ${linkId} infrastructure factor`)
+            .toBeDefined();
+          expect(loadByLink.get(linkId) ?? 0,
+            `tick ${tick}: physical weight on link ${linkId}`)
+            .toBeLessThanOrEqual(effectiveTransportLinkCapacity(link, factor!) + 1e-8);
+        }
+      };
+      const replayFresh = [...(replay.world.shipments?.values() ?? [])].filter(
+        cargo => !beforeIds.has(cargo.id),
+      );
+      assertCorridorCapacity(fresh, normal);
+      assertCorridorCapacity(replayFresh, shuffled);
+      if (zeroCapacityWindow && replayFresh.length > 0 && !negativeShuffledCapacityChecked) {
+        const closedLink = f.links[0]!;
+        expect(replayFresh.every(cargo => cargo.transportLinkId !== closedLink))
+          .toBe(true);
+        // Counterfeit one shuffled paid dispatch onto the physically closed
+        // corridor: worldwide cargo and buyer ownership stay unchanged.
+        const forgedCargo = replayFresh.map((cargo, index) =>
+          index === 0 ? { ...cargo, transportLinkId: closedLink } : cargo);
+        const weight = (cargoes: ReadonlyArray<(typeof fresh)[number]>) =>
+          cargoes.reduce((sum, cargo) => sum + cargo.quantity * cargoWeight, 0);
+        expect(weight(forgedCargo)).toBeCloseTo(weight(replayFresh), 8);
+        expect(() => assertCorridorCapacity(forgedCargo, shuffled)).toThrow();
+        negativeShuffledCapacityChecked = true;
       }
 
       expect(close.tick).toBe(tick);
@@ -4401,6 +4427,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeDeliveryOwnerChecked).toBe(true);
     expect(negativeReplayPhase1OwnerChecked).toBe(true);
     expect(negativeReplayPhase7PoolChecked).toBe(true);
+    expect(negativeShuffledCapacityChecked).toBe(true);
     expect(negativeDeliveryBucketChecked).toBe(true);
     expect(negativeDeliveryCashChecked).toBe(true);
     expect(negativeDeliveryOtherGoodChecked).toBe(true);
