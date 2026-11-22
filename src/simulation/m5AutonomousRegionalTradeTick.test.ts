@@ -1607,6 +1607,8 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     // currency total. A wrong-pool FX leg can conserve all currencies while
     // silently attributing a payment to the wrong monetary authority.
     const fxLegs = [...fxInputs, ...fxOutputs] as FxLedgerLeg[];
+    const moneyEpsilon = createDefaultSimulationConfig().numeric.moneyEpsilon!;
+    expect(moneyEpsilon).toBe(1e-9);
     const assertIssuerPoolPostings = (legs: readonly FxLedgerLeg[]): void => {
       for (const leg of legs) {
         const endpoint = leg.type === "FX_INPUT" ? leg.toAccount : leg.fromAccount;
@@ -1632,9 +1634,15 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
                 ? sum + (leg.type === "FX_INPUT" ? leg.moneyAmount : -leg.moneyAmount)
                 : sum;
             }, 0);
-            expect(nextPool!.cash.get(currencyId)! - balance,
-              "Physical issuer posting " + authorityId + "/" + pairId + "/" + currencyId)
-              .toBeCloseTo(posted, 7);
+            const physicalDelta = nextPool!.cash.get(currencyId)! - balance;
+            const mismatch = physicalDelta - posted;
+            if (!Number.isFinite(mismatch) || Math.abs(mismatch) > moneyEpsilon) {
+              throw new Error(
+                "FX_POOL_POSTING_DELTA_MISMATCH " + authorityId + "/" + pairId + "/" +
+                currencyId + ": physical=" + physicalDelta + ", posted=" + posted +
+                ", tolerance=" + moneyEpsilon,
+              );
+            }
           }
         }
       }
@@ -1645,9 +1653,22 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(new Set(payouts.map(leg => leg.fromAccount.type === "FX_POOL"
       ? leg.fromAccount.owningAuthorityId : "missing")).size).toBe(2);
     assertIssuerPoolPostings(fxLegs);
-    // Negative control: misattribute one actual payout to the other valid
-    // issuer, leaving payer/recipient, amounts and overall money unchanged.
-    // Aggregate currency accounting would accept this forged journal.
+    // Non-vacuous negative control: keep every real pool/currency endpoint
+    // valid and alter only one journal payout by 20 moneyEpsilon. The physical
+    // reserves remain untouched, so ONLY the numeric delta oracle can reject
+    // this forged posting (not the endpoint existence/currency checks).
+    const forgedPosting = fxLegs.map(leg => leg === payouts[0]
+      ? { ...leg, moneyAmount: leg.moneyAmount + 20 * moneyEpsilon } : leg);
+    expect(forgedPosting.map(leg => [leg.fromAccount, leg.toAccount, leg.currencyId]))
+      .toEqual(fxLegs.map(leg => [leg.fromAccount, leg.toAccount, leg.currencyId]));
+    expect(forgedPosting.find(leg => leg.fxSettlementId === payouts[0]!.fxSettlementId &&
+      leg.type === "FX_OUTPUT")!.moneyAmount - payouts[0]!.moneyAmount)
+      .toBeGreaterThan(10 * moneyEpsilon);
+    expect(() => assertIssuerPoolPostings(forgedPosting))
+      .toThrow(/FX_POOL_POSTING_DELTA_MISMATCH/);
+    // Separate malformed-endpoint negative control: misattribute one payout
+    // to the other issuer, leaving payer/recipient, amounts and totals intact.
+    // Here the disjoint four-currency fixture rejects unknown pool currency.
     const forgedIssuer = fxLegs.map(leg => leg === payouts[0]
       ? { ...leg, fromAccount: payouts[1]!.fromAccount } : leg);
     expect(forgedIssuer.map(leg => leg.moneyAmount))
