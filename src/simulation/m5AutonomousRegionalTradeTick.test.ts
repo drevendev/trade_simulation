@@ -2424,7 +2424,18 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(fiscalReceipts).toHaveLength(2);
     expect(fiscalReceipts.every(tx => tx.currencyId === currency &&
       tx.moneyAmount !== undefined && tx.moneyAmount > 0)).toBe(true);
-    const creditedAmount = fiscalReceipts.reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+    // The canonical border link also assigns its transport fee to Beta's
+    // treasury. Tax-only accounting would mistake that legitimate fee for an
+    // unexplained credit: reconcile ALL actual Phase-7 public receipts.
+    expect(world.transportLinks.get(f.link.linkId)!.feeReceiver)
+      .toEqual({ type: "STATE", stateId: importerId });
+    const transportReceipts = journal.filter(tx =>
+      tx.phase === 7 && tx.type === "TRANSPORT_FEE");
+    expect(transportReceipts).toHaveLength(1);
+    expect(transportReceipts[0]!.currencyId).toBe(currency);
+    expect(transportReceipts[0]!.moneyAmount).toBeGreaterThan(0);
+    const creditedAmount = [...fiscalReceipts, ...transportReceipts]
+      .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
     const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon!;
     const assertMoneyDelta = (actual: number, expected: number, owner: string): void => {
       const mismatch = actual - expected;
