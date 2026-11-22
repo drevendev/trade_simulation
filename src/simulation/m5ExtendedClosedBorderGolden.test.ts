@@ -2925,6 +2925,9 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeFxDoubleSpendChecked = false;
     let negativePerIntentDebitChecked = false;
     let perIntentReconciledTicks = 0;
+    let shuffledResidualReconciledTicks = 0;
+    let negativeShuffledBuyerResidualChecked = false;
+    let negativeShuffledSellerResidualChecked = false;
     let reconciledResidualTicks = 0;
     let zeroCapacityWindows = 0;
     let liveNeighborWhileBlockedTicks = 0;
@@ -2953,6 +2956,101 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     };
     const assertPhase1CashOwners = (opening: WorldState, settled: WorldState): void => {
       expect(phase1CashOwners(settled)).toEqual(phase1CashOwners(opening));
+    };
+
+
+    // This oracle intentionally uses the SHUFFLED run's own Phase-4 evidence,
+    // Phase-7 boundaries, receipts and cargo, never actual.context/actual.world.
+    // Equal replay hashes alone would not prove that either run preserves the
+    // quantity and cash envelope for each particular BUY and SELL intent.
+    const assertShuffledResiduals = (
+      tick: number, before: WorldState, after: WorldState,
+      result: ReturnType<typeof run>,
+      finalIntents: readonly MarketIntent[] = result.context.phase7MainIntents ?? [],
+    ): void => {
+      const originals = derivePhase7PostProcurementIntents(
+        before, { ...result.context, phase: 7 },
+      ).phase8MainIntents;
+      const byId = new Map(originals.map(intent => [String(intent.id), intent] as const));
+      const remaining = new Map(finalIntents.map(intent =>
+        [String(intent.id), intent] as const));
+      expect(byId.size, `tick ${tick}: shuffled original intent IDs unique`)
+        .toBe(originals.length);
+      expect(remaining.size, `tick ${tick}: shuffled remaining intent IDs unique`)
+        .toBe(finalIntents.length);
+      expect(remaining.size).toBe(byId.size);
+
+      const freshCargo = [...(after.shipments?.values() ?? [])].filter(cargo =>
+        !before.shipments?.has(cargo.id));
+      const cargoById = new Map(freshCargo.map(cargo =>
+        [String(cargo.id), cargo] as const));
+      const receipts = result.context.phase7CommittedLots ?? [];
+      expect(receipts, `tick ${tick}: shuffled receipt count`)
+        .toHaveLength(freshCargo.length);
+      expect(new Set(receipts.map(lot => lot.shipmentId)).size)
+        .toBe(receipts.length);
+      const usedIds = new Set<string>();
+      const debits = new Map<string, { quantity: number; spend: number }>();
+      const debit = (id: string, quantity: number, spend: number): void => {
+        const prior = debits.get(id) ?? { quantity: 0, spend: 0 };
+        debits.set(id, {
+          quantity: prior.quantity + quantity, spend: prior.spend + spend,
+        });
+      };
+      for (const lot of receipts) {
+        const cargo = cargoById.get(lot.shipmentId);
+        expect(cargo, `tick ${tick}: shuffled receipt must own physical cargo`)
+          .toBeDefined();
+        usedIds.add(lot.shipmentId);
+        const seller = byId.get(String(lot.sellerIntentId));
+        const buyer = byId.get(String(lot.buyerIntentId));
+        expect(seller?.side).toBe("SELL");
+        expect(buyer?.side).toBe("BUY");
+        expect(seller?.goodId).toBe(cargo!.goodId);
+        expect(buyer?.goodId).toBe(cargo!.goodId);
+        expect(seller?.regionId).toBe(cargo!.originRegionId);
+        expect(buyer?.regionId).toBe(cargo!.destinationRegionId);
+        expect(actorRefKey(seller!.actor)).toBe(actorRefKey(cargo!.seller));
+        expect(actorRefKey(buyer!.actor))
+          .toBe(actorRefKey(cargo!.beneficialOwner));
+        expect(lot.goodId).toBe(cargo!.goodId);
+        expect(lot.originRegionId).toBe(cargo!.originRegionId);
+        expect(lot.destinationRegionId).toBe(cargo!.destinationRegionId);
+        expect(lot.dispatchedQuantity).toBeCloseTo(cargo!.quantity, 6);
+        const cash = cargo!.buyerGoodsPaymentAmount + cargo!.transportFeeAmount +
+          cargo!.tariffAmount + cargo!.consumptionTaxAmount;
+        expect(lot.buyerTotalDebitDest).toBeCloseTo(cash, 6);
+        debit(String(lot.sellerIntentId), lot.dispatchedQuantity, 0);
+        debit(String(lot.buyerIntentId), lot.dispatchedQuantity,
+          lot.buyerTotalDebitDest);
+      }
+      expect(usedIds).toEqual(new Set(cargoById.keys()));
+      for (const [id, opening] of byId) {
+        const final = remaining.get(id);
+        expect(final, `tick ${tick}: shuffled intent ${id} retained`)
+          .toBeDefined();
+        expect({
+          ...final,
+          desiredQuantity: opening.desiredQuantity,
+          maxSpend: opening.maxSpend,
+        }, `tick ${tick}: shuffled immutable intent evidence ${id}`)
+          .toEqual(opening);
+        expect(final!.desiredQuantity).toBeGreaterThanOrEqual(0);
+        const expected = debits.get(id) ?? { quantity: 0, spend: 0 };
+        const consumed = opening.desiredQuantity - final!.desiredQuantity;
+        expect(consumed).toBeGreaterThanOrEqual(-1e-9);
+        expect(consumed, `tick ${tick}: shuffled per-ID supply/demand ${id}`)
+          .toBeCloseTo(expected.quantity, 6);
+        if (opening.side === "BUY") {
+          expect(opening.maxSpend).toBeDefined();
+          expect(final!.maxSpend).toBeDefined();
+          expect(final!.maxSpend!).toBeGreaterThanOrEqual(0);
+          const spent = opening.maxSpend! - final!.maxSpend!;
+          expect(spent).toBeGreaterThanOrEqual(-1e-9);
+          expect(spent, `tick ${tick}: shuffled per-ID spend ${id}`)
+            .toBeCloseTo(expected.spend, 6);
+        }
+      }
     };
 
     for (let tick = 7; tick < 607; tick++) {
@@ -3057,6 +3155,42 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
           .toEqual(actual.context.phase7CommittedLots);
       };
       assertReplayEvidence(replay.context);
+      // Shuffled residual accounting must pass against independent replay
+      // Phase-4 procurement and Phase-7 custody, not only equal output hashes.
+      if (replay.context.phase7MainIntents !== undefined) {
+        expect(replayPhase7Before).toBeDefined();
+        expect(replayPhase7After).toBeDefined();
+        assertShuffledResiduals(
+          tick, replayPhase7Before!, replayPhase7After!, replay,
+        );
+        shuffledResidualReconciledTicks++;
+        const firstPaid = replay.context.phase7CommittedLots?.[0];
+        if (firstPaid) {
+          for (const [side, intentId] of [
+            ["BUY", firstPaid.buyerIntentId],
+            ["SELL", firstPaid.sellerIntentId],
+          ] as const) {
+            if ((side === "BUY" && negativeShuffledBuyerResidualChecked) ||
+                (side === "SELL" && negativeShuffledSellerResidualChecked)) continue;
+            const untouched = replay.context.phase7MainIntents;
+            expect(untouched.some(intent => intent.id === intentId)).toBe(true);
+            // Return one real paid lot's quantity to its spent intent,
+            // leaving shipments, money, world state and receipts unchanged.
+            // This is a different independent failure for demand and supply.
+            const forged = untouched.map(intent => intent.id === intentId ? {
+              ...intent,
+              desiredQuantity: intent.desiredQuantity + firstPaid.dispatchedQuantity,
+            } : intent);
+            expect(() => assertShuffledResiduals(
+              tick, replayPhase7Before!, replayPhase7After!, replay, forged,
+            )).toThrow();
+            if (side === "BUY") negativeShuffledBuyerResidualChecked = true;
+            else negativeShuffledSellerResidualChecked = true;
+          }
+        }
+      } else {
+        expect(replay.context.phase7CommittedLots ?? []).toHaveLength(0);
+      }
       if (!negativeReplayEvidenceChecked && actual.context.phase7MainIntents?.length) {
         const forged = {
           ...replay.context,
@@ -4440,6 +4574,9 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeFxReservationBindingChecked).toBe(true);
     expect(negativeFxDoubleSpendChecked).toBe(true);
     expect(negativePerIntentDebitChecked).toBe(true);
+    expect(shuffledResidualReconciledTicks).toBeGreaterThan(0);
+    expect(negativeShuffledBuyerResidualChecked).toBe(true);
+    expect(negativeShuffledSellerResidualChecked).toBe(true);
     expect(perIntentReconciledTicks).toBeGreaterThan(0);
     expect(reconciledResidualTicks).toBeGreaterThan(0);
     expect(divergentFeeTicks).toBeGreaterThan(0);
