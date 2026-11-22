@@ -2066,4 +2066,156 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(run(f).context.transactions).toEqual(result.context.transactions);
   });
 
+
+  it("shares one directed link and issuer FX output across two autonomous destination buyers", () => {
+    const f = fixture();
+    // Give the source-region buyer a real destination-region wallet and
+    // address. Both distinct production units now seek the same imported iron
+    // against ONE source seller, directed link and finite issuer-owned FX pool.
+    const buyerTwo: ProductionUnitState = {
+      ...f.buyerA,
+      seed: { ...f.buyerA.seed, regionKey: f.destination.seed.key },
+      wallet: new Map([[f.destination.settlementCurrencyId, 1_000_000]]),
+    };
+    const opening: WorldState = {
+      ...f.world,
+      productionUnits: new Map(f.world.productionUnits).set(
+        buyerTwo.productionUnitId, buyerTwo,
+      ),
+    };
+    const tick = (world: WorldState, factor: number) => run({
+      ...f, world,
+      options: {
+        ...f.options,
+        infrastructureFactors: new Map([[f.link.linkId, factor]]),
+      },
+    });
+    const full = tick(opening, 1);
+    expect(full.phaseBoundaryError).toBeUndefined();
+    expect(full.reconciliationErrors).toBeNull();
+    const fullCargos = [...(full.world.shipments?.values() ?? [])];
+    // Positive control: this is real competition between TWO paid actor
+    // purchases. A single-buyer fixture cannot prove shared allocation.
+    expect(fullCargos).toHaveLength(2);
+    expect(new Set(fullCargos.map(cargo => cargo.transportLinkId)))
+      .toEqual(new Set([f.link.linkId]));
+    const buyers = new Set(fullCargos.map(cargo =>
+      cargo.beneficialOwner.type === "PRODUCTION_UNIT"
+        ? cargo.beneficialOwner.productionUnitId : "",
+    ));
+    expect(buyers).toEqual(new Set([
+      f.buyerB.productionUnitId, buyerTwo.productionUnitId,
+    ]));
+    const fullFxOutput = full.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_OUTPUT").reduce(
+      (sum, tx) => sum + tx.moneyAmount!, 0,
+    );
+    expect(fullFxOutput).toBeGreaterThan(0);
+    const weight = opening.definitionRegistry.goods[IRON]!.cargoWeightPerUnit;
+    const fullLinkUse = fullCargos.reduce(
+      (sum, cargo) => sum + cargoCapacityUse(cargo.quantity, weight), 0,
+    );
+    const nominalCapacity = effectiveTransportLinkCapacity(f.link, 1);
+    expect(fullLinkUse).toBeGreaterThan(0);
+    expect(fullLinkUse).toBeLessThanOrEqual(
+      nominalCapacity + opening.simulationConfig.numeric.quantityEpsilon!,
+    );
+
+    // Bind BOTH resources below the actual full-run usage. No guessed trade
+    // volumes, magic extra cash or separate per-buyer "link capacity".
+    const constrainedCapacity = fullLinkUse * 0.75;
+    const factor = constrainedCapacity / nominalCapacity;
+    const fxBudget = fullFxOutput * 0.75;
+    expect(factor).toBeGreaterThan(0);
+    expect(factor).toBeLessThan(1);
+    const sourceCurrency = f.source.settlementCurrencyId;
+    const destCurrency = f.destination.settlementCurrencyId;
+    const candidates = [...opening.monetaryAuthorities].flatMap(([authorityId, authority]) =>
+      [...authority.fxPools].filter(([, pool]) =>
+        (pool.baseCurrencyId === sourceCurrency && pool.quoteCurrencyId === destCurrency) ||
+        (pool.quoteCurrencyId === sourceCurrency && pool.baseCurrencyId === destCurrency),
+      ).map(([pairId, pool]) => ({ authorityId, pairId, pool })),
+    );
+    expect(candidates).toHaveLength(1);
+    const selected = candidates[0]!;
+    const reserveFloor = selected.pool.baseCurrencyId === sourceCurrency
+      ? selected.pool.minOperationalReserveBase
+      : selected.pool.minOperationalReserveQuote;
+    const limitedOpening: WorldState = {
+      ...opening,
+      monetaryAuthorities: new Map([...opening.monetaryAuthorities].map(([id, authority]) =>
+        [id, id === selected.authorityId ? {
+          ...authority,
+          fxPools: new Map(authority.fxPools).set(selected.pairId, {
+            ...selected.pool,
+            cash: new Map(selected.pool.cash).set(sourceCurrency, reserveFloor + fxBudget),
+          }),
+        } : authority] as const,
+      )),
+    };
+    const limited = tick(limitedOpening, factor);
+    expect(limited.phaseBoundaryError).toBeUndefined();
+    expect(limited.reconciliationErrors).toBeNull();
+    expect(limited.phaseTrace).toEqual([...Array(16).keys()]);
+    const paidCargos = [...(limited.world.shipments?.values() ?? [])];
+    expect(paidCargos.length).toBeGreaterThan(0);
+    expect(paidCargos.length).toBeLessThanOrEqual(2);
+    expect(paidCargos.every(cargo =>
+      cargo.transportLinkId === f.link.linkId && cargo.quantity > 0)).toBe(true);
+    const epsilon = opening.simulationConfig.numeric.quantityEpsilon!;
+    const assertSharedCapacity = (cargos: typeof fullCargos): void => {
+      const used = cargos.reduce(
+        (sum, cargo) => sum + cargoCapacityUse(cargo.quantity, weight), 0,
+      );
+      expect(used).toBeLessThanOrEqual(
+        effectiveTransportLinkCapacity(f.link, factor) + epsilon,
+      );
+    };
+    assertSharedCapacity(paidCargos);
+    // Negative control: both original, individually legitimate paid shipments
+    // violate the now-shared directed-link budget when taken together.
+    expect(() => assertSharedCapacity(fullCargos)).toThrow();
+    const actualFxOutput = limited.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_OUTPUT").reduce(
+      (sum, tx) => sum + tx.moneyAmount!, 0,
+    );
+    const moneyEpsilon = opening.simulationConfig.numeric.moneyEpsilon!;
+    const assertFxBudget = (paid: number): void =>
+      expect(paid).toBeLessThanOrEqual(fxBudget + moneyEpsilon);
+    expect(actualFxOutput).toBeGreaterThan(0);
+    assertFxBudget(actualFxOutput);
+    expect(() => assertFxBudget(fullFxOutput)).toThrow();
+    const endingPool = limited.world.monetaryAuthorities.get(selected.authorityId)!
+      .fxPools.get(selected.pairId)!;
+    expect(endingPool.cash.get(sourceCurrency)!).toBeGreaterThanOrEqual(
+      reserveFloor - moneyEpsilon,
+    );
+    const totalDispatched = paidCargos.reduce((sum, cargo) => sum + cargo.quantity, 0);
+    expect(limited.world.productionUnits.get(f.sellerA.productionUnitId)!
+      .inputInventory.get(IRON)).toBeCloseTo(500 - totalDispatched, 8);
+    expect(totalIron(limited.world)).toBeCloseTo(totalIron(limitedOpening), 8);
+    expect(limited.context.transactions.filter(tx =>
+      tx.phase === 4 && tx.type === "MARKET_SALE").length).toBeGreaterThan(0);
+
+    // Registry iteration must not allocate link or pool budgets in a different
+    // order. No input map is mutated by either execution.
+    const shuffled: WorldState = {
+      ...limitedOpening,
+      regions: new Map([...limitedOpening.regions].reverse()),
+      productionUnits: new Map([...limitedOpening.productionUnits].reverse()),
+      markets: new Map([...limitedOpening.markets].reverse()),
+      monetaryAuthorities: new Map([...limitedOpening.monetaryAuthorities].reverse()),
+    };
+    const replay = tick(shuffled, factor);
+    expect(replay.phaseBoundaryError).toBeUndefined();
+    expect(replay.reconciliationErrors).toBeNull();
+    expect(replay.context.transactions).toEqual(limited.context.transactions);
+    expect(replay.world.shipments).toEqual(limited.world.shipments);
+    expect(opening.productionUnits.get(f.sellerA.productionUnitId)!
+      .inputInventory.get(IRON)).toBe(500);
+    expect(limitedOpening.monetaryAuthorities.get(selected.authorityId)!
+      .fxPools.get(selected.pairId)!.cash.get(sourceCurrency))
+      .toBe(reserveFloor + fxBudget);
+  });
+
 });
