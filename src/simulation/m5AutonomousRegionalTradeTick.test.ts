@@ -8,6 +8,7 @@ import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { GoodId } from "../domain/id";
 import { cargoCapacityUse, effectiveTransportLinkCapacity } from "./transportCapacity";
 import type { PhaseHandler } from "./tickOrchestrator";
+import type { FxLedgerLeg } from "./fxSettlement";
 import type { M4ClosedEconomyOptions } from "./m4ClosedEconomyOrchestrator";
 import {
   executeM5AutonomousRegionalTradeTick, type M5AutonomousRegionalTradeOptions,
@@ -1602,6 +1603,79 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     );
     expect(fxInputs).toHaveLength(2);
     expect(fxOutputs).toHaveLength(2);
+    // Reconcile every physical issuer/pair reserve, not just the aggregate
+    // currency total. A wrong-pool FX leg can conserve all currencies while
+    // silently attributing a payment to the wrong monetary authority.
+    const fxLegs = [...fxInputs, ...fxOutputs] as FxLedgerLeg[];
+    const moneyEpsilon = createDefaultSimulationConfig().numeric.moneyEpsilon!;
+    expect(moneyEpsilon).toBe(1e-9);
+    const assertIssuerPoolPostings = (legs: readonly FxLedgerLeg[]): void => {
+      for (const leg of legs) {
+        const endpoint = leg.type === "FX_INPUT" ? leg.toAccount : leg.fromAccount;
+        expect(endpoint.type).toBe("FX_POOL");
+        if (endpoint.type !== "FX_POOL") throw new Error("Missing physical issuer pool");
+        const pool = opening.monetaryAuthorities.get(endpoint.owningAuthorityId)
+          ?.fxPools.get(endpoint.pairId);
+        expect(pool, "FX journal must name a live issuer-owned pool").toBeDefined();
+        expect(pool!.cash.has(leg.currencyId)).toBe(true);
+      }
+      for (const [authorityId, authority] of opening.monetaryAuthorities) {
+        const nextAuthority = departed.world.monetaryAuthorities.get(authorityId);
+        expect(nextAuthority).toBeDefined();
+        for (const [pairId, pool] of authority.fxPools) {
+          const nextPool = nextAuthority!.fxPools.get(pairId);
+          expect(nextPool).toBeDefined();
+          for (const [currencyId, balance] of pool.cash) {
+            const posted = legs.reduce((sum, leg) => {
+              const endpoint = leg.type === "FX_INPUT" ? leg.toAccount : leg.fromAccount;
+              return endpoint.type === "FX_POOL" &&
+                endpoint.owningAuthorityId === authorityId &&
+                endpoint.pairId === pairId && leg.currencyId === currencyId
+                ? sum + (leg.type === "FX_INPUT" ? leg.moneyAmount : -leg.moneyAmount)
+                : sum;
+            }, 0);
+            const physicalDelta = nextPool!.cash.get(currencyId)! - balance;
+            const mismatch = physicalDelta - posted;
+            if (!Number.isFinite(mismatch) || Math.abs(mismatch) > moneyEpsilon) {
+              throw new Error(
+                "FX_POOL_POSTING_DELTA_MISMATCH " + authorityId + "/" + pairId + "/" +
+                currencyId + ": physical=" + physicalDelta + ", posted=" + posted +
+                ", tolerance=" + moneyEpsilon,
+              );
+            }
+          }
+        }
+      }
+    };
+    const payouts = fxLegs.filter(leg => leg.type === "FX_OUTPUT");
+    expect(payouts).toHaveLength(2);
+    expect(payouts.every(leg => leg.fromAccount.type === "FX_POOL")).toBe(true);
+    expect(new Set(payouts.map(leg => leg.fromAccount.type === "FX_POOL"
+      ? leg.fromAccount.owningAuthorityId : "missing")).size).toBe(2);
+    assertIssuerPoolPostings(fxLegs);
+    // Non-vacuous negative control: keep every real pool/currency endpoint
+    // valid and alter only one journal payout by 20 moneyEpsilon. The physical
+    // reserves remain untouched, so ONLY the numeric delta oracle can reject
+    // this forged posting (not the endpoint existence/currency checks).
+    const forgedPosting = fxLegs.map(leg => leg === payouts[0]
+      ? { ...leg, moneyAmount: leg.moneyAmount + 20 * moneyEpsilon } : leg);
+    expect(forgedPosting.map(leg => [leg.fromAccount, leg.toAccount, leg.currencyId]))
+      .toEqual(fxLegs.map(leg => [leg.fromAccount, leg.toAccount, leg.currencyId]));
+    expect(forgedPosting.find(leg => leg.fxSettlementId === payouts[0]!.fxSettlementId &&
+      leg.type === "FX_OUTPUT")!.moneyAmount - payouts[0]!.moneyAmount)
+      .toBeGreaterThan(10 * moneyEpsilon);
+    expect(() => assertIssuerPoolPostings(forgedPosting))
+      .toThrow(/FX_POOL_POSTING_DELTA_MISMATCH/);
+    // Separate malformed-endpoint negative control: misattribute one payout
+    // to the other issuer, leaving payer/recipient, amounts and totals intact.
+    // Here the disjoint four-currency fixture rejects unknown pool currency.
+    const forgedIssuer = fxLegs.map(leg => leg === payouts[0]
+      ? { ...leg, fromAccount: payouts[1]!.fromAccount } : leg);
+    expect(forgedIssuer.map(leg => leg.moneyAmount))
+      .toEqual(fxLegs.map(leg => leg.moneyAmount));
+    expect(forgedIssuer.map(leg => leg.currencyId))
+      .toEqual(fxLegs.map(leg => leg.currencyId));
+    expect(() => assertIssuerPoolPostings(forgedIssuer)).toThrow();
     // Each paid cargo must have its *own* dispatch bundle and FX receipt.
     // Global counts and aggregated pool deltas alone let zero-value legs or
     // both conversions on one route masquerade as two funded settlements.
