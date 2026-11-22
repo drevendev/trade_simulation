@@ -2910,6 +2910,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativePublicInventoryChecked = false;
     let negativeDeliveryOwnerChecked = false;
     let negativeReplayPhase1OwnerChecked = false;
+    let negativeReplayPhase7PoolChecked = false;
     let negativeDeliveryBucketChecked = false;
     let negativeDeliveryCashChecked = false;
     let negativeDeliveryOtherGoodChecked = false;
@@ -2990,6 +2991,8 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       let replayPhase1After: WorldState | undefined;
       let phase7Before: WorldState | undefined;
       let phase7After: WorldState | undefined;
+      let replayPhase7Before: WorldState | undefined;
+      let replayPhase7After: WorldState | undefined;
       let phase11Cash: ReturnType<typeof poolOf>["cash"] | undefined;
       const actual = run(tickFixture, normal, open, tick, (phase, before, after) => {
         if (phase === 1) {
@@ -3007,6 +3010,10 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         if (phase === 1) {
           replayPhase1Before = before;
           replayPhase1After = after;
+        }
+        if (phase === 7) {
+          replayPhase7Before = before;
+          replayPhase7After = after;
         }
       });
       for (const result of [actual, replay]) {
@@ -3480,10 +3487,14 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
       expect(phase7After, `tick ${tick}: Phase-7 closing stock`).toBeDefined();
       const poolBefore = poolOf(phase7Before!);
       const poolAfter = poolOf(phase7After!);
-      const assertPoolJournal = (journal: typeof postings): void => {
+      const assertPoolJournal = (
+        journal: typeof postings,
+        opening: WorldState = phase7Before!,
+        settled: WorldState = phase7After!,
+      ): void => {
         for (const currency of f.currencies) {
-          const actualDelta = (poolAfter.cash.get(currency) ?? 0) -
-            (poolBefore.cash.get(currency) ?? 0);
+          const actualDelta = (poolOf(settled).cash.get(currency) ?? 0) -
+            (poolOf(opening).cash.get(currency) ?? 0);
           const postedDelta = journal.filter(tx =>
             tx.phase === 7 && tx.type === "FX_INPUT" && tx.currencyId === currency,
           ).reduce((sum, tx) => sum + tx.moneyAmount!, 0) -
@@ -3495,6 +3506,9 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
       };
       assertPoolJournal(postings);
+      expect(replayPhase7Before, `tick ${tick}: shuffled Phase-7 opening`).toBeDefined();
+      expect(replayPhase7After, `tick ${tick}: shuffled Phase-7 closing`).toBeDefined();
+      assertPoolJournal(replay.context.transactions, replayPhase7Before!, replayPhase7After!);
       if (zeroFxWindow) {
         zeroFxWindows++;
         expect(poolBefore.minOperationalReserveBase)
@@ -3710,18 +3724,23 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
       };
       assertActorStocks(phase7After!);
+      // Reconcile the shuffled run against its OWN Phase-7 boundaries. The
+      // end-of-tick replay hash cannot prove absence of transient misposting.
+      assertActorStocks(replayPhase7After!, replayPhase7Before!);
 
       // Tax receipts are owned by the importing State; corridor fees go to
       // the link's STATE fee receiver, if any. Use actual pre/post treasury
       // stocks, not the payee claimed by an accounting journal entry.
-      const assertStateTreasuries = (settled: WorldState): void => {
-        for (const [stateId, openingState] of phase7Before!.states) {
+      const assertStateTreasuries = (
+        settled: WorldState, opening: WorldState = phase7Before!,
+      ): void => {
+        for (const [stateId, openingState] of opening.states) {
           for (const currency of f.currencies) {
             const expectedDelta = fresh.reduce((sum, cargo) => {
               if (cargo.buyerPaymentCurrencyId !== currency) return sum;
-              const importingStateId = phase7Before!.regions
+              const importingStateId = opening.regions
                 .get(cargo.destinationRegionId)!.controllerStateId;
-              const receiver = phase7Before!.transportLinks
+              const receiver = opening.transportLinks
                 .get(cargo.transportLinkId)!.feeReceiver;
               return sum +
                 (importingStateId === stateId
@@ -3738,6 +3757,40 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
       };
       assertStateTreasuries(phase7After!);
+      assertStateTreasuries(replayPhase7After!, replayPhase7Before!);
+      if (fresh.length > 0 && !negativeReplayPhase7PoolChecked) {
+        // Balance-preserving corruption ONLY in the shuffled run: move one
+        // unit of issuer FX reserve into an actor wallet after Phase 7.
+        // The full-tick replay and normal-run ledger remain unchanged.
+        const currency = poolOf(replayPhase7After!).baseCurrencyId;
+        const [unitId, unit] = [...replayPhase7After!.productionUnits]
+          .find(([, value]) => (value.wallet.get(currency) ?? 0) >= 0) ?? [];
+        expect(unitId).toBeDefined();
+        expect(unit).toBeDefined();
+        const authority = replayPhase7After!.monetaryAuthorities.get(f.chosen.authorityId)!;
+        const pool = poolOf(replayPhase7After!);
+        const corruptedPool = { ...pool,
+          cash: new Map(pool.cash).set(currency, pool.cash.get(currency)! - 0.25),
+        };
+        const forged = {
+          ...replayPhase7After!,
+          monetaryAuthorities: new Map(replayPhase7After!.monetaryAuthorities).set(
+            f.chosen.authorityId, { ...authority,
+              fxPools: new Map(authority.fxPools).set(f.chosen.poolId, corruptedPool),
+            }),
+          productionUnits: new Map(replayPhase7After!.productionUnits).set(unitId!, {
+            ...unit!, wallet: new Map(unit!.wallet).set(currency,
+              (unit!.wallet.get(currency) ?? 0) + 0.25),
+          }),
+        };
+        expect(totalCash(forged, currency))
+          .toBeCloseTo(totalCash(replayPhase7After!, currency), 8);
+        expect(() => assertPoolJournal(
+          replay.context.transactions, replayPhase7Before!, forged,
+        )).toThrow();
+        expect(() => assertActorStocks(forged, replayPhase7Before!)).toThrow();
+        negativeReplayPhase7PoolChecked = true;
+      }
 
       // Real Phase-7 cargo in this fixture is exclusively owned by ProductionUnits.
       // Cohorts and State public inventories must not be silently debited even
@@ -3783,6 +3836,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
         }
       };
       assertPassiveStocks(phase7Before!, phase7After!);
+      assertPassiveStocks(replayPhase7Before!, replayPhase7After!);
       if (fresh.length > 0 && !negativeOtherGoodChecked) {
         // A balanced theft of an unrelated good between funded producers
         // leaves iron dispatches, FX payments and total wood unchanged.
@@ -4346,6 +4400,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativePublicInventoryChecked).toBe(true);
     expect(negativeDeliveryOwnerChecked).toBe(true);
     expect(negativeReplayPhase1OwnerChecked).toBe(true);
+    expect(negativeReplayPhase7PoolChecked).toBe(true);
     expect(negativeDeliveryBucketChecked).toBe(true);
     expect(negativeDeliveryCashChecked).toBe(true);
     expect(negativeDeliveryOtherGoodChecked).toBe(true);
