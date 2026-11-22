@@ -848,10 +848,12 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     let negativeGoodsOwnerChecked = false;
     let negativeSellerGoodsChecked = false;
     let negativePassiveCohortChecked = false;
+    let negativeShuffledTreasuryChecked = false;
 
     for (let tick = 7; tick < 607; tick++) {
       const open = (tick - 7) % 12 === 0;
       const beforeIds = new Set(normalWorld.shipments?.keys());
+      const replayBeforeIds = new Set(replayWorld.shipments?.keys());
       const due = [...(normalWorld.shipments?.values() ?? [])].filter(
         cargo => cargo.arrivalTick === tick,
       );
@@ -859,6 +861,8 @@ describe("M5/#676 monetary-union cross-State golden", () => {
       let phase1After: WorldState | undefined;
       let phase7Before: WorldState | undefined;
       let phase7After: WorldState | undefined;
+      let replayPhase7Before: WorldState | undefined;
+      let replayPhase7After: WorldState | undefined;
       const options = open ? f.options : {
         ...f.options, phase1TradeLawProvider: () => undefined,
       };
@@ -875,7 +879,15 @@ describe("M5/#676 monetary-union cross-State golden", () => {
           }
         },
       );
-      const replay = run(f, replayWorld, open, tick);
+      const replay = executeM5AutonomousRegionalTradeTick(
+        replayWorld, tick, households, (_phase, world) => world, options,
+        (phase, before, after) => {
+          if (phase === 7) {
+            replayPhase7Before = before;
+            replayPhase7After = after;
+          }
+        },
+      );
       for (const result of [normal, replay]) {
         expect(result.phaseTrace).toEqual([...Array(16).keys()]);
         expect(result.phaseBoundaryError).toBeUndefined();
@@ -928,9 +940,11 @@ describe("M5/#676 monetary-union cross-State golden", () => {
       // currency stocks against the frozen cargo, not the journal's payees.
       expect(phase7Before).toBeDefined();
       expect(phase7After).toBeDefined();
-      const assertPaidOwners = (settled: WorldState): void => {
-        for (const [id, before] of phase7Before!.productionUnits) {
-          const expected = fresh.reduce((sum, cargo) => {
+      const assertPaidOwners = (
+        settled: WorldState, opening: WorldState = phase7Before!, lots = fresh,
+      ): void => {
+        for (const [id, before] of opening.productionUnits) {
+          const expected = lots.reduce((sum, cargo) => {
             const sellerCredit = cargo.seller.type === "PRODUCTION_UNIT" &&
               cargo.seller.productionUnitId === id
                 ? cargo.sellerNetUnitPrice * cargo.quantity : 0;
@@ -945,11 +959,11 @@ describe("M5/#676 monetary-union cross-State golden", () => {
           expect(paid, "tick " + tick + " wallet owner " + id)
             .toBeCloseTo(expected, 6);
         }
-        for (const [id, before] of phase7Before!.states) {
-          const expected = fresh.reduce((sum, cargo) => {
-            const importer = phase7Before!.regions
+        for (const [id, before] of opening.states) {
+          const expected = lots.reduce((sum, cargo) => {
+            const importer = opening.regions
               .get(cargo.destinationRegionId)!.controllerStateId;
-            const receiver = phase7Before!.transportLinks
+            const receiver = opening.transportLinks
               .get(cargo.transportLinkId)!.feeReceiver;
             return sum + (importer === id
               ? cargo.tariffAmount + cargo.consumptionTaxAmount : 0) +
@@ -964,16 +978,46 @@ describe("M5/#676 monetary-union cross-State golden", () => {
         // No union-currency Phase-7 shipment in this fixture has a Cohort
         // buyer or a private Clan fee owner. These passive wallets must not
         // be debited or credited while active buyers and treasuries settle.
-        for (const [id, before] of phase7Before!.cohorts) {
+        for (const [id, before] of opening.cohorts) {
           expect(settled.cohorts.get(id)!.wallet,
             "tick " + tick + " passive Cohort wallet " + id).toEqual(before.wallet);
         }
-        for (const [id, before] of phase7Before!.clans) {
+        for (const [id, before] of opening.clans) {
           expect(settled.clans.get(id)!.treasury,
             "tick " + tick + " passive Clan treasury " + id).toEqual(before.treasury);
         }
       };
       assertPaidOwners(phase7After!);
+      expect(replayPhase7Before, `tick ${tick}: shuffled Phase-7 opening`).toBeDefined();
+      expect(replayPhase7After, `tick ${tick}: shuffled Phase-7 closing`).toBeDefined();
+      const replayFresh = [...(replay.world.shipments?.values() ?? [])].filter(
+        cargo => !replayBeforeIds.has(cargo.id),
+      );
+      // Reconcile the shuffled Phase-7 run against its OWN opening stocks and
+      // newly paid physical cargo; matching end-of-tick balances is insufficient.
+      assertPaidOwners(replayPhase7After!, replayPhase7Before!, replayFresh);
+      if (!negativeShuffledTreasuryChecked && replayFresh.length > 0) {
+        // A conserved-cash transfer between States must fail only because its
+        // owner differs from the independently observed paid tariff receiver.
+        const importerId = replayPhase7Before!.regions
+          .get(replayFresh[0]!.destinationRegionId)!.controllerStateId!;
+        const otherId = [...replayPhase7After!.states.keys()].find(id => id !== importerId);
+        expect(otherId).toBeDefined();
+        const importer = replayPhase7After!.states.get(importerId)!;
+        const other = replayPhase7After!.states.get(otherId!)!;
+        const diversion = Math.min(0.01, replayFresh[0]!.tariffAmount / 2);
+        expect(diversion).toBeGreaterThan(0);
+        const states = new Map(replayPhase7After!.states);
+        states.set(importerId, { ...importer, treasury: new Map(importer.treasury)
+          .set(currency, (importer.treasury.get(currency) ?? 0) - diversion) });
+        states.set(otherId!, { ...other, treasury: new Map(other.treasury)
+          .set(currency, (other.treasury.get(currency) ?? 0) + diversion) });
+        const forged: WorldState = { ...replayPhase7After!, states };
+        expect(totalCash(forged, currency)).toBeCloseTo(
+          totalCash(replayPhase7After!, currency), 6);
+        expect(() => assertPaidOwners(forged, replayPhase7Before!, replayFresh)).toThrow();
+        negativeShuffledTreasuryChecked = true;
+      }
       if (!negativePassiveCohortChecked) {
         // An equal-and-opposite transfer between two passive Cohorts leaves
         // total currency, seller receipts and State taxes unchanged. The
@@ -1210,6 +1254,7 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     expect(negativeGoodsOwnerChecked).toBe(true);
     expect(negativeSellerGoodsChecked).toBe(true);
     expect(negativePassiveCohortChecked).toBe(true);
+    expect(negativeShuffledTreasuryChecked).toBe(true);
     expect(dispatched.size).toBeGreaterThanOrEqual(2);
     expect(delivered).toEqual(dispatched);
     expect(normalWorld.shipments?.size ?? 0).toBe(0);
