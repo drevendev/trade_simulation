@@ -2378,7 +2378,10 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
         },
       ),
     };
-    const result = run({ ...f, world, destination: dest });
+    let phase7States: { before: WorldState; after: WorldState } | undefined;
+    const result = run({ ...f, world, destination: dest }, (phase, before, after) => {
+      if (phase === 7) phase7States = { before, after };
+    });
     expect(result.phaseBoundaryError).toBeUndefined();
     expect(result.reconciliationErrors).toBeNull();
     const cargos = [...(result.world.shipments?.values() ?? [])];
@@ -2408,6 +2411,63 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
     expect(result.context.phase7FxReservations ?? []).toHaveLength(0);
     expect(journal.some(tx => tx.type === "SHIPMENT_DISPATCH")).toBe(true);
     expect(journal.filter(tx => tx.type === "IMPORT_TARIFF")).toHaveLength(1);
+    // A monetary union does not merge its sovereign treasuries. The importer
+    // receives BOTH Phase-7 tax legs, while the exporter receives neither.
+    // Use Phase-7 boundaries to exclude unrelated Phase-4 local tax receipts.
+    expect(phase7States).toBeDefined();
+    const exporterId = f.source.controllerStateId!;
+    const importerId = dest.controllerStateId!;
+    const treasuryCash = (state: WorldState, owner: typeof importerId) =>
+      state.states.get(owner)!.treasury.get(currency) ?? 0;
+    const fiscalReceipts = journal.filter(tx => tx.phase === 7 &&
+      (tx.type === "IMPORT_TARIFF" || tx.type === "CONSUMPTION_TAX"));
+    expect(fiscalReceipts).toHaveLength(2);
+    expect(fiscalReceipts.every(tx => tx.currencyId === currency &&
+      tx.moneyAmount !== undefined && tx.moneyAmount > 0)).toBe(true);
+    // The canonical border link also assigns its transport fee to Beta's
+    // treasury. Tax-only accounting would mistake that legitimate fee for an
+    // unexplained credit: reconcile ALL actual Phase-7 public receipts.
+    expect(world.transportLinks.get(f.link.linkId)!.feeReceiver)
+      .toEqual({ type: "STATE", stateId: importerId });
+    const transportReceipts = journal.filter(tx =>
+      tx.phase === 7 && tx.type === "TRANSPORT_FEE");
+    expect(transportReceipts).toHaveLength(1);
+    expect(transportReceipts[0]!.currencyId).toBe(currency);
+    expect(transportReceipts[0]!.moneyAmount).toBeGreaterThan(0);
+    const creditedAmount = [...fiscalReceipts, ...transportReceipts]
+      .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+    const moneyEpsilon = world.simulationConfig.numeric.moneyEpsilon!;
+    const assertMoneyDelta = (actual: number, expected: number, owner: string): void => {
+      const mismatch = actual - expected;
+      if (!Number.isFinite(mismatch) || Math.abs(mismatch) > moneyEpsilon) {
+        throw new Error("MONETARY_UNION_TAX_OWNER_MISMATCH " + owner +
+          ": actual=" + actual + ", expected=" + expected);
+      }
+    };
+    const assertSovereignTaxOwner = (after: WorldState): void => {
+      assertMoneyDelta(treasuryCash(after, importerId) -
+        treasuryCash(phase7States!.before, importerId), creditedAmount, "importer");
+      assertMoneyDelta(treasuryCash(after, exporterId) -
+        treasuryCash(phase7States!.before, exporterId), 0, "exporter");
+    };
+    assertSovereignTaxOwner(phase7States!.after);
+    // Balanced fraud: shift an actual fiscal credit from importer to exporter.
+    // Total currency is unchanged; only the sovereign-owner oracle catches it.
+    const shift = fiscalReceipts[0]!.moneyAmount! / 2;
+    const importState = phase7States!.after.states.get(importerId)!;
+    const exportState = phase7States!.after.states.get(exporterId)!;
+    const forged: WorldState = {
+      ...phase7States!.after,
+      states: new Map(phase7States!.after.states)
+        .set(importerId, { ...importState, treasury: new Map(importState.treasury)
+          .set(currency, treasuryCash(phase7States!.after, importerId) - shift) })
+        .set(exporterId, { ...exportState, treasury: new Map(exportState.treasury)
+          .set(currency, treasuryCash(phase7States!.after, exporterId) + shift) }),
+    };
+    expect(treasuryCash(forged, importerId) + treasuryCash(forged, exporterId))
+      .toBeCloseTo(treasuryCash(phase7States!.after, importerId) +
+        treasuryCash(phase7States!.after, exporterId), 8);
+    expect(() => assertSovereignTaxOwner(forged)).toThrow(/MONETARY_UNION_TAX_OWNER_MISMATCH/);
     expect(result.world.monetaryAuthorities).toEqual(world.monetaryAuthorities);
     expect(totalIron(result.world)).toBeCloseTo(totalIron(world), 8);
     // Different registries must not change a same-currency route's payment order.
