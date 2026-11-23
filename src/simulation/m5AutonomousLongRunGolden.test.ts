@@ -2,12 +2,13 @@
  * M5 / #676: 600 consecutive canonical 16-phase ticks, replayed from the
  * same world. A bounded long-run golden, not all seven M5 acceptance criteria.
  *
- * Check physical iron independently of the engine's journal reconciler:
- * inventories + paid cargo in transit lose mass only on recorded transport loss.
+ * Check per-good physical stock and per-currency live money independently of
+ * the journal reconciler. This fixture has no production, consumption or
+ * monetary issuance, so only recorded transport loss can reduce physical goods.
  */
 import { describe, expect, it } from "vitest";
 import { createM5PreviewScenario, M5_PREVIEW_TICK } from "../diagnostics/m5PreviewScenario";
-import type { GoodId } from "../domain/id";
+import type { CurrencyId, GoodId } from "../domain/id";
 import { executeM5AutonomousRegionalTradeTick } from "./m5AutonomousRegionalTradeTick";
 import type { PhaseHandler } from "./tickOrchestrator";
 import type { WorldState } from "./worldState";
@@ -88,6 +89,35 @@ function assertPhysicalGoods(
   }
 }
 
+/** Count all live cash owners once, including each FX pool's two reserves. */
+function physicalMoney(world: WorldState): Map<CurrencyId, number> {
+  const totals = new Map<CurrencyId, number>();
+  const addWallet = (wallet: ReadonlyMap<CurrencyId, number>) => {
+    for (const [currencyId, amount] of wallet) {
+      totals.set(currencyId, (totals.get(currencyId) ?? 0) + amount);
+    }
+  };
+  for (const unit of world.productionUnits.values()) addWallet(unit.wallet);
+  for (const state of world.states.values()) addWallet(state.treasury);
+  for (const clan of world.clans.values()) addWallet(clan.treasury);
+  for (const cohort of world.cohorts.values()) addWallet(cohort.wallet);
+  for (const authority of world.monetaryAuthorities.values()) {
+    for (const pool of authority.fxPools.values()) addWallet(pool.cash);
+  }
+  return totals;
+}
+
+/** FX may move currencies across owners, but cannot mint or burn either one. */
+function assertPhysicalMoney(
+  expected: ReadonlyMap<CurrencyId, number>, actual: ReadonlyMap<CurrencyId, number>,
+  label: string,
+): void {
+  for (const currencyId of new Set([...expected.keys(), ...actual.keys()])) {
+    expect(actual.get(currencyId) ?? 0, "cash " + currencyId + " " + label)
+      .toBeCloseTo(expected.get(currencyId) ?? 0, 6);
+  }
+}
+
 describe("M5 #676 600-tick real-trade physical replay golden", () => {
   it("reconciles per-tick iron ownership and replays paid FX/delivery deterministically", () => {
     const fixture = createM5PreviewScenario();
@@ -106,6 +136,8 @@ describe("M5 #676 600-tick real-trade physical replay golden", () => {
     let transitWitness = false;
     let expectedIron = physicalIron(original);
     const expectedGoods = physicalGoods(original);
+    const expectedMoney = physicalMoney(original);
+    expect(expectedMoney.size).toBeGreaterThanOrEqual(2);
     expect(expectedIron).toBeGreaterThan(0);
     expect(expectedGoods.get(IRON)).toBeCloseTo(expectedIron, 8);
 
@@ -132,6 +164,30 @@ describe("M5 #676 600-tick real-trade physical replay golden", () => {
     expect(totalMass(forgedGoods)).toBeCloseTo(totalMass(expectedGoods), 8);
     expect(() => assertPhysicalGoods(expectedGoods, forgedGoods, "forged conversion"))
       .toThrow();
+
+    // Negative control: a fake FX conversion can conserve total cash while
+    // minting one currency and burning another. Per-currency stocks must fail.
+    const sourceCurrency = regions[0]!.settlementCurrencyId;
+    const destinationCurrency = regions[1]!.settlementCurrencyId;
+    const payer = [...original.productionUnits.values()].find(unit =>
+      (unit.wallet.get(sourceCurrency) ?? 0) >= 1);
+    expect(payer).toBeDefined();
+    const fakeWallet = new Map(payer!.wallet);
+    fakeWallet.set(sourceCurrency, fakeWallet.get(sourceCurrency)! - 0.25);
+    fakeWallet.set(destinationCurrency, (fakeWallet.get(destinationCurrency) ?? 0) + 0.25);
+    const forgedMoneyWorld: WorldState = {
+      ...original,
+      productionUnits: new Map(original.productionUnits).set(
+        payer!.productionUnitId, { ...payer!, wallet: fakeWallet },
+      ),
+    };
+    const sumCash = (cash: ReadonlyMap<CurrencyId, number>) =>
+      [...cash.values()].reduce((sum, amount) => sum + amount, 0);
+    expect(sumCash(physicalMoney(forgedMoneyWorld)))
+      .toBeCloseTo(sumCash(expectedMoney), 8);
+    expect(() => assertPhysicalMoney(
+      expectedMoney, physicalMoney(forgedMoneyWorld), "forged cross-currency move",
+    )).toThrow();
 
     for (let offset = 0; offset < TICKS; offset += 1) {
       const tick = M5_PREVIEW_TICK + offset;
@@ -179,6 +235,8 @@ describe("M5 #676 600-tick real-trade physical replay golden", () => {
       const replayGoods = physicalGoods(b.world);
       assertPhysicalGoods(expectedGoods, actualGoods, "at tick " + tick);
       assertPhysicalGoods(expectedGoods, replayGoods, "replay at tick " + tick);
+      assertPhysicalMoney(expectedMoney, physicalMoney(a.world), "at tick " + tick);
+      assertPhysicalMoney(expectedMoney, physicalMoney(b.world), "replay at tick " + tick);
 
       paidFx += journal.filter(tx => tx.phase === 7 && tx.type === "FX_OUTPUT").length;
       dispatched += journal.filter(tx => tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH").length;
