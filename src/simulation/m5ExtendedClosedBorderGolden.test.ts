@@ -258,6 +258,62 @@ describe("M5 #676: complete physical iron conservation witness", () => {
     expect(seeded.productionUnits).toBe(opening.productionUnits);
     expect(seeded.shipments).toBe(opening.shipments);
   });
+
+  it("counts all production stock buckets and paid transit independently", () => {
+    const f = fixture();
+    const opening = f.world;
+    const baseline = totalIron(opening);
+    const [unitId, unit] = [...opening.productionUnits][0]!;
+    const addToBucket = (
+      bucket: "inputInventory" | "outputInventory" | "investmentInventory",
+      quantity: number,
+    ): WorldState => ({
+      ...opening,
+      productionUnits: new Map(opening.productionUnits).set(unitId, {
+        ...unit,
+        [bucket]: new Map(unit[bucket]).set(
+          IRON, (unit[bucket].get(IRON) ?? 0) + quantity,
+        ),
+      }),
+    });
+
+    // Each distinct stock bucket must affect the full-world mass oracle.
+    // The other producer buckets, passive owners and shipment registry are
+    // unchanged, so accidentally omitting one bucket makes this fail.
+    for (const [bucket, quantity] of [
+      ["inputInventory", 1],
+      ["outputInventory", 2],
+      ["investmentInventory", 3],
+    ] as const) {
+      const modified = addToBucket(bucket, quantity);
+      expect(totalIron(modified) - baseline, bucket).toBeCloseTo(quantity, 8);
+      expect(modified.states).toBe(opening.states);
+      expect(modified.cohorts).toBe(opening.cohorts);
+      expect(modified.shipments).toBe(opening.shipments);
+    }
+
+    // Dispatch must move the same real IRON out of the seller's stock into
+    // in-transit custody. Removing one actual, paid cargo without returning
+    // its stock must reduce the counted physical mass by exactly its quantity.
+    const paid = run(f, opening);
+    expect(paid.phaseBoundaryError).toBeUndefined();
+    expect(paid.reconciliationErrors).toBeNull();
+    const cargo = [...(paid.world.shipments?.values() ?? [])];
+    expect(cargo).toHaveLength(2);
+    expect(cargo.every(shipment => shipment.goodId === IRON)).toBe(true);
+    expect(totalIron(paid.world)).toBeCloseTo(baseline, 6);
+    const dropped: WorldState = {
+      ...paid.world,
+      shipments: new Map([...paid.world.shipments!].filter(
+        ([id]) => id !== cargo[0]!.id,
+      )),
+    };
+    expect(totalIron(paid.world) - totalIron(dropped))
+      .toBeCloseTo(cargo[0]!.quantity, 8);
+    expect(dropped.productionUnits).toBe(paid.world.productionUnits);
+    expect(dropped.states).toBe(paid.world.states);
+    expect(dropped.cohorts).toBe(paid.world.cohorts);
+  });
 });
 
 
