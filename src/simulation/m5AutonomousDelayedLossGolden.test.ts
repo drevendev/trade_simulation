@@ -502,4 +502,74 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
     },
   );
 
+
+  it("bounds positive dispatch by gross cargo weight before routine transport loss", () => {
+    const f = createM5PreviewScenario();
+    const links = [...f.opening.transportLinks.values()];
+    expect(links).toHaveLength(1);
+    const link = links[0]!;
+    const opening: WorldState = {
+      ...f.opening,
+      transportLinks: new Map([[link.linkId, {
+        ...link, seed: { ...link.seed, routinePhysicalLossRate: 0.25 },
+      }]]),
+    };
+    const run = (factor: number) => executeM5AutonomousRegionalTradeTick(
+      opening, M5_PREVIEW_TICK, upstream, unchanged, {
+        ...f.options, infrastructureFactors: new Map([[link.linkId, factor]]),
+      },
+    );
+    const weight = opening.definitionRegistry.goods[IRON]!.cargoWeightPerUnit;
+    expect(weight).toBeGreaterThan(0);
+    const fullCapacity = link.seed.baseCapacity * link.seed.condition;
+    const grossWeight = (journal: readonly EconomicTransaction[]) =>
+      journal.filter(tx => tx.phase === 7 && tx.type === "TRADE_GOODS_SALE")
+        .reduce((total, tx) => {
+          expect(tx.goodId).toBe(IRON);
+          expect(tx.quantity).toBeGreaterThan(0);
+          return total + tx.quantity! * weight;
+        }, 0);
+
+    const funded = run(1);
+    expect(funded.phaseBoundaryError).toBeUndefined();
+    expect(funded.reconciliationErrors).toBeNull();
+    const unrestrictedWeight = grossWeight(funded.context.transactions);
+    expect(unrestrictedWeight).toBeGreaterThan(0);
+    expect(unrestrictedWeight).toBeLessThanOrEqual(fullCapacity + 1e-8);
+
+    // Pick a positive physical capacity below actual unrestricted demand.
+    // The only changed input is the external infrastructure factor.
+    const cap = unrestrictedWeight / 2;
+    const constrained = run(cap / fullCapacity);
+    expect(constrained.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(constrained.phaseBoundaryError).toBeUndefined();
+    expect(constrained.reconciliationErrors).toBeNull();
+    const shippedWeight = grossWeight(constrained.context.transactions);
+    expect(shippedWeight).toBeGreaterThan(0);
+    expect(shippedWeight).toBeLessThan(unrestrictedWeight);
+    expect(shippedWeight).toBeLessThanOrEqual(cap + 1e-8);
+
+    // The cap is consumed by the invoiced gross quantity, not the surviving
+    // cargo. Count every new shipment and typed loss independently of the
+    // market-sale records; the preview has a single directed route.
+    const cargo = [...(constrained.world.shipments?.values() ?? [])];
+    expect(cargo.length).toBeGreaterThan(0);
+    expect(cargo.every(item => item.transportLinkId === link.linkId &&
+      item.goodId === IRON && item.departureTick === M5_PREVIEW_TICK &&
+      item.fxSettlementId !== undefined)).toBe(true);
+    const surviving = cargo.reduce((sum, item) => sum + item.quantity * weight, 0);
+    const destroyed = constrained.context.transactions
+      .filter(tx => tx.phase === 7 && tx.type === "GOODS_TRANSPORT_LOSS")
+      .reduce((sum, tx) => {
+        expect(tx.goodId).toBe(IRON);
+        return sum + tx.quantity! * weight;
+      }, 0);
+    expect(destroyed).toBeGreaterThan(0);
+    expect(destroyed).toBeCloseTo(shippedWeight * 0.25, 8);
+    expect(surviving + destroyed).toBeCloseTo(shippedWeight, 8);
+    expect(constrained.context.transactions.some(tx =>
+      tx.phase === 7 && tx.type === "FX_OUTPUT" && (tx.moneyAmount ?? 0) > 0))
+      .toBe(true);
+  });
+
 });
