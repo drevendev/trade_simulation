@@ -214,6 +214,21 @@ function freezeAvailableFx(world: WorldState): WorldState {
   return { ...world, monetaryAuthorities: authorities };
 }
 
+/** Local procurement precedes regional trade. Require a real paid sale, not
+ * equality of two empty journals. This does not assert identical Phase-8
+ * residuals, which may legitimately differ after Phase 7. */
+function assertPaidLocalProcurement(
+  funded: readonly EconomicTransaction[], restricted: readonly EconomicTransaction[],
+): void {
+  const localSales = (journal: readonly EconomicTransaction[]) =>
+    journal.filter(tx => tx.phase === 4 && tx.type === "MARKET_SALE");
+  const paidLocal = localSales(funded);
+  expect(paidLocal.some(tx => (tx.quantity ?? 0) > 0 &&
+    (tx.moneyAmount ?? 0) > 0 && tx.sourceRegionId !== undefined &&
+    tx.sourceRegionId === tx.destinationRegionId)).toBe(true);
+  expect(localSales(restricted)).toEqual(paidLocal);
+}
+
 describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
   it("destroys cargo once at dispatch, retains surviving ownership, and credits only its buyer on arrival", () => {
     const f = createM5PreviewScenario();
@@ -423,7 +438,8 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
     expect(blocked.world.shipments?.size ?? 0).toBe(0);
     expect(blocked.context.transactions.filter(tx => tx.phase === 7 && [
       "FX_INPUT", "FX_OUTPUT", "TRADE_GOODS_SALE",
-      "SHIPMENT_DISPATCH", "GOODS_TRANSPORT_LOSS",
+      "SHIPMENT_DISPATCH", "GOODS_TRANSPORT_LOSS", "TRANSPORT_FEE",
+      "IMPORT_TARIFF", "CONSUMPTION_TAX",
     ].includes(tx.type))).toHaveLength(0);
     expect(allIron(afterTrade!)).toBeCloseTo(allIron(beforeTrade!), 8);
 
@@ -438,6 +454,17 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
       expect(next!.investmentInventory).toEqual(original.investmentInventory);
       expect(next!.wallet).toEqual(original.wallet);
     }
+    expect(afterTrade!.states).toEqual(beforeTrade!.states);
+    expect(afterTrade!.cohorts).toEqual(beforeTrade!.cohorts);
+    expect(afterTrade!.monetaryAuthorities).toEqual(beforeTrade!.monetaryAuthorities);
+    assertPaidLocalProcurement(funded.context.transactions, blocked.context.transactions);
+    // A removed domestic sale must fail even if both world registries survive.
+    const withoutLocalSales = blocked.context.transactions.filter(
+      tx => !(tx.phase === 4 && tx.type === "MARKET_SALE"),
+    );
+    expect(() => assertPaidLocalProcurement(
+      funded.context.transactions, withoutLocalSales,
+    )).toThrow();
     expect(blocked.world.markets.size).toBe(exhausted.markets.size);
     for (const id of exhausted.markets.keys()) {
       expect(blocked.world.markets.has(id)).toBe(true);
@@ -491,13 +518,7 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
       expect(afterTrade!.monetaryAuthorities).toEqual(beforeTrade!.monetaryAuthorities);
       // Non-vacuous local trade: Phase 4 must still settle the same paid
       // same-region procurement that occurred with the open funded route.
-      const localSales = (journal: readonly EconomicTransaction[]) =>
-        journal.filter(tx => tx.phase === 4 && tx.type === "MARKET_SALE");
-      const paidLocal = localSales(funded.context.transactions);
-      expect(paidLocal.some(tx => (tx.quantity ?? 0) > 0 &&
-        (tx.moneyAmount ?? 0) > 0 && tx.sourceRegionId === tx.destinationRegionId))
-        .toBe(true);
-      expect(localSales(blocked.context.transactions)).toEqual(paidLocal);
+      assertPaidLocalProcurement(funded.context.transactions, blocked.context.transactions);
       expect([...blocked.world.markets.keys()]).toEqual([...funded.world.markets.keys()]);
     },
   );
