@@ -167,6 +167,10 @@ function totalIron(world: WorldState) {
     sum + (unit.inputInventory.get(IRON) ?? 0) +
       (unit.outputInventory.get(IRON) ?? 0) +
       (unit.investmentInventory.get(IRON) ?? 0), 0) +
+    [...world.states.values()].reduce((sum, state) =>
+      sum + (state.publicInventory.get(IRON) ?? 0), 0) +
+    [...world.cohorts.values()].reduce((sum, cohort) =>
+      sum + (cohort.householdInventory.get(IRON) ?? 0), 0) +
     [...(world.shipments?.values() ?? [])].reduce((sum, cargo) =>
       sum + (cargo.goodId === IRON ? cargo.quantity : 0), 0);
 }
@@ -848,6 +852,7 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     let negativeGoodsOwnerChecked = false;
     let negativeSellerGoodsChecked = false;
     let negativePassiveCohortChecked = false;
+    let negativePassiveGoodsChecked = false;
     let negativeShuffledTreasuryChecked = false;
 
     for (let tick = 7; tick < 607; tick++) {
@@ -996,6 +1001,64 @@ describe("M5/#676 monetary-union cross-State golden", () => {
       // Reconcile the shuffled Phase-7 run against its OWN opening stocks and
       // newly paid physical cargo; matching end-of-tick balances is insufficient.
       assertPaidOwners(replayPhase7After!, replayPhase7Before!, replayFresh);
+      // Phase 7 dispatch sells only the exporting unit's INPUT stock.
+      // Public warehouses, household inventories and all other producer
+      // buckets must remain untouched even when total goods still balance.
+      const assertNonTradeGoodsOwners = (
+        opening: WorldState, settled: WorldState,
+      ): void => {
+        for (const [id, state] of opening.states) {
+          expect(settled.states.get(id)!.publicInventory,
+            "tick " + tick + " passive State goods " + id).toEqual(state.publicInventory);
+        }
+        for (const [id, cohort] of opening.cohorts) {
+          expect(settled.cohorts.get(id)!.householdInventory,
+            "tick " + tick + " passive Cohort goods " + id)
+            .toEqual(cohort.householdInventory);
+        }
+        for (const [id, unit] of opening.productionUnits) {
+          const closing = settled.productionUnits.get(id)!;
+          expect(closing.outputInventory,
+            "tick " + tick + " untouched output bucket " + id)
+            .toEqual(unit.outputInventory);
+          expect(closing.investmentInventory,
+            "tick " + tick + " untouched investment bucket " + id)
+            .toEqual(unit.investmentInventory);
+        }
+      };
+      assertNonTradeGoodsOwners(phase7Before!, phase7After!);
+      assertNonTradeGoodsOwners(replayPhase7Before!, replayPhase7After!);
+      if (!negativePassiveGoodsChecked && replayFresh.length > 0) {
+        const donorEntry = [...replayPhase7After!.productionUnits].find(
+          ([, unit]) => (unit.inputInventory.get(IRON) ?? 0) > 0,
+        );
+        expect(donorEntry).toBeDefined();
+        const [donorId, donor] = donorEntry!;
+        const shift = Math.min(0.125, (donor.inputInventory.get(IRON) ?? 0) / 2);
+        expect(shift).toBeGreaterThan(0);
+        const stateId = f.origin.controllerStateId!;
+        const state = replayPhase7After!.states.get(stateId)!;
+        // Move real goods into an uninvolved State warehouse while removing
+        // the same quantity from the funded producer. Aggregate physical iron
+        // remains unchanged; journal, money and shipments are untouched.
+        const forged: WorldState = {
+          ...replayPhase7After!,
+          productionUnits: new Map(replayPhase7After!.productionUnits).set(
+            donorId, { ...donor, inputInventory: new Map(donor.inputInventory).set(
+              IRON, (donor.inputInventory.get(IRON) ?? 0) - shift,
+            ) },
+          ),
+          states: new Map(replayPhase7After!.states).set(stateId, {
+            ...state,
+            publicInventory: new Map(state.publicInventory).set(
+              IRON, (state.publicInventory.get(IRON) ?? 0) + shift,
+            ),
+          }),
+        };
+        expect(totalIron(forged)).toBeCloseTo(totalIron(replayPhase7After!), 7);
+        expect(() => assertNonTradeGoodsOwners(replayPhase7Before!, forged)).toThrow();
+        negativePassiveGoodsChecked = true;
+      }
       if (!negativeShuffledTreasuryChecked && replayFresh.length > 0) {
         // A conserved-cash transfer between States must fail only because its
         // owner differs from the independently observed paid tariff receiver.
@@ -1254,6 +1317,7 @@ describe("M5/#676 monetary-union cross-State golden", () => {
     expect(negativeGoodsOwnerChecked).toBe(true);
     expect(negativeSellerGoodsChecked).toBe(true);
     expect(negativePassiveCohortChecked).toBe(true);
+    expect(negativePassiveGoodsChecked).toBe(true);
     expect(negativeShuffledTreasuryChecked).toBe(true);
     expect(dispatched.size).toBeGreaterThanOrEqual(2);
     expect(delivered).toEqual(dispatched);
