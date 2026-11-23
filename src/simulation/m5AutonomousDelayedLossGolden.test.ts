@@ -444,4 +444,62 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
     }
   });
 
+
+  it.each(["closed border", "zero physical capacity"] as const)(
+    "blocks new dispatch at %s while retaining paid local procurement",
+    (restriction) => {
+      const f = createM5PreviewScenario();
+      const links = [...f.opening.transportLinks.values()];
+      expect(links).toHaveLength(1);
+      const link = links[0]!;
+      expect(link.seed.baseCapacity * link.seed.condition).toBeGreaterThan(0);
+      const funded = executeM5AutonomousRegionalTradeTick(
+        f.opening, M5_PREVIEW_TICK, upstream, unchanged, f.options,
+      );
+      expect(funded.phaseBoundaryError).toBeUndefined();
+      expect(funded.reconciliationErrors).toBeNull();
+      expect(funded.context.transactions.some(tx =>
+        tx.phase === 7 && tx.type === "FX_OUTPUT")).toBe(true);
+      expect(funded.world.shipments?.size ?? 0).toBeGreaterThan(0);
+
+      // Change just one independent gate, not the economic stocks, prices,
+      // available FX or Phase-4 local procurement inputs.
+      const options = restriction === "closed border"
+        ? { ...f.options, phase1TradeLawProvider: () => 0 }
+        : { ...f.options, infrastructureFactors: new Map([[link.linkId, 0]]) };
+      let beforeTrade: WorldState | undefined;
+      let afterTrade: WorldState | undefined;
+      const blocked = executeM5AutonomousRegionalTradeTick(
+        f.opening, M5_PREVIEW_TICK, upstream, unchanged, options,
+        (phase, before, after) => {
+          if (phase === 7) { beforeTrade = before; afterTrade = after; }
+        },
+      );
+      expect(blocked.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(blocked.phaseBoundaryError).toBeUndefined();
+      expect(blocked.reconciliationErrors).toBeNull();
+      expect(blocked.world.shipments?.size ?? 0).toBe(0);
+      expect(blocked.context.transactions.filter(tx => tx.phase === 7 &&
+        ["FX_INPUT", "FX_OUTPUT", "TRADE_GOODS_SALE", "SHIPMENT_DISPATCH",
+          "GOODS_TRANSPORT_LOSS", "TRANSPORT_FEE", "IMPORT_TARIFF"].includes(tx.type)))
+        .toHaveLength(0);
+      expect(beforeTrade).toBeDefined();
+      expect(afterTrade).toBeDefined();
+      expect(afterTrade!.productionUnits).toEqual(beforeTrade!.productionUnits);
+      expect(afterTrade!.states).toEqual(beforeTrade!.states);
+      expect(afterTrade!.cohorts).toEqual(beforeTrade!.cohorts);
+      expect(afterTrade!.monetaryAuthorities).toEqual(beforeTrade!.monetaryAuthorities);
+      // Non-vacuous local trade: Phase 4 must still settle the same paid
+      // same-region procurement that occurred with the open funded route.
+      const localSales = (journal: readonly EconomicTransaction[]) =>
+        journal.filter(tx => tx.phase === 4 && tx.type === "MARKET_SALE");
+      const paidLocal = localSales(funded.context.transactions);
+      expect(paidLocal.some(tx => (tx.quantity ?? 0) > 0 &&
+        (tx.moneyAmount ?? 0) > 0 && tx.sourceRegionId === tx.destinationRegionId))
+        .toBe(true);
+      expect(localSales(blocked.context.transactions)).toEqual(paidLocal);
+      expect([...blocked.world.markets.keys()]).toEqual([...funded.world.markets.keys()]);
+    },
+  );
+
 });
