@@ -184,6 +184,53 @@ describe("M5 #672 atomic settleFx / Handoff-04 §§19–21", () => {
     expect(resolveCanonicalFxPool(exhausted, request.pairId).pool).toBe(before);
   });
 
+  it("re-quotes a funded promise against the live FX pool before posting either currency", () => {
+    const { world, pool, request, payer, recipient } = fixture();
+    const fundedPromise = context(world, request);
+    expect(fundedPromise.reservation.quote.feasibleOutputAmount).toBe(10);
+    const floor = pool.minOperationalReserveQuote;
+    const payerBefore = readActorWallet(world, payer).get(request.inputCurrencyId)!;
+    const recipientBefore = readActorWallet(world, recipient).get(request.outputCurrencyId)!;
+
+    // An earlier same-tick settlement may consume the output reserve AFTER
+    // the planner produced this still-valid reservation. The old quoted
+    // output must not authorize stock mutation against the new live pool.
+    const thin = withPoolCash(world, request, request.outputCurrencyId, floor + 2);
+    const thinPoolBefore = resolveCanonicalFxPool(thin, request.pairId).pool;
+    const settled = settleFx(thin, request, fundedPromise);
+    expect(settled).not.toBeNull();
+    expect(settled!.receipt.outputAmount).toBeCloseTo(2, 9);
+    expect(settled!.receipt.outputAmount).toBeLessThan(
+      fundedPromise.reservation.quote.feasibleOutputAmount,
+    );
+    expect(settled!.receipt.reserveLimited).toBe(true);
+    expect(settled!.ledgerLegs.map(leg => leg.moneyAmount)).toEqual([
+      settled!.receipt.inputAmount, settled!.receipt.outputAmount,
+    ]);
+    expect(payerBefore - readActorWallet(settled!.world, payer)
+      .get(request.inputCurrencyId)!).toBeCloseTo(settled!.receipt.inputAmount, 9);
+    expect(readActorWallet(settled!.world, recipient)
+      .get(request.outputCurrencyId)! - recipientBefore)
+      .toBeCloseTo(settled!.receipt.outputAmount, 9);
+    expect(poolCash(settled!.world, request, request.outputCurrencyId))
+      .toBeCloseTo(floor, 9);
+    expect(resolveCanonicalFxPool(thin, request.pairId).pool).toBe(thinPoolBefore);
+    expect(readActorWallet(thin, payer).get(request.inputCurrencyId)).toBe(payerBefore);
+
+    // At the exact floor there is no payable output. Reusing the *funded*
+    // reservation still produces no transaction and no modified WorldState.
+    const exhausted = withPoolCash(world, request, request.outputCurrencyId, floor);
+    const exhaustedPool = resolveCanonicalFxPool(exhausted, request.pairId).pool;
+    expect(settleFx(exhausted, request, fundedPromise)).toBeNull();
+    expect(resolveCanonicalFxPool(exhausted, request.pairId).pool).toBe(exhaustedPool);
+    expect(readActorWallet(exhausted, payer).get(request.inputCurrencyId))
+      .toBe(payerBefore);
+    expect(readActorWallet(exhausted, recipient).get(request.outputCurrencyId))
+      .toBe(recipientBefore);
+    expect(poolCash(world, request, request.outputCurrencyId))
+      .toBe(pool.cash.get(request.outputCurrencyId));
+  });
+
   it("refuses invalid direction, recipient contract and missing/wrong reservation without mutation", () => {
     const { world, request, pool } = fixture();
     const ctx = context(world, request);
