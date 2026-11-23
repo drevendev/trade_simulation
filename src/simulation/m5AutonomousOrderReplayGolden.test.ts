@@ -23,18 +23,37 @@ const upstream: PhaseHandler = (world, context) => {
   return context.phase === 2 ? { ...context, householdMarketIntents: [] } : context;
 };
 
+/** Reverse both registries and nested economic stores without changing values. */
 function reversedRegistries(world: WorldState): WorldState {
+  const rev = <K, V>(map: ReadonlyMap<K, V>): Map<K, V> => new Map([...map].reverse());
   return {
     ...world,
-    regions: new Map([...world.regions].reverse()),
-    states: new Map([...world.states].reverse()),
-    currencies: new Map([...world.currencies].reverse()),
-    monetaryAuthorities: new Map([...world.monetaryAuthorities].reverse()),
-    clans: new Map([...world.clans].reverse()),
-    cohorts: new Map([...world.cohorts].reverse()),
-    productionUnits: new Map([...world.productionUnits].reverse()),
-    markets: new Map([...world.markets].reverse()),
-    transportLinks: new Map([...world.transportLinks].reverse()),
+    regions: new Map([...world.regions].reverse().map(([id, region]) =>
+      [id, { ...region, resourceDeposits: rev(region.resourceDeposits) }] as const)),
+    states: new Map([...world.states].reverse().map(([id, state]) =>
+      [id, { ...state, treasury: rev(state.treasury),
+        publicInventory: rev(state.publicInventory) }] as const)),
+    currencies: rev(world.currencies),
+    monetaryAuthorities: new Map([...world.monetaryAuthorities].reverse().map(([id, authority]) =>
+      [id, { ...authority, fxPools: new Map([...authority.fxPools].reverse().map(([poolId, pool]) =>
+        [poolId, { ...pool, cash: rev(pool.cash) }] as const)) }] as const)),
+    clans: new Map([...world.clans].reverse().map(([id, clan]) =>
+      [id, { ...clan, treasury: rev(clan.treasury) }] as const)),
+    cohorts: new Map([...world.cohorts].reverse().map(([id, cohort]) =>
+      [id, { ...cohort, wallet: rev(cohort.wallet),
+        householdInventory: rev(cohort.householdInventory) }] as const)),
+    productionUnits: new Map([...world.productionUnits].reverse().map(([id, unit]) =>
+      [id, { ...unit, wallet: rev(unit.wallet),
+        inputInventory: rev(unit.inputInventory),
+        outputInventory: rev(unit.outputInventory),
+        investmentInventory: rev(unit.investmentInventory) }] as const)),
+    markets: new Map([...world.markets].reverse().map(([id, market]) =>
+      [id, { ...market, priceByGood: rev(market.priceByGood),
+        expectationsByGood: rev(market.expectationsByGood) }] as const)),
+    transportLinks: rev(world.transportLinks),
+    ...(world.shipments ? { shipments: rev(world.shipments) } : {}),
+    ...(world.outgoingTransportLinkIdsByRegion
+      ? { outgoingTransportLinkIdsByRegion: rev(world.outgoingTransportLinkIdsByRegion) } : {}),
   };
 }
 
@@ -74,9 +93,25 @@ function playSixTicks(opening: WorldState, options: ReturnType<typeof createM5Pr
 describe("M5 #676 multi-tick registry-order replay golden", () => {
   it("replays six actual 16-phase ticks identically when all live registry insertion orders reverse", () => {
     const scenario = createM5PreviewScenario();
+    const reordered = reversedRegistries(scenario.opening);
+    // Non-vacuity: merely reversing the outer WorldState maps is insufficient.
+    // The real monetary pool and local price maps must also be adversarial.
+    const market = [...scenario.opening.markets.values()].find(item => item.priceByGood.size > 1);
+    expect(market, "fixture needs a multi-good market").toBeDefined();
+    const revisedMarket = reordered.markets.get(market!.marketId)!;
+    expect([...revisedMarket.priceByGood.keys()])
+      .toEqual([...market!.priceByGood.keys()].reverse());
+    const issuer = [...scenario.opening.monetaryAuthorities.entries()].find(
+      ([, authority]) => [...authority.fxPools.values()].some(pool => pool.cash.size > 1),
+    );
+    expect(issuer, "fixture needs a funded multi-currency pool").toBeDefined();
+    const poolEntry = [...issuer![1].fxPools.entries()].find(([, pool]) => pool.cash.size > 1)!;
+    expect([...reordered.monetaryAuthorities.get(issuer![0])!.fxPools.get(poolEntry[0])!.cash.keys()])
+      .toEqual([...poolEntry[1].cash.keys()].reverse());
+
     const original = playSixTicks(scenario.opening, scenario.options);
     const replay = playSixTicks(scenario.opening, scenario.options);
-    const reversed = playSixTicks(reversedRegistries(scenario.opening), scenario.options);
+    const reversed = playSixTicks(reordered, scenario.options);
 
     // Prove the scenario really exercises both money settlement and a subsequent
     // physical arrival, rather than certifying a vacuous no-trade replay.
