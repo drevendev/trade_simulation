@@ -11,6 +11,7 @@ import type { FxLedgerLeg } from "./fxSettlement";
 import { createM5PreviewScenario, M5_PREVIEW_TICK } from "../diagnostics/m5PreviewScenario";
 import type { GoodId } from "../domain/id";
 import { executeM5AutonomousRegionalTradeTick } from "./m5AutonomousRegionalTradeTick";
+import { quoteFxForPool } from "./fxQuoteReservation";
 import type { PhaseHandler } from "./tickOrchestrator";
 import type { TradeShipmentState } from "./tradeShipmentState";
 import type { WorldState } from "./worldState";
@@ -184,6 +185,35 @@ function assertPaidFxDeparture(
     .toBeCloseTo(output.moneyAmount, 8);
 }
 
+/**
+ * Exhaust every *future* FX payout budget without touching money stocks.
+ * The departure was already settled in Phase 7, so later policy floors must
+ * not retroactively cancel or recharge the physical cargo in transit.
+ */
+function freezeAvailableFx(world: WorldState): WorldState {
+  const authorities = new Map(world.monetaryAuthorities);
+  let frozenPools = 0;
+  for (const [id, authority] of authorities) {
+    const pools = new Map(authority.fxPools);
+    for (const [pairId, pool] of pools) {
+      const frozen = {
+        ...pool,
+        minOperationalReserveBase: pool.cash.get(pool.baseCurrencyId)!,
+        minOperationalReserveQuote: pool.cash.get(pool.quoteCurrencyId)!,
+      };
+      expect(quoteFxForPool(frozen, frozen.baseCurrencyId,
+        frozen.quoteCurrencyId, 1).feasibleOutputAmount).toBe(0);
+      expect(quoteFxForPool(frozen, frozen.quoteCurrencyId,
+        frozen.baseCurrencyId, 1).feasibleOutputAmount).toBe(0);
+      pools.set(pairId, frozen);
+      frozenPools += 1;
+    }
+    authorities.set(id, { ...authority, fxPools: pools });
+  }
+  expect(frozenPools).toBeGreaterThan(0);
+  return { ...world, monetaryAuthorities: authorities };
+}
+
 describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
   it("destroys cargo once at dispatch, retains surviving ownership, and credits only its buyer on arrival", () => {
     const f = createM5PreviewScenario();
@@ -285,11 +315,12 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
     expect(() => assertPaidFxDeparture(beforeDispatch!, afterDispatch!, cargo, wrongCurrencyFx, gross))
       .toThrow();
 
-    // Altering current transport policy after paid dispatch must not undo
-    // frozen arrival timing, reprice the invoice, or destroy cargo again.
+    // Exhaust all prospective FX payout headroom and alter transport policy
+    // AFTER actual FX-paid dispatch. Neither condition can cancel a paid
+    // cargo, reprice/recharge it at arrival, or cause a second loss.
     const laterLink = departed.world.transportLinks.get(linkId)!;
     const changedRoute: WorldState = {
-      ...departed.world,
+      ...freezeAvailableFx(departed.world),
       transportLinks: new Map(departed.world.transportLinks).set(linkId, {
         ...laterLink, travelTicks: 0,
         seed: { ...laterLink.seed, routinePhysicalLossRate: 0 },
