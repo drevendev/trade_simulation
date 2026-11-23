@@ -73,6 +73,19 @@ function physicalGoods(world: WorldState): Map<GoodId, number> {
     totals.set(cargo.goodId, (totals.get(cargo.goodId) ?? 0) + cargo.quantity);
   }
   return totals;
+
+}
+
+/** Distinguish individual good losses from a zero-sum cross-good conversion. */
+function assertPhysicalGoods(
+  expected: ReadonlyMap<GoodId, number>, actual: ReadonlyMap<GoodId, number>,
+  label: string,
+): void {
+  const ids = new Set([...expected.keys(), ...actual.keys()]);
+  for (const goodId of ids) {
+    expect(actual.get(goodId) ?? 0, "physical " + goodId + " " + label)
+      .toBeCloseTo(expected.get(goodId) ?? 0, 6);
+  }
 }
 
 describe("M5 #676 600-tick real-trade physical replay golden", () => {
@@ -95,6 +108,30 @@ describe("M5 #676 600-tick real-trade physical replay golden", () => {
     const expectedGoods = physicalGoods(original);
     expect(expectedIron).toBeGreaterThan(0);
     expect(expectedGoods.get(IRON)).toBeCloseTo(expectedIron, 8);
+
+    // Negative control: preserve overall mass while converting real iron into
+    // a different, definition-backed good without a corresponding transaction.
+    // A total-mass-only oracle would accept the forged world.
+    const WOOD = "good:wood" as GoodId;
+    const seller = [...original.productionUnits.values()].find(unit =>
+      (unit.inputInventory.get(IRON) ?? 0) >= 1);
+    expect(seller).toBeDefined();
+    const forgedInput = new Map(seller!.inputInventory);
+    const shift = 0.25;
+    forgedInput.set(IRON, forgedInput.get(IRON)! - shift);
+    forgedInput.set(WOOD, (forgedInput.get(WOOD) ?? 0) + shift);
+    const forgedWorld: WorldState = {
+      ...original,
+      productionUnits: new Map(original.productionUnits).set(
+        seller!.productionUnitId, { ...seller!, inputInventory: forgedInput },
+      ),
+    };
+    const totalMass = (goods: ReadonlyMap<GoodId, number>) =>
+      [...goods.values()].reduce((sum, quantity) => sum + quantity, 0);
+    const forgedGoods = physicalGoods(forgedWorld);
+    expect(totalMass(forgedGoods)).toBeCloseTo(totalMass(expectedGoods), 8);
+    expect(() => assertPhysicalGoods(expectedGoods, forgedGoods, "forged conversion"))
+      .toThrow();
 
     for (let offset = 0; offset < TICKS; offset += 1) {
       const tick = M5_PREVIEW_TICK + offset;
@@ -140,16 +177,8 @@ describe("M5 #676 600-tick real-trade physical replay golden", () => {
       }
       const actualGoods = physicalGoods(a.world);
       const replayGoods = physicalGoods(b.world);
-      const allGoods = new Set([
-        ...expectedGoods.keys(), ...actualGoods.keys(), ...replayGoods.keys(),
-      ]);
-      for (const goodId of allGoods) {
-        const expected = expectedGoods.get(goodId) ?? 0;
-        expect(actualGoods.get(goodId) ?? 0, "physical " + goodId + " at tick " + tick)
-          .toBeCloseTo(expected, 6);
-        expect(replayGoods.get(goodId) ?? 0, "replayed " + goodId + " at tick " + tick)
-          .toBeCloseTo(expected, 6);
-      }
+      assertPhysicalGoods(expectedGoods, actualGoods, "at tick " + tick);
+      assertPhysicalGoods(expectedGoods, replayGoods, "replay at tick " + tick);
 
       paidFx += journal.filter(tx => tx.phase === 7 && tx.type === "FX_OUTPUT").length;
       dispatched += journal.filter(tx => tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH").length;
