@@ -50,6 +50,31 @@ function physicalIron(world: WorldState): number {
   return total;
 }
 
+/**
+ * AC-4: independent per-good totals, not just the headline iron stock.
+ * This fixture has no Phase-5 production or Phase-9 consumption enabled;
+ * Phase-7 recorded transport loss is its only legitimate mass sink.
+ */
+function physicalGoods(world: WorldState): Map<GoodId, number> {
+  const totals = new Map<GoodId, number>();
+  const addStock = (stock: ReadonlyMap<GoodId, number>) => {
+    for (const [goodId, quantity] of stock) {
+      totals.set(goodId, (totals.get(goodId) ?? 0) + quantity);
+    }
+  };
+  for (const unit of world.productionUnits.values()) {
+    addStock(unit.inputInventory);
+    addStock(unit.outputInventory);
+    addStock(unit.investmentInventory);
+  }
+  for (const state of world.states.values()) addStock(state.publicInventory);
+  for (const cohort of world.cohorts.values()) addStock(cohort.householdInventory);
+  for (const cargo of world.shipments?.values() ?? []) {
+    totals.set(cargo.goodId, (totals.get(cargo.goodId) ?? 0) + cargo.quantity);
+  }
+  return totals;
+}
+
 describe("M5 #676 600-tick real-trade physical replay golden", () => {
   it("reconciles per-tick iron ownership and replays paid FX/delivery deterministically", () => {
     const fixture = createM5PreviewScenario();
@@ -67,7 +92,9 @@ describe("M5 #676 600-tick real-trade physical replay golden", () => {
     let recordedLosses = 0;
     let transitWitness = false;
     let expectedIron = physicalIron(original);
+    const expectedGoods = physicalGoods(original);
     expect(expectedIron).toBeGreaterThan(0);
+    expect(expectedGoods.get(IRON)).toBeCloseTo(expectedIron, 8);
 
     for (let offset = 0; offset < TICKS; offset += 1) {
       const tick = M5_PREVIEW_TICK + offset;
@@ -100,6 +127,29 @@ describe("M5 #676 600-tick real-trade physical replay golden", () => {
         .toBeCloseTo(expectedIron, 6);
       expect(physicalIron(b.world), "replay goods at tick " + tick)
         .toBeCloseTo(expectedIron, 6);
+
+      // Reconcile every physical good independently. An unrecorded conversion
+      // from one good into another can leave total mass unchanged; the
+      // single-iron oracle alone would not catch an unrelated good's loss.
+      for (const tx of journal) {
+        if (tx.type !== "GOODS_TRANSPORT_LOSS") continue;
+        expect(tx.goodId, "loss good at tick " + tick).toBeDefined();
+        expect(tx.quantity, "loss quantity at tick " + tick).toBeGreaterThanOrEqual(0);
+        const goodId = tx.goodId!;
+        expectedGoods.set(goodId, (expectedGoods.get(goodId) ?? 0) - tx.quantity!);
+      }
+      const actualGoods = physicalGoods(a.world);
+      const replayGoods = physicalGoods(b.world);
+      const allGoods = new Set([
+        ...expectedGoods.keys(), ...actualGoods.keys(), ...replayGoods.keys(),
+      ]);
+      for (const goodId of allGoods) {
+        const expected = expectedGoods.get(goodId) ?? 0;
+        expect(actualGoods.get(goodId) ?? 0, "physical " + goodId + " at tick " + tick)
+          .toBeCloseTo(expected, 6);
+        expect(replayGoods.get(goodId) ?? 0, "replayed " + goodId + " at tick " + tick)
+          .toBeCloseTo(expected, 6);
+      }
 
       paidFx += journal.filter(tx => tx.phase === 7 && tx.type === "FX_OUTPUT").length;
       dispatched += journal.filter(tx => tx.phase === 7 && tx.type === "SHIPMENT_DISPATCH").length;
