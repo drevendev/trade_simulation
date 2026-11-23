@@ -2915,6 +2915,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     let negativeDeliveryBucketChecked = false;
     let negativeDeliveryCashChecked = false;
     let negativeDeliveryOtherGoodChecked = false;
+    let negativePhase1PassiveGoodsChecked = false;
     let negativeFxBundleChecked = false;
     let negativeChargeBundleChecked = false;
     let negativeTransitIdentityChecked = false;
@@ -4360,17 +4361,93 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
           }
         }
       };
+      // Phase-1 goods receipts belong only to paid ProductionUnit INPUT owners.
+      // State public and Cohort household inventory must remain passive, even
+      // if their changes would cancel in a world-wide goods conservation sum.
+      const assertPhase1PassiveGoods = (opening: WorldState, settled: WorldState): void => {
+        const assertInventory = (
+          owner: string, before: ReadonlyMap<GoodId, number>,
+          after: ReadonlyMap<GoodId, number>,
+        ): void => {
+          for (const good of new Set([...before.keys(), ...after.keys()])) {
+            expect(after.get(good) ?? 0, `tick ${tick}: passive arrival ${owner}/${good}`)
+              .toBeCloseTo(before.get(good) ?? 0, 8);
+          }
+        };
+        expect(settled.states.size).toBe(opening.states.size);
+        for (const [id, state] of opening.states) {
+          const after = settled.states.get(id);
+          expect(after, `tick ${tick}: arrival State ${id}`).toBeDefined();
+          assertInventory(`state:${id}`, state.publicInventory, after!.publicInventory);
+        }
+        expect(settled.cohorts.size).toBe(opening.cohorts.size);
+        for (const [id, cohort] of opening.cohorts) {
+          const after = settled.cohorts.get(id);
+          expect(after, `tick ${tick}: arrival Cohort ${id}`).toBeDefined();
+          assertInventory(`cohort:${id}`, cohort.householdInventory,
+            after!.householdInventory);
+        }
+      };
       expect(due.every(cargo => cargo.goodId === IRON &&
         cargo.destinationInventoryBucket === "INPUT" &&
         cargo.beneficialOwner.type === "PRODUCTION_UNIT")).toBe(true);
       assertDeliveryOwners(phase1Before!, phase1After!);
       assertPhase1CashOwners(phase1Before!, phase1After!);
+      assertPhase1PassiveGoods(phase1Before!, phase1After!);
       // A matching end-of-tick fingerprint cannot prove that the shuffled
       // replay preserved Phase-1 ownership or did not briefly repay the cargo.
       expect(replayPhase1Before, `tick ${tick}: replay Phase-1 opening`).toBeDefined();
       expect(replayPhase1After, `tick ${tick}: replay Phase-1 closing`).toBeDefined();
       assertDeliveryOwners(replayPhase1Before!, replayPhase1After!);
       assertPhase1CashOwners(replayPhase1Before!, replayPhase1After!);
+      assertPhase1PassiveGoods(replayPhase1Before!, replayPhase1After!);
+      if (due.length > 0 && !negativePhase1PassiveGoodsChecked) {
+        // Seed identical passive stocks at both Phase-1 boundaries, then
+        // move 0.25 iron between two State warehouses or two Cohorts.
+        // The forged arrivals conserve all goods, cash and actual paid
+        // ProductionUnit INPUT receipts, but violate individual ownership.
+        const stateIds = [...replayPhase1After!.states.keys()].slice(0, 2);
+        const cohortIds = [...replayPhase1After!.cohorts.keys()].slice(0, 2);
+        expect(stateIds).toHaveLength(2);
+        expect(cohortIds).toHaveLength(2);
+        const withPassiveIron = (
+          world: WorldState, stateFirst: number, stateSecond: number,
+          cohortFirst: number, cohortSecond: number,
+        ): WorldState => {
+          const states = new Map(world.states);
+          for (const [id, iron] of [
+            [stateIds[0]!, stateFirst], [stateIds[1]!, stateSecond],
+          ] as const) {
+            const state = states.get(id)!;
+            states.set(id, {
+              ...state, publicInventory: new Map(state.publicInventory).set(IRON, iron),
+            });
+          }
+          const cohorts = new Map(world.cohorts);
+          for (const [id, iron] of [
+            [cohortIds[0]!, cohortFirst], [cohortIds[1]!, cohortSecond],
+          ] as const) {
+            const cohort = cohorts.get(id)!;
+            cohorts.set(id, {
+              ...cohort,
+              householdInventory: new Map(cohort.householdInventory).set(IRON, iron),
+            });
+          }
+          return { ...world, states, cohorts };
+        };
+        const seededBefore = withPassiveIron(replayPhase1Before!, 1, 1, 1, 1);
+        const seededAfter = withPassiveIron(replayPhase1After!, 1, 1, 1, 1);
+        const stolenByState = withPassiveIron(replayPhase1After!, 0.75, 1.25, 1, 1);
+        const stolenByCohort = withPassiveIron(replayPhase1After!, 1, 1, 0.75, 1.25);
+        expect(() => assertPhase1PassiveGoods(seededBefore, seededAfter)).not.toThrow();
+        for (const counterfeit of [stolenByState, stolenByCohort]) {
+          expect(totalIron(counterfeit)).toBeCloseTo(totalIron(seededAfter), 8);
+          expect(phase1CashOwners(counterfeit)).toEqual(phase1CashOwners(seededAfter));
+          expect(() => assertDeliveryOwners(seededBefore, counterfeit)).not.toThrow();
+          expect(() => assertPhase1PassiveGoods(seededBefore, counterfeit)).toThrow();
+        }
+        negativePhase1PassiveGoodsChecked = true;
+      }
       const sortedStocks = (inventory: ReadonlyMap<GoodId, number>) =>
         [...inventory].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
       for (const [unitId, unit] of phase1After!.productionUnits) {
@@ -4565,6 +4642,7 @@ describe("M5 #676: 600-tick multi-route FX close acceptance", () => {
     expect(negativeDeliveryBucketChecked).toBe(true);
     expect(negativeDeliveryCashChecked).toBe(true);
     expect(negativeDeliveryOtherGoodChecked).toBe(true);
+    expect(negativePhase1PassiveGoodsChecked).toBe(true);
     expect(negativeFxBundleChecked).toBe(true);
     expect(negativeChargeBundleChecked).toBe(true);
     expect(negativeTransitIdentityChecked).toBe(true);
