@@ -10,6 +10,7 @@ import { createFxSettlementId, type EconomicTransaction } from "./tickOrchestrat
 import type { FxLedgerLeg } from "./fxSettlement";
 import { createM5PreviewScenario, M5_PREVIEW_TICK } from "../diagnostics/m5PreviewScenario";
 import type { GoodId } from "../domain/id";
+import { createMarketIntentId } from "./marketIntent";
 import { executeM5AutonomousRegionalTradeTick } from "./m5AutonomousRegionalTradeTick";
 import { quoteFxForPool } from "./fxQuoteReservation";
 import type { PhaseHandler } from "./tickOrchestrator";
@@ -592,5 +593,113 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
       tx.phase === 7 && tx.type === "FX_OUTPUT" && (tx.moneyAmount ?? 0) > 0))
       .toBe(true);
   });
+
+  it.each(["open", "closed border", "zero capacity", "zero FX"] as const)(
+    "settles a paid domestic MAIN purchase after Phase 7 with %s",
+    (restriction) => {
+      const f = createM5PreviewScenario();
+      const link = [...f.opening.transportLinks.values()][0]!;
+      const source = f.opening.regions.get(link.fromRegionId)!;
+      const cohort = [...f.opening.cohorts.values()].find(
+        item => item.seed.regionKey === source.seed.key,
+      )!;
+      expect(cohort).toBeDefined();
+      const funded = {
+        ...cohort,
+        wallet: new Map(cohort.wallet).set(source.settlementCurrencyId, 100_000),
+      };
+      const opening: WorldState = {
+        ...f.opening,
+        cohorts: new Map(f.opening.cohorts).set(funded.cohortId, funded),
+      };
+      const household: PhaseHandler = (world, context, pending) => {
+        const next = upstream(world, context, pending);
+        return context.phase !== 2 ? next : {
+          ...next,
+          householdMarketIntents: [{
+            id: createMarketIntentId("mi:m5-restricted-main-iron"),
+            actor: { type: "COHORT" as const, cohortId: funded.cohortId },
+            regionId: source.regionId,
+            goodId: IRON,
+            side: "BUY" as const,
+            purpose: "CONSUMPTION" as const,
+            desiredQuantity: 1,
+            maxSpend: 10_000,
+            inventoryBucket: "GENERAL" as const,
+            sourcePlanId: "plan:m5-restricted-main",
+          }],
+        };
+      };
+      const options = restriction === "closed border"
+        ? { ...f.options, phase1TradeLawProvider: () => 0 }
+        : restriction === "zero capacity"
+          ? { ...f.options, infrastructureFactors: new Map([[link.linkId, 0]]) }
+          : f.options;
+      let beforeMain: WorldState | undefined;
+      let afterMain: WorldState | undefined;
+      const result = executeM5AutonomousRegionalTradeTick(
+        restriction === "zero FX" ? freezeAvailableFx(opening) : opening,
+        M5_PREVIEW_TICK, household, unchanged, options,
+        (phase, before, after) => {
+          if (phase === 8) { beforeMain = before; afterMain = after; }
+        },
+      );
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      const crossBorder = result.context.transactions.filter(tx =>
+        tx.phase === 7 && ["TRADE_GOODS_SALE", "SHIPMENT_DISPATCH",
+          "FX_INPUT", "FX_OUTPUT"].includes(tx.type));
+      if (restriction === "open") {
+        expect(crossBorder.some(tx => tx.type === "FX_OUTPUT" &&
+          (tx.moneyAmount ?? 0) > 0)).toBe(true);
+        expect(crossBorder.some(tx => tx.type === "SHIPMENT_DISPATCH")).toBe(true);
+      } else {
+        expect(crossBorder).toHaveLength(0);
+      }
+      expect(beforeMain).toBeDefined();
+      expect(afterMain).toBeDefined();
+      const assertMain = (journal: readonly EconomicTransaction[], after: WorldState) => {
+        const payments = journal.filter(tx => tx.phase === 8 &&
+          tx.source?.type === "COHORT" && tx.source.cohortId === funded.cohortId);
+        const sales = payments.filter(tx => tx.type === "MARKET_SALE");
+        expect(sales.length).toBeGreaterThan(0);
+        for (const sale of sales) {
+          expect(sale.goodId).toBe(IRON);
+          expect(sale.sourceRegionId).toBe(source.regionId);
+          expect(sale.destinationRegionId).toBe(source.regionId);
+          expect(sale.currencyId).toBe(source.settlementCurrencyId);
+          expect(sale.quantity).toBeGreaterThan(0);
+          expect(sale.moneyAmount).toBeGreaterThan(0);
+        }
+        const quantity = sales.reduce((sum, tx) => sum + tx.quantity!, 0);
+        expect(quantity).toBeLessThanOrEqual(1 + 1e-8);
+        const debit = payments.filter(tx =>
+          tx.type === "MARKET_SALE" || tx.type === "CONSUMPTION_TAX")
+          .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+        const prior = beforeMain!.cohorts.get(funded.cohortId)!;
+        const next = after.cohorts.get(funded.cohortId)!;
+        expect((next.householdInventory.get(IRON) ?? 0) -
+          (prior.householdInventory.get(IRON) ?? 0)).toBeCloseTo(quantity, 8);
+        expect((prior.wallet.get(source.settlementCurrencyId) ?? 0) -
+          (next.wallet.get(source.settlementCurrencyId) ?? 0)).toBeCloseTo(debit, 8);
+        expect(allIron(after)).toBeCloseTo(allIron(beforeMain!), 8);
+      };
+      // Compare actual Phase-8 stock transitions, not Phase-4 receipts or
+      // equality between runs whose Phase-7 residuals may legitimately differ.
+      assertMain(result.context.transactions, afterMain!);
+      expect(() => assertMain(result.context.transactions.filter(tx =>
+        !(tx.phase === 8 && tx.type === "MARKET_SALE")), afterMain!)).toThrow();
+      const original = afterMain!.cohorts.get(funded.cohortId)!;
+      const forged: WorldState = {
+        ...afterMain!,
+        cohorts: new Map(afterMain!.cohorts).set(funded.cohortId, {
+          ...original,
+          householdInventory: beforeMain!.cohorts.get(funded.cohortId)!.householdInventory,
+        }),
+      };
+      expect(() => assertMain(result.context.transactions, forged)).toThrow();
+    },
+  );
 
 });
