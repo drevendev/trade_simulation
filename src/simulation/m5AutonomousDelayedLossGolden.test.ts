@@ -390,4 +390,58 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
       "GOODS_TRANSPORT_LOSS", "IMPORT_TARIFF",
     ].includes(tx.type))).toHaveLength(0);
   }, 30_000);
+  it("blocks new FX-dependent shipments without corrupting the canonical local tick", () => {
+    const scenario = createM5PreviewScenario();
+    const execute = (world: WorldState,
+      observe?: (phase: number, before: WorldState, after: WorldState) => void,
+    ) => executeM5AutonomousRegionalTradeTick(
+      world, M5_PREVIEW_TICK, upstream, unchanged, scenario.options, observe,
+    );
+
+    // Positive control: identical market/route/stock inputs with actual FX
+    // liquidity do dispatch and pay for a real cross-currency shipment.
+    const funded = execute(scenario.opening);
+    expect(funded.phaseBoundaryError).toBeUndefined();
+    expect(funded.reconciliationErrors).toBeNull();
+    expect(funded.world.shipments?.size ?? 0).toBeGreaterThan(0);
+    expect(funded.context.transactions.some(tx =>
+      tx.phase === 7 && tx.type === "FX_OUTPUT")).toBe(true);
+
+    // The ONLY changed input is each FX pool's usable payout headroom.
+    // Preserve actual pool cash, physical inventory and local-market state.
+    const exhausted = freezeAvailableFx(scenario.opening);
+    let beforeTrade: WorldState | undefined;
+    let afterTrade: WorldState | undefined;
+    const blocked = execute(exhausted, (phase, before, after) => {
+      if (phase === 7) { beforeTrade = before; afterTrade = after; }
+    });
+    expect(blocked.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(blocked.phaseBoundaryError).toBeUndefined();
+    expect(blocked.reconciliationErrors).toBeNull();
+    expect(beforeTrade).toBeDefined();
+    expect(afterTrade).toBeDefined();
+    expect(blocked.world.shipments?.size ?? 0).toBe(0);
+    expect(blocked.context.transactions.filter(tx => tx.phase === 7 && [
+      "FX_INPUT", "FX_OUTPUT", "TRADE_GOODS_SALE",
+      "SHIPMENT_DISPATCH", "GOODS_TRANSPORT_LOSS",
+    ].includes(tx.type))).toHaveLength(0);
+    expect(allIron(afterTrade!)).toBeCloseTo(allIron(beforeTrade!), 8);
+
+    // Failed route settlement must not debit a different owner or quietly
+    // relabel its stock. Local markets still pass the complete 16-phase tick.
+    expect(afterTrade!.productionUnits.size).toBe(beforeTrade!.productionUnits.size);
+    for (const [id, original] of beforeTrade!.productionUnits) {
+      const next = afterTrade!.productionUnits.get(id);
+      expect(next, "FX-exhausted Phase-7 producer " + id).toBeDefined();
+      expect(next!.inputInventory).toEqual(original.inputInventory);
+      expect(next!.outputInventory).toEqual(original.outputInventory);
+      expect(next!.investmentInventory).toEqual(original.investmentInventory);
+      expect(next!.wallet).toEqual(original.wallet);
+    }
+    expect(blocked.world.markets.size).toBe(exhausted.markets.size);
+    for (const id of exhausted.markets.keys()) {
+      expect(blocked.world.markets.has(id)).toBe(true);
+    }
+  });
+
 });
