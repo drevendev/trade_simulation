@@ -189,13 +189,77 @@ function totalCash(world: WorldState, currency: string): number {
 }
 
 function totalIron(world: WorldState): number {
+  // Physical mass includes passive owners. Excluding either silently lets
+  // a State or Cohort mint/burn stock while producer+cargo totals still match.
   return [...world.productionUnits.values()].reduce((sum, unit) =>
     sum + (unit.inputInventory.get(IRON) ?? 0) +
       (unit.outputInventory.get(IRON) ?? 0) +
       (unit.investmentInventory.get(IRON) ?? 0), 0,
+  ) + [...world.states.values()].reduce((sum, state) =>
+    sum + (state.publicInventory.get(IRON) ?? 0), 0,
+  ) + [...world.cohorts.values()].reduce((sum, cohort) =>
+    sum + (cohort.householdInventory.get(IRON) ?? 0), 0,
   ) + [...(world.shipments?.values() ?? [])].reduce((sum, shipment) =>
     sum + (shipment.goodId === IRON ? shipment.quantity : 0), 0);
 }
+// This test is sensitive to both passive ownership surfaces independently.
+// The 600-tick State/Cohort owner witnesses below additionally prove that a
+// balanced theft is not excused just because the full mass remains constant.
+describe("M5 #676: complete physical iron conservation witness", () => {
+  it("counts public and household inventories even when producers and cargo are unchanged", () => {
+    const opening = fixture().world;
+    const [stateId, state] = [...opening.states][0]!;
+    const [cohortId, cohort] = [...opening.cohorts][0]!;
+    const stateStock = state.publicInventory.get(IRON) ?? 0;
+    const householdStock = cohort.householdInventory.get(IRON) ?? 0;
+    const baseline = totalIron(opening);
+    const publicMint: WorldState = {
+      ...opening,
+      states: new Map(opening.states).set(stateId, {
+        ...state,
+        publicInventory: new Map(state.publicInventory).set(IRON, stateStock + 1),
+      }),
+    };
+    const householdMint: WorldState = {
+      ...opening,
+      cohorts: new Map(opening.cohorts).set(cohortId, {
+        ...cohort,
+        householdInventory: new Map(cohort.householdInventory).set(IRON, householdStock + 2),
+      }),
+    };
+    expect(totalIron(publicMint) - baseline).toBeCloseTo(1, 8);
+    expect(totalIron(householdMint) - baseline).toBeCloseTo(2, 8);
+
+    const seeded: WorldState = {
+      ...publicMint, cohorts: householdMint.cohorts,
+    };
+    expect(totalIron(seeded) - baseline).toBeCloseTo(3, 8);
+    const seededState = seeded.states.get(stateId)!;
+    const seededCohort = seeded.cohorts.get(cohortId)!;
+    const shifted: WorldState = {
+      ...seeded,
+      states: new Map(seeded.states).set(stateId, {
+        ...seededState,
+        publicInventory: new Map(seededState.publicInventory)
+          .set(IRON, stateStock + 0.75),
+      }),
+      cohorts: new Map(seeded.cohorts).set(cohortId, {
+        ...seededCohort,
+        householdInventory: new Map(seededCohort.householdInventory)
+          .set(IRON, householdStock + 2.25),
+      }),
+    };
+    // A true transfer preserves full mass but changes both rightful owners.
+    expect(totalIron(shifted)).toBeCloseTo(totalIron(seeded), 8);
+    expect(shifted.states.get(stateId)!.publicInventory)
+      .not.toEqual(seededState.publicInventory);
+    expect(shifted.cohorts.get(cohortId)!.householdInventory)
+      .not.toEqual(seededCohort.householdInventory);
+    expect(seeded.productionUnits).toBe(opening.productionUnits);
+    expect(seeded.shipments).toBe(opening.shipments);
+  });
+});
+
 
 function reordered(world: WorldState): WorldState {
   // All keyed registries are semantically unordered, including nested stock
