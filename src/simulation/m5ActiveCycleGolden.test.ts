@@ -69,6 +69,40 @@ function reconcile<K>(expected: ReadonlyMap<K, number>, actual: ReadonlyMap<K, n
   }
 }
 
+/** Reverse both registries and nested economic stores without changing values. */
+function reversedRegistries(world: WorldState): WorldState {
+  const rev = <K, V>(map: ReadonlyMap<K, V>): Map<K, V> => new Map([...map].reverse());
+  return {
+    ...world,
+    regions: new Map([...world.regions].reverse().map(([id, region]) =>
+      [id, { ...region, resourceDeposits: rev(region.resourceDeposits) }] as const)),
+    states: new Map([...world.states].reverse().map(([id, state]) =>
+      [id, { ...state, treasury: rev(state.treasury),
+        publicInventory: rev(state.publicInventory) }] as const)),
+    currencies: rev(world.currencies),
+    monetaryAuthorities: new Map([...world.monetaryAuthorities].reverse().map(([id, authority]) =>
+      [id, { ...authority, fxPools: new Map([...authority.fxPools].reverse().map(([poolId, pool]) =>
+        [poolId, { ...pool, cash: rev(pool.cash) }] as const)) }] as const)),
+    clans: new Map([...world.clans].reverse().map(([id, clan]) =>
+      [id, { ...clan, treasury: rev(clan.treasury) }] as const)),
+    cohorts: new Map([...world.cohorts].reverse().map(([id, cohort]) =>
+      [id, { ...cohort, wallet: rev(cohort.wallet),
+        householdInventory: rev(cohort.householdInventory) }] as const)),
+    productionUnits: new Map([...world.productionUnits].reverse().map(([id, unit]) =>
+      [id, { ...unit, wallet: rev(unit.wallet),
+        inputInventory: rev(unit.inputInventory),
+        outputInventory: rev(unit.outputInventory),
+        investmentInventory: rev(unit.investmentInventory) }] as const)),
+    markets: new Map([...world.markets].reverse().map(([id, market]) =>
+      [id, { ...market, priceByGood: rev(market.priceByGood),
+        expectationsByGood: rev(market.expectationsByGood) }] as const)),
+    transportLinks: rev(world.transportLinks),
+    ...(world.shipments ? { shipments: rev(world.shipments) } : {}),
+    ...(world.outgoingTransportLinkIdsByRegion
+      ? { outgoingTransportLinkIdsByRegion: rev(world.outgoingTransportLinkIdsByRegion) } : {}),
+  };
+}
+
 function activeFixture() {
   const { opening: base, options } = createM5PreviewScenario();
   const recipe = base.definitionRegistry.recipes["recipe:tools-craft"]!;
@@ -120,10 +154,24 @@ function activeFixture() {
 }
 
 describe("M5 #676 active-cycle physical golden", () => {
-  it("reconciles actual production, consumption and regional trade over a replayed 12-tick window", () => {
+  it("reconciles actual production, consumption and regional trade over a replayed and registry-reordered 12-tick window", () => {
     const { opening, tick } = activeFixture();
     let world = opening;
     let replay = opening;
+    let reordered = reversedRegistries(opening);
+    expect(opening.cohorts.size).toBeGreaterThan(1);
+    expect([...reordered.cohorts.keys()]).toEqual([...opening.cohorts.keys()].reverse());
+    expect([...reordered.cohorts.keys()]).not.toEqual([...opening.cohorts.keys()]);
+    const market = [...opening.markets.values()].find(item => item.priceByGood.size > 1)!;
+    expect(market).toBeDefined();
+    expect([...reordered.markets.get(market.marketId)!.priceByGood.keys()])
+      .toEqual([...market.priceByGood.keys()].reverse());
+    const issuer = [...opening.monetaryAuthorities.entries()].find(([, authority]) =>
+      [...authority.fxPools.values()].some(pool => pool.cash.size > 1))!;
+    expect(issuer).toBeDefined();
+    const [poolId, pool] = [...issuer[1].fxPools.entries()].find(([, p]) => p.cash.size > 1)!;
+    expect([...reordered.monetaryAuthorities.get(issuer[0])!.fxPools.get(poolId)!.cash.keys()])
+      .toEqual([...pool.cash.keys()].reverse());
     const expectedCash = cash(opening);
     const expectedGoods = goods(opening);
     let productiveTicks = 0;
@@ -137,13 +185,18 @@ describe("M5 #676 active-cycle physical golden", () => {
       const number = M5_PREVIEW_TICK + offset;
       const a = tick(world, number);
       const b = tick(replay, number);
-      for (const result of [a, b]) {
+      // Reorder the carried state too, including shipments created after genesis.
+      const c = tick(reordered, number);
+      for (const result of [a, b, c]) {
         expect(result.phaseTrace).toEqual([...Array(16).keys()]);
         expect(result.phaseBoundaryError).toBeUndefined();
         expect(result.reconciliationErrors).toBeNull();
       }
       expect(b.context.transactions).toEqual(a.context.transactions);
       expect(b.world).toEqual(a.world);
+      expect(c.context.transactions, "reordered journal at tick " + number)
+        .toEqual(a.context.transactions);
+      expect(c.world, "reordered world at tick " + number).toEqual(a.world);
 
       // Use realized physical flows, not stock differences or the engine's
       // own reconciliation result, to carry the expected per-good balance.
@@ -175,6 +228,8 @@ describe("M5 #676 active-cycle physical golden", () => {
       reconcile(expectedGoods, goods(b.world), "replay physical tick " + number);
       reconcile(expectedCash, cash(a.world), "currency tick " + number);
       reconcile(expectedCash, cash(b.world), "replay currency tick " + number);
+      reconcile(expectedGoods, goods(c.world), "reordered physical tick " + number);
+      reconcile(expectedCash, cash(c.world), "reordered currency tick " + number);
 
       const output = production.find(item => item.outputProducedQuantity > 0);
       if (output) {
@@ -207,6 +262,7 @@ describe("M5 #676 active-cycle physical golden", () => {
       }
       world = a.world;
       replay = b.world;
+      reordered = reversedRegistries(c.world);
     }
     // A dormant fixture cannot pass simply by replaying a static balance.
     expect(productiveTicks).toBeGreaterThanOrEqual(3);
