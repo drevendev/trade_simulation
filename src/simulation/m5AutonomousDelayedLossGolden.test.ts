@@ -608,6 +608,107 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
   });
 
 
+
+  it("reduces real paid import quantity when tariff makes the same household budget binding", () => {
+    const f = createM5PreviewScenario();
+    const link = [...f.opening.transportLinks.values()][0]!;
+    const destination = f.opening.regions.get(link.toRegionId)!;
+    const currency = destination.settlementCurrencyId;
+    const cohort = [...f.opening.cohorts.values()].find(
+      item => item.seed.regionKey === destination.seed.key,
+    )!;
+    expect(cohort).toBeDefined();
+    // Remove competing destination production demand; retain the real source
+    // procurement and closing sellers. Both tariff runs share the same world.
+    const units = new Map(f.opening.productionUnits);
+    const producer = [...units.values()].find(unit =>
+      unit.seed.regionKey === destination.seed.key && unit.status === "ACTIVE")!;
+    expect(producer).toBeDefined();
+    units.set(producer.productionUnitId, { ...producer, status: "CLOSING", installedCapital: 0 });
+    const actor = { type: "COHORT" as const, cohortId: cohort.cohortId };
+    const run = (rate: number, budget: number) => {
+      const opening: WorldState = {
+        ...f.opening, productionUnits: units,
+        cohorts: new Map(f.opening.cohorts).set(cohort.cohortId, {
+          ...cohort, wallet: new Map([[currency, budget]]),
+        }),
+      };
+      const household: PhaseHandler = (world, context, pending) => {
+        const next = upstream(world, context, pending);
+        return context.phase !== 2 ? next : {
+          ...next, householdMarketIntents: [{
+            id: createMarketIntentId("mi:m5-tariff-budget"),
+            actor, regionId: destination.regionId, goodId: IRON,
+            side: "BUY" as const, purpose: "CONSUMPTION" as const,
+            desiredQuantity: 300, maxSpend: budget,
+            inventoryBucket: "GENERAL" as const, sourcePlanId: "plan:m5-tariff-budget",
+          }],
+        };
+      };
+      let before: WorldState | undefined;
+      let after: WorldState | undefined;
+      const result = executeM5AutonomousRegionalTradeTick(
+        opening, M5_PREVIEW_TICK, household, unchanged, {
+          ...f.options, phase1TariffLawProvider: query => query.goodId === IRON ? rate : 0,
+        }, (phase, previous, next) => {
+          if (phase === 7) { before = previous; after = next; }
+        },
+      );
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      const cargos = [...(result.world.shipments?.values() ?? [])];
+      expect(cargos).toHaveLength(1);
+      const cargo = cargos[0]!;
+      expect(cargo.buyer).toEqual(actor);
+      expect(cargo.beneficialOwner).toEqual(actor);
+      expect(cargo.fxSettlementId).toBeDefined();
+      expect(cargo.quantity).toBeGreaterThan(0);
+      const sales = result.context.transactions.filter(tx =>
+        tx.phase === 7 && tx.type === "TRADE_GOODS_SALE");
+      expect(sales).toHaveLength(1);
+      expect(sales[0]!.quantity).toBeCloseTo(cargo.quantity, 8);
+      const debit = result.context.transactions.filter(tx => tx.phase === 7 &&
+        tx.source?.type === "COHORT" && tx.source.cohortId === cohort.cohortId &&
+        ["FX_INPUT", "TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"].includes(tx.type))
+        .reduce((sum, tx) => sum + tx.moneyAmount!, 0);
+      expect(debit).toBeGreaterThan(0);
+      expect(debit).toBeCloseTo(cargo.buyerGoodsPaymentAmount + cargo.transportFeeAmount +
+        cargo.tariffAmount + cargo.consumptionTaxAmount, 8);
+      const prior = before!.cohorts.get(cohort.cohortId)!.wallet.get(currency)!;
+      const next = after!.cohorts.get(cohort.cohortId)!.wallet.get(currency) ?? 0;
+      expect(prior).toBe(budget);
+      expect(prior - next).toBeCloseTo(debit, 8);
+      expect(next).toBeGreaterThanOrEqual(0);
+      expect(debit).toBeLessThanOrEqual(budget + 1e-8);
+      assertActualSellerDeparture(before!, after!, cargo, cargo.quantity);
+      expect(allIron(after!)).toBeCloseTo(allIron(before!), 8);
+      return { cargo, debit, journal: result.context.transactions };
+    };
+    // Calibrate a single common budget between the two unconstrained costs.
+    // The positive controls must fill the same physical quantity first.
+    const free = run(0, 100_000);
+    const taxed = run(0.5, 100_000);
+    expect(taxed.cargo.quantity).toBeCloseTo(free.cargo.quantity, 8);
+    expect(free.cargo.tariffAmount).toBe(0);
+    expect(taxed.cargo.tariffAmount).toBeGreaterThan(0);
+    expect(taxed.debit).toBeGreaterThan(free.debit);
+    const budget = (free.debit + taxed.debit) / 2;
+    const low = run(0, budget);
+    const high = run(0.5, budget);
+    expect(low.cargo.quantity).toBeCloseTo(free.cargo.quantity, 8);
+    expect(high.cargo.quantity).toBeLessThan(low.cargo.quantity);
+    expect(high.cargo.tariffAmount).toBeGreaterThan(0);
+    assertPaidLocalProcurement(low.journal, high.journal);
+    // Negative control: retaining the duty-free physical volume at the
+    // observed taxed all-in unit price would breach the identical budget.
+    const taxedUnitCost = high.debit / high.cargo.quantity;
+    const assertAffordable = (quantity: number) =>
+      expect(quantity * taxedUnitCost).toBeLessThanOrEqual(budget + 1e-8);
+    assertAffordable(high.cargo.quantity);
+    expect(() => assertAffordable(low.cargo.quantity)).toThrow();
+  });
+
   it.each([1, 2])("bounds gross cargo weight before loss (weight per unit %i)", (weight) => {
     const f = createM5PreviewScenario();
     // Define a separate, validated test-only definition pack before execution.
