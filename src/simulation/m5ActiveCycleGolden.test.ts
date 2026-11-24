@@ -9,7 +9,7 @@ import { createM5PreviewScenario, M5_PREVIEW_TICK } from "../diagnostics/m5Previ
 import type { NeedCategoryDefinition } from "../config/definitionPack";
 import type { CurrencyId, GoodId } from "../domain/id";
 import { executeM5AutonomousRegionalTradeTick } from "./m5AutonomousRegionalTradeTick";
-import type { EconomicTransaction, PhaseHandler } from "./tickOrchestrator";
+import type { EconomicTransaction, PhaseHandler, TickContext } from "./tickOrchestrator";
 import type { PhaseWorldTransitionObserver } from "./statefulTickOrchestrator";
 import type { TradeShipmentState } from "./tradeShipmentState";
 import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
@@ -130,6 +130,7 @@ function cashByOwner(world: WorldState): Map<string, number> {
 function reconcilePaidBundles(
   before: WorldState, after: WorldState, cargos: readonly TradeShipmentState[],
   journal: readonly EconomicTransaction[], lossRate: number,
+  jurisdiction: TickContext["effectiveJurisdictionByRegion"],
 ): void {
   const phase7 = journal.filter(tx => tx.phase === 7);
   const expected = cashByOwner(before);
@@ -220,7 +221,20 @@ function reconcilePaidBundles(
         expect(fee.source).toEqual(cargo.buyer);
         expect(fee.currencyId).toBe(cargo.buyerPaymentCurrencyId);
         expect(fee.moneyAmount).toBeCloseTo(amount, 8);
-        move(actor(cargo.buyer), actor(fee.destination), cargo.buyerPaymentCurrencyId, amount);
+        // Entitlement comes from the directed link or the activated jurisdiction,
+        // never from the receipt whose correctness is being tested.
+        const link = before.transportLinks.get(cargo.transportLinkId);
+        expect(link).toBeDefined();
+        const destination = before.regions.get(cargo.destinationRegionId);
+        expect(destination).toBeDefined();
+        const controller = jurisdiction?.get(cargo.destinationRegionId);
+        expect(controller).toBe(destination!.controllerStateId);
+        const recipient: ActorRef | null | undefined = kind === "TRANSPORT_FEE"
+          ? link!.feeReceiver
+          : controller == null ? null : { type: "STATE", stateId: controller };
+        expect(recipient, kind + " policy recipient").toBeTruthy();
+        expect(fee.destination, kind + " policy recipient").toEqual(recipient);
+        move(actor(cargo.buyer), actor(recipient!), cargo.buyerPaymentCurrencyId, amount);
       }
     }
   }
@@ -258,7 +272,14 @@ function activeFixture(lossRate: number) {
   const opening: WorldState = {
     ...base,
     transportLinks: new Map([...base.transportLinks].map(([id, link]) => [
-      id, { ...link, seed: { ...link.seed, routinePhysicalLossRate: lossRate } },
+      id, {
+        ...link,
+        seed: { ...link.seed, routinePhysicalLossRate: lossRate },
+        // Use a distinct configured transport owner so a destination-treasury
+        // fallback cannot accidentally pass the transport entitlement check.
+        feeReceiver: { type: "STATE" as const,
+          stateId: base.regions.get(link.fromRegionId)!.controllerStateId! },
+      },
     ] as const)),
     productionUnits: new Map([...base.productionUnits].map(([id, unit]) => [
       id, unit.status === "ACTIVE" ? {
@@ -318,6 +339,8 @@ describe("M5 #676 active-cycle physical golden", () => {
     let omittedLossRejected = false;
     let wrongPayeeRejected = false;
     let paidBundleTicks = 0;
+    const chargeKinds = ["TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"] as const;
+    const misroutingRejected = new Set<string>();
 
     for (let offset = 0; offset < WINDOW; offset += 1) {
       const number = M5_PREVIEW_TICK + offset;
@@ -325,7 +348,40 @@ describe("M5 #676 active-cycle physical golden", () => {
         if (phase !== 7) return;
         const cargos = context.phase7DispatchedShipments;
         expect(Array.isArray(cargos)).toBe(true);
-        reconcilePaidBundles(before, after, cargos!, context.transactions, lossRate);
+        const jurisdiction = context.effectiveJurisdictionByRegion;
+        reconcilePaidBundles(before, after, cargos!, context.transactions, lossRate, jurisdiction);
+        // Corrupt both the journal and the closing wallets consistently. A
+        // receipt-driven owner-balance oracle alone would accept this transfer.
+        for (const kind of chargeKinds) {
+          if (misroutingRejected.has(kind)) continue;
+          const fee = context.transactions.find(tx => tx.phase === 7 && tx.type === kind);
+          if (!fee) continue;
+          expect(fee.destination?.type).toBe("STATE");
+          if (fee.destination?.type !== "STATE") throw new Error("expected State charge");
+          const actualId = fee.destination.stateId;
+          const otherId = [...before.regions.values()].map(region => region.controllerStateId)
+            .find(id => id !== null && id !== actualId);
+          expect(otherId).toBeDefined();
+          if (otherId == null) throw new Error("missing alternate State");
+          const currency = fee.currencyId!;
+          const amount = fee.moneyAmount!;
+          expect(amount).toBeGreaterThan(0);
+          const states = new Map(after.states);
+          for (const [id, delta] of [[actualId, -amount], [otherId, amount]] as const) {
+            const state = states.get(id)!;
+            const treasury = new Map(state.treasury);
+            treasury.set(currency, (treasury.get(currency) ?? 0) + delta);
+            states.set(id, { ...state, treasury });
+          }
+          const forgedWorld = { ...after, states };
+          const forgedJournal = context.transactions.map(tx => tx === fee
+            ? { ...tx, destination: { type: "STATE" as const, stateId: otherId } } : tx);
+          reconcile(cash(after), cash(forgedWorld), "misrouting preserves currency totals");
+          expect(() => reconcilePaidBundles(
+            before, forgedWorld, cargos!, forgedJournal, lossRate, jurisdiction,
+          )).toThrow(kind + " policy recipient");
+          misroutingRejected.add(kind);
+        }
         if (cargos!.length > 0) {
           paidBundleTicks++;
           if (!wrongPayeeRejected) {
@@ -334,7 +390,7 @@ describe("M5 #676 active-cycle physical golden", () => {
               tx.type === "FX_OUTPUT" && tx.fxSettlementId === cargo.fxSettlementId
                 ? { ...tx, destination: cargo.buyer } : tx);
             // Same amount, same currency and same bundle, but the wrong recipient.
-            expect(() => reconcilePaidBundles(before, after, cargos!, forged, lossRate)).toThrow();
+            expect(() => reconcilePaidBundles(before, after, cargos!, forged, lossRate, jurisdiction)).toThrow();
             wrongPayeeRejected = true;
           }
         }
@@ -454,6 +510,7 @@ describe("M5 #676 active-cycle physical golden", () => {
     expect(dispatchTicks).toBeGreaterThanOrEqual(2);
     expect(paidBundleTicks).toBe(dispatchTicks);
     expect(wrongPayeeRejected).toBe(true);
+    expect([...misroutingRejected].sort()).toEqual([...chargeKinds].sort());
     expect(deliveryTicks).toBeGreaterThan(0);
     expect(omittedOutputRejected).toBe(true);
     expect(omittedConsumptionRejected).toBe(true);
