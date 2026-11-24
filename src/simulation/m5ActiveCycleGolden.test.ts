@@ -9,7 +9,10 @@ import { createM5PreviewScenario, M5_PREVIEW_TICK } from "../diagnostics/m5Previ
 import type { NeedCategoryDefinition } from "../config/definitionPack";
 import type { CurrencyId, GoodId } from "../domain/id";
 import { executeM5AutonomousRegionalTradeTick } from "./m5AutonomousRegionalTradeTick";
-import type { PhaseHandler } from "./tickOrchestrator";
+import type { EconomicTransaction, PhaseHandler } from "./tickOrchestrator";
+import type { PhaseWorldTransitionObserver } from "./statefulTickOrchestrator";
+import type { TradeShipmentState } from "./tradeShipmentState";
+import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import type { WorldState } from "./worldState";
 
 const IRON = "good:iron" as GoodId;
@@ -103,6 +106,134 @@ function reversedRegistries(world: WorldState): WorldState {
   };
 }
 
+/** Individual Phase-7 cash accounts, not just total currency stock. */
+function cashByOwner(world: WorldState): Map<string, number> {
+  const balances = new Map<string, number>();
+  const record = (owner: string, wallet: ReadonlyMap<CurrencyId, number>) => {
+    for (const [currency, amount] of wallet) {
+      add(balances, JSON.stringify([owner, currency]), amount);
+    }
+  };
+  for (const [id, unit] of world.productionUnits) record("PU:" + id, unit.wallet);
+  for (const [id, cohort] of world.cohorts) record("COHORT:" + id, cohort.wallet);
+  for (const [id, state] of world.states) record("STATE:" + id, state.treasury);
+  for (const [id, clan] of world.clans) record("CLAN:" + id, clan.treasury);
+  for (const [id, authority] of world.monetaryAuthorities) {
+    for (const [pair, pool] of authority.fxPools) record("POOL:" + id + ":" + pair, pool.cash);
+  }
+  return balances;
+}
+
+/** Match every paid cargo to its own receipts and independently post the
+ * monetary legs against actual Phase-7 opening/closing owner balances.
+ * The FX sale is a nonposting invoice; counting it again is incorrect. */
+function reconcilePaidBundles(
+  before: WorldState, after: WorldState, cargos: readonly TradeShipmentState[],
+  journal: readonly EconomicTransaction[], lossRate: number,
+): void {
+  const phase7 = journal.filter(tx => tx.phase === 7);
+  const expected = cashByOwner(before);
+  const move = (source: string, destination: string, currency: CurrencyId, amount: number) => {
+    expect(amount).toBeGreaterThan(0);
+    add(expected, JSON.stringify([source, currency]), -amount);
+    add(expected, JSON.stringify([destination, currency]), amount);
+  };
+  const used = new Set<string>();
+  const settlementIds = new Set<string>();
+  const actor = (value: ActorRef | undefined) => {
+    expect(value).toBeDefined();
+    return actorRefKey(value!);
+  };
+  const count = (kind: string) => phase7.filter(tx => tx.type === kind).length;
+  for (const kind of ["SHIPMENT_DISPATCH", "TRADE_GOODS_SALE", "FX_INPUT", "FX_OUTPUT"]) {
+    expect(count(kind), kind).toBe(cargos.length);
+  }
+  for (const cargo of cargos) {
+    const bundle = "tb:" + cargo.id.slice(3);
+    expect(used.has(bundle)).toBe(false);
+    used.add(bundle);
+    expect(cargo.fxSettlementId).toBeDefined();
+    expect(settlementIds.has(cargo.fxSettlementId!)).toBe(false);
+    settlementIds.add(cargo.fxSettlementId!);
+    const receipts = phase7.filter(tx => tx.bundleId === bundle);
+    const one = (kind: string) => {
+      const matches = receipts.filter(tx => tx.type === kind);
+      expect(matches, bundle + " " + kind).toHaveLength(1);
+      return matches[0]!;
+    };
+    const sale = one("TRADE_GOODS_SALE");
+    const dispatch = one("SHIPMENT_DISPATCH");
+    const input = one("FX_INPUT");
+    const output = one("FX_OUTPUT");
+    expect(cargo.beneficialOwner).toEqual(cargo.buyer);
+    expect(sale.source).toEqual(cargo.buyer);
+    expect(sale.destination).toEqual(cargo.seller);
+    expect(dispatch.source).toEqual(cargo.seller);
+    expect(dispatch.destination).toEqual(cargo.beneficialOwner);
+    for (const receipt of [sale, dispatch]) {
+      expect(receipt.goodId).toBe(cargo.goodId);
+      expect(receipt.sourceRegionId).toBe(cargo.originRegionId);
+      expect(receipt.destinationRegionId).toBe(cargo.destinationRegionId);
+    }
+    expect(sale.quantity).toBeGreaterThan(0);
+    expect(dispatch.quantity).toBe(cargo.quantity);
+    expect(cargo.quantity).toBeCloseTo(sale.quantity! * (1 - lossRate), 8);
+    if (lossRate > 0) {
+      const loss = one("GOODS_TRANSPORT_LOSS");
+      expect(loss.source).toEqual(cargo.beneficialOwner);
+      expect(loss.goodId).toBe(cargo.goodId);
+      expect(loss.quantity).toBeCloseTo(sale.quantity! * lossRate, 8);
+    } else {
+      expect(receipts.filter(tx => tx.type === "GOODS_TRANSPORT_LOSS")).toHaveLength(0);
+    }
+    for (const leg of [sale, input, output]) {
+      expect(leg.fxSettlementId).toBe(cargo.fxSettlementId);
+    }
+    expect(input.source).toEqual(cargo.buyer);
+    expect(output.destination).toEqual(cargo.seller);
+    expect(input.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+    expect(output.currencyId).toBe(cargo.invoiceCurrencyId);
+    expect(sale.currencyId).toBe(cargo.invoiceCurrencyId);
+    expect(input.moneyAmount).toBeCloseTo(cargo.buyerGoodsPaymentAmount, 8);
+    expect(output.moneyAmount).toBeCloseTo(sale.moneyAmount!, 8);
+    expect(sale.moneyAmount).toBeCloseTo(cargo.sellerNetUnitPrice * sale.quantity!, 8);
+
+    const pools = [...before.monetaryAuthorities].flatMap(([id, authority]) =>
+      [...authority.fxPools].filter(([, pool]) =>
+        (pool.baseCurrencyId === cargo.invoiceCurrencyId &&
+          pool.quoteCurrencyId === cargo.buyerPaymentCurrencyId) ||
+        (pool.quoteCurrencyId === cargo.invoiceCurrencyId &&
+          pool.baseCurrencyId === cargo.buyerPaymentCurrencyId),
+      ).map(([pair]) => "POOL:" + id + ":" + pair));
+    expect(pools).toHaveLength(1);
+    move(actor(cargo.buyer), pools[0]!, cargo.buyerPaymentCurrencyId, input.moneyAmount!);
+    move(pools[0]!, actor(cargo.seller), cargo.invoiceCurrencyId, output.moneyAmount!);
+    for (const [kind, amount] of [
+      ["TRANSPORT_FEE", cargo.transportFeeAmount],
+      ["IMPORT_TARIFF", cargo.tariffAmount],
+      ["CONSUMPTION_TAX", cargo.consumptionTaxAmount],
+    ] as const) {
+      if (amount === 0) {
+        expect(receipts.filter(tx => tx.type === kind)).toHaveLength(0);
+      } else {
+        const fee = one(kind);
+        expect(fee.source).toEqual(cargo.buyer);
+        expect(fee.currencyId).toBe(cargo.buyerPaymentCurrencyId);
+        expect(fee.moneyAmount).toBeCloseTo(amount, 8);
+        move(actor(cargo.buyer), actor(fee.destination), cargo.buyerPaymentCurrencyId, amount);
+      }
+    }
+  }
+  // No orphan monetary or physical-loss receipts may hide outside paid bundles.
+  for (const tx of phase7) {
+    if (tx.moneyAmount !== undefined || tx.type === "GOODS_TRANSPORT_LOSS") {
+      expect(used.has(tx.bundleId ?? ""), tx.type).toBe(true);
+    }
+  }
+  expect(count("GOODS_TRANSPORT_LOSS")).toBe(lossRate > 0 ? cargos.length : 0);
+  reconcile(expected, cashByOwner(after), "phase-7 owner cash");
+}
+
 function activeFixture(lossRate: number) {
   const { opening: base, options } = createM5PreviewScenario();
   const recipe = base.definitionRegistry.recipes["recipe:tools-craft"]!;
@@ -145,14 +276,14 @@ function activeFixture(lossRate: number) {
       COMFORT: need("COMFORT", "good:cloth" as GoodId, 1, 0),
     } },
   };
-  const tick = (world: WorldState, number: number) =>
+  const tick = (world: WorldState, number: number, observer?: PhaseWorldTransitionObserver) =>
     executeM5AutonomousRegionalTradeTick(world, number, phase1, (_phase, current) => current, {
       ...options,
       planHouseholdNeedsInPhase2: true,
       settleLaborAndProductionInPhase5: true,
       settleMainMarketInPhase8: true,
       realizeHouseholdConsumptionInPhase9: true,
-    });
+    }, observer);
   return { opening, tick };
 }
 
@@ -185,10 +316,29 @@ describe("M5 #676 active-cycle physical golden", () => {
     let omittedConsumptionRejected = false;
     let lossTicks = 0;
     let omittedLossRejected = false;
+    let wrongPayeeRejected = false;
+    let paidBundleTicks = 0;
 
     for (let offset = 0; offset < WINDOW; offset += 1) {
       const number = M5_PREVIEW_TICK + offset;
-      const a = tick(world, number);
+      const a = tick(world, number, (phase, before, after, context) => {
+        if (phase !== 7) return;
+        const cargos = context.phase7DispatchedShipments;
+        expect(Array.isArray(cargos)).toBe(true);
+        reconcilePaidBundles(before, after, cargos!, context.transactions, lossRate);
+        if (cargos!.length > 0) {
+          paidBundleTicks++;
+          if (!wrongPayeeRejected) {
+            const cargo = cargos![0]!;
+            const forged = context.transactions.map(tx =>
+              tx.type === "FX_OUTPUT" && tx.fxSettlementId === cargo.fxSettlementId
+                ? { ...tx, destination: cargo.buyer } : tx);
+            // Same amount, same currency and same bundle, but the wrong recipient.
+            expect(() => reconcilePaidBundles(before, after, cargos!, forged, lossRate)).toThrow();
+            wrongPayeeRejected = true;
+          }
+        }
+      });
       const b = tick(replay, number);
       // Reorder the carried state too, including shipments created after genesis.
       const c = tick(reordered, number);
@@ -302,6 +452,8 @@ describe("M5 #676 active-cycle physical golden", () => {
     expect(productiveTicks).toBeGreaterThanOrEqual(3);
     expect(consumptionTicks).toBeGreaterThanOrEqual(3);
     expect(dispatchTicks).toBeGreaterThanOrEqual(2);
+    expect(paidBundleTicks).toBe(dispatchTicks);
+    expect(wrongPayeeRejected).toBe(true);
     expect(deliveryTicks).toBeGreaterThan(0);
     expect(omittedOutputRejected).toBe(true);
     expect(omittedConsumptionRejected).toBe(true);
