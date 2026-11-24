@@ -103,7 +103,7 @@ function reversedRegistries(world: WorldState): WorldState {
   };
 }
 
-function activeFixture() {
+function activeFixture(lossRate: number) {
   const { opening: base, options } = createM5PreviewScenario();
   const recipe = base.definitionRegistry.recipes["recipe:tools-craft"]!;
   const workers = [...base.regions.values()].map(region => {
@@ -126,6 +126,9 @@ function activeFixture() {
     });
   const opening: WorldState = {
     ...base,
+    transportLinks: new Map([...base.transportLinks].map(([id, link]) => [
+      id, { ...link, seed: { ...link.seed, routinePhysicalLossRate: lossRate } },
+    ] as const)),
     productionUnits: new Map([...base.productionUnits].map(([id, unit]) => [
       id, unit.status === "ACTIVE" ? {
         ...unit, inputInventory: new Map(unit.inputInventory).set(WOOD, 1000),
@@ -154,8 +157,8 @@ function activeFixture() {
 }
 
 describe("M5 #676 active-cycle physical golden", () => {
-  it("reconciles actual production, consumption and regional trade over a replayed and registry-reordered 12-tick window", () => {
-    const { opening, tick } = activeFixture();
+  it.each([0, 0.25])("reconciles the active 12-tick replay with transport loss rate %s", (lossRate) => {
+    const { opening, tick } = activeFixture(lossRate);
     let world = opening;
     let replay = opening;
     let reordered = reversedRegistries(opening);
@@ -180,6 +183,8 @@ describe("M5 #676 active-cycle physical golden", () => {
     let deliveryTicks = 0;
     let omittedOutputRejected = false;
     let omittedConsumptionRejected = false;
+    let lossTicks = 0;
+    let omittedLossRejected = false;
 
     for (let offset = 0; offset < WINDOW; offset += 1) {
       const number = M5_PREVIEW_TICK + offset;
@@ -217,13 +222,42 @@ describe("M5 #676 active-cycle physical golden", () => {
           }
         }
       }
-      for (const tx of a.context.transactions) {
-        if (tx.type !== "GOODS_TRANSPORT_LOSS") continue;
-        expect(tx.goodId).toBeDefined();
-        expect(tx.quantity).toBeGreaterThanOrEqual(0);
+      // This fixture has one directed route and trades only iron. The gross
+      // paid invoice is independent of the physical loss receipt.
+      const invoices = a.context.transactions.filter(tx =>
+        tx.phase === 7 && tx.type === "TRADE_GOODS_SALE");
+      const losses = a.context.transactions.filter(tx => tx.type === "GOODS_TRANSPORT_LOSS");
+      let gross = 0;
+      for (const invoice of invoices) {
+        expect(invoice.goodId).toBe(IRON);
+        expect(invoice.quantity).toBeGreaterThan(0);
+        gross += invoice.quantity!;
+      }
+      let destroyed = 0;
+      for (const tx of losses) {
+        expect(tx.phase).toBe(7);
+        expect(tx.goodId).toBe(IRON);
+        expect(tx.quantity).toBeGreaterThan(0);
+        expect(tx.moneyAmount).toBeUndefined();
+        expect(tx.currencyId).toBeUndefined();
+        destroyed += tx.quantity!;
         add(expectedGoods, tx.goodId!, -tx.quantity!);
       }
+      const departing = [...(a.world.shipments?.values() ?? [])].filter(
+        cargo => cargo.departureTick === number);
+      const surviving = departing.reduce((sum, cargo) => sum + cargo.quantity, 0);
+      expect(destroyed).toBeCloseTo(gross * lossRate, 8);
+      expect(surviving).toBeCloseTo(gross * (1 - lossRate), 8);
       const actual = goods(a.world);
+      if (destroyed > 0) {
+        lossTicks++;
+        if (!omittedLossRejected) {
+          const forged = new Map(expectedGoods);
+          add(forged, IRON, destroyed);
+          expect(() => reconcile(forged, actual, "omitted real transport loss")).toThrow();
+          omittedLossRejected = true;
+        }
+      }
       reconcile(expectedGoods, actual, "physical tick " + number);
       reconcile(expectedGoods, goods(b.world), "replay physical tick " + number);
       reconcile(expectedCash, cash(a.world), "currency tick " + number);
@@ -271,5 +305,11 @@ describe("M5 #676 active-cycle physical golden", () => {
     expect(deliveryTicks).toBeGreaterThan(0);
     expect(omittedOutputRejected).toBe(true);
     expect(omittedConsumptionRejected).toBe(true);
+    if (lossRate > 0) {
+      expect(lossTicks).toBeGreaterThanOrEqual(2);
+      expect(omittedLossRejected).toBe(true);
+    } else {
+      expect(lossTicks).toBe(0);
+    }
   }, 120_000);
 });
