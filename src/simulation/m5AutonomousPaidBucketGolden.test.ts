@@ -69,6 +69,40 @@ function allPhysical(world: WorldState, good: TradeShipmentState["goodId"]): num
   );
 }
 
+/**
+ * An arrival is a physical handoff of an already-paid shipment. Its Phase-1
+ * transition must not debit any actor a second time or silently transfer cash
+ * between owners, even when a global per-currency sum would still reconcile.
+ */
+function assertNoArrivalMoneyMovement(before: WorldState, after: WorldState): void {
+  expect(after.productionUnits.size).toBe(before.productionUnits.size);
+  for (const [id, unit] of before.productionUnits) {
+    expect(after.productionUnits.get(id)?.wallet, "unit money " + id).toEqual(unit.wallet);
+  }
+  expect(after.states.size).toBe(before.states.size);
+  for (const [id, state] of before.states) {
+    expect(after.states.get(id)?.treasury, "State treasury " + id).toEqual(state.treasury);
+  }
+  expect(after.clans.size).toBe(before.clans.size);
+  for (const [id, clan] of before.clans) {
+    expect(after.clans.get(id)?.treasury, "Clan treasury " + id).toEqual(clan.treasury);
+  }
+  expect(after.cohorts.size).toBe(before.cohorts.size);
+  for (const [id, cohort] of before.cohorts) {
+    expect(after.cohorts.get(id)?.wallet, "Cohort money " + id).toEqual(cohort.wallet);
+  }
+  expect(after.monetaryAuthorities.size).toBe(before.monetaryAuthorities.size);
+  for (const [id, authority] of before.monetaryAuthorities) {
+    const next = after.monetaryAuthorities.get(id);
+    expect(next, "issuer " + id).toBeDefined();
+    expect(next!.fxPools.size).toBe(authority.fxPools.size);
+    for (const [poolId, pool] of authority.fxPools) {
+      expect(next!.fxPools.get(poolId)?.cash, "FX cash " + id + "/" + poolId)
+        .toEqual(pool.cash);
+    }
+  }
+}
+
 function relabelStock(
   world: WorldState, id: ProductionUnitState["productionUnitId"],
   cargo: TradeShipmentState, target: "outputInventory" | "investmentInventory",
@@ -175,6 +209,42 @@ describe("M5 #676 paid cargo bucket-level ownership", () => {
     expect(beforeArrival).toBeDefined();
     expect(afterArrival).toBeDefined();
     assertBucketDeltas(beforeArrival!, afterArrival!, cargo, 1);
+    assertNoArrivalMoneyMovement(beforeArrival!, afterArrival!);
+
+    // Negative control: forge a second (unrecorded) buyer-currency payment at
+    // delivery. The global monetary total is unchanged, so a sum-only oracle
+    // and an unchanged delivery journal would both miss the wrong owners.
+    const peers = [...afterArrival!.productionUnits.values()].filter(
+      unit => unit.wallet.has(cargo.buyerPaymentCurrencyId),
+    );
+    expect(peers.length).toBeGreaterThanOrEqual(2);
+    const payer = peers.find(unit =>
+      (unit.wallet.get(cargo.buyerPaymentCurrencyId) ?? 0) > 0.25);
+    expect(payer).toBeDefined();
+    const payee = peers.find(unit => unit.productionUnitId !== payer!.productionUnitId);
+    expect(payee).toBeDefined();
+    const forgedUnits = new Map(afterArrival!.productionUnits);
+    const transfer = 0.25;
+    for (const [owner, delta] of [[payer!, -transfer], [payee!, transfer]] as const) {
+      forgedUnits.set(owner.productionUnitId, {
+        ...owner,
+        wallet: new Map(owner.wallet).set(
+          cargo.buyerPaymentCurrencyId,
+          (owner.wallet.get(cargo.buyerPaymentCurrencyId) ?? 0) + delta,
+        ),
+      });
+    }
+    const forgedPayment: WorldState = {
+      ...afterArrival!, productionUnits: forgedUnits,
+    };
+    const sumBuyerCurrency = (world: WorldState) =>
+      [...world.productionUnits.values()].reduce(
+        (sum, unit) => sum + (unit.wallet.get(cargo.buyerPaymentCurrencyId) ?? 0), 0,
+      );
+    expect(sumBuyerCurrency(forgedPayment))
+      .toBeCloseTo(sumBuyerCurrency(afterArrival!), 8);
+    expect(() => assertNoArrivalMoneyMovement(beforeArrival!, forgedPayment))
+      .toThrow();
 
     const badArrival = relabelStock(
       afterArrival!, cargo.beneficialOwner.productionUnitId, cargo, "investmentInventory",
