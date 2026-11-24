@@ -2123,6 +2123,77 @@ describe("M5/#673 autonomous regional Phase-2/4/6 -> Phase-7 FX dispatch", () =>
       nominalCapacity + opening.simulationConfig.numeric.quantityEpsilon!,
     );
 
+    // Isolate physical capacity from FX scarcity, with positive routine loss.
+    // Two simultaneous buyers must share the GROSS weight ceiling; surviving
+    // cargo alone understates the capacity consumed by their paid invoices.
+    const lossyOpening: WorldState = {
+      ...opening,
+      transportLinks: new Map([[f.link.linkId, {
+        ...opening.transportLinks.get(f.link.linkId)!,
+        seed: { ...f.link.seed, routinePhysicalLossRate: 0.25 },
+      }]]),
+    };
+    const lossCap = fullLinkUse * 0.75;
+    const lossFactor = lossCap / nominalCapacity;
+    let lossBoundary: { before: WorldState; after: WorldState } | undefined;
+    const lossy = run({
+      ...f, world: lossyOpening,
+      options: { ...f.options,
+        infrastructureFactors: new Map([[f.link.linkId, lossFactor]]) },
+    }, (phase, before, after) => {
+      if (phase === 7) lossBoundary = { before, after };
+    });
+    expect(lossy.phaseBoundaryError).toBeUndefined();
+    expect(lossy.reconciliationErrors).toBeNull();
+    expect(lossy.phaseTrace).toEqual([...Array(16).keys()]);
+    const lossyCargos = [...(lossy.world.shipments?.values() ?? [])];
+    expect(lossyCargos).toHaveLength(2);
+    expect(new Set(lossyCargos.map(cargo =>
+      cargo.beneficialOwner.type === "PRODUCTION_UNIT"
+        ? cargo.beneficialOwner.productionUnitId : "",
+    ))).toEqual(buyers);
+    expect(lossyCargos.every(cargo => cargo.transportLinkId === f.link.linkId &&
+      cargo.goodId === IRON && cargo.quantity > 0 &&
+      cargo.fxSettlementId !== undefined)).toBe(true);
+    const invoices = lossy.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "TRADE_GOODS_SALE");
+    expect(invoices).toHaveLength(2);
+    const gross = invoices.reduce((sum, invoice) => {
+      expect(invoice.goodId).toBe(IRON);
+      expect(invoice.quantity).toBeGreaterThan(0);
+      expect(invoice.moneyAmount).toBeGreaterThan(0);
+      return sum + invoice.quantity!;
+    }, 0);
+    const lost = lossy.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "GOODS_TRANSPORT_LOSS")
+      .reduce((sum, tx) => {
+        expect(tx.goodId).toBe(IRON);
+        return sum + tx.quantity!;
+      }, 0);
+    const surviving = lossyCargos.reduce((sum, cargo) => sum + cargo.quantity, 0);
+    const assertGrossCap = (survivingQuantity: number, lostQuantity: number) =>
+      expect((survivingQuantity + lostQuantity) * weight).toBeLessThanOrEqual(
+        lossCap + opening.simulationConfig.numeric.quantityEpsilon!,
+      );
+    expect(lost).toBeGreaterThan(0);
+    expect(lost).toBeCloseTo(gross * 0.25, 8);
+    expect(surviving + lost).toBeCloseTo(gross, 8);
+    assertGrossCap(surviving, lost);
+    // A forged oversubscription can fit when inspecting surviving cargo
+    // alone; the exact same gross-cap oracle must reject it.
+    const forgedGross = lossCap / weight * 1.1;
+    expect(forgedGross * 0.75 * weight).toBeLessThan(lossCap);
+    expect(() => assertGrossCap(forgedGross * 0.75, forgedGross * 0.25)).toThrow();
+    expect(lossBoundary).toBeDefined();
+    const sellerIron = (world: WorldState) =>
+      world.productionUnits.get(f.sellerA.productionUnitId)!.inputInventory.get(IRON) ?? 0;
+    expect(sellerIron(lossBoundary!.before) - sellerIron(lossBoundary!.after))
+      .toBeCloseTo(gross, 8);
+    expect(totalIron(lossBoundary!.before) - totalIron(lossBoundary!.after))
+      .toBeCloseTo(lost, 8);
+    expect(lossy.context.transactions.filter(tx =>
+      tx.phase === 7 && tx.type === "FX_OUTPUT")).toHaveLength(2);
+
     // Bind BOTH resources below the actual full-run usage. No guessed trade
     // volumes, magic extra cash or separate per-buyer "link capacity".
     const constrainedCapacity = fullLinkUse * 0.75;
