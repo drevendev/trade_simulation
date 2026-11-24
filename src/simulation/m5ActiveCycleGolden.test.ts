@@ -248,6 +248,66 @@ function reconcilePaidBundles(
   reconcile(expected, cashByOwner(after), "phase-7 owner cash");
 }
 
+/** Project physical inventory by owner and bucket, excluding in-transit stock. */
+function goodsByOwnerBucket(world: WorldState): Map<string, number> {
+  const totals = new Map<string, number>();
+  const record = (owner: ActorRef, bucket: string, stock: ReadonlyMap<GoodId, number>) => {
+    for (const [good, quantity] of stock) {
+      expect(quantity).toBeGreaterThanOrEqual(0);
+      add(totals, JSON.stringify([actorRefKey(owner), bucket, good]), quantity);
+    }
+  };
+  for (const [id, unit] of world.productionUnits) {
+    const owner: ActorRef = { type: "PRODUCTION_UNIT", productionUnitId: id };
+    record(owner, "INPUT", unit.inputInventory);
+    record(owner, "OUTPUT", unit.outputInventory);
+    record(owner, "INVESTMENT", unit.investmentInventory);
+  }
+  for (const [id, cohort] of world.cohorts) {
+    record({ type: "COHORT", cohortId: id }, "GENERAL", cohort.householdInventory);
+  }
+  for (const [id, state] of world.states) {
+    record({ type: "STATE", stateId: id }, "GENERAL", state.publicInventory);
+  }
+  return totals;
+}
+
+/** The opening cargo, not the delivery receipt, owns the expected recipient,
+ * stock bucket, quantity and due tick. This fixture has no other Phase-1
+ * stock or cash effects. Future cargo must survive unchanged. */
+function reconcileArrivals(
+  before: WorldState, after: WorldState, context: TickContext,
+): readonly TradeShipmentState[] {
+  const expected = goodsByOwnerBucket(before);
+  const carried = new Map(before.shipments ?? []);
+  const due = [...carried.values()].filter(cargo => cargo.arrivalTick === context.tick);
+  const receipts = context.transactions.filter(tx =>
+    tx.phase === 1 && tx.type === "SHIPMENT_DELIVERY");
+  expect(receipts).toHaveLength(due.length);
+  for (const cargo of due) {
+    const matches = receipts.filter(tx => tx.bundleId === "tb:delivery:" + cargo.id);
+    expect(matches).toHaveLength(1);
+    const receipt = matches[0]!;
+    expect(receipt.tick).toBe(context.tick);
+    expect(receipt.destination, "frozen delivery recipient").toEqual(cargo.beneficialOwner);
+    expect(receipt.goodId).toBe(cargo.goodId);
+    expect(receipt.quantity).toBe(cargo.quantity);
+    expect(receipt.sourceRegionId).toBe(cargo.originRegionId);
+    expect(receipt.destinationRegionId).toBe(cargo.destinationRegionId);
+    expect(receipt.moneyAmount).toBeUndefined();
+    expect(receipt.currencyId).toBeUndefined();
+    const key = JSON.stringify([
+      actorRefKey(cargo.beneficialOwner), cargo.destinationInventoryBucket, cargo.goodId,
+    ]);
+    add(expected, key, cargo.quantity);
+    carried.delete(cargo.id);
+  }
+  expect(after.shipments ?? new Map()).toEqual(carried);
+  reconcile(expected, goodsByOwnerBucket(after), "phase-1 owner bucket");
+  reconcile(cashByOwner(before), cashByOwner(after), "phase-1 owner cash");
+  return due;
+}
+
 function activeFixture(lossRate: number, competingRoutes = false) {
   const { opening: base, options } = createM5PreviewScenario();
   const recipe = base.definitionRegistry.recipes["recipe:tools-craft"]!;
@@ -372,6 +432,9 @@ describe("M5 #676 active-cycle physical golden", () => {
     let omittedLossRejected = false;
     let wrongPayeeRejected = false;
     let paidBundleTicks = 0;
+    let arrivalObserverTicks = 0;
+    let wrongArrivalRejected = false;
+    let wrongArrivalStockRejected = false;
     let simultaneousRouteTicks = 0;
     let narrowRouteSaturated = false;
     const chargeKinds = ["TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"] as const;
@@ -380,6 +443,42 @@ describe("M5 #676 active-cycle physical golden", () => {
     for (let offset = 0; offset < WINDOW; offset += 1) {
       const number = M5_PREVIEW_TICK + offset;
       const a = tick(world, number, (phase, before, after, context) => {
+        if (phase === 1) {
+          const due = reconcileArrivals(before, after, context);
+          if (due.length > 0) arrivalObserverTicks++;
+          if (due.length > 0 && !wrongArrivalRejected) {
+            const cargo = due[0]!;
+            const forged = { ...context, transactions: context.transactions.map(tx =>
+              tx.bundleId === "tb:delivery:" + cargo.id
+                ? { ...tx, destination: cargo.seller } : tx) };
+            expect(() => reconcileArrivals(before, after, forged))
+              .toThrow("frozen delivery recipient");
+            wrongArrivalRejected = true;
+          }
+          // A wrong physical bucket can conserve all per-good totals and
+          // leave every delivery receipt correct. Move a real arrival into
+          // another bucket of the very same production unit.
+          const unitCargo = due.find(cargo => cargo.beneficialOwner.type === "PRODUCTION_UNIT");
+          if (unitCargo && !wrongArrivalStockRejected) {
+            const owner = unitCargo.beneficialOwner;
+            if (owner.type !== "PRODUCTION_UNIT") throw new Error("expected unit");
+            const unit = after.productionUnits.get(owner.productionUnitId)!;
+            const field = unitCargo.destinationInventoryBucket === "INPUT" ? "inputInventory"
+              : unitCargo.destinationInventoryBucket === "OUTPUT" ? "outputInventory" : "investmentInventory";
+            const other = field === "inputInventory" ? "outputInventory" : "inputInventory";
+            const good = unitCargo.goodId;
+            const source = new Map(unit[field]);
+            const target = new Map(unit[other]);
+            source.set(good, source.get(good)! - unitCargo.quantity);
+            target.set(good, (target.get(good) ?? 0) + unitCargo.quantity);
+            const forgedWorld = { ...after, productionUnits: new Map(after.productionUnits)
+              .set(owner.productionUnitId, { ...unit, [field]: source, [other]: target }) };
+            reconcile(goods(after), goods(forgedWorld), "wrong bucket preserves goods");
+            expect(() => reconcileArrivals(before, forgedWorld, context))
+              .toThrow("phase-1 owner bucket");
+            wrongArrivalStockRejected = true;
+          }
+        }
         if (phase !== 7) return;
         const cargos = context.phase7DispatchedShipments;
         expect(Array.isArray(cargos)).toBe(true);
@@ -576,6 +675,9 @@ describe("M5 #676 active-cycle physical golden", () => {
     expect(wrongPayeeRejected).toBe(true);
     expect([...misroutingRejected].sort()).toEqual([...chargeKinds].sort());
     expect(deliveryTicks).toBeGreaterThan(0);
+    expect(arrivalObserverTicks).toBe(deliveryTicks);
+    expect(wrongArrivalRejected).toBe(true);
+    expect(wrongArrivalStockRejected).toBe(true);
     expect(omittedOutputRejected).toBe(true);
     expect(omittedConsumptionRejected).toBe(true);
     if (lossRate > 0) {
