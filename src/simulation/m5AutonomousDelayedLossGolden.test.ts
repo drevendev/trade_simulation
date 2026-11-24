@@ -6,6 +6,9 @@
  */
 import { describe, expect, it } from "vitest";
 import { actorRefKey } from "../domain/genesisLedger";
+import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
+import { validateDefinitionPack } from "../config/validation";
+import { buildDefinitionRegistry } from "../domain/definitionRegistry";
 import { createFxSettlementId, type EconomicTransaction } from "./tickOrchestrator";
 import type { FxLedgerLeg } from "./fxSettlement";
 import { createM5PreviewScenario, M5_PREVIEW_TICK } from "../diagnostics/m5PreviewScenario";
@@ -525,13 +528,23 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
   );
 
 
-  it("bounds positive dispatch by gross cargo weight before routine transport loss", () => {
+  it.each([1, 2])("bounds gross cargo weight before loss (weight per unit %i)", (weight) => {
     const f = createM5PreviewScenario();
+    // Define a separate, validated test-only definition pack before execution.
+    // A unit-weight fixture alone cannot distinguish quantity from weight.
+    const pack = {
+      ...baselineDefinitionPack,
+      goods: { ...baselineDefinitionPack.goods, [IRON]: {
+        ...baselineDefinitionPack.goods[IRON]!, cargoWeightPerUnit: weight,
+      } },
+    };
+    validateDefinitionPack(pack);
     const links = [...f.opening.transportLinks.values()];
     expect(links).toHaveLength(1);
     const link = links[0]!;
     const opening: WorldState = {
       ...f.opening,
+      definitionRegistry: buildDefinitionRegistry(pack),
       transportLinks: new Map([[link.linkId, {
         ...link, seed: { ...link.seed, routinePhysicalLossRate: 0.25 },
       }]]),
@@ -541,8 +554,7 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
         ...f.options, infrastructureFactors: new Map([[link.linkId, factor]]),
       },
     );
-    const weight = opening.definitionRegistry.goods[IRON]!.cargoWeightPerUnit;
-    expect(weight).toBeGreaterThan(0);
+    expect(opening.definitionRegistry.goods[IRON]!.cargoWeightPerUnit).toBe(weight);
     const fullCapacity = link.seed.baseCapacity * link.seed.condition;
     const grossWeight = (journal: readonly EconomicTransaction[]) =>
       journal.filter(tx => tx.phase === 7 && tx.type === "TRADE_GOODS_SALE")
@@ -569,7 +581,16 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
     const shippedWeight = grossWeight(constrained.context.transactions);
     expect(shippedWeight).toBeGreaterThan(0);
     expect(shippedWeight).toBeLessThan(unrestrictedWeight);
-    expect(shippedWeight).toBeLessThanOrEqual(cap + 1e-8);
+    const assertGrossCap = (grossQuantity: number) =>
+      expect(grossQuantity * weight).toBeLessThanOrEqual(cap + 1e-8);
+    assertGrossCap(shippedWeight / weight);
+    if (weight === 2) {
+      // A quantity-only allocator can dispatch the entire unconstrained
+      // quantity: it fits numerically, but consumes twice the weight cap.
+      const forgedQuantity = unrestrictedWeight / weight;
+      expect(forgedQuantity).toBeCloseTo(cap, 8);
+      expect(() => assertGrossCap(forgedQuantity)).toThrow();
+    }
 
     // The cap is consumed by the invoiced gross quantity, not the surviving
     // cargo. Count every new shipment and typed loss independently of the
