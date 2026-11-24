@@ -340,19 +340,29 @@ function independentPairFixture() {
   const regions = new Map(base.regions);
   const markets = new Map(base.markets);
   const units = new Map(base.productionUnits);
-  for (const [region, iron, price] of [[source, 500, 1], [target, 2, 100]] as const) {
+  // Neither border region has native baseline production units. Reuse explicit
+  // unused tools-craft templates from the same respective currency regions,
+  // as the ALP/BET preview does, and relocate their region binding.
+  for (const [region, templateRegionKey, iron, price] of [
+    [source, "region:c2-craft", 500, 1],
+    [target, "region:d5-industry", 2, 100],
+  ] as const) {
     expect(regions.has(region.regionId)).toBe(false);
     regions.set(region.regionId, region);
     const market = [...full.markets.values()].find(m => m.seed.regionKey === region.seed.key)!;
     expect(market).toBeDefined();
     markets.set(market.marketId, { ...market, priceByGood: new Map(market.priceByGood).set(IRON, price) });
-    const templates = [...full.productionUnits.values()].filter(u => u.seed.regionKey === region.seed.key);
-    expect(templates.length).toBeGreaterThanOrEqual(2);
     for (const [index, status] of ["ACTIVE", "CLOSING"].entries()) {
-      const template = templates[index]!;
+      const templateKey = `unit:${templateRegionKey}-recipe:tools-craft-${index}`;
+      const matches = [...full.productionUnits.values()].filter(u => u.seed.key === templateKey);
+      expect(matches, templateKey).toHaveLength(1);
+      const template = matches[0]!;
+      expect(template.seed.regionKey).toBe(templateRegionKey);
+      expect(template.seed.recipeId).toBe("recipe:tools-craft");
+      expect(template.wallet.has(region.settlementCurrencyId)).toBe(true);
       expect(units.has(template.productionUnitId)).toBe(false);
       units.set(template.productionUnitId, {
-        ...template, seed: { ...template.seed, recipeId: "recipe:tools-craft" },
+        ...template, seed: { ...template.seed, regionKey: region.seed.key },
         status: status === "ACTIVE" ? "ACTIVE" : "CLOSING",
         installedCapital: status === "ACTIVE" ? 5 : 0,
         wallet: new Map([[region.settlementCurrencyId, status === "ACTIVE" ? 1_000_000 : 5]]),
