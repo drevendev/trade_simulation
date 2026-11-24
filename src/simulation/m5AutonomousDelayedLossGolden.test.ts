@@ -528,6 +528,86 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
   );
 
 
+
+  it.each([0, 0.20])("settles the frozen statutory tariff on MID invoice plus freight (rate %f)", (rate) => {
+    const f = createM5PreviewScenario();
+    let before: WorldState | undefined;
+    let after: WorldState | undefined;
+    const result = executeM5AutonomousRegionalTradeTick(
+      f.opening, M5_PREVIEW_TICK, upstream, unchanged, {
+        ...f.options,
+        phase1TariffLawProvider: query => query.goodId === IRON ? rate : 0,
+      }, (phase, previous, next) => {
+        if (phase === 7) { before = previous; after = next; }
+      },
+    );
+    expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+    expect(result.phaseBoundaryError).toBeUndefined();
+    expect(result.reconciliationErrors).toBeNull();
+    expect(before).toBeDefined();
+    expect(after).toBeDefined();
+    const cargos = [...(result.world.shipments?.values() ?? [])];
+    expect(cargos).toHaveLength(1);
+    const cargo = cargos[0]!;
+    const journal = result.context.transactions;
+    const sale = journal.find(tx => tx.phase === 7 && tx.type === "TRADE_GOODS_SALE")!;
+    expect(sale).toBeDefined();
+    expect(sale.quantity).toBeGreaterThan(0);
+    assertPaidFxDeparture(before!, after!, cargo, journal, sale.quantity!);
+    const poolList = [...before!.monetaryAuthorities.values()].flatMap(
+      authority => [...authority.fxPools.values()],
+    );
+    expect(poolList).toHaveLength(1);
+    const pool = poolList[0]!;
+    // The preview pins Alpha as the base issuer and Beta as the importer.
+    // Compute the MID conversion from the actual pre-trade pool, not the
+    // spread-inclusive FX debit or a self-reported tariff quote.
+    expect(pool.baseCurrencyId).toBe(cargo.invoiceCurrencyId);
+    expect(pool.quoteCurrencyId).toBe(cargo.buyerPaymentCurrencyId);
+    const mid = sale.moneyAmount! * pool.spotRateQuotePerBase;
+    const fees = journal.filter(tx => tx.phase === 7 && tx.bundleId === sale.bundleId &&
+      tx.type === "TRANSPORT_FEE");
+    expect(fees).toHaveLength(1);
+    const fee = fees[0]!.moneyAmount!;
+    expect(fee).toBeGreaterThan(0);
+    const expectedTariff = (mid + fee) * rate; // fixture collection efficiency = 1
+    const importer = before!.regions.get(cargo.destinationRegionId)!.controllerStateId;
+    if (!importer) throw new Error("Tariff fixture requires a destination State");
+    const currency = cargo.buyerPaymentCurrencyId;
+    const assertTariff = (receipts: readonly EconomicTransaction[], amount: number) => {
+      const tariffs = receipts.filter(tx => tx.phase === 7 && tx.type === "IMPORT_TARIFF");
+      expect(amount).toBeCloseTo(expectedTariff, 8);
+      if (rate === 0) {
+        expect(tariffs).toHaveLength(0);
+      } else {
+        expect(tariffs).toHaveLength(1);
+        expect(tariffs[0]).toMatchObject({
+          bundleId: sale.bundleId, source: cargo.buyer,
+          destination: { type: "STATE", stateId: importer }, currencyId: currency,
+        });
+        expect(tariffs[0]!.moneyAmount).toBeCloseTo(expectedTariff, 8);
+      }
+    };
+    assertTariff(journal, cargo.tariffAmount);
+    // Reconcile the actual importer treasury at the Phase-7 boundary;
+    // freight and consumption tax may share this recipient.
+    const expectedCredit = journal.filter(tx => tx.phase === 7 &&
+      tx.destination?.type === "STATE" && tx.destination.stateId === importer &&
+      tx.currencyId === currency).reduce((sum, tx) => sum + (tx.moneyAmount ?? 0), 0);
+    const prior = before!.states.get(importer)!.treasury.get(currency) ?? 0;
+    const next = after!.states.get(importer)!.treasury.get(currency) ?? 0;
+    expect(next - prior).toBeCloseTo(expectedCredit, 8);
+    if (rate > 0) {
+      // A journal and cargo that agree on an incorrect tax base must fail
+      // independently: omitting freight is not the statutory formula.
+      const wrong = mid * rate;
+      const forged = journal.map(tx => tx.type === "IMPORT_TARIFF"
+        ? { ...tx, moneyAmount: wrong } : tx);
+      expect(() => assertTariff(forged, wrong)).toThrow();
+    }
+  });
+
+
   it.each([1, 2])("bounds gross cargo weight before loss (weight per unit %i)", (weight) => {
     const f = createM5PreviewScenario();
     // Define a separate, validated test-only definition pack before execution.
