@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { createM5PreviewScenario, M5_PREVIEW_TICK } from "../diagnostics/m5PreviewScenario";
 import type { NeedCategoryDefinition } from "../config/definitionPack";
-import type { CurrencyId, GoodId } from "../domain/id";
+import type { CurrencyId, GoodId, TransportLinkId } from "../domain/id";
 import { executeM5AutonomousRegionalTradeTick } from "./m5AutonomousRegionalTradeTick";
 import type { EconomicTransaction, PhaseHandler, TickContext } from "./tickOrchestrator";
 import type { PhaseWorldTransitionObserver } from "./statefulTickOrchestrator";
@@ -248,7 +248,7 @@ function reconcilePaidBundles(
   reconcile(expected, cashByOwner(after), "phase-7 owner cash");
 }
 
-function activeFixture(lossRate: number) {
+function activeFixture(lossRate: number, competingRoutes = false) {
   const { opening: base, options } = createM5PreviewScenario();
   const recipe = base.definitionRegistry.recipes["recipe:tools-craft"]!;
   const workers = [...base.regions.values()].map(region => {
@@ -269,7 +269,7 @@ function activeFixture(lossRate: number) {
       substitutionGoods: [{ goodId, basePreference: 1, qualityFactor: 1 }],
       priceSensitivity: 1, inventoryCarryoverTicks: 0,
     });
-  const opening: WorldState = {
+  let opening: WorldState = {
     ...base,
     transportLinks: new Map([...base.transportLinks].map(([id, link]) => [
       id, {
@@ -297,9 +297,38 @@ function activeFixture(lossRate: number) {
       COMFORT: need("COMFORT", "good:cloth" as GoodId, 1, 0),
     } },
   };
+  let tradeOptions = options;
+  if (competingRoutes) {
+    // Two explicitly configured parallel direct links share the same residual
+    // sellers, buyers and FX pool. The cheap link alone cannot fill demand.
+    const primary = [...opening.transportLinks.values()][0]!;
+    const alternateId = "tl:999" as TransportLinkId; // isolated fixture identity
+    expect(opening.transportLinks.has(alternateId)).toBe(false);
+    const alternate = {
+      ...primary, linkId: alternateId,
+      seed: { ...primary.seed, key: primary.seed.key + ":alternate",
+        baseTransportCost: primary.seed.baseTransportCost * 1.05 },
+    };
+    const links = new Map([
+      [primary.linkId, { ...primary, seed: { ...primary.seed, baseCapacity: 1 } }],
+      [alternateId, alternate],
+    ]);
+    opening = {
+      ...opening, transportLinks: links,
+      outgoingTransportLinkIdsByRegion: new Map([
+        [primary.fromRegionId, [...links.keys()].sort()],
+      ]),
+    };
+    tradeOptions = {
+      ...options,
+      infrastructureFactors: new Map([...links.keys()].map(id => [id, 1] as const)),
+      phase1TradeLawProvider: query =>
+        links.has(query.linkId) && query.goodId === IRON ? null : undefined,
+    };
+  }
   const tick = (world: WorldState, number: number, observer?: PhaseWorldTransitionObserver) =>
     executeM5AutonomousRegionalTradeTick(world, number, phase1, (_phase, current) => current, {
-      ...options,
+      ...tradeOptions,
       planHouseholdNeedsInPhase2: true,
       settleLaborAndProductionInPhase5: true,
       settleMainMarketInPhase8: true,
@@ -309,8 +338,12 @@ function activeFixture(lossRate: number) {
 }
 
 describe("M5 #676 active-cycle physical golden", () => {
-  it.each([0, 0.25])("reconciles the active 12-tick replay with transport loss rate %s", (lossRate) => {
-    const { opening, tick } = activeFixture(lossRate);
+  it.each([
+    { lossRate: 0, competingRoutes: false },
+    { lossRate: 0.25, competingRoutes: false },
+    { lossRate: 0.25, competingRoutes: true },
+  ])("reconciles active replay (loss=$lossRate, competing=$competingRoutes)", ({ lossRate, competingRoutes }) => {
+    const { opening, tick } = activeFixture(lossRate, competingRoutes);
     let world = opening;
     let replay = opening;
     let reordered = reversedRegistries(opening);
@@ -339,6 +372,8 @@ describe("M5 #676 active-cycle physical golden", () => {
     let omittedLossRejected = false;
     let wrongPayeeRejected = false;
     let paidBundleTicks = 0;
+    let simultaneousRouteTicks = 0;
+    let narrowRouteSaturated = false;
     const chargeKinds = ["TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"] as const;
     const misroutingRejected = new Set<string>();
 
@@ -350,6 +385,28 @@ describe("M5 #676 active-cycle physical golden", () => {
         expect(Array.isArray(cargos)).toBe(true);
         const jurisdiction = context.effectiveJurisdictionByRegion;
         reconcilePaidBundles(before, after, cargos!, context.transactions, lossRate, jurisdiction);
+        // Charge the gross paid quantity against each route independently,
+        // not the surviving cargo after physical loss and not a global cap.
+        const usedCapacity = new Map<TransportLinkId, number>();
+        for (const cargo of cargos!) {
+          const sale = context.transactions.find(tx => tx.phase === 7 &&
+            tx.type === "TRADE_GOODS_SALE" && tx.bundleId === "tb:" + cargo.id.slice(3));
+          expect(sale?.quantity).toBeGreaterThan(0);
+          const weight = before.definitionRegistry.goods[cargo.goodId]!.cargoWeightPerUnit;
+          add(usedCapacity, cargo.transportLinkId, sale!.quantity! * weight);
+        }
+        for (const [id, use] of usedCapacity) {
+          const link = before.transportLinks.get(id)!;
+          expect(link).toBeDefined();
+          const cap = link.seed.baseCapacity * link.seed.condition; // fixture factor = 1
+          expect(use, "gross route capacity " + id)
+            .toBeLessThanOrEqual(cap + before.simulationConfig.numeric.quantityEpsilon!);
+          if (competingRoutes && link.seed.baseCapacity === 1 &&
+              Math.abs(use - cap) <= before.simulationConfig.numeric.quantityEpsilon!) {
+            narrowRouteSaturated = true;
+          }
+        }
+        if (usedCapacity.size > 1) simultaneousRouteTicks++;
         // Corrupt both the journal and the closing wallets consistently. A
         // receipt-driven owner-balance oracle alone would accept this transfer.
         for (const kind of chargeKinds) {
@@ -428,7 +485,7 @@ describe("M5 #676 active-cycle physical golden", () => {
           }
         }
       }
-      // This fixture has one directed route and trades only iron. The gross
+      // This fixture trades only iron over one or two direct links. The gross
       // paid invoice is independent of the physical loss receipt.
       const invoices = a.context.transactions.filter(tx =>
         tx.phase === 7 && tx.type === "TRADE_GOODS_SALE");
@@ -509,6 +566,13 @@ describe("M5 #676 active-cycle physical golden", () => {
     expect(consumptionTicks).toBeGreaterThanOrEqual(3);
     expect(dispatchTicks).toBeGreaterThanOrEqual(2);
     expect(paidBundleTicks).toBe(dispatchTicks);
+    if (competingRoutes) {
+      expect(simultaneousRouteTicks, "both routes must actually dispatch in the same tick")
+        .toBeGreaterThan(0);
+      expect(narrowRouteSaturated, "cheap route must exercise its physical bottleneck").toBe(true);
+    } else {
+      expect(simultaneousRouteTicks).toBe(0);
+    }
     expect(wrongPayeeRejected).toBe(true);
     expect([...misroutingRejected].sort()).toEqual([...chargeKinds].sort());
     expect(deliveryTicks).toBeGreaterThan(0);
