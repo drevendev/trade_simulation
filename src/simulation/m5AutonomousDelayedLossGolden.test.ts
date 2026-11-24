@@ -12,7 +12,7 @@ import { buildDefinitionRegistry } from "../domain/definitionRegistry";
 import { createFxSettlementId, type EconomicTransaction } from "./tickOrchestrator";
 import type { FxLedgerLeg } from "./fxSettlement";
 import { createM5PreviewScenario, M5_PREVIEW_TICK } from "../diagnostics/m5PreviewScenario";
-import type { GoodId } from "../domain/id";
+import type { CurrencyId, GoodId } from "../domain/id";
 import { createMarketIntentId } from "./marketIntent";
 import { executeM5AutonomousRegionalTradeTick } from "./m5AutonomousRegionalTradeTick";
 import { quoteFxForPool } from "./fxQuoteReservation";
@@ -693,6 +693,68 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
           expect(sale.quantity).toBeGreaterThan(0);
           expect(sale.moneyAmount).toBeGreaterThan(0);
         }
+        // The preview's explicit policy is 5% collected in full. Bind each
+        // household tax to its taxable sale and the effective local jurisdiction,
+        // independently of the transaction's self-reported taxAmount.
+        const jurisdiction = source.controllerStateId;
+        if (!jurisdiction) throw new Error("Taxable fixture requires a State");
+        const taxes = payments.filter(tx => tx.type === "CONSUMPTION_TAX");
+        expect(taxes).toHaveLength(sales.length);
+        for (const sale of sales) {
+          expect(sale.transactionId).toBeDefined();
+          expect(sale.bundleId).toBeDefined();
+          const matching = taxes.filter(tx => tx.originatingTransactionId === sale.transactionId);
+          expect(matching).toHaveLength(1);
+          const tax = matching[0]!;
+          expect(tax.bundleId).toBe(sale.bundleId);
+          expect(tax.destination).toEqual({ type: "STATE", stateId: jurisdiction });
+          expect(tax.currencyId).toBe(source.settlementCurrencyId);
+          expect(tax.moneyAmount).toBeGreaterThan(0);
+          expect(tax.moneyAmount).toBeCloseTo(sale.moneyAmount! * 0.05, 8);
+          expect(tax.taxAmount).toBeCloseTo(tax.moneyAmount!, 8);
+        }
+        // Other MAIN purchases may coexist. Reconcile all actual Phase-8
+        // postings against every individual live cash owner, not just the
+        // household or the aggregate money supply.
+        const wallets = (world: WorldState) => {
+          const entries = new Map<string, ReadonlyMap<CurrencyId, number>>();
+          for (const [productionUnitId, unit] of world.productionUnits)
+            entries.set(actorRefKey({ type: "PRODUCTION_UNIT", productionUnitId }), unit.wallet);
+          for (const [cohortId, item] of world.cohorts)
+            entries.set(actorRefKey({ type: "COHORT", cohortId }), item.wallet);
+          for (const [stateId, state] of world.states)
+            entries.set(actorRefKey({ type: "STATE", stateId }), state.treasury);
+          for (const [clanId, clan] of world.clans)
+            entries.set(actorRefKey({ type: "CLAN", clanId }), clan.treasury);
+          return entries;
+        };
+        const openingCash = wallets(beforeMain!);
+        const closingCash = wallets(after);
+        expect([...closingCash.keys()].sort()).toEqual([...openingCash.keys()].sort());
+        const expected = new Map<string, Map<CurrencyId, number>>();
+        const post = (owner: string, currency: CurrencyId, amount: number) => {
+          expect(openingCash.has(owner)).toBe(true);
+          const balances = expected.get(owner) ?? new Map<CurrencyId, number>();
+          balances.set(currency, (balances.get(currency) ?? 0) + amount);
+          expected.set(owner, balances);
+        };
+        for (const tx of journal.filter(tx => tx.phase === 8)) {
+          expect(["MARKET_SALE", "CONSUMPTION_TAX"]).toContain(tx.type);
+          if (!tx.source || !tx.destination || !tx.currencyId || tx.moneyAmount === undefined)
+            throw new Error("Incomplete Phase-8 cash posting");
+          post(actorRefKey(tx.source), tx.currencyId, -tx.moneyAmount);
+          post(actorRefKey(tx.destination), tx.currencyId, tx.moneyAmount);
+        }
+        for (const [owner, priorCash] of openingCash) {
+          const nextCash = closingCash.get(owner)!;
+          const deltas = expected.get(owner) ?? new Map<CurrencyId, number>();
+          for (const currency of new Set([...priorCash.keys(), ...nextCash.keys(), ...deltas.keys()])) {
+            expect((nextCash.get(currency) ?? 0) - (priorCash.get(currency) ?? 0),
+              "Phase-8 cash delta " + owner + "/" + currency)
+              .toBeCloseTo(deltas.get(currency) ?? 0, 8);
+          }
+        }
+        expect(after.monetaryAuthorities).toEqual(beforeMain!.monetaryAuthorities);
         const quantity = sales.reduce((sum, tx) => sum + tx.quantity!, 0);
         expect(quantity).toBeLessThanOrEqual(1 + 1e-8);
         const debit = payments.filter(tx =>
@@ -720,6 +782,33 @@ describe("M5 #676 real paid FX shipment with delayed physical loss", () => {
         }),
       };
       expect(() => assertMain(result.context.transactions, forged)).toThrow();
+      // A zero-sum wrong-jurisdiction mutation preserves the buyer debit and
+      // even makes the forged receipt agree with the forged owner balances.
+      // The independent jurisdiction check must still reject it.
+      const tax = result.context.transactions.find(tx => tx.phase === 8 &&
+        tx.type === "CONSUMPTION_TAX" && tx.source?.type === "COHORT" &&
+        tx.source.cohortId === funded.cohortId)!;
+      const rightId = source.controllerStateId;
+      const wrongId = [...afterMain!.states.keys()].find(id => id !== rightId);
+      if (!rightId || !wrongId || !tax || tax.moneyAmount === undefined)
+        throw new Error("Wrong-recipient control requires two States and a real tax");
+      const currency = source.settlementCurrencyId;
+      const right = afterMain!.states.get(rightId)!;
+      const wrong = afterMain!.states.get(wrongId)!;
+      const amount = tax.moneyAmount;
+      const misdirected: WorldState = {
+        ...afterMain!,
+        states: new Map(afterMain!.states)
+          .set(rightId, { ...right, treasury: new Map(right.treasury)
+            .set(currency, (right.treasury.get(currency) ?? 0) - amount) })
+          .set(wrongId, { ...wrong, treasury: new Map(wrong.treasury)
+            .set(currency, (wrong.treasury.get(currency) ?? 0) + amount) }),
+      };
+      expect(() => assertMain(result.context.transactions, misdirected)).toThrow();
+      const misdirectedJournal = result.context.transactions.map(tx => tx === tax
+        ? { ...tx, destination: { type: "STATE" as const, stateId: wrongId } }
+        : tx);
+      expect(() => assertMain(misdirectedJournal, misdirected)).toThrow();
     },
   );
 
