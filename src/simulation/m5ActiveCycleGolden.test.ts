@@ -13,6 +13,7 @@ import type { EconomicTransaction, PhaseHandler, TickContext } from "./tickOrche
 import type { PhaseWorldTransitionObserver } from "./statefulTickOrchestrator";
 import type { TradeShipmentState } from "./tradeShipmentState";
 import { reconcileDelayedDispatch } from "./m5DelayedDispatchOracle";
+import { captureMainEnvelopes, reconcileMainEnvelopes, assertMainAllocations } from "./m5MainEnvelopeOracle";
 import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import { buildInitialWorld, type WorldState } from "./worldState";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
@@ -578,12 +579,20 @@ describe("M5 #676 active-cycle physical golden", () => {
     let narrowRouteSaturated = false;
     const seenDispatchIds = new Set<string>();
     let compensatedStockRejected = false;
+    let restoredDemandRejected = false;
     const chargeKinds = ["TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"] as const;
     const misroutingRejected = new Set<string>();
 
     for (let offset = 0; offset < window; offset += 1) {
       const number = M5_PREVIEW_TICK + offset;
+      let openingMain: ReturnType<typeof captureMainEnvelopes> | undefined;
+      let residualMain: ReturnType<typeof reconcileMainEnvelopes> | undefined;
       const a = tick(world, number, (phase, before, after, context) => {
+        if (phase === 6) openingMain = captureMainEnvelopes(after, context);
+        if (phase === 8) {
+          expect(residualMain).toBeDefined();
+          assertMainAllocations(before, residualMain!, context);
+        }
         if (phase === 1) {
           const due = reconcileArrivals(before, after, context);
           if (due.length > 0) arrivalObserverTicks++;
@@ -626,6 +635,18 @@ describe("M5 #676 active-cycle physical golden", () => {
         const jurisdiction = context.effectiveJurisdictionByRegion;
         reconcilePaidBundles(before, after, cargos!, context.transactions, lossRate, jurisdiction);
         reconcileDelayedDispatch(before, after, cargos!, context, goodsByOwnerBucket);
+        expect(openingMain).toBeDefined();
+        residualMain = reconcileMainEnvelopes(before, openingMain!, context);
+        const paidLot = context.phase7CommittedLots?.[0];
+        if (paidLot && !restoredDemandRejected) {
+          const forged = { ...context, phase7MainIntents: context.phase7MainIntents!.map(intent =>
+            intent.id === paidLot.buyerIntentId
+              ? { ...intent, desiredQuantity: intent.desiredQuantity + paidLot.dispatchedQuantity }
+              : intent) };
+          expect(() => reconcileMainEnvelopes(before, openingMain!, forged))
+            .toThrow("residual quantity");
+          restoredDemandRejected = true;
+        }
         for (const cargo of cargos!) {
           expect(seenDispatchIds.has(cargo.id), "cross-tick dispatch ID reuse").toBe(false);
           seenDispatchIds.add(cargo.id);
@@ -856,6 +877,7 @@ describe("M5 #676 active-cycle physical golden", () => {
     expect(dispatchTicks).toBeGreaterThanOrEqual(2);
     expect(paidBundleTicks).toBe(dispatchTicks);
     expect(compensatedStockRejected).toBe(true);
+    expect(restoredDemandRejected).toBe(true);
     expect(seenDispatchIds.size).toBeGreaterThanOrEqual(dispatchTicks);
     if (competingRoutes) {
       expect(simultaneousRouteTicks, "both routes must actually dispatch in the same tick")
