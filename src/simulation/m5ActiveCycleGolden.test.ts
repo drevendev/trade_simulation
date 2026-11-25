@@ -1,6 +1,6 @@
 /**
  * #676 / REQ-ACCEPTANCE-006: active production/consumption/trade replay.
- * Unlike the passive 600-tick fixture, this short window opts in to the
+ * Unlike the passive 600-tick fixture, these scenarios opt in to the
  * canonical M4 labor, physical production and household realization owners.
  * No synthetic orders, stock replenishment or wage forecasts during the run.
  */
@@ -20,7 +20,8 @@ import { createDefaultSimulationConfig } from "../config/simulationConfig";
 
 const IRON = "good:iron" as GoodId;
 const WOOD = "good:wood" as GoodId;
-const WINDOW = 12;
+const SHORT_WINDOW = 12;
+const LONG_WINDOW = 600;
 const phase1: PhaseHandler = (world, context) => context.phase === 1 ? {
   ...context,
   effectiveJurisdictionByRegion: new Map([...world.regions].map(
@@ -477,11 +478,12 @@ function activeFixture(lossRate: number, competingRoutes = false, independentPai
 
 describe("M5 #676 active-cycle physical golden", () => {
   it.each([
-    { lossRate: 0, competingRoutes: false, independentPairs: false },
-    { lossRate: 0.25, competingRoutes: false, independentPairs: false },
-    { lossRate: 0.25, competingRoutes: true, independentPairs: false },
-    { lossRate: 0.25, competingRoutes: false, independentPairs: true },
-  ])("reconciles active replay (loss=$lossRate, competing=$competingRoutes, independent=$independentPairs)", ({ lossRate, competingRoutes, independentPairs }) => {
+    { lossRate: 0, competingRoutes: false, independentPairs: false, window: SHORT_WINDOW },
+    { lossRate: 0.25, competingRoutes: false, independentPairs: false, window: SHORT_WINDOW },
+    { lossRate: 0.25, competingRoutes: true, independentPairs: false, window: SHORT_WINDOW },
+    { lossRate: 0.25, competingRoutes: false, independentPairs: true, window: SHORT_WINDOW },
+    { lossRate: 0.25, competingRoutes: false, independentPairs: true, window: LONG_WINDOW },
+  ])("reconciles active replay (loss=$lossRate, competing=$competingRoutes, independent=$independentPairs, ticks=$window)", ({ lossRate, competingRoutes, independentPairs, window }) => {
     const { opening, tick } = activeFixture(lossRate, competingRoutes, independentPairs);
     let world = opening;
     let replay = opening;
@@ -503,6 +505,8 @@ describe("M5 #676 active-cycle physical golden", () => {
     const expectedGoods = goods(opening);
     let productiveTicks = 0;
     let consumptionTicks = 0;
+    let activityBeyondShortWindow = 0;
+    let completedTicks = 0;
     let dispatchTicks = 0;
     let deliveryTicks = 0;
     let omittedOutputRejected = false;
@@ -520,7 +524,7 @@ describe("M5 #676 active-cycle physical golden", () => {
     const chargeKinds = ["TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"] as const;
     const misroutingRejected = new Set<string>();
 
-    for (let offset = 0; offset < WINDOW; offset += 1) {
+    for (let offset = 0; offset < window; offset += 1) {
       const number = M5_PREVIEW_TICK + offset;
       const a = tick(world, number, (phase, before, after, context) => {
         if (phase === 1) {
@@ -745,9 +749,22 @@ describe("M5 #676 active-cycle physical golden", () => {
       if (journal.some(tx => tx.phase === 1 && tx.type === "SHIPMENT_DELIVERY")) {
         deliveryTicks++;
       }
+      if (offset >= SHORT_WINDOW &&
+          (output || consumed > 0 || invoices.length > 0)) {
+        activityBeyondShortWindow++;
+      }
       world = a.world;
       replay = b.world;
       reordered = reversedRegistries(c.world);
+      completedTicks++;
+    }
+    expect(completedTicks).toBe(window);
+    if (window === LONG_WINDOW) {
+      // A longer replay of an already dormant fixture is not evidence of
+      // additional realized economic activity. Finite stocks may eventually
+      // exhaust; do not refill them or require continuous dispatch.
+      expect(activityBeyondShortWindow, "realized activity after the short horizon")
+        .toBeGreaterThan(0);
     }
     // A dormant fixture cannot pass simply by replaying a static balance.
     expect(productiveTicks).toBeGreaterThanOrEqual(3);
