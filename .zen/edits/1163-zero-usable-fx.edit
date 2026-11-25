@@ -1,0 +1,40 @@
+### FILE: src/simulation/m5ActiveCycleGolden.test.ts
+<<<<<<< FIND
+  it("isolates a corridor with zero FX payout reserve while other markets operate", () => {
+=======
+  it("isolates a corridor with zero usable FX payout reserve while other markets operate", () => {
+>>>>>>> REPLACE
+<<<<<<< FIND
+    expect(pool.cash.get(source.settlementCurrencyId)).toBeGreaterThan(0);
+    expect(pool.cash.get(destination.settlementCurrencyId)).toBeGreaterThan(0);
+    // Change only the opening payout reserve of this one directed corridor.
+    // The other currency remains available; no reserves are changed in flight.
+    const authorities = new Map(opening.monetaryAuthorities).set(issuer.authorityId, {
+      ...issuer, fxPools: new Map(issuer.fxPools).set(pair, {
+        ...pool, cash: new Map(pool.cash).set(source.settlementCurrencyId, 0),
+      }),
+    });
+    const scarce: WorldState = { ...opening, monetaryAuthorities: authorities };
+=======
+    const payoutFloor = pool.minOperationalReserveBase;
+    expect(payoutFloor).toBeGreaterThan(0);
+    expect(pool.cash.get(source.settlementCurrencyId)).toBeGreaterThan(payoutFloor);
+    expect(pool.cash.get(destination.settlementCurrencyId)).toBeGreaterThan(pool.minOperationalReserveQuote);
+    // Zero spendable headroom, not an invalid balance below the operational floor.
+    // The other currency remains available; no reserves are changed in flight.
+    const scarcePoolCash = new Map(pool.cash).set(source.settlementCurrencyId, payoutFloor);
+    expect(scarcePoolCash.get(source.settlementCurrencyId)! - payoutFloor).toBe(0);
+    const authorities = new Map(opening.monetaryAuthorities).set(issuer.authorityId, {
+      ...issuer, fxPools: new Map(issuer.fxPools).set(pair, {
+        ...pool, cash: scarcePoolCash,
+      }),
+    });
+    const scarce: WorldState = { ...opening, monetaryAuthorities: authorities };
+>>>>>>> REPLACE
+<<<<<<< FIND
+      expect(actual.world.monetaryAuthorities.get(issuer.authorityId)!.fxPools.get(pair)!.cash
+        .get(source.settlementCurrencyId) ?? 0).toBe(0);
+=======
+      expect(actual.world.monetaryAuthorities.get(issuer.authorityId)!.fxPools.get(pair)!.cash
+        .get(source.settlementCurrencyId)).toBe(payoutFloor);
+>>>>>>> REPLACE
