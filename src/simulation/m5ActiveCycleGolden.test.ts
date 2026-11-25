@@ -858,7 +858,7 @@ describe("M5 #676 active-cycle physical golden", () => {
     }
   }, 120_000);
 
-  it("isolates a corridor with zero FX payout reserve while other markets operate", () => {
+  it("isolates a corridor with zero usable FX payout reserve while other markets operate", () => {
     const { opening, tick } = activeFixture(0.25, false, true);
     const source = [...opening.regions.values()].find(r => r.seed.key === "region:a4-border")!;
     const destination = [...opening.regions.values()].find(r => r.seed.key === "region:b4-chokepoint")!;
@@ -869,13 +869,17 @@ describe("M5 #676 active-cycle physical golden", () => {
     const [pair, pool] = [...issuer.fxPools.entries()].find(([, p]) =>
       p.baseCurrencyId === source.settlementCurrencyId &&
       p.quoteCurrencyId === destination.settlementCurrencyId)!;
-    expect(pool.cash.get(source.settlementCurrencyId)).toBeGreaterThan(0);
-    expect(pool.cash.get(destination.settlementCurrencyId)).toBeGreaterThan(0);
-    // Change only the opening payout reserve of this one directed corridor.
+    const payoutFloor = pool.minOperationalReserveBase;
+    expect(payoutFloor).toBeGreaterThan(0);
+    expect(pool.cash.get(source.settlementCurrencyId)).toBeGreaterThan(payoutFloor);
+    expect(pool.cash.get(destination.settlementCurrencyId)).toBeGreaterThan(pool.minOperationalReserveQuote);
+    // Zero spendable headroom, not an invalid balance below the operational floor.
     // The other currency remains available; no reserves are changed in flight.
+    const scarcePoolCash = new Map(pool.cash).set(source.settlementCurrencyId, payoutFloor);
+    expect(scarcePoolCash.get(source.settlementCurrencyId)! - payoutFloor).toBe(0);
     const authorities = new Map(opening.monetaryAuthorities).set(issuer.authorityId, {
       ...issuer, fxPools: new Map(issuer.fxPools).set(pair, {
-        ...pool, cash: new Map(pool.cash).set(source.settlementCurrencyId, 0),
+        ...pool, cash: scarcePoolCash,
       }),
     });
     const scarce: WorldState = { ...opening, monetaryAuthorities: authorities };
@@ -929,7 +933,7 @@ describe("M5 #676 active-cycle physical golden", () => {
       expect(replay.context.transactions).toEqual(actual.context.transactions);
       expect(replay.world).toEqual(actual.world);
       expect(actual.world.monetaryAuthorities.get(issuer.authorityId)!.fxPools.get(pair)!.cash
-        .get(source.settlementCurrencyId) ?? 0).toBe(0);
+        .get(source.settlementCurrencyId)).toBe(payoutFloor);
       for (const item of actual.context.productionExecutions!) {
         for (const [id, quantity] of Object.entries(item.inputConsumedByGood)) {
           add(expectedGoods, id as GoodId, -quantity);
