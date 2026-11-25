@@ -966,4 +966,93 @@ describe("M5 #676 active-cycle physical golden", () => {
     expect(healthyDeliveries, "independent funded cargo arrives").toBeGreaterThan(0);
     expect(localPaidTicks, "local paid iron trade in the blocked source region").toBeGreaterThan(0);
   }, 120_000);
+
+  it("shrinks a paid shipment against positive insufficient FX before debiting stock", () => {
+    const { opening, tick } = activeFixture(0.25);
+    const source = [...opening.regions.values()].find(r => r.seed.key === "region:a4-border")!;
+    const destination = [...opening.regions.values()].find(r => r.seed.key === "region:b4-chokepoint")!;
+    const issuer = [...opening.monetaryAuthorities.values()].find(a => a.seed.key === "authority:alpha")!;
+    const [pair, pool] = [...issuer.fxPools.entries()].find(([, p]) =>
+      p.baseCurrencyId === source.settlementCurrencyId &&
+      p.quoteCurrencyId === destination.settlementCurrencyId)!;
+    const currency = source.settlementCurrencyId;
+    const floor = pool.minOperationalReserveBase;
+    const epsilon = opening.simulationConfig.numeric.quantityEpsilon!;
+    const originalHeadroom = pool.cash.get(currency)! - floor;
+
+    function run(world: WorldState) {
+      let gross = 0;
+      let payout = 0;
+      let surviving = 0;
+      let observed = false;
+      const result = tick(world, M5_PREVIEW_TICK, (phase, before, after, context) => {
+        if (phase !== 7) return;
+        observed = true;
+        const cargos = context.phase7DispatchedShipments!;
+        expect(cargos.length).toBeGreaterThan(0);
+        reconcilePaidBundles(before, after, cargos, context.transactions, 0.25,
+          context.effectiveJurisdictionByRegion);
+        const expected = goodsByOwnerBucket(before);
+        for (const cargo of cargos) {
+          expect(cargo.originRegionId).toBe(source.regionId);
+          expect(cargo.destinationRegionId).toBe(destination.regionId);
+          expect(cargo.invoiceCurrencyId).toBe(currency);
+          expect(cargo.goodId).toBe(IRON);
+          const sale = context.transactions.find(tx => tx.phase === 7 &&
+            tx.type === "TRADE_GOODS_SALE" && tx.bundleId === "tb:" + cargo.id.slice(3))!;
+          expect(sale).toBeDefined();
+          expect(sale.quantity).toBeGreaterThan(0);
+          // The fixture offers iron from the closing workshop's INPUT stock.
+          // Compare actual Phase-7 owner/bucket balances, not end-of-tick
+          // inventory (which Phase 8 can legitimately sell again).
+          const seller = cargo.seller;
+          if (seller.type !== "PRODUCTION_UNIT") throw new Error("expected workshop seller");
+          expect(before.productionUnits.get(seller.productionUnitId)!.status).toBe("CLOSING");
+          const key = JSON.stringify([actorRefKey(seller), "INPUT", cargo.goodId]);
+          expect(expected.get(key)).toBeGreaterThanOrEqual(sale.quantity!);
+          add(expected, key, -sale.quantity!);
+          gross += sale.quantity!;
+          payout += sale.moneyAmount!;
+          surviving += cargo.quantity;
+        }
+        reconcile(expected, goodsByOwnerBucket(after), "FX-limited phase-7 physical debit");
+        expect(surviving).toBeCloseTo(gross * 0.75, 8);
+        const beforeReserve = before.monetaryAuthorities.get(issuer.authorityId)!
+          .fxPools.get(pair)!.cash.get(currency)!;
+        const afterReserve = after.monetaryAuthorities.get(issuer.authorityId)!
+          .fxPools.get(pair)!.cash.get(currency)!;
+        expect(afterReserve).toBeGreaterThanOrEqual(floor - epsilon);
+        expect(beforeReserve - afterReserve).toBeCloseTo(payout, 6);
+      });
+      expect(observed).toBe(true);
+      expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+      expect(result.phaseBoundaryError).toBeUndefined();
+      expect(result.reconciliationErrors).toBeNull();
+      expect(gross).toBeGreaterThan(epsilon);
+      expect(payout).toBeGreaterThan(0);
+      reconcile(cash(world), cash(result.world), "partial FX total currency");
+      return { result, gross, payout, surviving };
+    }
+
+    const funded = run(opening);
+    // Size the stress from the realized funded payout rather than guessing
+    // a nominal price. Only opening payout cash changes between the runs.
+    const headroom = funded.payout / 2;
+    expect(headroom).toBeGreaterThan(0);
+    expect(originalHeadroom).toBeGreaterThan(headroom);
+    const constrainedCash = new Map(pool.cash).set(currency, floor + headroom);
+    const constrained: WorldState = { ...opening, monetaryAuthorities:
+      new Map(opening.monetaryAuthorities).set(issuer.authorityId, {
+        ...issuer, fxPools: new Map(issuer.fxPools).set(pair, { ...pool, cash: constrainedCash }),
+      }),
+    };
+    const scarce = run(constrained);
+    expect(scarce.gross).toBeLessThan(funded.gross);
+    expect(scarce.payout).toBeLessThan(funded.payout);
+    expect(scarce.payout).toBeLessThanOrEqual(headroom + epsilon);
+    expect(scarce.surviving).toBeLessThan(funded.surviving);
+    const replay = run(reversedRegistries(constrained));
+    expect(replay.result.context.transactions).toEqual(scarce.result.context.transactions);
+    expect(replay.result.world).toEqual(scarce.result.world);
+  }, 120_000);
 });
