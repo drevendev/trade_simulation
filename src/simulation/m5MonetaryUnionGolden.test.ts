@@ -1,12 +1,12 @@
 /** #1169 / #676: shared legal tender does not remove a State border. */
 import { describe, expect, it } from "vitest";
 import { createM5PreviewScenario, M5_PREVIEW_TICK } from "../diagnostics/m5PreviewScenario";
-import type { CurrencyId, GoodId } from "../domain/id";
+import type { CurrencyId, GoodId, MonetaryAuthorityId } from "../domain/id";
 import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import { executeM5AutonomousRegionalTradeTick } from "./m5AutonomousRegionalTradeTick";
 import type { PhaseHandler } from "./tickOrchestrator";
 import type { PhaseWorldTransitionObserver } from "./statefulTickOrchestrator";
-import type { WorldState } from "./worldState";
+import type { MonetaryAuthorityState, WorldState } from "./worldState";
 
 const phase1: PhaseHandler = (world, context) => context.phase === 1 ? {
   ...context, effectiveJurisdictionByRegion: new Map([...world.regions].map(
@@ -49,16 +49,16 @@ function unionFixture() {
         treasury: id === beta.stateId ? wallet(state.treasury) : state.treasury,
       } : state,
     ] as const)),
-    monetaryAuthorities: new Map([...base.monetaryAuthorities].map(([id, authority]) => {
+    monetaryAuthorities: new Map([...base.monetaryAuthorities].map(([id, authority]): [MonetaryAuthorityId, MonetaryAuthorityState] => {
       if (id === issuer.authorityId) return [id, {
         ...authority, memberStateIds: [alpha.stateId, beta.stateId],
         seed: { ...authority.seed, memberStateKeys: [alpha.seed.key, beta.seed.key] },
-      }] as const;
+      }];
       return [id, { ...authority,
         memberStateIds: authority.memberStateIds.filter(member => member !== beta.stateId),
         seed: { ...authority.seed,
           memberStateKeys: authority.seed.memberStateKeys.filter(key => key !== beta.seed.key) },
-      }] as const;
+      }];
     })),
     productionUnits: new Map([...base.productionUnits].map(([id, unit]) => [
       id, unit.seed.regionKey === target.seed.key ? { ...unit, wallet: wallet(unit.wallet) } : unit,
