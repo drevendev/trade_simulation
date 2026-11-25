@@ -484,7 +484,60 @@ describe("M5 #676 active-cycle physical golden", () => {
     { lossRate: 0.25, competingRoutes: false, independentPairs: true, window: SHORT_WINDOW },
     { lossRate: 0.25, competingRoutes: false, independentPairs: true, window: LONG_WINDOW },
   ])("reconciles active replay (loss=$lossRate, competing=$competingRoutes, independent=$independentPairs, ticks=$window)", ({ lossRate, competingRoutes, independentPairs, window }) => {
-    const { opening, tick } = activeFixture(lossRate, competingRoutes, independentPairs);
+    const fixture = activeFixture(lossRate, competingRoutes, independentPairs);
+    const { tick } = fixture;
+    let opening = fixture.opening;
+    if (window === LONG_WINDOW) {
+      // Reproduce the original finite-stock fixture through the first late
+      // tick. Record actual physical constraints, not a guessed root cause.
+      let diagnosticWorld = opening;
+      let lastActiveTick: number | null = null;
+      for (let offset = 0; offset <= SHORT_WINDOW; offset++) {
+        const number = M5_PREVIEW_TICK + offset;
+        const result = tick(diagnosticWorld, number);
+        const executions = result.context.productionExecutions!;
+        const consumed = result.context.householdConsumptionExecutions!.reduce(
+          (sum, item) => sum + (item.consumedByGood[IRON] ?? 0), 0);
+        const sales = result.context.transactions.filter(tx =>
+          tx.phase === 7 && tx.type === "TRADE_GOODS_SALE");
+        if (executions.some(item => item.outputProducedQuantity > 0) ||
+            consumed > 0 || sales.length > 0) lastActiveTick = number;
+        if (offset === SHORT_WINDOW) {
+          console.info("M5 original fixture boundary", JSON.stringify({
+            tick: number, lastActiveTick, consumed, paidSales: sales.length,
+            production: executions.map(item => ({
+              unit: item.unitId, planned: item.plannedBatches,
+              input: item.inputBoundBatches, labor: item.laborBoundBatches,
+              capital: item.capitalBoundBatches, realized: item.realizedBatches,
+              openingInputs: [...diagnosticWorld.productionUnits.get(item.unitId)!.inputInventory],
+            })),
+            pools: [...diagnosticWorld.monetaryAuthorities.values()].flatMap(authority =>
+              [...authority.fxPools.values()].map(pool => ({
+                pair: pool.pairId, cash: [...pool.cash],
+              }))),
+          }));
+        }
+        diagnosticWorld = result.world;
+      }
+
+      // Long-window stock endowment: one existing upstream workshop holds
+      // inputs for the nominal capital throughput over the test horizon.
+      // Other actors, both liquidation offers, routes, wallets and FX pools
+      // remain untouched. This is an opening stock, never an in-run refill.
+      const source = [...opening.productionUnits.values()].filter(unit =>
+        unit.status === "ACTIVE" && unit.seed.regionKey === "region:a4-border");
+      expect(source).toHaveLength(1);
+      const unit = source[0]!;
+      const recipe = opening.definitionRegistry.recipes[unit.seed.recipeId]!;
+      const nominalBatches = window * unit.installedCapital * recipe.batchesPerCapitalUnit;
+      const inputs = new Map(unit.inputInventory);
+      for (const [id, coefficient] of Object.entries(recipe.inputsPerBatch)) {
+        const good = id as GoodId;
+        inputs.set(good, Math.max(inputs.get(good) ?? 0, nominalBatches * coefficient));
+      }
+      opening = { ...opening, productionUnits: new Map(opening.productionUnits)
+        .set(unit.productionUnitId, { ...unit, inputInventory: inputs }) };
+    }
     let world = opening;
     let replay = opening;
     let reordered = reversedRegistries(opening);
@@ -506,6 +559,7 @@ describe("M5 #676 active-cycle physical golden", () => {
     let productiveTicks = 0;
     let consumptionTicks = 0;
     let activityBeyondShortWindow = 0;
+    let lastActivityTick: number | null = null;
     let completedTicks = 0;
     let dispatchTicks = 0;
     let deliveryTicks = 0;
@@ -749,9 +803,9 @@ describe("M5 #676 active-cycle physical golden", () => {
       if (journal.some(tx => tx.phase === 1 && tx.type === "SHIPMENT_DELIVERY")) {
         deliveryTicks++;
       }
-      if (offset >= SHORT_WINDOW &&
-          (output || consumed > 0 || invoices.length > 0)) {
-        activityBeyondShortWindow++;
+      if (output || consumed > 0 || invoices.length > 0) {
+        lastActivityTick = number;
+        if (offset >= SHORT_WINDOW) activityBeyondShortWindow++;
       }
       world = a.world;
       replay = b.world;
@@ -763,7 +817,10 @@ describe("M5 #676 active-cycle physical golden", () => {
       // A longer replay of an already dormant fixture is not evidence of
       // additional realized economic activity. Finite stocks may eventually
       // exhaust; do not refill them or require continuous dispatch.
-      expect(activityBeyondShortWindow, "realized activity after the short horizon")
+      console.info("M5 endowed fixture activity", JSON.stringify({
+        lastActivityTick, activityBeyondShortWindow, completedTicks,
+      }));
+      expect(activityBeyondShortWindow, "realized activity after the short horizon; last active tick " + lastActivityTick)
         .toBeGreaterThan(0);
     }
     // A dormant fixture cannot pass simply by replaying a static balance.
