@@ -59,10 +59,10 @@ function fixture() {
     } },
   };
   return { opening, options: { ...options,
-    planHouseholdNeedsInPhase2: true,
-    settleLaborAndProductionInPhase5: true,
-    settleMainMarketInPhase8: true,
-    realizeHouseholdConsumptionInPhase9: true,
+    planHouseholdNeedsInPhase2: true as const,
+    settleLaborAndProductionInPhase5: true as const,
+    settleMainMarketInPhase8: true as const,
+    realizeHouseholdConsumptionInPhase9: true as const,
   } };
 }
 
