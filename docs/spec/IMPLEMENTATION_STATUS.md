@@ -114,7 +114,7 @@ that fact; this file does not.
 | REQ-MARKET-007 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-MARKET-008 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-MONETARY-003 | `READY` | `NOT_STARTED` | — | — | — |
-| REQ-ACCEPTANCE-006 | `READY` | `NOT_STARTED` | — | — | — |
+| REQ-ACCEPTANCE-006 | `READY` | `PARTIAL` | #676 | #1170, `100c4a156da935475c53f1dcf30e7929038401ad` | Merged bounded acceptance slices: PR #994 (src/simulation/m5SharedFxRouteCompetition.test.ts) proves shared finite FX competition in one tick; PRs #1163 and #1166 (src/simulation/m5ActiveCycleGolden.test.ts) prove zero usable payout reserve isolation and positive FX-limited shipment shrinkage with owner-level reconciliation; PR #1168 (src/simulation/m5BlockedCorridorGolden.test.ts) proves separate closed-border and zero-capacity controls over 12 ticks with active local markets; PR #1170 (src/simulation/m5MonetaryUnionGolden.test.ts) proves direct shared-currency cross-State payment, tariff/fee recipients, delivery and replay. All cited PRs merged after independent acceptance. The combined long-run active multi-region/multi-currency golden, repeated settlement and capacity/residual anti-double-use proof remain open under #676; no full Gate M5 claim. |
 | REQ-VISUALIZATION-010 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-CLAN-001 | `READY` | `NOT_STARTED` | — | — | — |
 | REQ-CLAN-002 | `READY` | `NOT_STARTED` | — | — | — |
@@ -177,6 +177,7 @@ that fact; this file does not.
 | REQ-ACCEPTANCE-016 | `READY` | `NOT_STARTED` | — | — | — |
 
 **Summary: 45 of 118 requirement identifiers implemented.**
+Also recorded: 1 partial.
 The denominator is the data-row count of the mirrored registry at generation time; it is never carried forward from an earlier revision. Work that is claimed but not yet merged is a `status:in-progress` label on its Issue, not a row here.
 
 <!-- coverage:generated:end -->
