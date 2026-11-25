@@ -857,4 +857,109 @@ describe("M5 #676 active-cycle physical golden", () => {
       expect(lossTicks).toBe(0);
     }
   }, 120_000);
+
+  it("isolates a corridor with zero FX payout reserve while other markets operate", () => {
+    const { opening, tick } = activeFixture(0.25, false, true);
+    const source = [...opening.regions.values()].find(r => r.seed.key === "region:a4-border")!;
+    const destination = [...opening.regions.values()].find(r => r.seed.key === "region:b4-chokepoint")!;
+    const blockedLink = [...opening.transportLinks.values()].find(link =>
+      link.fromRegionId === source.regionId && link.toRegionId === destination.regionId)!;
+    expect(blockedLink).toBeDefined();
+    const issuer = [...opening.monetaryAuthorities.values()].find(a => a.seed.key === "authority:alpha")!;
+    const [pair, pool] = [...issuer.fxPools.entries()].find(([, p]) =>
+      p.baseCurrencyId === source.settlementCurrencyId &&
+      p.quoteCurrencyId === destination.settlementCurrencyId)!;
+    expect(pool.cash.get(source.settlementCurrencyId)).toBeGreaterThan(0);
+    expect(pool.cash.get(destination.settlementCurrencyId)).toBeGreaterThan(0);
+    // Change only the opening payout reserve of this one directed corridor.
+    // The other currency remains available; no reserves are changed in flight.
+    const authorities = new Map(opening.monetaryAuthorities).set(issuer.authorityId, {
+      ...issuer, fxPools: new Map(issuer.fxPools).set(pair, {
+        ...pool, cash: new Map(pool.cash).set(source.settlementCurrencyId, 0),
+      }),
+    });
+    const scarce: WorldState = { ...opening, monetaryAuthorities: authorities };
+    const openingCash = cash(scarce);
+    const expectedGoods = goods(scarce);
+    let control = opening;
+    let world = scarce;
+    let shuffled = reversedRegistries(scarce);
+    let controlBlockedDispatches = 0;
+    let healthyDispatches = 0;
+    let healthyDeliveries = 0;
+    let localPaidTicks = 0;
+    const localActors = new Set([
+      ...[...scarce.productionUnits.values()].filter(u => u.seed.regionKey === source.seed.key)
+        .map(u => actorRefKey({ type: "PRODUCTION_UNIT", productionUnitId: u.productionUnitId })),
+      ...[...scarce.cohorts.values()].filter(c => c.seed.regionKey === source.seed.key)
+        .map(c => actorRefKey({ type: "COHORT", cohortId: c.cohortId })),
+    ]);
+    for (let offset = 0; offset < SHORT_WINDOW; offset++) {
+      const number = M5_PREVIEW_TICK + offset;
+      const funded = tick(control, number);
+      expect(funded.phaseBoundaryError).toBeUndefined();
+      expect(funded.reconciliationErrors).toBeNull();
+      controlBlockedDispatches += [...(funded.world.shipments?.values() ?? [])].filter(cargo =>
+        cargo.departureTick === number && cargo.transportLinkId === blockedLink.linkId).length;
+      control = funded.world;
+      const actual = tick(world, number, (phase, before, after, context) => {
+        if (phase === 1) healthyDeliveries += reconcileArrivals(before, after, context).length;
+        if (phase !== 7) return;
+        const cargos = context.phase7DispatchedShipments!;
+        expect(Array.isArray(cargos)).toBe(true);
+        for (const cargo of cargos) {
+          expect(cargo.transportLinkId).not.toBe(blockedLink.linkId);
+          expect([cargo.invoiceCurrencyId, cargo.buyerPaymentCurrencyId])
+            .not.toContain(source.settlementCurrencyId);
+          expect([cargo.invoiceCurrencyId, cargo.buyerPaymentCurrencyId])
+            .not.toContain(destination.settlementCurrencyId);
+        }
+        healthyDispatches += cargos.length;
+        reconcilePaidBundles(before, after, cargos, context.transactions, 0.25,
+          context.effectiveJurisdictionByRegion);
+        expect(after.monetaryAuthorities.get(issuer.authorityId)!.fxPools.get(pair)!.cash)
+          .toEqual(before.monetaryAuthorities.get(issuer.authorityId)!.fxPools.get(pair)!.cash);
+      });
+      const replay = tick(shuffled, number);
+      for (const result of [actual, replay]) {
+        expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+        expect(result.phaseBoundaryError).toBeUndefined();
+        expect(result.reconciliationErrors).toBeNull();
+      }
+      expect(replay.context.transactions).toEqual(actual.context.transactions);
+      expect(replay.world).toEqual(actual.world);
+      expect(actual.world.monetaryAuthorities.get(issuer.authorityId)!.fxPools.get(pair)!.cash
+        .get(source.settlementCurrencyId) ?? 0).toBe(0);
+      for (const item of actual.context.productionExecutions!) {
+        for (const [id, quantity] of Object.entries(item.inputConsumedByGood)) {
+          add(expectedGoods, id as GoodId, -quantity);
+        }
+        add(expectedGoods, item.outputGoodId, item.outputProducedQuantity);
+      }
+      for (const item of actual.context.householdConsumptionExecutions!) {
+        for (const flows of [item.consumedByGood, item.spoiledByGood]) {
+          for (const [id, quantity] of Object.entries(flows)) {
+            add(expectedGoods, id as GoodId, -quantity);
+          }
+        }
+      }
+      for (const tx of actual.context.transactions) {
+        if (tx.type === "GOODS_TRANSPORT_LOSS") add(expectedGoods, tx.goodId!, -tx.quantity!);
+      }
+      if (actual.context.transactions.some(tx => tx.phase === 8 && tx.goodId === IRON &&
+          (tx.moneyAmount ?? 0) > 0 && tx.source && tx.destination &&
+          localActors.has(actorRefKey(tx.source)) && localActors.has(actorRefKey(tx.destination)))) {
+        localPaidTicks++;
+      }
+      reconcile(openingCash, cash(actual.world), "scarce FX currency tick " + number);
+      reconcile(expectedGoods, goods(actual.world), "scarce FX goods tick " + number);
+      world = actual.world;
+      shuffled = reversedRegistries(replay.world);
+    }
+    // The funded counterfactual makes a vacuous no-trade fixture fail.
+    expect(controlBlockedDispatches, "funded corridor actually dispatches").toBeGreaterThan(0);
+    expect(healthyDispatches, "independent funded corridor dispatches").toBeGreaterThan(0);
+    expect(healthyDeliveries, "independent funded cargo arrives").toBeGreaterThan(0);
+    expect(localPaidTicks, "local paid iron trade in the blocked source region").toBeGreaterThan(0);
+  }, 120_000);
 });
