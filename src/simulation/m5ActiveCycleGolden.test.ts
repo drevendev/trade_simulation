@@ -13,7 +13,10 @@ import type { EconomicTransaction, PhaseHandler, TickContext } from "./tickOrche
 import type { PhaseWorldTransitionObserver } from "./statefulTickOrchestrator";
 import type { TradeShipmentState } from "./tradeShipmentState";
 import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
-import type { WorldState } from "./worldState";
+import { buildInitialWorld, type WorldState } from "./worldState";
+import { baselineScenario } from "../config/fixtures/baselineScenario";
+import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPack";
+import { createDefaultSimulationConfig } from "../config/simulationConfig";
 
 const IRON = "good:iron" as GoodId;
 const WOOD = "good:wood" as GoodId;
@@ -308,8 +311,83 @@ function reconcileArrivals(
   return due;
 }
 
-function activeFixture(lossRate: number, competingRoutes = false) {
+/** Add a disjoint real GAM/DEL route and exactly one issuer-owned pool.
+ * The two corridors share the same tick and orchestrator, but no currency,
+ * seller, buyer or reserve account. All fixture stock is set before the run. */
+function independentPairFixture() {
   const { opening: base, options } = createM5PreviewScenario();
+  const full = buildInitialWorld(
+    baselineScenario, baselineDefinitionPack, createDefaultSimulationConfig(), 42,
+  );
+  const source = [...full.regions.values()].find(r => r.seed.key === "region:c4-trade")!;
+  const target = [...full.regions.values()].find(r => r.seed.key === "region:d1-capital")!;
+  expect(source).toBeDefined();
+  expect(target).toBeDefined();
+  const link = [...full.transportLinks.values()].find(l =>
+    l.fromRegionId === source.regionId && l.toRegionId === target.regionId)!;
+  expect(link).toBeDefined();
+  const issuer = [...full.monetaryAuthorities.values()].find(a => a.seed.key === "authority:gamma")!;
+  expect(issuer).toBeDefined();
+  const pool = [...issuer.fxPools.entries()].find(([, p]) =>
+    p.baseCurrencyId === source.settlementCurrencyId &&
+    p.quoteCurrencyId === target.settlementCurrencyId)!;
+  expect(pool).toBeDefined();
+  const authorities = new Map(base.monetaryAuthorities);
+  const previous = authorities.get(issuer.authorityId)!;
+  expect(previous.fxPools.size).toBe(0);
+  authorities.set(issuer.authorityId, { ...previous, fxPools: new Map([pool]) });
+
+  const regions = new Map(base.regions);
+  const markets = new Map(base.markets);
+  const units = new Map(base.productionUnits);
+  // Neither border region has native baseline production units. Reuse explicit
+  // unused tools-craft templates from the same respective currency regions,
+  // as the ALP/BET preview does, and relocate their region binding.
+  for (const [region, templateRegionKey, iron, price] of [
+    [source, "region:c2-craft", 500, 1],
+    [target, "region:d5-industry", 2, 100],
+  ] as const) {
+    expect(regions.has(region.regionId)).toBe(false);
+    regions.set(region.regionId, region);
+    const market = [...full.markets.values()].find(m => m.seed.regionKey === region.seed.key)!;
+    expect(market).toBeDefined();
+    markets.set(market.marketId, { ...market, priceByGood: new Map(market.priceByGood).set(IRON, price) });
+    for (const [index, status] of ["ACTIVE", "CLOSING"].entries()) {
+      const templateKey = `unit:${templateRegionKey}-recipe:tools-craft-${index}`;
+      const matches = [...full.productionUnits.values()].filter(u => u.seed.key === templateKey);
+      expect(matches, templateKey).toHaveLength(1);
+      const template = matches[0]!;
+      expect(template.seed.regionKey).toBe(templateRegionKey);
+      expect(template.seed.recipeId).toBe("recipe:tools-craft");
+      expect(template.wallet.has(region.settlementCurrencyId)).toBe(true);
+      expect(units.has(template.productionUnitId)).toBe(false);
+      units.set(template.productionUnitId, {
+        ...template, seed: { ...template.seed, regionKey: region.seed.key },
+        status: status === "ACTIVE" ? "ACTIVE" : "CLOSING",
+        installedCapital: status === "ACTIVE" ? 5 : 0,
+        wallet: new Map([[region.settlementCurrencyId, status === "ACTIVE" ? 1_000_000 : 5]]),
+        inputInventory: status === "ACTIVE" ? new Map() : new Map([[IRON, iron]]),
+        outputInventory: new Map(), investmentInventory: new Map(),
+      });
+    }
+  }
+  const links = new Map(base.transportLinks).set(link.linkId, link);
+  const outgoing = new Map([...links.values()].map(l => [l.fromRegionId, [l.linkId]] as const));
+  return {
+    opening: { ...base, regions, markets, productionUnits: units, monetaryAuthorities: authorities,
+      transportLinks: links, outgoingTransportLinkIdsByRegion: outgoing },
+    options: { ...options,
+      infrastructureFactors: new Map([...links.keys()].map(id => [id, 1] as const)),
+      phase1TradeLawProvider: ((query) =>
+        links.has(query.linkId) && query.goodId === IRON ? null : undefined
+      ) as typeof options.phase1TradeLawProvider,
+    },
+  };
+}
+
+function activeFixture(lossRate: number, competingRoutes = false, independentPairs = false) {
+  const { opening: base, options } = independentPairs
+    ? independentPairFixture() : createM5PreviewScenario();
   const recipe = base.definitionRegistry.recipes["recipe:tools-craft"]!;
   const workers = [...base.regions.values()].map(region => {
     const worker = [...base.cohorts.values()].find(cohort =>
@@ -399,11 +477,12 @@ function activeFixture(lossRate: number, competingRoutes = false) {
 
 describe("M5 #676 active-cycle physical golden", () => {
   it.each([
-    { lossRate: 0, competingRoutes: false },
-    { lossRate: 0.25, competingRoutes: false },
-    { lossRate: 0.25, competingRoutes: true },
-  ])("reconciles active replay (loss=$lossRate, competing=$competingRoutes)", ({ lossRate, competingRoutes }) => {
-    const { opening, tick } = activeFixture(lossRate, competingRoutes);
+    { lossRate: 0, competingRoutes: false, independentPairs: false },
+    { lossRate: 0.25, competingRoutes: false, independentPairs: false },
+    { lossRate: 0.25, competingRoutes: true, independentPairs: false },
+    { lossRate: 0.25, competingRoutes: false, independentPairs: true },
+  ])("reconciles active replay (loss=$lossRate, competing=$competingRoutes, independent=$independentPairs)", ({ lossRate, competingRoutes, independentPairs }) => {
+    const { opening, tick } = activeFixture(lossRate, competingRoutes, independentPairs);
     let world = opening;
     let replay = opening;
     let reordered = reversedRegistries(opening);
@@ -436,6 +515,7 @@ describe("M5 #676 active-cycle physical golden", () => {
     let wrongArrivalRejected = false;
     let wrongArrivalStockRejected = false;
     let simultaneousRouteTicks = 0;
+    let simultaneousPairTicks = 0;
     let narrowRouteSaturated = false;
     const chargeKinds = ["TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"] as const;
     const misroutingRejected = new Set<string>();
@@ -506,6 +586,15 @@ describe("M5 #676 active-cycle physical golden", () => {
           }
         }
         if (usedCapacity.size > 1) simultaneousRouteTicks++;
+        const paidPairs = new Set(cargos!.map(cargo =>
+          JSON.stringify([cargo.invoiceCurrencyId, cargo.buyerPaymentCurrencyId].sort())));
+        if (paidPairs.size > 1) {
+          expect(paidPairs.size).toBe(2);
+          const currencies = new Set(cargos!.flatMap(cargo =>
+            [cargo.invoiceCurrencyId, cargo.buyerPaymentCurrencyId]));
+          expect(currencies.size, "independent paid currency pairs").toBe(4);
+          simultaneousPairTicks++;
+        }
         // Corrupt both the journal and the closing wallets consistently. A
         // receipt-driven owner-balance oracle alone would accept this transfer.
         for (const kind of chargeKinds) {
@@ -669,8 +758,15 @@ describe("M5 #676 active-cycle physical golden", () => {
       expect(simultaneousRouteTicks, "both routes must actually dispatch in the same tick")
         .toBeGreaterThan(0);
       expect(narrowRouteSaturated, "cheap route must exercise its physical bottleneck").toBe(true);
+    } else if (independentPairs) {
+      expect(simultaneousRouteTicks).toBeGreaterThan(0);
     } else {
       expect(simultaneousRouteTicks).toBe(0);
+    }
+    if (independentPairs) {
+      expect(simultaneousPairTicks, "both independent pools must actually settle in the same tick").toBeGreaterThan(0);
+    } else {
+      expect(simultaneousPairTicks).toBe(0);
     }
     expect(wrongPayeeRejected).toBe(true);
     expect([...misroutingRejected].sort()).toEqual([...chargeKinds].sort());
