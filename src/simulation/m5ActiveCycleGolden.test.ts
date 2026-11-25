@@ -12,6 +12,7 @@ import { executeM5AutonomousRegionalTradeTick } from "./m5AutonomousRegionalTrad
 import type { EconomicTransaction, PhaseHandler, TickContext } from "./tickOrchestrator";
 import type { PhaseWorldTransitionObserver } from "./statefulTickOrchestrator";
 import type { TradeShipmentState } from "./tradeShipmentState";
+import { reconcileDelayedDispatch } from "./m5DelayedDispatchOracle";
 import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import { buildInitialWorld, type WorldState } from "./worldState";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
@@ -575,6 +576,8 @@ describe("M5 #676 active-cycle physical golden", () => {
     let simultaneousRouteTicks = 0;
     let simultaneousPairTicks = 0;
     let narrowRouteSaturated = false;
+    const seenDispatchIds = new Set<string>();
+    let compensatedStockRejected = false;
     const chargeKinds = ["TRANSPORT_FEE", "IMPORT_TARIFF", "CONSUMPTION_TAX"] as const;
     const misroutingRejected = new Set<string>();
 
@@ -622,6 +625,30 @@ describe("M5 #676 active-cycle physical golden", () => {
         expect(Array.isArray(cargos)).toBe(true);
         const jurisdiction = context.effectiveJurisdictionByRegion;
         reconcilePaidBundles(before, after, cargos!, context.transactions, lossRate, jurisdiction);
+        reconcileDelayedDispatch(before, after, cargos!, context, goodsByOwnerBucket);
+        for (const cargo of cargos!) {
+          expect(seenDispatchIds.has(cargo.id), "cross-tick dispatch ID reuse").toBe(false);
+          seenDispatchIds.add(cargo.id);
+          if (!compensatedStockRejected) {
+            const seller = cargo.seller;
+            if (seller.type !== "PRODUCTION_UNIT") throw new Error("expected workshop seller");
+            const unit = after.productionUnits.get(seller.productionUnitId)!;
+            const quantity = cargo.quantity / 2;
+            const restored = new Map(unit.inputInventory).set(cargo.goodId,
+              (unit.inputInventory.get(cargo.goodId) ?? 0) + quantity);
+            const forged: WorldState = {
+              ...after,
+              productionUnits: new Map(after.productionUnits).set(seller.productionUnitId,
+                { ...unit, inputInventory: restored }),
+              shipments: new Map(after.shipments ?? []).set(cargo.id,
+                { ...cargo, quantity: cargo.quantity - quantity }),
+            };
+            reconcile(goods(after), goods(forged), "compensated dispatch preserves goods");
+            expect(() => reconcileDelayedDispatch(before, forged, cargos!, context, goodsByOwnerBucket))
+              .toThrow("phase-7 owner bucket");
+            compensatedStockRejected = true;
+          }
+        }
         // Charge the gross paid quantity against each route independently,
         // not the surviving cargo after physical loss and not a global cap.
         const usedCapacity = new Map<TransportLinkId, number>();
@@ -828,6 +855,8 @@ describe("M5 #676 active-cycle physical golden", () => {
     expect(consumptionTicks).toBeGreaterThanOrEqual(3);
     expect(dispatchTicks).toBeGreaterThanOrEqual(2);
     expect(paidBundleTicks).toBe(dispatchTicks);
+    expect(compensatedStockRejected).toBe(true);
+    expect(seenDispatchIds.size).toBeGreaterThanOrEqual(dispatchTicks);
     if (competingRoutes) {
       expect(simultaneousRouteTicks, "both routes must actually dispatch in the same tick")
         .toBeGreaterThan(0);
