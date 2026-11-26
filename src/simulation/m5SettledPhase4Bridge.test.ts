@@ -8,7 +8,8 @@ import { createM5SettledPhase4Bridge } from "./m5SettledPhase4Bridge";
 import type { M4ClosedEconomyOptions } from "./m4ClosedEconomyOrchestrator";
 import { executeM5CanonicalIntakeTradeTick } from "./m5LiveQuotedTradeTick";
 import { derivePhase7PostProcurementIntents } from "./phase7PostProcurementIntents";
-import { marketPriceKey } from "./phase6MarketPriceFormation";
+import { marketPriceKey, ZERO_EXPECTATION } from "./phase6MarketPriceFormation";
+import { repriceGoodInPhase6 } from "./marketPricing";
 import type { PhaseHandler } from "./tickOrchestrator";
 import { buildInitialWorld, type WorldState } from "./worldState";
 
@@ -168,6 +169,79 @@ describe("M5 #673 physically settled Phase-4 pre-production bridge", () => {
     expect(originalBuyer.inputInventory.get(GOOD)).toBe(0);
     expect(originalSeller.wallet.get(f.currency)).toBe(5);
     expect(originalBuyer.wallet.get(f.currency)).toBe(30);
+  });
+
+  it.each([
+    { maxSpend: 30, binding: "quantity", expectedDemand: 3, resetDemand: 5 },
+    { maxSpend: 5, binding: "cash", expectedDemand: 0.5, resetDemand: 2.5 },
+  ])("prices paid Phase-4 residuals when $binding binds", ({
+    maxSpend, binding, expectedDemand, resetDemand,
+  }) => {
+    const f = fixture();
+    const buy = { ...f.buy, maxSpend };
+    const plan: PhaseHandler = (_world, context) => {
+      if (context.phase === 2) {
+        return { ...context, productionMarketIntents: [buy, f.sell], householdMarketIntents: [] };
+      }
+      if (context.phase === 5) {
+        return { ...context, productionMarketIntents: [
+          ...context.productionMarketIntents!, f.phase5Offer,
+        ] };
+      }
+      return context;
+    };
+    const bridge = createM5SettledPhase4Bridge(plan, (_phase, world) => world, f.options);
+    let observed = false;
+    const runPaid = () => executeM5CanonicalIntakeTradeTick(
+      f.world, 7, bridge.handler, bridge.applyPhaseTransition, () => null,
+      (phase, before, after, context) => {
+        if (phase !== 4) return;
+        observed = true;
+        const buyerBefore = before.productionUnits.get(f.buyer.productionUnitId)!;
+        const buyerAfter = after.productionUnits.get(f.buyer.productionUnitId)!;
+        const bought = buyerAfter.inputInventory.get(GOOD)! - buyerBefore.inputInventory.get(GOOD)!;
+        const paid = buyerBefore.wallet.get(f.currency)! - buyerAfter.wallet.get(f.currency)!;
+        expect(bought).toBe(2);
+        expect(paid).toBe(4);
+        expect(context.phase4MarketAllocations).toHaveLength(1);
+        const receipt = context.phase4MarketAllocations![0]!;
+        expect(receipt.buyerIntentId).toBe(buy.id);
+        expect(receipt.quantity).toBe(bought);
+        expect(receipt.quantity * receipt.buyerGrossUnitPrice).toBe(paid);
+        expect(context.transactions.some(tx => tx.phase === 4 && tx.type === "MARKET_SALE"))
+          .toBe(true);
+        const prior = f.world.markets.get(f.market.marketId)!.priceByGood.get(GOOD)!;
+        const quantityLeft = buy.desiredQuantity - bought;
+        const cashLeft = buy.maxSpend - paid;
+        expect(Math.min(quantityLeft, cashLeft / prior)).toBe(expectedDemand);
+        expect(binding === "quantity"
+          ? Math.min(buy.desiredQuantity, cashLeft / prior)
+          : Math.min(quantityLeft, buy.maxSpend / prior)).toBe(resetDemand);
+      },
+      undefined, undefined, undefined, f.options.priceConfig,
+    );
+    const result = runPaid();
+    expect(observed).toBe(true);
+    expect(result.phaseBoundaryError).toBeUndefined();
+    expect(result.reconciliationErrors).toBeNull();
+    expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+    const priorMarket = f.world.markets.get(f.market.marketId)!;
+    const prior = priorMarket.priceByGood.get(GOOD)!;
+    const epsilon = f.world.simulationConfig.numeric.quantityEpsilon!;
+    // The original seller is exhausted; the independent Phase-5 offer is one.
+    const priceFor = (demand: number) => repriceGoodInPhase6(
+      prior, demand, 1, 1, priorMarket.expectationsByGood.get(GOOD) ?? ZERO_EXPECTATION,
+      epsilon, f.options.priceConfig,
+    );
+    const expected = priceFor(expectedDemand);
+    const restored = priceFor(resetDemand);
+    expect(Math.abs(expected - restored)).toBeGreaterThan(1e-6);
+    const actual = result.context.marketPrices.get(marketPriceKey(f.market.marketId, GOOD));
+    expect(actual).toBe(expected);
+    expect(actual).not.toBe(restored);
+    const replay = runPaid();
+    expect(replay.context.marketPrices).toEqual(result.context.marketPrices);
+    expect(replay.context.transactions).toEqual(result.context.transactions);
   });
 
   it("rejects an underfunded physical buyer without publishing any successor", () => {
