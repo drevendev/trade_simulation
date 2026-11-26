@@ -15,6 +15,7 @@ import type { TradeShipmentState } from "./tradeShipmentState";
 import { reconcileDelayedDispatch } from "./m5DelayedDispatchOracle";
 import { captureMainEnvelopes, reconcileMainEnvelopes, assertMainAllocations } from "./m5MainEnvelopeOracle";
 import { rejectOverdrawOnSharedSeller } from "./m5MainOverlapOracle";
+import { rejectOverdrawOnSharedBuyer } from "./m5MainBuyerOverlapOracle";
 import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import { buildInitialWorld, type WorldState } from "./worldState";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
@@ -958,6 +959,66 @@ describe("M5 #676 active-cycle physical golden", () => {
     }
     expect(overlapTicks, "actual paid Phase-7 seller also fills MAIN in the same tick")
       .toBeGreaterThan(0);
+  }, 120_000);
+
+  it("requires actual shared buyer intent and independently rejects quantity and cash overdraw", () => {
+    const fixture = activeFixture(0.25);
+    const link = [...fixture.opening.transportLinks.values()][0]!;
+    expect(fixture.opening.transportLinks.size).toBe(1);
+    const localSellers = [...fixture.opening.productionUnits.values()].filter(unit =>
+      unit.status === "CLOSING" && unit.seed.regionKey ===
+        fixture.opening.regions.get(link.toRegionId)!.seed.key);
+    expect(localSellers).toHaveLength(1);
+    const seller = localSellers[0]!;
+    // Opening stock only: ensure local stock can compete for residual demand
+    // without replenishing it or fabricating intents during the run.
+    const opening: WorldState = {
+      ...fixture.opening,
+      transportLinks: new Map(fixture.opening.transportLinks).set(link.linkId, {
+        ...link, seed: { ...link.seed, baseCapacity: 1 },
+      }),
+      productionUnits: new Map(fixture.opening.productionUnits).set(seller.productionUnitId, {
+        ...seller, inputInventory: new Map(seller.inputInventory).set(IRON, 500),
+      }),
+    };
+    let world = opening;
+    let replay = opening;
+    let shuffled = reversedRegistries(opening);
+    let quantityRejected = false;
+    let cashRejected = false;
+    for (let offset = 0; offset < SHORT_WINDOW; offset++) {
+      const number = M5_PREVIEW_TICK + offset;
+      let initial: ReturnType<typeof captureMainEnvelopes> | undefined;
+      let residual: ReturnType<typeof reconcileMainEnvelopes> | undefined;
+      const actual = fixture.tick(world, number, (phase, before, after, context) => {
+        if (phase === 6) initial = captureMainEnvelopes(after, context);
+        if (phase === 7) {
+          expect(initial).toBeDefined();
+          residual = reconcileMainEnvelopes(before, initial!, context);
+        }
+        if (phase === 8) {
+          expect(initial).toBeDefined();
+          expect(residual).toBeDefined();
+          const rejected = rejectOverdrawOnSharedBuyer(before, initial!, residual!, context);
+          quantityRejected ||= rejected.quantity;
+          cashRejected ||= rejected.cash;
+        }
+      });
+      const same = fixture.tick(replay, number);
+      const reversed = fixture.tick(shuffled, number);
+      for (const result of [actual, same, reversed]) {
+        expect(result.phaseTrace).toEqual([...Array(16).keys()]);
+        expect(result.phaseBoundaryError).toBeUndefined();
+        expect(result.reconciliationErrors).toBeNull();
+        expect(result.context.transactions).toEqual(actual.context.transactions);
+        expect(result.world).toEqual(actual.world);
+      }
+      world = actual.world;
+      replay = same.world;
+      shuffled = reversedRegistries(reversed.world);
+    }
+    expect(quantityRejected, "actual shared buyer with a load-bearing quantity control").toBe(true);
+    expect(cashRejected, "actual shared buyer with a load-bearing cash control").toBe(true);
   }, 120_000);
 
   it("isolates a corridor with zero usable FX payout reserve while other markets operate", () => {
