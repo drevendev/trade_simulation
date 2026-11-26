@@ -16,6 +16,7 @@ import { reconcileDelayedDispatch } from "./m5DelayedDispatchOracle";
 import { captureMainEnvelopes, reconcileMainEnvelopes, assertMainAllocations } from "./m5MainEnvelopeOracle";
 import { rejectOverdrawOnSharedSeller } from "./m5MainOverlapOracle";
 import { rejectOverdrawOnSharedBuyer } from "./m5MainBuyerOverlapOracle";
+import { reconcileGrossRouteCapacity, rejectCapacityHiddenByLoss } from "./m5GrossRouteCapacityOracle";
 import { actorRefKey, type ActorRef } from "../domain/genesisLedger";
 import { buildInitialWorld, type WorldState } from "./worldState";
 import { baselineScenario } from "../config/fixtures/baselineScenario";
@@ -579,6 +580,7 @@ describe("M5 #676 active-cycle physical golden", () => {
     let simultaneousRouteTicks = 0;
     let simultaneousPairTicks = 0;
     let narrowRouteSaturated = false;
+    let lossHiddenOverdrawRejected = false;
     const seenDispatchIds = new Set<string>();
     let compensatedStockRejected = false;
     let restoredDemandRejected = false;
@@ -672,25 +674,18 @@ describe("M5 #676 active-cycle physical golden", () => {
             compensatedStockRejected = true;
           }
         }
-        // Charge the gross paid quantity against each route independently,
-        // not the surviving cargo after physical loss and not a global cap.
-        const usedCapacity = new Map<TransportLinkId, number>();
-        for (const cargo of cargos!) {
-          const sale = context.transactions.find(tx => tx.phase === 7 &&
-            tx.type === "TRADE_GOODS_SALE" && tx.bundleId === "tb:" + cargo.id.slice(3));
-          expect(sale?.quantity).toBeGreaterThan(0);
-          const weight = before.definitionRegistry.goods[cargo.goodId]!.cargoWeightPerUnit;
-          add(usedCapacity, cargo.transportLinkId, sale!.quantity! * weight);
-        }
+        const usedCapacity = reconcileGrossRouteCapacity(before, cargos!, context);
         for (const [id, use] of usedCapacity) {
           const link = before.transportLinks.get(id)!;
-          expect(link).toBeDefined();
-          const cap = link.seed.baseCapacity * link.seed.condition; // fixture factor = 1
-          expect(use, "gross route capacity " + id)
-            .toBeLessThanOrEqual(cap + before.simulationConfig.numeric.quantityEpsilon!);
+          const cap = link.seed.baseCapacity * link.seed.condition;
           if (competingRoutes && link.seed.baseCapacity === 1 &&
-              Math.abs(use - cap) <= before.simulationConfig.numeric.quantityEpsilon!) {
+              Math.abs(use.gross - cap) <= before.simulationConfig.numeric.quantityEpsilon!) {
             narrowRouteSaturated = true;
+            if (!lossHiddenOverdrawRejected) {
+              lossHiddenOverdrawRejected = rejectCapacityHiddenByLoss(
+                before, cargos!, context, id, use,
+              );
+            }
           }
         }
         if (usedCapacity.size > 1) simultaneousRouteTicks++;
@@ -885,6 +880,7 @@ describe("M5 #676 active-cycle physical golden", () => {
       expect(simultaneousRouteTicks, "both routes must actually dispatch in the same tick")
         .toBeGreaterThan(0);
       expect(narrowRouteSaturated, "cheap route must exercise its physical bottleneck").toBe(true);
+      expect(lossHiddenOverdrawRejected, "gross overdraw hidden by actual transit loss").toBe(true);
     } else if (independentPairs) {
       expect(simultaneousRouteTicks).toBeGreaterThan(0);
     } else {
