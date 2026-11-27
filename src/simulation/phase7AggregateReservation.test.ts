@@ -496,13 +496,17 @@ describe("M5 #1204 pre-FX regional demand is not independent route demand", () =
         [[r.candidate.tradePlanId, r.fxPoolPairId] as const])));
   }
 
-  it("shares export and import residuals across alternate routes even with no FX", () => {
+  it.each([
+    { stock: 9, demand: 9 },
+    { stock: 100, demand: 9 },
+    { stock: 9, demand: 100 },
+  ])("shares export and import residuals across alternate routes (stock=$stock, demand=$demand)", ({ stock, demand }) => {
     const first = edge(foreign);
     const second = { ...first, linkId: "link:pre-fx-alternate" as TransportLinkId };
     const a = req("a", first, wood, 3, { fxPoolPairId: pair });
     const b = req("b", second, wood, 2, { fxPoolPairId: pair });
     for (const fx of [0, 4, 100]) {
-      const budgets = balances([a, b], 9, 9, 100, fx);
+      const budgets = balances([a, b], stock, demand, 100, fx);
       const before = JSON.stringify(Object.values(budgets).map(map => [...map]));
       const quotes = Object.freeze([Object.freeze(evidence(a, fx / 2, 10)),
         Object.freeze(evidence(b, fx / 2, 5))]);
