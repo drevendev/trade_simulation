@@ -333,8 +333,8 @@ describe("M5 #671 independent pre-FX demand evidence", () => {
     expect(preview([fx(0, { legalQuantityCap: 2 })])[0]?.desiredOwnQuantity).toBe(2);
     expect(() => preview([fx(-1)])).toThrow(/fxFeasibleQuantity/);
     expect(() => preview([fx(Infinity)])).toThrow(/fxFeasibleQuantity/);
-    expect(() => preview([fx(0, { fxFeasibleQuantity: undefined })]))
-      .toThrow(/FX feasible quantity/);
+    const { fxFeasibleQuantity: _omitted, ...missingFxBound } = fx(0);
+    expect(() => preview([missingFxBound])).toThrow(/FX feasible quantity/);
     expect(previewPhase7PreFxCandidateDemand(
       world, config, [candidate("plan:domestic")], factors, new Set([link.linkId]), policy,
     )).toEqual([]);
