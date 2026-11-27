@@ -8,6 +8,7 @@ import { buildInitialWorld, type FxLiquidityPoolState, type WorldState } from ".
 import { settleFx, type FxLedgerLeg } from "./fxSettlement";
 import { quoteFx, resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 import type { FxReservation } from "./fxQuoteReservation";
+import type { Phase7DesiredFxFlow } from "./phase7AutoFxReservations";
 import {
   createFxSettlementId, createTransactionBundleId, initializeTickContext,
   type EconomicTransaction, type TickContext,
@@ -170,10 +171,10 @@ describe("M5 #675 / M5-FX-CLOSE-001 real FX monetary close", () => {
     const opening = captureFxCloseOpening(world, 7);
     const ctx = context(7, paid.transactions, [paid.reservation]);
     const ordinary = reconcileAndPlanFxClose(opening, paid.world, ctx, POLICY);
-    const original = new Map([
-      [0, { tick: 7, pairId: PAIR, direction: "QUOTE_TO_BASE" as const,
+    const original = new Map<number, Phase7DesiredFxFlow>([
+      [0, { tick: 7, pairId: PAIR, direction: "QUOTE_TO_BASE",
         desiredOutputAmount: 12, requiredInputAmountAtDesiredOutput: 12 }],
-      [2, { tick: 7, pairId: PAIR, direction: "BASE_TO_QUOTE" as const,
+      [2, { tick: 7, pairId: PAIR, direction: "BASE_TO_QUOTE",
         desiredOutputAmount: 6, requiredInputAmountAtDesiredOutput: 6 }],
     ]);
     const withOriginal = { ...ctx, phase7DesiredFxFlowByLotOrdinal: original };
