@@ -6,6 +6,7 @@ import type { CurrencyId, MonetaryAuthorityId } from "../domain/id";
 import { actorRefKey } from "../domain/genesisLedger";
 import type { EconomicTransaction, TickContext } from "./tickOrchestrator";
 import type { FxLedgerLeg } from "./fxSettlement";
+import type { Phase7DesiredFxFlow } from "./phase7AutoFxReservations";
 import { quoteFxForPool, type FxReservation } from "./fxQuoteReservation";
 import { resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 import type { FxLiquidityPoolState, WorldState } from "./worldState";
@@ -58,6 +59,9 @@ declare module "./tickOrchestrator" {
   interface TickContext {
     /** Detached actual Phase-7 reservation evidence, including unfilled reserved demand. */
     readonly phase7FxReservations?: readonly FxReservation[];
+    /** Complete original matched-lot desired evidence, if captured before resizing.
+     * Replaces desired totals from reservations; never authorizes settlement. */
+    readonly phase7DesiredFxFlowByLotOrdinal?: ReadonlyMap<number, Phase7DesiredFxFlow>;
     /** Read-only Phase-11 result; not active quotes until Phase-15 publication. */
     readonly fxMonetaryClose?: FxMonetaryClose;
   }
@@ -263,16 +267,14 @@ export function reconcileAndPlanFxClose(
       flow.base -= units(output.moneyAmount); flow.quote += units(input.moneyAmount);
     }
   }
-  const desired = new Map<string, { demand: number; supply: number }>();
-  for (const reservation of ordered(reservations.values(), r => r.requestId)) {
-    const q = reservation.quote;
+  type DesiredTotals = Map<string, { demand: number; supply: number; demandUnits: bigint; supplyUnits: bigint }>;
+  const addDesired = (totals: DesiredTotals, q: Phase7DesiredFxFlow): void => {
     const p = opening.pools.find(location => location.pool.pairId === q.pairId)?.pool;
-    if (!p || q.spotRate !== p.spotRateQuotePerBase || q.spread !== p.transactionSpread) fail("reservation quote differs from opening pool");
+    if (!p || q.tick !== context.tick) fail("unknown pool or stale desired FX evidence");
     if (q.direction !== "QUOTE_TO_BASE" && q.direction !== "BASE_TO_QUOTE") fail("unknown reservation direction");
     finite(q.desiredOutputAmount, "desired FX output");
     finite(q.requiredInputAmountAtDesiredOutput, "required desired FX input");
-    // Validate desired amounts independently of fills. A zero input cap
-    // deliberately prevents re-reserving liquidity during monetary close.
+    // Validate desired amounts independently of fills, without re-reserving.
     const fromBase = q.direction === "BASE_TO_QUOTE";
     const desiredQuote = quoteFxForPool(p,
       fromBase ? p.baseCurrencyId : p.quoteCurrencyId,
@@ -281,10 +283,45 @@ export function reconcileAndPlanFxClose(
     if (q.requiredInputAmountAtDesiredOutput !== desiredQuote.requiredInputAmountAtDesiredOutput) {
       fail("reservation desired input differs from canonical quote");
     }
-    const flow = desired.get(q.pairId) ?? { demand: 0, supply: 0 };
-    if (fromBase) flow.supply = finite(flow.supply + q.requiredInputAmountAtDesiredOutput, "desired base supply");
-    else flow.demand = finite(flow.demand + q.desiredOutputAmount, "desired base demand");
-    desired.set(q.pairId, flow);
+    const flow = totals.get(q.pairId) ?? { demand: 0, supply: 0, demandUnits: 0n, supplyUnits: 0n };
+    // Keep display totals unchanged, but retain every constituent for exact
+    // coverage: rounded binary64 sums can hide cumulative omitted demand.
+    if (fromBase) {
+      flow.supply = finite(flow.supply + q.requiredInputAmountAtDesiredOutput, "desired base supply");
+      flow.supplyUnits += units(q.requiredInputAmountAtDesiredOutput);
+    } else {
+      flow.demand = finite(flow.demand + q.desiredOutputAmount, "desired base demand");
+      flow.demandUnits += units(q.desiredOutputAmount);
+    }
+    totals.set(q.pairId, flow);
+  };
+  const reservedDesired: DesiredTotals = new Map();
+  for (const reservation of ordered(reservations.values(), r => r.requestId)) {
+    const q = reservation.quote;
+    const p = opening.pools.find(location => location.pool.pairId === q.pairId)?.pool;
+    if (!p || q.spotRate !== p.spotRateQuotePerBase || q.spread !== p.transactionSpread) fail("reservation quote differs from opening pool");
+    addDesired(reservedDesired, { ...q, tick: reservation.tick });
+  }
+  let desired = reservedDesired;
+  const original = context.phase7DesiredFxFlowByLotOrdinal;
+  if (original !== undefined) {
+    if (!(original instanceof Map)) fail("invalid original desired FX evidence map");
+    desired = new Map();
+    for (const [ordinal, q] of [...original.entries()].sort(([a], [b]) => a - b)) {
+      if (!Number.isSafeInteger(ordinal) || ordinal < 0) fail("invalid original FX lot ordinal");
+      addDesired(desired, q);
+    }
+    // A complete original set must cover every final desired reservation.
+    // Check exact constituent sums per direction using one absolute epsilon;
+    // neither an opposite flow nor floating-point rounding can mask loss.
+    const coverageEpsilon = units(opening.moneyEpsilon);
+    for (const [pairId, reserved] of reservedDesired) {
+      const pre = desired.get(pairId);
+      if (!pre || reserved.demandUnits - pre.demandUnits > coverageEpsilon ||
+          reserved.supplyUnits - pre.supplyUnits > coverageEpsilon) {
+        fail("original desired FX evidence does not cover final reservations");
+      }
+    }
   }
   const epsilon = units(opening.moneyEpsilon);
   const results = current.map((location, i): FxPoolClose => {
