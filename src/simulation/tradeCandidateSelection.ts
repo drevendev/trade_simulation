@@ -138,13 +138,14 @@ export function rankWithEpsilonTies(
  * well-formed, ineligible request yields no candidate rather than authorizing
  * a trade on a missing or implicitly eligible route. All reads are pure.
  */
-export function selectPhase7TradeCandidates(
+function selectCandidates(
   world: Pick<WorldState, "regions" | "transportLinks">,
   config: Pick<SimulationConfig, "trade" | "numeric">,
   evidence: readonly Phase7CandidateEvidence[],
   infrastructureFactors: ReadonlyMap<TransportLinkId, number>,
   eligibleDirectedLinkIdsAtPhase1: ReadonlySet<TransportLinkId>,
   policy: Phase7CandidateScorePolicy,
+  beforeFxRationing: boolean,
 ): readonly Phase7EligibleTradeCandidate[] {
   if (!infrastructureFactors || !eligibleDirectedLinkIdsAtPhase1) {
     throw new Error("Phase-7 candidate selection requires explicit route factors and Phase-1 eligibility");
@@ -250,7 +251,8 @@ export function selectPhase7TradeCandidates(
       capacity / request.cargoWeightPerUnit,
       budgetBound,
       request.legalQuantityCap ?? Number.POSITIVE_INFINITY,
-      request.fxFeasibleQuantity ?? Number.POSITIVE_INFINITY,
+      beforeFxRationing ? Number.POSITIVE_INFINITY
+        : request.fxFeasibleQuantity ?? Number.POSITIVE_INFINITY,
     );
     if (!Number.isFinite(maximumOwnQuantity) || maximumOwnQuantity < 0) {
       throw new Error("Phase-7 own-bound quantity is not finite");
@@ -288,4 +290,51 @@ export function selectPhase7TradeCandidates(
     });
   }
   return rankWithEpsilonTies(selected, scoreEpsilon);
+}
+
+/** Production selection retains every original finite FX constraint. */
+export function selectPhase7TradeCandidates(
+  world: Pick<WorldState, "regions" | "transportLinks">,
+  config: Pick<SimulationConfig, "trade" | "numeric">,
+  evidence: readonly Phase7CandidateEvidence[],
+  infrastructureFactors: ReadonlyMap<TransportLinkId, number>,
+  eligibleDirectedLinkIdsAtPhase1: ReadonlySet<TransportLinkId>,
+  policy: Phase7CandidateScorePolicy,
+): readonly Phase7EligibleTradeCandidate[] {
+  return selectCandidates(world, config, evidence, infrastructureFactors,
+    eligibleDirectedLinkIdsAtPhase1, policy, false);
+}
+
+/** Independent route bound only, NOT an allocation, FX quote or pool-flow total.
+ * Competing routes can still share cash, goods and cargo. Never sum these bounds
+ * or pass them to the reservation/dispatch path.
+ */
+export interface Phase7PreFxCandidateDemand {
+  readonly tradePlanId: string;
+  readonly sourceCurrencyId: CurrencyId;
+  readonly destinationCurrencyId: CurrencyId;
+  readonly desiredOwnQuantity: number;
+}
+
+/** Read-only candidate evidence before the first FX quantity cap. All other
+ * eligibility and validation (including valid finite FX evidence) stay intact.
+ * This does not assign shared resources or establish complete desired flow.
+ */
+export function previewPhase7PreFxCandidateDemand(
+  world: Pick<WorldState, "regions" | "transportLinks">,
+  config: Pick<SimulationConfig, "trade" | "numeric">,
+  evidence: readonly Phase7CandidateEvidence[],
+  infrastructureFactors: ReadonlyMap<TransportLinkId, number>,
+  eligibleDirectedLinkIdsAtPhase1: ReadonlySet<TransportLinkId>,
+  policy: Phase7CandidateScorePolicy,
+): readonly Phase7PreFxCandidateDemand[] {
+  return selectCandidates(world, config, evidence, infrastructureFactors,
+    eligibleDirectedLinkIdsAtPhase1, policy, true)
+    .filter(candidate => candidate.sourceCurrencyId !== candidate.destinationCurrencyId)
+    .map(candidate => Object.freeze({
+      tradePlanId: candidate.tradePlanId,
+      sourceCurrencyId: candidate.sourceCurrencyId,
+      destinationCurrencyId: candidate.destinationCurrencyId,
+      desiredOwnQuantity: candidate.maximumOwnQuantity,
+    }));
 }
