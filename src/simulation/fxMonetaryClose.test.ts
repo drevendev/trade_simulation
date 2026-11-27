@@ -125,6 +125,44 @@ describe("M5 #675 / M5-FX-CLOSE-001 real FX monetary close", () => {
       desiredDemandForBase: 100, filledDemandForBase: 0, settlements: 0, logMove: 0 });
   });
 
+  it.each(["BASE_TO_QUOTE", "QUOTE_TO_BASE"] as const)(
+    "validates each unredeemed %s desired quote before aggregation", direction => {
+      const world = changePool(fixture(), p => ({ ...p, spotRateQuotePerBase: 4, transactionSpread: 0.5 }));
+      const opening = captureFxCloseOpening(world, 3);
+      const { pool } = resolveCanonicalFxPool(world, PAIR);
+      const fromBase = direction === "BASE_TO_QUOTE";
+      const payer = [...world.states.values()].find(s => s.seed.key === "state:alpha")!;
+      const payerKey = actorRefKey({ type: "STATE", stateId: payer.stateId });
+      const makeReservation = (suffix: string, desiredOutput: number): FxReservation => ({
+        tick: 3, requestId: "reserve:3:" + suffix, payerKey,
+        quote: quoteFx(world, PAIR,
+          fromBase ? pool.baseCurrencyId : pool.quoteCurrencyId,
+          fromBase ? pool.quoteCurrencyId : pool.baseCurrencyId,
+          desiredOutput, { maxInputAmount: 0 }),
+      });
+      const a = makeReservation("a", 12), b = makeReservation("b", 4);
+      const close = reconcileAndPlanFxClose(opening, world, context(3, [], [a, b]), POLICY);
+      expect(close.pools[0]).toMatchObject({
+        desiredDemandForBase: fromBase ? 0 : 16,
+        desiredSupplyOfBase: fromBase ? 8 : 0,
+        filledDemandForBase: 0, filledSupplyOfBase: 0, settlements: 0,
+        logMove: 0, nextSpot: 4,
+      });
+      expect(reconcileAndPlanFxClose(opening, world, context(3, [], [b, a]), POLICY)).toEqual(close);
+      // The first valid request is large enough to mask a negative second
+      // request if only the aggregate is validated. The other forged quote
+      // preserves the spot and spread but changes the desired input amount.
+      for (const quote of [
+        { ...b.quote, desiredOutputAmount: -4, requiredInputAmountAtDesiredOutput: -b.quote.requiredInputAmountAtDesiredOutput },
+        { ...b.quote, requiredInputAmountAtDesiredOutput: b.quote.requiredInputAmountAtDesiredOutput + 1 },
+      ]) {
+        expect(() => reconcileAndPlanFxClose(opening, world,
+          context(3, [], [a, { ...b, quote }]), POLICY)).toThrow(/M5 FX close/);
+      }
+      expect(captureFxCloseOpening(world, 3)).toEqual(opening);
+    },
+  );
+
   it("separates desired flow from a real reserve-limited fill", () => {
     const world = changePool(fixture(), p => ({ ...p, cash: new Map(p.cash).set(p.baseCurrencyId, 3) }));
     const paid = exchange(world, 3, "QUOTE_TO_BASE", 100);
