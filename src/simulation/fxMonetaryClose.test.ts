@@ -191,6 +191,59 @@ describe("M5 #675 / M5-FX-CLOSE-001 real FX monetary close", () => {
     }, POLICY)).toThrow(/matching unspent reservation/);
   });
 
+  it.each(["BASE_TO_QUOTE", "QUOTE_TO_BASE"] as const)(
+    "checks exact %s desired coverage despite rounded aggregate cancellation", direction => {
+      const tick = 7;
+      const world = changePool(fixture(), p => ({ ...p, transactionSpread: 0 }));
+      const opening = captureFxCloseOpening(world, tick);
+      expect(opening.moneyEpsilon).toBe(1e-9);
+      const { pool } = resolveCanonicalFxPool(world, PAIR);
+      const fromBase = direction === "BASE_TO_QUOTE";
+      const payer = [...world.states.values()].find(s =>
+        s.seed.key === (fromBase ? "state:alpha" : "state:beta"))!;
+      const payerKey = actorRefKey({ type: "STATE", stateId: payer.stateId });
+      const ordinals = [2, 3, 4, 5, 10];
+      const reservations: FxReservation[] = ordinals.map(ordinal => ({
+        tick, requestId: `fx:req:m5:${tick}:${ordinal}`, payerKey,
+        quote: quoteFx(world, PAIR,
+          fromBase ? pool.baseCurrencyId : pool.quoteCurrencyId,
+          fromBase ? pool.quoteCurrencyId : pool.baseCurrencyId,
+          ordinal === 10 ? 1e7 : 5e-10, { maxInputAmount: 0 }),
+      }));
+      expect(reservations.every(r => r.quote.feasibleOutputAmount === 0)).toBe(true);
+      const original = new Map<number, Phase7DesiredFxFlow>(reservations.map((r, i) => [
+        ordinals[i]!, {
+          tick, pairId: PAIR, direction,
+          desiredOutputAmount: r.quote.desiredOutputAmount,
+          requiredInputAmountAtDesiredOutput: r.quote.requiredInputAmountAtDesiredOutput,
+        },
+      ]));
+      // Lexical request ordering puts ordinal 10 first, where each small
+      // obligation disappears from the rounded total. Together they exceed epsilon.
+      expect([1e7, 5e-10, 5e-10, 5e-10, 5e-10].reduce((a, b) => a + b, 0)).toBe(1e7);
+      const run = (evidence: ReadonlyMap<number, Phase7DesiredFxFlow>, reverse: boolean) =>
+        reconcileAndPlanFxClose(opening, world, {
+          ...context(tick, [], reverse ? [...reservations].reverse() : reservations),
+          phase7DesiredFxFlowByLotOrdinal: reverse ? new Map([...evidence].reverse()) : evidence,
+        }, POLICY);
+      const complete = run(original, false);
+      expect(complete.pools[0]).toMatchObject({
+        settlements: 0, filledDemandForBase: 0, filledSupplyOfBase: 0,
+        netFlowPressure: 0, logMove: 0, nextSpot: 1,
+      });
+      // A deficit smaller than the canonical absolute epsilon is allowed.
+      const withinEpsilon = new Map(original);
+      withinEpsilon.delete(2);
+      const omitted = new Map([[10, original.get(10)!]]);
+      for (const reverse of [false, true]) {
+        expect(run(original, reverse)).toEqual(complete);
+        expect(run(withinEpsilon, reverse).pools[0]!.settlements).toBe(0);
+        expect(() => run(omitted, reverse)).toThrow(/does not cover final reservations/);
+      }
+      expect(captureFxCloseOpening(world, tick)).toEqual(opening);
+    },
+  );
+
   it("reports entirely unfunded original flow without changing the current or next quote", () => {
     const world = changePool(fixture(), p => ({ ...p, transactionSpread: 0,
       cash: new Map(p.cash).set(p.baseCurrencyId, p.minOperationalReserveBase) }));
