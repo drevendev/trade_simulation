@@ -163,6 +163,70 @@ describe("M5 #675 / M5-FX-CLOSE-001 real FX monetary close", () => {
     },
   );
 
+  it("replaces rather than adds original desired flows while keeping real paid pressure", () => {
+    const world = changePool(fixture(), p => ({ ...p, transactionSpread: 0 }));
+    const paid = exchange(world, 7, "QUOTE_TO_BASE", 2);
+    expect(paid.settled).not.toBeNull();
+    const opening = captureFxCloseOpening(world, 7);
+    const ctx = context(7, paid.transactions, [paid.reservation]);
+    const ordinary = reconcileAndPlanFxClose(opening, paid.world, ctx, POLICY);
+    const original = new Map([
+      [0, { tick: 7, pairId: PAIR, direction: "QUOTE_TO_BASE" as const,
+        desiredOutputAmount: 12, requiredInputAmountAtDesiredOutput: 12 }],
+      [2, { tick: 7, pairId: PAIR, direction: "BASE_TO_QUOTE" as const,
+        desiredOutputAmount: 6, requiredInputAmountAtDesiredOutput: 6 }],
+    ]);
+    const withOriginal = { ...ctx, phase7DesiredFxFlowByLotOrdinal: original };
+    const close = reconcileAndPlanFxClose(opening, paid.world, withOriginal, POLICY);
+    expect(close).toEqual({ ...ordinary, pools: [{
+      ...ordinary.pools[0]!, desiredDemandForBase: 12, desiredSupplyOfBase: 6,
+    }] });
+    expect(reconcileAndPlanFxClose(opening, paid.world, {
+      ...withOriginal, phase7DesiredFxFlowByLotOrdinal: new Map([...original].reverse()),
+    }, POLICY)).toEqual(close);
+    // The detached map never substitutes for the actual settlement promise.
+    expect(() => reconcileAndPlanFxClose(opening, paid.world, {
+      ...withOriginal, phase7FxReservations: [],
+    }, POLICY)).toThrow(/matching unspent reservation/);
+  });
+
+  it("reports entirely unfunded original flow without changing the current or next quote", () => {
+    const world = changePool(fixture(), p => ({ ...p, transactionSpread: 0,
+      cash: new Map(p.cash).set(p.baseCurrencyId, p.minOperationalReserveBase) }));
+    const opening = captureFxCloseOpening(world, 7);
+    const original = new Map([[0, { tick: 7, pairId: PAIR, direction: "QUOTE_TO_BASE" as const,
+      desiredOutputAmount: 12, requiredInputAmountAtDesiredOutput: 12 }]]);
+    const close = reconcileAndPlanFxClose(opening, world, {
+      ...context(7), phase7DesiredFxFlowByLotOrdinal: original,
+    }, POLICY);
+    expect(close.pools[0]).toMatchObject({ desiredDemandForBase: 12,
+      filledDemandForBase: 0, settlements: 0, logMove: 0, nextSpot: 1 });
+    expect(captureFxCloseOpening(world, 7)).toEqual(opening);
+  });
+
+  it.each(["stale", "unknown-pair", "negative", "forged", "under-covered", "opposite", "ordinal", "empty"])(
+    "rejects %s original FX evidence", corruption => {
+      const world = changePool(fixture(), p => ({ ...p, transactionSpread: 0 }));
+      const paid = exchange(world, 7, "QUOTE_TO_BASE", 2);
+      const opening = captureFxCloseOpening(world, 7);
+      const before = captureFxCloseOpening(paid.world, 7);
+      const q = { tick: 7, pairId: PAIR, direction: "QUOTE_TO_BASE" as "QUOTE_TO_BASE" | "BASE_TO_QUOTE",
+        desiredOutputAmount: 12, requiredInputAmountAtDesiredOutput: 12 };
+      if (corruption === "stale") q.tick = 6;
+      if (corruption === "unknown-pair") q.pairId = "missing";
+      if (corruption === "negative") q.desiredOutputAmount = -1;
+      if (corruption === "forged") q.requiredInputAmountAtDesiredOutput = 13;
+      if (corruption === "under-covered") q.desiredOutputAmount = q.requiredInputAmountAtDesiredOutput = 1;
+      if (corruption === "opposite") q.direction = "BASE_TO_QUOTE";
+      const original = new Map([[corruption === "ordinal" ? -1 : 0, q]]);
+      if (corruption === "empty") original.clear();
+      expect(() => reconcileAndPlanFxClose(opening, paid.world, {
+        ...context(7, paid.transactions, [paid.reservation]), phase7DesiredFxFlowByLotOrdinal: original,
+      }, POLICY)).toThrow(/M5 FX close/);
+      expect(captureFxCloseOpening(paid.world, 7)).toEqual(before);
+    },
+  );
+
   it("separates desired flow from a real reserve-limited fill", () => {
     const world = changePool(fixture(), p => ({ ...p, cash: new Map(p.cash).set(p.baseCurrencyId, 3) }));
     const paid = exchange(world, 3, "QUOTE_TO_BASE", 100);
