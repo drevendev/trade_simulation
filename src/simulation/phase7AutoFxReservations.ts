@@ -181,7 +181,15 @@ export function reservePhase7QuotedFxLots(
   return planPhase7QuotedFxLots(world, tick, quotes, false);
 }
 
+/** Original desired flow only; deliberately not an FxReservation or a payment promise. */
+export type Phase7DesiredFxFlow = Readonly<Pick<FxReservation["quote"],
+  "pairId" | "direction" | "desiredOutputAmount" | "requiredInputAmountAtDesiredOutput"
+> & { tick: number }>;
+
 export interface Phase7FxScarcityCaps {
+  /** Detached desired-only evidence keyed by original matched FX lot ordinal.
+   * Capture before resizing; never use this map to authorize settlement. */
+  readonly desiredFlowByLotOrdinal: ReadonlyMap<number, Phase7DesiredFxFlow>;
   /** True only when an actual FX lot could not be completely funded. */
   readonly requiresShrink: boolean;
   /** READ-ONLY aggregate output ceilings; replace only these FX keys upstream,
@@ -210,6 +218,7 @@ export function assessPhase7QuotedFxScarcity(
   const epsilon = world.simulationConfig.numeric.moneyEpsilon!;
   const totals = new Map<string, { desired: number; feasible: number; partial: boolean }>();
   const feasibleQuantityByLotOrdinal = new Map<number, number>();
+  const desiredFlowByLotOrdinal = new Map<number, Phase7DesiredFxFlow>();
 
   const addExact = (previous: number, amount: number): number => {
     const next = previous + amount;
@@ -227,6 +236,10 @@ export function assessPhase7QuotedFxScarcity(
     if (quote.fxPairId === null) continue;
     const promise = partial.get(ordinal);
     if (!promise) return fail("scarcity probe lacks a matched FX lot");
+    const { pairId, direction, desiredOutputAmount, requiredInputAmountAtDesiredOutput } = promise.quote;
+    desiredFlowByLotOrdinal.set(ordinal, Object.freeze({
+      tick, pairId, direction, desiredOutputAmount, requiredInputAmountAtDesiredOutput,
+    }));
     const available = promise.quote.feasibleOutputAmount;
     const invoice = quote.sellerInvoiceSource;
     if (!Number.isFinite(available) || available < 0 || available > invoice) {
@@ -287,6 +300,7 @@ export function assessPhase7QuotedFxScarcity(
   }
   return {
     requiresShrink: reduced.size > 0,
+    desiredFlowByLotOrdinal,
     reducedOutputByPairCurrency: reduced,
     feasibleQuantityByLotOrdinal,
   };
