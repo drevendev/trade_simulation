@@ -79,6 +79,18 @@ describe("M5 #1192 / #671 shared cash across canonical FX pairs", () => {
     expect(caps.requiresShrink).toBe(true);
     expect(caps.reducedOutputByPairCurrency).toEqual(new Map([[secondKey, 8]]));
     expect(caps.feasibleQuantityByLotOrdinal).toEqual(new Map([[0, 3], [1, 4]]));
+    const expectedDesired = [
+      { tick: 7, pairId: pairs[0], direction: "BASE_TO_QUOTE",
+        desiredOutputAmount: 6, requiredInputAmountAtDesiredOutput: 6 },
+      { tick: 7, pairId: pairs[1], direction: "BASE_TO_QUOTE",
+        desiredOutputAmount: 12, requiredInputAmountAtDesiredOutput: 6 },
+    ];
+    // Full original demand survives even though the second feasible output is 8.
+    // Exact shape also proves no request ID, feasible amount or redemption promise leaks.
+    expect([...caps.desiredFlowByLotOrdinal]).toEqual([
+      [0, expectedDesired[0]], [1, expectedDesired[1]],
+    ]);
+    expect([...caps.desiredFlowByLotOrdinal.values()].every(Object.isFrozen)).toBe(true);
 
     // Pair order, not registry or incoming ordinal across pairs, owns priority.
     const reordered: WorldState = {
@@ -92,6 +104,9 @@ describe("M5 #1192 / #671 shared cash across canonical FX pairs", () => {
     const reversed = assessPhase7QuotedFxScarcity(reordered, 7, [...quotes].reverse());
     expect(reversed.reducedOutputByPairCurrency).toEqual(caps.reducedOutputByPairCurrency);
     expect(reversed.feasibleQuantityByLotOrdinal).toEqual(new Map([[0, 4], [1, 3]]));
+    expect([...reversed.desiredFlowByLotOrdinal]).toEqual([
+      [0, expectedDesired[1]], [1, expectedDesired[0]],
+    ]);
 
     // Exact shared-cash boundary and separate-payer counterfactual.
     const funded: WorldState = {
@@ -115,7 +130,9 @@ describe("M5 #1192 / #671 shared cash across canonical FX pairs", () => {
         [actorRefKey(payers[0]!), pairs[0], 6, 6],
         [actorRefKey(payers[1]!), pairs[1], 12, 6],
       ]);
-      expect(assessPhase7QuotedFxScarcity(fixture, 7, lots).requiresShrink).toBe(false);
+      const noScarcity = assessPhase7QuotedFxScarcity(fixture, 7, lots);
+      expect(noScarcity.requiresShrink).toBe(false);
+      expect(noScarcity.desiredFlowByLotOrdinal).toEqual(caps.desiredFlowByLotOrdinal);
     }
     expect(world).toEqual(before);
     expect(reordered).toEqual(reorderedBefore);
