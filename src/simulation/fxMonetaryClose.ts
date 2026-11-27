@@ -6,7 +6,7 @@ import type { CurrencyId, MonetaryAuthorityId } from "../domain/id";
 import { actorRefKey } from "../domain/genesisLedger";
 import type { EconomicTransaction, TickContext } from "./tickOrchestrator";
 import type { FxLedgerLeg } from "./fxSettlement";
-import type { FxReservation } from "./fxQuoteReservation";
+import { quoteFxForPool, type FxReservation } from "./fxQuoteReservation";
 import { resolveCanonicalFxPool } from "./fxWorldPoolAuthority";
 import type { FxLiquidityPoolState, WorldState } from "./worldState";
 
@@ -268,10 +268,22 @@ export function reconcileAndPlanFxClose(
     const q = reservation.quote;
     const p = opening.pools.find(location => location.pool.pairId === q.pairId)?.pool;
     if (!p || q.spotRate !== p.spotRateQuotePerBase || q.spread !== p.transactionSpread) fail("reservation quote differs from opening pool");
+    if (q.direction !== "QUOTE_TO_BASE" && q.direction !== "BASE_TO_QUOTE") fail("unknown reservation direction");
+    finite(q.desiredOutputAmount, "desired FX output");
+    finite(q.requiredInputAmountAtDesiredOutput, "required desired FX input");
+    // Validate desired amounts independently of fills. A zero input cap
+    // deliberately prevents re-reserving liquidity during monetary close.
+    const fromBase = q.direction === "BASE_TO_QUOTE";
+    const desiredQuote = quoteFxForPool(p,
+      fromBase ? p.baseCurrencyId : p.quoteCurrencyId,
+      fromBase ? p.quoteCurrencyId : p.baseCurrencyId,
+      q.desiredOutputAmount, { maxInputAmount: 0 });
+    if (q.requiredInputAmountAtDesiredOutput !== desiredQuote.requiredInputAmountAtDesiredOutput) {
+      fail("reservation desired input differs from canonical quote");
+    }
     const flow = desired.get(q.pairId) ?? { demand: 0, supply: 0 };
-    if (q.direction === "QUOTE_TO_BASE") flow.demand = finite(flow.demand + q.desiredOutputAmount, "desired base demand");
-    else if (q.direction === "BASE_TO_QUOTE") flow.supply = finite(flow.supply + q.requiredInputAmountAtDesiredOutput, "desired base supply");
-    else fail("unknown reservation direction");
+    if (fromBase) flow.supply = finite(flow.supply + q.requiredInputAmountAtDesiredOutput, "desired base supply");
+    else flow.demand = finite(flow.demand + q.desiredOutputAmount, "desired base demand");
     desired.set(q.pairId, flow);
   }
   const epsilon = units(opening.moneyEpsilon);
