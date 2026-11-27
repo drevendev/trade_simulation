@@ -14,7 +14,11 @@
 import type { SimulationConfig } from "../config/simulationConfig";
 import type { CurrencyId, GoodId, RegionId, TransportLinkId } from "../domain/id";
 import { cargoCapacityUse, effectiveTransportLinkCapacity, hasUsableTransportCapacity } from "./transportCapacity";
-import { rankWithEpsilonTies, type Phase7EligibleTradeCandidate } from "./tradeCandidateSelection";
+import {
+  rankWithEpsilonTies, previewPhase7RankedCandidatesBeforeFx,
+  type Phase7EligibleTradeCandidate, type Phase7CandidateEvidence,
+  type Phase7CandidateScorePolicy,
+} from "./tradeCandidateSelection";
 import type { WorldState } from "./worldState";
 
 export function phase7RegionGoodKey(region: RegionId, good: GoodId): string {
@@ -158,13 +162,14 @@ function validateCumulativeDebits(
  * reserves cargo capacity before checking money, goods, demand and FX: a
  * refused candidate must not take capacity away from the following one.
  */
-export function reservePhase7AggregateTrades(
+function allocatePhase7AggregateTrades(
   world: Pick<WorldState, "regions" | "transportLinks">,
   config: Pick<SimulationConfig, "numeric" | "trade">,
   requests: readonly Phase7AggregateReservationRequest[],
   budgets: Phase7AggregateBudgets,
   infrastructureFactors: ReadonlyMap<TransportLinkId, number>,
   phase1EligibleDirectedLinks: ReadonlySet<TransportLinkId>,
+  beforeFxRationing: boolean,
 ): Phase7AggregateReservationResult {
   if (!budgets || !infrastructureFactors || !phase1EligibleDirectedLinks) {
     throw new Error("Phase-7 requires explicit shared budgets, infrastructure and frozen Phase-1 eligibility");
@@ -242,6 +247,7 @@ export function reservePhase7AggregateTrades(
       positive(c.sourceSellerNetUnitPrice, "cross-currency seller invoice per unit");
       fxKey = phase7FxOutputKey(request.fxPoolPairId, c.sourceCurrencyId);
       requiredBudget(remainingFx, fxKey, "FX pool output");
+      if (beforeFxRationing) fxKey = null;
     } else if (request.fxPoolPairId !== undefined) {
       throw new Error("same-currency trade must not reserve an FX pool");
     }
@@ -368,4 +374,71 @@ export function reservePhase7AggregateTrades(
     remainingFxOutputByPairCurrency: remainingFx,
     remainingCargoWeightByLink: new Map([...links].sort(([a], [b]) => cmp(a, b))),
   };
+}
+
+/** Production reservations always enforce finite FX output. */
+export function reservePhase7AggregateTrades(
+  world: Pick<WorldState, "regions" | "transportLinks">,
+  config: Pick<SimulationConfig, "numeric" | "trade">,
+  requests: readonly Phase7AggregateReservationRequest[],
+  budgets: Phase7AggregateBudgets,
+  infrastructureFactors: ReadonlyMap<TransportLinkId, number>,
+  phase1EligibleDirectedLinks: ReadonlySet<TransportLinkId>,
+): Phase7AggregateReservationResult {
+  return allocatePhase7AggregateTrades(world, config, requests, budgets,
+    infrastructureFactors, phase1EligibleDirectedLinks, false);
+}
+
+export interface Phase7PreFxRegionalDemand {
+  readonly tradePlanId: string;
+  readonly sourceCurrencyId: CurrencyId;
+  readonly destinationCurrencyId: CurrencyId;
+  readonly desiredRegionalQuantity: number;
+}
+
+/**
+ * Counterfactual regional allocation before FX rationing. Domestic candidates
+ * participate in the same ranked competition. Only desired cross-currency
+ * quantities escape this diagnostic: no reservation, residual, or settlement
+ * authority. Actor-level feasibility and final FX amounts remain separate.
+ */
+export function previewPhase7PreFxRegionalDemand(
+  world: Pick<WorldState, "regions" | "transportLinks">,
+  config: Pick<SimulationConfig, "numeric" | "trade">,
+  evidence: readonly Phase7CandidateEvidence[],
+  budgets: Phase7AggregateBudgets,
+  infrastructureFactors: ReadonlyMap<TransportLinkId, number>,
+  phase1EligibleDirectedLinks: ReadonlySet<TransportLinkId>,
+  policy: Phase7CandidateScorePolicy,
+  fxPairIdByTradePlanId: ReadonlyMap<string, string>,
+): readonly Phase7PreFxRegionalDemand[] {
+  const ranked = previewPhase7RankedCandidatesBeforeFx(world, config, evidence,
+    infrastructureFactors, phase1EligibleDirectedLinks, policy);
+  const originals = new Map(evidence.map(entry => [entry.planId, entry]));
+  const requests: Phase7AggregateReservationRequest[] = ranked.map(
+    ({ desiredOwnQuantity, ...candidate }) => {
+      const original = originals.get(candidate.tradePlanId)!;
+      const pair = fxPairIdByTradePlanId.get(candidate.tradePlanId);
+      return {
+        candidate: { ...candidate, maximumOwnQuantity: desiredOwnQuantity },
+        cargoWeightPerUnit: original.cargoWeightPerUnit,
+        landedGrossUnitCostDest: original.landedGrossUnitCostDest,
+        ...(pair !== undefined ? { fxPoolPairId: pair } : {}),
+      };
+    },
+  );
+  const result = allocatePhase7AggregateTrades(world, config, requests, budgets,
+    infrastructureFactors, phase1EligibleDirectedLinks, true);
+  const byId = new Map(ranked.map(candidate => [candidate.tradePlanId, candidate]));
+  return Object.freeze(result.reservations.flatMap(reservation => {
+    const candidate = byId.get(reservation.tradePlanId)!;
+    if (candidate.sourceCurrencyId === candidate.destinationCurrencyId ||
+        reservation.allocatedQuantity === 0) return [];
+    return [Object.freeze({
+      tradePlanId: reservation.tradePlanId,
+      sourceCurrencyId: candidate.sourceCurrencyId,
+      destinationCurrencyId: candidate.destinationCurrencyId,
+      desiredRegionalQuantity: reservation.allocatedQuantity,
+    })];
+  }));
 }
