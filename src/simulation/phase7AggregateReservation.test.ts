@@ -4,12 +4,13 @@ import { baselineDefinitionPack } from "../config/fixtures/baselineDefinitionPac
 import { baselineScenario } from "../config/fixtures/baselineScenario";
 import { createDefaultSimulationConfig } from "../config/simulationConfig";
 import type { GoodId, TransportLinkId } from "../domain/id";
-import type { Phase7EligibleTradeCandidate } from "./tradeCandidateSelection";
+import type { Phase7EligibleTradeCandidate, Phase7CandidateEvidence } from "./tradeCandidateSelection";
 import {
   phase7FxOutputKey,
   phase7RegionCashKey,
   phase7RegionGoodKey,
   reservePhase7AggregateTrades,
+  previewPhase7PreFxRegionalDemand,
   type Phase7AggregateBudgets,
   type Phase7AggregateReservationRequest,
 } from "./phase7AggregateReservation";
@@ -461,5 +462,98 @@ describe("M5 #670 shared Phase-7 aggregate resource preflight", () => {
     expect(one.remainingExportableByOriginGood.get(
       phase7RegionGoodKey(first.fromRegionId, wood))).toBeCloseTo(9.4, 9);
     expect([...budget.exportableByOriginGood]).toEqual(before);
+  });
+});
+
+describe("M5 #1204 pre-FX regional demand is not independent route demand", () => {
+  const policy = { tradeProfitWeight: 1, shortageWeight: 0, minimumTradeScore: 0,
+    maximumShortagePremiumShare: 0 };
+  function evidence(request: Phase7AggregateReservationRequest, cap: number,
+    reference: number): Phase7CandidateEvidence {
+    const c = request.candidate;
+    return {
+      planId: c.tradePlanId, linkId: c.linkId, originRegionId: c.originRegionId,
+      destinationRegionId: c.destinationRegionId, goodId: c.goodId,
+      authorizedAtPhase1: true, exportableQuantity: 8, residualImportDemandQuantity: 8,
+      buyerRemainingBudgetDest: 100, cargoWeightPerUnit: request.cargoWeightPerUnit,
+      destinationReferenceGrossUnitPrice: reference,
+      landedGrossUnitCostDest: request.landedGrossUnitCostDest,
+      sourceSellerNetUnitPrice: c.sourceSellerNetUnitPrice,
+      destinationReferenceNetUnitPrice: reference,
+      estimatedTransportUnitCostDest: c.estimatedTransportUnitCostDest,
+      estimatedTariffRate: c.estimatedTariffRate,
+      estimatedFxInputPerSourceCurrency: c.estimatedFxInputPerSourceCurrency,
+      shortageRateDestination: c.shortageRateDestination,
+      ...(c.sourceCurrencyId !== c.destinationCurrencyId ? { fxFeasibleQuantity: cap } : {}),
+    };
+  }
+  function preview(requests: readonly Phase7AggregateReservationRequest[],
+    quotes: readonly Phase7CandidateEvidence[], budgets: Phase7AggregateBudgets,
+    links: readonly TransportLinkState[], eligible = links.map(link => link.linkId)) {
+    return previewPhase7PreFxRegionalDemand(worldWith(...links), config, quotes, budgets,
+      new Map(links.map(link => [link.linkId, 1])), new Set(eligible), policy,
+      new Map(requests.flatMap(r => r.fxPoolPairId === undefined ? [] :
+        [[r.candidate.tradePlanId, r.fxPoolPairId] as const])));
+  }
+
+  it.each([
+    { stock: 9, demand: 9 },
+    { stock: 100, demand: 9 },
+    { stock: 9, demand: 100 },
+  ])("shares export and import residuals across alternate routes (stock=$stock, demand=$demand)", ({ stock, demand }) => {
+    const first = edge(foreign);
+    const second = { ...first, linkId: "link:pre-fx-alternate" as TransportLinkId };
+    const a = req("a", first, wood, 3, { fxPoolPairId: pair });
+    const b = req("b", second, wood, 2, { fxPoolPairId: pair });
+    for (const fx of [0, 4, 100]) {
+      const budgets = balances([a, b], stock, demand, 100, fx);
+      const before = JSON.stringify(Object.values(budgets).map(map => [...map]));
+      const quotes = Object.freeze([Object.freeze(evidence(a, fx / 2, 10)),
+        Object.freeze(evidence(b, fx / 2, 5))]);
+      const result = preview([a, b], quotes, budgets, [first, second]);
+      expect(result.map(r => [r.tradePlanId, r.desiredRegionalQuantity]))
+        .toEqual([["a", 8], ["b", 1]]);
+      expect(preview([b, a], [...quotes].reverse(), budgets, [second, first])).toEqual(result);
+      expect(result[0]).not.toHaveProperty("allocatedQuantity");
+      expect(result[0]).not.toHaveProperty("maximumOwnQuantity");
+      expect(result[0]).not.toHaveProperty("fxPoolOutputReservedSource");
+      expect(Object.isFrozen(result[0])).toBe(true);
+      expect(JSON.stringify(Object.values(budgets).map(map => [...map]))).toBe(before);
+      expect(reserve([a, b], budgets, [first, second]).reservations.map(r => r.allocatedQuantity))
+        .toEqual(fx === 0 ? [0, 0] : fx === 4 ? [2, 0] : [8, 1]);
+    }
+  });
+
+  it("shares cargo and cash across different goods and rejects missing FX budgets", () => {
+    const link = edge(foreign, 10);
+    const a = req("a", link, iron, 3, { fxPoolPairId: pair });
+    const b = req("b", link, wood, 2, { fxPoolPairId: pair });
+    const quotes = [evidence(a, 0, 10), evidence(b, 0, 5)];
+    for (const [cash, expected] of [[100, [8, 2]], [18, [8, 1]]] as const) {
+      const budgets = balances([a, b], 100, 100, cash, 0);
+      expect(preview([a, b], quotes, budgets, [link]).map(r => r.desiredRegionalQuantity))
+        .toEqual(expected);
+      expect(() => preview([a, b], quotes,
+        { ...budgets, fxOutputByPairCurrency: new Map() }, [link])).toThrow(/FX pool output/);
+      expect(preview([a, b], quotes, budgets, [link], [])).toEqual([]);
+    }
+  });
+
+  it("includes domestic competitors in ranked stock competition but not FX evidence", () => {
+    const cross = edge(foreign);
+    const source = baseline.regions.get(cross.fromRegionId)!;
+    const target = [...baseline.regions.values()].find(region =>
+      region.regionId !== source.regionId &&
+      region.settlementCurrencyId === source.settlementCurrencyId)!;
+    const local = { ...cross, linkId: "link:pre-fx-domestic" as TransportLinkId,
+      toRegionId: target.regionId };
+    const a = req("domestic", local, wood, 3);
+    const b = req("foreign", cross, wood, 2, { fxPoolPairId: pair });
+    const budgets = balances([a, b], 9, 100, 100, 0);
+    expect(preview([a, b], [evidence(a, 0, 10), evidence(b, 0, 5)], budgets,
+      [local, cross]).map(r => [r.tradePlanId, r.desiredRegionalQuantity]))
+      .toEqual([["foreign", 1]]);
+    expect(preview([b], [evidence(b, 0, 5)], budgets, [cross])
+      .map(r => r.desiredRegionalQuantity)).toEqual([8]);
   });
 });
