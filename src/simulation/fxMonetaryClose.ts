@@ -267,7 +267,7 @@ export function reconcileAndPlanFxClose(
       flow.base -= units(output.moneyAmount); flow.quote += units(input.moneyAmount);
     }
   }
-  type DesiredTotals = Map<string, { demand: number; supply: number }>;
+  type DesiredTotals = Map<string, { demand: number; supply: number; demandUnits: bigint; supplyUnits: bigint }>;
   const addDesired = (totals: DesiredTotals, q: Phase7DesiredFxFlow): void => {
     const p = opening.pools.find(location => location.pool.pairId === q.pairId)?.pool;
     if (!p || q.tick !== context.tick) fail("unknown pool or stale desired FX evidence");
@@ -283,9 +283,16 @@ export function reconcileAndPlanFxClose(
     if (q.requiredInputAmountAtDesiredOutput !== desiredQuote.requiredInputAmountAtDesiredOutput) {
       fail("reservation desired input differs from canonical quote");
     }
-    const flow = totals.get(q.pairId) ?? { demand: 0, supply: 0 };
-    if (fromBase) flow.supply = finite(flow.supply + q.requiredInputAmountAtDesiredOutput, "desired base supply");
-    else flow.demand = finite(flow.demand + q.desiredOutputAmount, "desired base demand");
+    const flow = totals.get(q.pairId) ?? { demand: 0, supply: 0, demandUnits: 0n, supplyUnits: 0n };
+    // Keep display totals unchanged, but retain every constituent for exact
+    // coverage: rounded binary64 sums can hide cumulative omitted demand.
+    if (fromBase) {
+      flow.supply = finite(flow.supply + q.requiredInputAmountAtDesiredOutput, "desired base supply");
+      flow.supplyUnits += units(q.requiredInputAmountAtDesiredOutput);
+    } else {
+      flow.demand = finite(flow.demand + q.desiredOutputAmount, "desired base demand");
+      flow.demandUnits += units(q.desiredOutputAmount);
+    }
     totals.set(q.pairId, flow);
   };
   const reservedDesired: DesiredTotals = new Map();
@@ -305,11 +312,13 @@ export function reconcileAndPlanFxClose(
       addDesired(desired, q);
     }
     // A complete original set must cover every final desired reservation.
-    // Check each direction independently; an opposite flow cannot mask loss.
+    // Check exact constituent sums per direction using one absolute epsilon;
+    // neither an opposite flow nor floating-point rounding can mask loss.
+    const coverageEpsilon = units(opening.moneyEpsilon);
     for (const [pairId, reserved] of reservedDesired) {
       const pre = desired.get(pairId);
-      if (!pre || reserved.demand - pre.demand > opening.moneyEpsilon ||
-          reserved.supply - pre.supply > opening.moneyEpsilon) {
+      if (!pre || reserved.demandUnits - pre.demandUnits > coverageEpsilon ||
+          reserved.supplyUnits - pre.supplyUnits > coverageEpsilon) {
         fail("original desired FX evidence does not cover final reservations");
       }
     }
