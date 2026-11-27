@@ -6,6 +6,7 @@ import type { CurrencyId, GoodId, TransportLinkId } from "../domain/id";
 import { buildInitialWorld, type WorldState } from "./worldState";
 import {
   selectPhase7TradeCandidates,
+  previewPhase7PreFxCandidateDemand,
   type Phase7CandidateEvidence,
   type Phase7CandidateScorePolicy,
 } from "./tradeCandidateSelection";
@@ -275,5 +276,87 @@ describe("M5 #670 Phase-7 aggregate opportunity selection, not reservation", () 
     expect(() => select([good], world, [link.linkId],
       new Map([[link.linkId, 1]]),
       { ...policy, shortageWeight: NaN })).toThrow(/shortageWeight/);
+  });
+});
+
+describe("M5 #671 independent pre-FX demand evidence", () => {
+  const foreign = "currency:foreign-test" as CurrencyId;
+  const regions = new Map(world.regions);
+  regions.set(link.toRegionId, {
+    ...regions.get(link.toRegionId)!, settlementCurrencyId: foreign,
+  });
+  const foreignWorld = { regions, transportLinks: world.transportLinks };
+  const factors = new Map([[link.linkId, 1], [other.linkId, 1]]);
+  const preview = (
+    evidence: readonly Phase7CandidateEvidence[],
+    eligible: readonly TransportLinkId[] = [link.linkId],
+    scorePolicy: Phase7CandidateScorePolicy = policy,
+  ) => previewPhase7PreFxCandidateDemand(
+    foreignWorld, config, evidence, factors, new Set(eligible), scorePolicy,
+  );
+  const fx = (cap: number, overrides: Partial<Phase7CandidateEvidence> = {}) =>
+    candidate("plan:fx", {
+      estimatedFxInputPerSourceCurrency: 1.3, fxFeasibleQuantity: cap,
+      ...overrides,
+    });
+
+  it("retains the same non-FX bound when the pool is empty, thin or sufficient", () => {
+    for (const cap of [0, 2, 8]) {
+      const input = Object.freeze(fx(cap));
+      const expected = [{
+        tradePlanId: "plan:fx",
+        sourceCurrencyId: world.regions.get(link.fromRegionId)!.settlementCurrencyId,
+        destinationCurrencyId: foreign,
+        desiredOwnQuantity: 4,
+      }];
+      const evidence = preview([input]);
+      expect(evidence).toEqual(expected);
+      expect(evidence[0]).not.toHaveProperty("maximumOwnQuantity");
+      expect(Object.isFrozen(evidence[0])).toBe(true);
+      expect(select([input], foreignWorld).map(c => c.maximumOwnQuantity))
+        .toEqual(cap === 0 ? [] : [Math.min(4, cap)]);
+      expect(input).toEqual(fx(cap));
+    }
+  });
+
+  it("retains non-FX restrictions and rejects malformed FX evidence", () => {
+    expect(preview([fx(0)], [])).toEqual([]);
+    expect(preview([fx(0, { authorizedAtPhase1: false })])).toEqual([]);
+    expect(preview([fx(0, { buyerRemainingBudgetDest: 0 })])).toEqual([]);
+    expect(preview([fx(0, { legalQuantityCap: 0 })])).toEqual([]);
+    expect(preview([fx(0, { exportableQuantity: 0 })])).toEqual([]);
+    expect(preview([fx(0, { residualImportDemandQuantity: 0 })])).toEqual([]);
+    expect(preview([fx(0, { cargoWeightPerUnit: 1e10 })])).toEqual([]);
+    expect(preview([fx(0)], [link.linkId], { ...policy, minimumTradeScore: 2 })).toEqual([]);
+    expect(preview([fx(0, { landedGrossUnitCostDest: 26, shortageRateDestination: 1 })]))
+      .toEqual([]);
+    expect(preview([fx(0, { legalQuantityCap: 2 })])[0]?.desiredOwnQuantity).toBe(2);
+    expect(() => preview([fx(-1)])).toThrow(/fxFeasibleQuantity/);
+    expect(() => preview([fx(Infinity)])).toThrow(/fxFeasibleQuantity/);
+    expect(() => preview([fx(0, { fxFeasibleQuantity: undefined })]))
+      .toThrow(/FX feasible quantity/);
+    expect(previewPhase7PreFxCandidateDemand(
+      world, config, [candidate("plan:domestic")], factors, new Set([link.linkId]), policy,
+    )).toEqual([]);
+  });
+
+  it("preserves ranking across input and registry order without modifying evidence", () => {
+    const a = Object.freeze(fx(0));
+    const b = Object.freeze(fx(1, { planId: "plan:iron", goodId: iron }));
+    const input = Object.freeze([a, b]);
+    const beforeRegions = [...regions];
+    const beforeLinks = [...world.transportLinks];
+    const beforeFactors = [...factors];
+    const original = preview(input);
+    expect(original.map(c => c.tradePlanId)).toEqual(["plan:iron", "plan:fx"]);
+    expect(previewPhase7PreFxCandidateDemand(
+      { regions: new Map([...regions].reverse()),
+        transportLinks: new Map([...world.transportLinks].reverse()) },
+      config, [b, a], new Map([...factors].reverse()), new Set([link.linkId]), policy,
+    )).toEqual(original);
+    expect([...regions]).toEqual(beforeRegions);
+    expect([...world.transportLinks]).toEqual(beforeLinks);
+    expect([...factors]).toEqual(beforeFactors);
+    expect(input).toEqual([fx(0), fx(1, { planId: "plan:iron", goodId: iron })]);
   });
 });
