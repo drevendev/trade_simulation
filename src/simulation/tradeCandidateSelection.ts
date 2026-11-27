@@ -316,6 +316,28 @@ export interface Phase7PreFxCandidateDemand {
   readonly desiredOwnQuantity: number;
 }
 
+/** Ranked diagnostic candidates, including domestic routes which compete for
+ * the same non-FX resources. Not a reservation-ready candidate type. */
+export type Phase7PreFxRankedCandidate =
+  Omit<Phase7EligibleTradeCandidate, "maximumOwnQuantity"> & {
+    readonly desiredOwnQuantity: number;
+  };
+
+export function previewPhase7RankedCandidatesBeforeFx(
+  world: Pick<WorldState, "regions" | "transportLinks">,
+  config: Pick<SimulationConfig, "trade" | "numeric">,
+  evidence: readonly Phase7CandidateEvidence[],
+  infrastructureFactors: ReadonlyMap<TransportLinkId, number>,
+  eligibleDirectedLinkIdsAtPhase1: ReadonlySet<TransportLinkId>,
+  policy: Phase7CandidateScorePolicy,
+): readonly Phase7PreFxRankedCandidate[] {
+  return selectCandidates(world, config, evidence, infrastructureFactors,
+    eligibleDirectedLinkIdsAtPhase1, policy, true)
+    .map(({ maximumOwnQuantity, ...candidate }) => Object.freeze({
+      ...candidate, desiredOwnQuantity: maximumOwnQuantity,
+    }));
+}
+
 /** Read-only candidate evidence before the first FX quantity cap. All other
  * eligibility and validation (including valid finite FX evidence) stay intact.
  * This does not assign shared resources or establish complete desired flow.
@@ -328,13 +350,13 @@ export function previewPhase7PreFxCandidateDemand(
   eligibleDirectedLinkIdsAtPhase1: ReadonlySet<TransportLinkId>,
   policy: Phase7CandidateScorePolicy,
 ): readonly Phase7PreFxCandidateDemand[] {
-  return selectCandidates(world, config, evidence, infrastructureFactors,
-    eligibleDirectedLinkIdsAtPhase1, policy, true)
+  return previewPhase7RankedCandidatesBeforeFx(world, config, evidence,
+    infrastructureFactors, eligibleDirectedLinkIdsAtPhase1, policy)
     .filter(candidate => candidate.sourceCurrencyId !== candidate.destinationCurrencyId)
     .map(candidate => Object.freeze({
       tradePlanId: candidate.tradePlanId,
       sourceCurrencyId: candidate.sourceCurrencyId,
       destinationCurrencyId: candidate.destinationCurrencyId,
-      desiredOwnQuantity: candidate.maximumOwnQuantity,
+      desiredOwnQuantity: candidate.desiredOwnQuantity,
     }));
 }
