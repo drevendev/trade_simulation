@@ -252,6 +252,7 @@ function matchActorIntents(
   quantityEpsilon: number,
   moneyEpsilon: number,
   minimumPreviewShipment?: number,
+  previewFeedback?: Phase7PreFxRegionalFeedback,
 ): Phase7ActorMatchResult {
   if (!Number.isFinite(scoreEpsilon) || scoreEpsilon <= 0 ||
       !Number.isFinite(quantityEpsilon) || quantityEpsilon < 0 ||
@@ -355,8 +356,17 @@ function matchActorIntents(
   let totalReservedBuyerCash = 0;
   for (const c of ranked) {
     const request = byPlan.get(c.tradePlanId)!;
-    const regionalQuantity = request.reservation.allocatedQuantity;
-    if (regionalQuantity === 0) continue;
+    const ownCeiling = request.reservation.allocatedQuantity;
+    const regionalQuantity = previewFeedback === undefined ? ownCeiling
+      : previewFeedback.resolveRegionalCeiling(c.tradePlanId, ownCeiling);
+    validNonnegative(regionalQuantity, "Phase-7 feedback regional ceiling");
+    if (regionalQuantity > ownCeiling) {
+      throw new Error("Phase-7 feedback regional ceiling exceeds original bound");
+    }
+    if (regionalQuantity === 0) {
+      previewFeedback?.recordMatchedQuantity(c.tradePlanId, 0);
+      continue;
+    }
     const quote = request.landedGrossUnitCostDest;
     // Fairly split shared physical stock across all intents from an endpoint.
     // An intent's full potential is NOT a committed debit. Only actual matched
@@ -450,7 +460,10 @@ function matchActorIntents(
         }
         quantity *= 1 - Number.EPSILON;
       }
-      if (quantity <= quantityEpsilon || quantity < minimumPreviewShipment) continue;
+      if (quantity <= quantityEpsilon || quantity < minimumPreviewShipment) {
+        previewFeedback?.recordMatchedQuantity(c.tradePlanId, 0);
+        continue;
+      }
       if (!sellerFills || !buyerFills) throw new Error("Phase-7 preview cannot safely round actor debits");
       reservedBuyerCash = quantity * quote;
       if (!Number.isFinite(reservedBuyerCash) || (quote > 0 && reservedBuyerCash === 0)) {
@@ -538,6 +551,7 @@ function matchActorIntents(
     for (const [k, v] of nextCash) actorCash.set(k, v);
     totalReservedQuantity += quantity;
     totalReservedBuyerCash += reservedBuyerCash;
+    previewFeedback?.recordMatchedQuantity(c.tradePlanId, quantity);
   }
   // Per-plan tolerated binary64 drift must not accumulate across plans.
   // Snapshot original physical owners (not intent IDs), including keys
@@ -579,6 +593,19 @@ export interface Phase7PreFxActorDemandRequest extends Omit<Phase7ActorMatchRequ
   readonly desiredRegionalQuantity: number;
 }
 
+/**
+ * Ordered, synchronous feedback for a detached joint regional/actor replay.
+ * Both callbacks are invoked once per ranked plan (including domestic and
+ * zero matches), resolve before matching and record after the staged match.
+ * The caller must keep its regional bookkeeping ephemeral and discard it on
+ * ANY error: final whole-call actor reconciliation can still refuse.
+ * This is not a reservation or settlement API.
+ */
+export interface Phase7PreFxRegionalFeedback {
+  readonly resolveRegionalCeiling: (tradePlanId: string, ownCeiling: number) => number;
+  readonly recordMatchedQuantity: (tradePlanId: string, quantity: number) => void;
+}
+
 export interface Phase7PreFxActorDemandLot {
   readonly tradePlanId: string;
   readonly sellerIntentId: MarketIntentId;
@@ -593,7 +620,8 @@ export interface Phase7PreFxActorDemandLot {
  * domestic competitors and are independent of FX rationing. Match all routes
  * against one actor residual ledger; expose foreign scalar evidence only.
  * No settlement authority, actor references or residual balances escape.
- * Unused regional capacity is not redistributed by this helper.
+ * With feedback, a caller may reclaim unused regional capacity before the
+ * next route. Without feedback, fixed ceilings retain their existing behavior.
  */
 export function previewPhase7PreFxActorDemand(
   requests: readonly Phase7PreFxActorDemandRequest[],
@@ -602,6 +630,7 @@ export function previewPhase7PreFxActorDemand(
   quantityEpsilon: number,
   moneyEpsilon: number,
   minimumShipment: number,
+  feedback?: Phase7PreFxRegionalFeedback,
 ): readonly Phase7PreFxActorDemandLot[] {
   if (!Number.isFinite(minimumShipment) || minimumShipment <= 0) {
     throw new Error("Phase-7 preview requires positive finite minimum shipment");
@@ -622,7 +651,7 @@ export function previewPhase7PreFxActorDemand(
     },
   }));
   const result = matchActorIntents(provisional, budgets, scoreEpsilon, quantityEpsilon,
-    moneyEpsilon, minimumShipment);
+    moneyEpsilon, minimumShipment, feedback);
   const candidates = new Map(requests.map(r => [r.candidate.tradePlanId, r.candidate]));
   return Object.freeze(result.lots.flatMap(lot => {
     const candidate = candidates.get(lot.tradePlanId)!;
