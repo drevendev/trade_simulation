@@ -245,12 +245,13 @@ function fairSharedCaps(
  * demand AND cash residuals fails closed. It must be resized before atomic
  * dispatch; this function may not silently grant a different trade quantity.
  */
-export function matchPhase7ActorIntents(
+function matchActorIntents(
   requests: readonly Phase7ActorMatchRequest[],
   budgets: Phase7ActorMatchBudgets,
   scoreEpsilon: number,
   quantityEpsilon: number,
   moneyEpsilon: number,
+  minimumPreviewShipment?: number,
 ): Phase7ActorMatchResult {
   if (!Number.isFinite(scoreEpsilon) || scoreEpsilon <= 0 ||
       !Number.isFinite(quantityEpsilon) || quantityEpsilon < 0 ||
@@ -354,8 +355,8 @@ export function matchPhase7ActorIntents(
   let totalReservedBuyerCash = 0;
   for (const c of ranked) {
     const request = byPlan.get(c.tradePlanId)!;
-    const quantity = request.reservation.allocatedQuantity;
-    if (quantity === 0) continue;
+    const regionalQuantity = request.reservation.allocatedQuantity;
+    if (regionalQuantity === 0) continue;
     const quote = request.landedGrossUnitCostDest;
     // Fairly split shared physical stock across all intents from an endpoint.
     // An intent's full potential is NOT a committed debit. Only actual matched
@@ -382,6 +383,23 @@ export function matchPhase7ActorIntents(
       (key) => quote > 0 ? actorCash.get(key)! / quote : Number.POSITIVE_INFINITY,
       quantityEpsilon,
     );
+    // Only the diagnostic path may shrink a regional ceiling. Actual
+    // reservations remain strict and must be resized by their owner.
+    let quantity = regionalQuantity;
+    let reservedBuyerCash = request.reservation.buyerCashReservedDest;
+    if (minimumPreviewShipment !== undefined) {
+      const sellerTotal = sellers.reduce((sum, entry) => sum + entry.cap, 0);
+      const buyerTotal = buyers.reduce((sum, entry) => sum + entry.cap, 0);
+      if (!Number.isFinite(sellerTotal) || !Number.isFinite(buyerTotal)) {
+        throw new Error("Phase-7 preview actor capacity not finite");
+      }
+      quantity = Math.min(quantity, sellerTotal, buyerTotal);
+      if (quantity <= quantityEpsilon || quantity < minimumPreviewShipment) continue;
+      reservedBuyerCash = quantity * quote;
+      if (!Number.isFinite(reservedBuyerCash) || (quote > 0 && reservedBuyerCash === 0)) {
+        throw new Error("Phase-7 preview buyer cash lost numeric precision");
+      }
+    }
     const sellerFills = proportional(sellers, quantity, quantityEpsilon);
     const buyerFills = proportional(buyers, quantity, quantityEpsilon);
     // Stage every actor mutation in local copies. Nothing in canonical WorldState
@@ -413,7 +431,7 @@ export function matchPhase7ActorIntents(
     // Preserve the regional cash reservation through proportional splitting,
     // not merely the regional goods quantity.
     if (!Number.isFinite(stagedBuyerCash) ||
-        Math.abs(stagedBuyerCash - request.reservation.buyerCashReservedDest) > moneyEpsilon) {
+        Math.abs(stagedBuyerCash - reservedBuyerCash) > moneyEpsilon) {
       throw new Error("Phase-7 actor payments cannot reconcile accepted buyer cash reservation");
     }
 
@@ -422,7 +440,7 @@ export function matchPhase7ActorIntents(
     // 10_000_000 can cumulatively exceed the single 1e-9 tolerance.
     if (Math.abs(observableDebits(endpoint, nextEndpoints, "seller endpoint") - quantity) > quantityEpsilon ||
         Math.abs(observableDebits(actorCash, nextCash, "buyer wallet") -
-          request.reservation.buyerCashReservedDest) > moneyEpsilon) {
+          reservedBuyerCash) > moneyEpsilon) {
       throw new Error("Phase-7 observable actor debits cannot reconcile aggregate reservation");
     }
 
@@ -462,7 +480,7 @@ export function matchPhase7ActorIntents(
     for (const [k, v] of nextEndpoints) endpoint.set(k, v);
     for (const [k, v] of nextCash) actorCash.set(k, v);
     totalReservedQuantity += quantity;
-    totalReservedBuyerCash += request.reservation.buyerCashReservedDest;
+    totalReservedBuyerCash += reservedBuyerCash;
   }
   // Per-plan tolerated binary64 drift must not accumulate across plans.
   // Snapshot original physical owners (not intent IDs), including keys
@@ -487,4 +505,78 @@ export function matchPhase7ActorIntents(
     remainingBuyerCashByActorCurrency: actorCash,
     remainingBuyerSpendByIntent: buyerSpend,
   };
+}
+
+/** Production matching never clips a reservation or relaxes reconciliation. */
+export function matchPhase7ActorIntents(
+  requests: readonly Phase7ActorMatchRequest[],
+  budgets: Phase7ActorMatchBudgets,
+  scoreEpsilon: number,
+  quantityEpsilon: number,
+  moneyEpsilon: number,
+): Phase7ActorMatchResult {
+  return matchActorIntents(requests, budgets, scoreEpsilon, quantityEpsilon, moneyEpsilon);
+}
+
+export interface Phase7PreFxActorDemandRequest extends Omit<Phase7ActorMatchRequest, "reservation"> {
+  readonly desiredRegionalQuantity: number;
+}
+
+export interface Phase7PreFxActorDemandLot {
+  readonly tradePlanId: string;
+  readonly sellerIntentId: MarketIntentId;
+  readonly buyerIntentId: MarketIntentId;
+  readonly sourceCurrencyId: CurrencyId;
+  readonly destinationCurrencyId: CurrencyId;
+  readonly desiredQuantity: number;
+}
+
+/**
+ * Intermediate counterfactual preview: upstream regional ceilings include
+ * domestic competitors and are independent of FX rationing. Match all routes
+ * against one actor residual ledger; expose foreign scalar evidence only.
+ * No settlement authority, actor references or residual balances escape.
+ * Unused regional capacity is not redistributed by this helper.
+ */
+export function previewPhase7PreFxActorDemand(
+  requests: readonly Phase7PreFxActorDemandRequest[],
+  budgets: Phase7ActorMatchBudgets,
+  scoreEpsilon: number,
+  quantityEpsilon: number,
+  moneyEpsilon: number,
+  minimumShipment: number,
+): readonly Phase7PreFxActorDemandLot[] {
+  if (!Number.isFinite(minimumShipment) || minimumShipment <= 0) {
+    throw new Error("Phase-7 preview requires positive finite minimum shipment");
+  }
+  // Internal synthetic ceilings use the matcher validation and allocation
+  // machinery, but cannot be returned or consumed as dispatch reservations.
+  const provisional: Phase7ActorMatchRequest[] = requests.map(({ desiredRegionalQuantity, ...request }) => ({
+    ...request,
+    reservation: {
+      tradePlanId: request.candidate.tradePlanId,
+      linkId: request.candidate.linkId,
+      goodId: request.candidate.goodId,
+      allocatedQuantity: desiredRegionalQuantity,
+      buyerCashReservedDest: desiredRegionalQuantity * request.landedGrossUnitCostDest,
+      cargoWeightReserved: 0,
+      fxPoolOutputReservedSource: 0,
+      refusal: null,
+    },
+  }));
+  const result = matchActorIntents(provisional, budgets, scoreEpsilon, quantityEpsilon,
+    moneyEpsilon, minimumShipment);
+  const candidates = new Map(requests.map(r => [r.candidate.tradePlanId, r.candidate]));
+  return Object.freeze(result.lots.flatMap(lot => {
+    const candidate = candidates.get(lot.tradePlanId)!;
+    if (candidate.sourceCurrencyId === candidate.destinationCurrencyId) return [];
+    return [Object.freeze({
+      tradePlanId: lot.tradePlanId,
+      sellerIntentId: lot.sellerIntentId,
+      buyerIntentId: lot.buyerIntentId,
+      sourceCurrencyId: candidate.sourceCurrencyId,
+      destinationCurrencyId: candidate.destinationCurrencyId,
+      desiredQuantity: lot.quantity,
+    })];
+  }));
 }
