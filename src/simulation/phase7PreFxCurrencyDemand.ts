@@ -25,6 +25,9 @@ function positive(value: number, label: string): number {
  * inputs used to construct the actor preview. The source NET price values
  * the seller invoice; transport and taxes are not currency-pool demand.
  *
+ * Reconcile each plan's total lot quantity at the canonical absolute quantity
+ * precision. Shared-resource consistency across different plans remains the
+ * upstream matcher's responsibility.
  * Preserve input lot order (canonical matching order), not dispatch ordinals.
  * A zero input cap prevents the quote's feasible leg from being used as
  * demand; only the desired fields leave this function.
@@ -46,6 +49,11 @@ export function valuePhase7PreFxActorDemand(
     }
     byPlan.set(candidate.tradePlanId, candidate);
   }
+  const quantityEpsilon = world.simulationConfig.numeric.quantityEpsilon;
+  if (quantityEpsilon === undefined || !Number.isFinite(quantityEpsilon) || quantityEpsilon < 0) {
+    throw new Error("Phase-7 desired FX requires resolved quantity epsilon");
+  }
+  const totalByPlan = new Map<string, number>();
   const seen = new Set<string>();
   return Object.freeze(lots.map(lot => {
     const candidate = byPlan.get(lot.tradePlanId);
@@ -60,9 +68,12 @@ export function valuePhase7PreFxActorDemand(
     if (seen.has(key)) throw new Error("Phase-7 desired FX duplicate lot provenance");
     seen.add(key);
     const quantity = positive(lot.desiredQuantity, "quantity");
-    if (quantity > positive(candidate.desiredOwnQuantity, "candidate bound")) {
-      throw new Error("Phase-7 desired FX lot exceeds candidate bound");
+    const bound = positive(candidate.desiredOwnQuantity, "candidate bound");
+    const total = (totalByPlan.get(lot.tradePlanId) ?? 0) + quantity;
+    if (!Number.isFinite(total) || total - bound > quantityEpsilon) {
+      throw new Error("Phase-7 desired FX aggregate lots exceed candidate bound");
     }
+    totalByPlan.set(lot.tradePlanId, total);
     const invoice = positive(quantity *
       positive(candidate.sourceSellerNetUnitPrice, "source NET price"), "invoice");
     const q = quoteFx(world, pair, lot.destinationCurrencyId, lot.sourceCurrencyId,
