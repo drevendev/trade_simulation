@@ -65,6 +65,80 @@ const preview = (requests: readonly Phase7PreFxActorDemandRequest[], b: Phase7Ac
   minimum = 1) => previewPhase7PreFxActorDemand(requests, b, eps, eps, eps, minimum);
 
 describe("M5 pre-FX actor demand preview", () => {
+  it("feeds back domestic and refused routes before matching the next regional ceiling", () => {
+    const d = seller("local", domestic), f = seller("foreign");
+    const b = buyer("shared");
+    const base = budgets([d, f], b, 20, 12);
+    const balance: Phase7ActorMatchBudgets = {
+      ...base,
+      sellerExportableByEndpoint: new Map([
+        [phase7SellerEndpointKey(d.intent), 2],
+        [phase7SellerEndpointKey(f.intent), 20],
+      ]),
+    };
+    const local = request("local", d, b, 4);
+    const tiny = request("tiny", f, b, 3);
+    const zero = request("zero", f, b, 2);
+    const foreign = request("foreign", f, b, 1);
+    const before = JSON.stringify(Object.values(balance).map(map => [...map]));
+    const run = (requests: readonly Phase7PreFxActorDemandRequest[]) => {
+      let regionalRemaining = 8;
+      const trace: [string, string, number][] = [];
+      const lots = previewPhase7PreFxActorDemand(requests, balance, eps, eps, eps, 1, {
+        resolveRegionalCeiling: (id, ownCeiling) => {
+          trace.push(["resolve", id, regionalRemaining]);
+          return Math.min(ownCeiling, regionalRemaining, id === "tiny" ? 0.5 :
+            id === "zero" ? 0 : Infinity);
+        },
+        recordMatchedQuantity: (id, quantity) => {
+          trace.push(["record", id, quantity]);
+          regionalRemaining -= quantity;
+        },
+      });
+      return { lots, trace, regionalRemaining };
+    };
+    const result = run([foreign, tiny, local, zero]);
+    expect(result.trace).toEqual([
+      ["resolve", "local", 8], ["record", "local", 2],
+      ["resolve", "tiny", 6], ["record", "tiny", 0],
+      ["resolve", "zero", 6], ["record", "zero", 0],
+      ["resolve", "foreign", 6], ["record", "foreign", 6],
+    ]);
+    expect(result.regionalRemaining).toBe(0);
+    expect(result.lots.map(lot => [lot.tradePlanId, lot.desiredQuantity])).toEqual([["foreign", 6]]);
+    expect(run([local, zero, foreign, tiny])).toEqual(result);
+    expect(JSON.stringify(Object.values(balance).map(map => [...map]))).toBe(before);
+    expect(preview([local, foreign], balance).map(lot => lot.desiredQuantity)).toEqual([10]);
+  });
+
+  it("reports a zero actor match and carries shared wallet residuals into subsequent routes", () => {
+    const s = seller("s"), b = buyer("b");
+    const balance = budgets([s], b, 20, 3);
+    const trace: [string, number][] = [];
+    const lots = previewPhase7PreFxActorDemand([
+      request("later", s, b, 1), request("first", s, b, 2),
+    ], balance, eps, eps, eps, 1, {
+      resolveRegionalCeiling: (_id, cap) => cap,
+      recordMatchedQuantity: (id, quantity) => { trace.push([id, quantity]); },
+    });
+    expect(trace).toEqual([["first", 3], ["later", 0]]);
+    expect(lots.map(lot => [lot.tradePlanId, lot.desiredQuantity])).toEqual([["first", 3]]);
+  });
+
+  it.each([-1, NaN, Infinity, 11])("rejects invalid or enlarged feedback ceiling %s", cap => {
+    const s = seller("s"), b = buyer("b");
+    const balance = budgets([s], b, 20, 20);
+    const before = JSON.stringify(Object.values(balance).map(map => [...map]));
+    const records: number[] = [];
+    expect(() => previewPhase7PreFxActorDemand([request("a", s, b)], balance,
+      eps, eps, eps, 1, {
+        resolveRegionalCeiling: () => cap,
+        recordMatchedQuantity: (_id, quantity) => { records.push(quantity); },
+      })).toThrow(/feedback regional ceiling/);
+    expect(records).toEqual([]);
+    expect(JSON.stringify(Object.values(balance).map(map => [...map]))).toBe(before);
+  });
+
   it.each([
     { stock: 12, cash: 100, spend: 100, demand: 20 },
     { stock: 100, cash: 12, spend: 100, demand: 20 },
