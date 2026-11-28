@@ -81,6 +81,41 @@ describe("M5 pre-FX actor demand currency valuation", () => {
       .toThrow(/duplicate lot/);
   });
 
+  it("bounds the sum of distinct lots per plan, using one canonical quantity epsilon", () => {
+    const { world, candidate, lot, pairs } = fixture();
+    const lots = (a: number, b: number) => [
+      { ...lot, desiredQuantity: a },
+      { ...lot, buyerIntentId: createMarketIntentId("mi:other"), desiredQuantity: b },
+    ];
+    expect(() => valuePhase7PreFxActorDemand(world, 0, lots(6, 6), [candidate], pairs))
+      .toThrow(/aggregate lots exceed candidate bound/);
+    expect(valuePhase7PreFxActorDemand(world, 0, lots(6, 4), [candidate], pairs)
+      .map(v => v.desiredOutputAmount)).toEqual([18, 12]);
+    expect(valuePhase7PreFxActorDemand(world, 0, lots(0.1, 0.2),
+      [{ ...candidate, desiredOwnQuantity: 0.3 }], pairs)).toHaveLength(2);
+    const epsilon = world.simulationConfig.numeric.quantityEpsilon!;
+    expect(() => valuePhase7PreFxActorDemand(world, 0, [
+      { ...lot, desiredQuantity: 10 },
+      { ...lot, buyerIntentId: createMarketIntentId("mi:other"), desiredQuantity: epsilon * 0.75 },
+      { ...lot, buyerIntentId: createMarketIntentId("mi:third"), desiredQuantity: epsilon * 0.75 },
+    ], [candidate], pairs)).toThrow(/aggregate lots exceed candidate bound/);
+  });
+
+  it("rejects a known pool with wrong currencies and underflow of required input", () => {
+    const { world, pool, owningAuthorityId, candidate, lot, pairs } = fixture();
+    const wrong = "currency:other" as typeof lot.destinationCurrencyId;
+    expect(() => valuePhase7PreFxActorDemand(world, 0, [
+      { ...lot, destinationCurrencyId: wrong },
+    ], [{ ...candidate, destinationCurrencyId: wrong }], pairs)).toThrow(/currencies do not match/);
+    const owner = world.monetaryAuthorities.get(owningAuthorityId)!;
+    const tinyRate = { ...world, monetaryAuthorities: new Map(world.monetaryAuthorities)
+      .set(owningAuthorityId, { ...owner, fxPools: new Map(owner.fxPools)
+        .set(pair, { ...pool, spotRateQuotePerBase: 0.25 }) }) };
+    expect(() => valuePhase7PreFxActorDemand(tinyRate, 0,
+      [{ ...lot, desiredQuantity: Number.MIN_VALUE }],
+      [{ ...candidate, sourceSellerNetUnitPrice: 1 }], pairs)).toThrow(/required input/);
+  });
+
   it("rejects missing, mismatched, domestic and duplicate route evidence", () => {
     const { world, candidate, lot, pairs } = fixture();
     expect(() => valuePhase7PreFxActorDemand(world, 0, [lot], [], pairs)).toThrow(/route evidence/);
