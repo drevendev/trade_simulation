@@ -98,6 +98,55 @@ describe("M5 pre-FX actor demand preview", () => {
     expect(preview([foreign], budgets([f], b, 20, 0))).toEqual([]);
   });
 
+  it.each([
+    { cash: 1.08, spend: 100 },
+    { cash: 100, spend: 1.08 },
+  ])("clips fractional cash or intent spend without relaxing strict production (%j)", ({ cash, spend }) => {
+    const s = seller("s"), b = buyer("b", spend);
+    const balance = budgets([s], b, 20, cash);
+    const before = JSON.stringify(Object.values(balance).map(map => [...map]));
+    const r = { ...request("foreign", s, b), landedGrossUnitCostDest: 1.07 };
+    const cap = Math.min(cash, spend);
+    const unsafe = cap / r.landedGrossUnitCostDest;
+    expect(unsafe * r.landedGrossUnitCostDest).toBeGreaterThan(cap);
+    const lots = preview([r], balance);
+    expect(lots).toHaveLength(1);
+    const quantity = lots[0]!.desiredQuantity;
+    expect(quantity).toBeGreaterThanOrEqual(1);
+    expect(quantity).toBeCloseTo(unsafe, 12);
+    expect(quantity * r.landedGrossUnitCostDest).toBeLessThanOrEqual(cap);
+    // The next lower representable quantity falls below this minimum.
+    expect(preview([r], balance, unsafe)).toEqual([]);
+    expect(() => matchPhase7ActorIntents([{
+      ...r, reservation: {
+        tradePlanId: r.candidate.tradePlanId, linkId: r.candidate.linkId, goodId: good,
+        allocatedQuantity: unsafe, cargoWeightReserved: unsafe,
+        buyerCashReservedDest: unsafe * r.landedGrossUnitCostDest,
+        fxPoolOutputReservedSource: unsafe, refusal: null,
+      },
+    }], balance, eps, eps, eps)).toThrow("overdraw");
+    expect(JSON.stringify(Object.values(balance).map(map => [...map]))).toBe(before);
+  });
+
+  it("rechecks grouped wallet payments after proportional splitting", () => {
+    const s = seller("s"), a = buyer("a"), b = buyer("b");
+    const balance = budgets([s], a, 20, 2.16);
+    const r = { ...request("foreign", s, a), buyers: [b, a], landedGrossUnitCostDest: 1.07 };
+    const before = JSON.stringify(Object.values(balance).map(map => [...map]));
+    const unsafe = 2.16 / r.landedGrossUnitCostDest;
+    const unsafePayment = (unsafe / 2) * r.landedGrossUnitCostDest;
+    expect(unsafePayment + unsafePayment).toBeGreaterThan(2.16);
+    const lots = preview([r], balance);
+    expect(lots).toHaveLength(2);
+    const quantity = lots.reduce((sum, lot) => sum + lot.desiredQuantity, 0);
+    const payment = lots.reduce((sum, lot) => sum + lot.desiredQuantity * r.landedGrossUnitCostDest, 0);
+    expect(quantity).toBeCloseTo(unsafe, 12);
+    expect(payment).toBeLessThanOrEqual(2.16);
+    expect(lots.every(lot => lot.desiredQuantity >= 1)).toBe(true);
+    expect(preview([{ ...r, buyers: [a, b] }], balance)).toEqual(lots);
+    expect(JSON.stringify(Object.values(balance).map(map => [...map]))).toBe(before);
+  });
+
   it("never relaxes the production matcher's strict aggregate reservation", () => {
     const s = seller("s"), b = buyer("b");
     const balance = budgets([s], b, 3, 100);
