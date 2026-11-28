@@ -387,6 +387,7 @@ function matchActorIntents(
     // reservations remain strict and must be resized by their owner.
     let quantity = regionalQuantity;
     let reservedBuyerCash = request.reservation.buyerCashReservedDest;
+    let buyerFills: Fill[] | undefined;
     if (minimumPreviewShipment !== undefined) {
       const sellerTotal = sellers.reduce((sum, entry) => sum + entry.cap, 0);
       const buyerTotal = buyers.reduce((sum, entry) => sum + entry.cap, 0);
@@ -394,14 +395,48 @@ function matchActorIntents(
         throw new Error("Phase-7 preview actor capacity not finite");
       }
       quantity = Math.min(quantity, sellerTotal, buyerTotal);
+      // Division-based cash caps can round up when converted back to money.
+      // Validate actual proportional payments against each intent and shared
+      // wallet, in the same stable order as the staged debits below. Retry
+      // only the detached preview at a conservatively smaller quantity.
+      for (let attempt = 0; attempt < 8; attempt++) {
+        if (quantity <= quantityEpsilon || quantity < minimumPreviewShipment) break;
+        const fills = proportional(buyers, quantity, quantityEpsilon);
+        const remainingWallet = new Map<string, number>();
+        const paidByWallet = new Map<string, number>();
+        let fits = true;
+        for (const b of fills) {
+          const id = b.evidence.intent.id;
+          const key = phase7BuyerActorCashKey(b.evidence.intent.actor, c.destinationCurrencyId);
+          const payment = b.fill * quote;
+          if (!Number.isFinite(payment) || (b.fill > 0 && quote > 0 && payment === 0)) {
+            throw new Error("Phase-7 preview buyer cash lost numeric precision");
+          }
+          const balance = actorCash.get(key)!;
+          const remaining = remainingWallet.get(key) ?? balance;
+          const total = (paidByWallet.get(key) ?? 0) + payment;
+          if (payment > buyerSpend.get(id)! || payment > remaining || total > balance) {
+            fits = false;
+            break;
+          }
+          remainingWallet.set(key, remaining - payment);
+          paidByWallet.set(key, total);
+        }
+        if (fits) {
+          buyerFills = fills;
+          break;
+        }
+        quantity *= 1 - Number.EPSILON;
+      }
       if (quantity <= quantityEpsilon || quantity < minimumPreviewShipment) continue;
+      if (!buyerFills) throw new Error("Phase-7 preview cannot safely round buyer payments");
       reservedBuyerCash = quantity * quote;
       if (!Number.isFinite(reservedBuyerCash) || (quote > 0 && reservedBuyerCash === 0)) {
         throw new Error("Phase-7 preview buyer cash lost numeric precision");
       }
     }
     const sellerFills = proportional(sellers, quantity, quantityEpsilon);
-    const buyerFills = proportional(buyers, quantity, quantityEpsilon);
+    buyerFills ??= proportional(buyers, quantity, quantityEpsilon);
     // Stage every actor mutation in local copies. Nothing in canonical WorldState
     // or an external intent/budget Map changes on error.
     const nextEndpoints = new Map<string, number>();
