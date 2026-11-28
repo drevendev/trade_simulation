@@ -387,6 +387,7 @@ function matchActorIntents(
     // reservations remain strict and must be resized by their owner.
     let quantity = regionalQuantity;
     let reservedBuyerCash = request.reservation.buyerCashReservedDest;
+    let sellerFills: Fill[] | undefined;
     let buyerFills: Fill[] | undefined;
     if (minimumPreviewShipment !== undefined) {
       const sellerTotal = sellers.reduce((sum, entry) => sum + entry.cap, 0);
@@ -395,16 +396,35 @@ function matchActorIntents(
         throw new Error("Phase-7 preview actor capacity not finite");
       }
       quantity = Math.min(quantity, sellerTotal, buyerTotal);
-      // Division-based cash caps can round up when converted back to money.
-      // Validate actual proportional payments against each intent and shared
-      // wallet, in the same stable order as the staged debits below. Retry
-      // only the detached preview at a conservatively smaller quantity.
+      // Proportional shares can round above shared stock or cash, even when
+      // the regional ceiling appears feasible. Check sequential and summed
+      // owner debits in staged order. Only the detached preview may shrink.
       for (let attempt = 0; attempt < 8; attempt++) {
         if (quantity <= quantityEpsilon || quantity < minimumPreviewShipment) break;
+        const proposedSellers = proportional(sellers, quantity, quantityEpsilon);
+        const remainingEndpoint = new Map<string, number>();
+        const usedByEndpoint = new Map<string, number>();
+        let fits = true;
+        for (const s of proposedSellers) {
+          const id = s.evidence.intent.id;
+          const key = phase7SellerEndpointKey(s.evidence.intent);
+          const balance = endpoint.get(key)!;
+          const remaining = remainingEndpoint.get(key) ?? balance;
+          const total = (usedByEndpoint.get(key) ?? 0) + s.fill;
+          if (s.fill > sellerRemain.get(id)! || s.fill > remaining || total > balance) {
+            fits = false;
+            break;
+          }
+          remainingEndpoint.set(key, remaining - s.fill);
+          usedByEndpoint.set(key, total);
+        }
+        if (!fits) {
+          quantity *= 1 - Number.EPSILON;
+          continue;
+        }
         const fills = proportional(buyers, quantity, quantityEpsilon);
         const remainingWallet = new Map<string, number>();
         const paidByWallet = new Map<string, number>();
-        let fits = true;
         for (const b of fills) {
           const id = b.evidence.intent.id;
           const key = phase7BuyerActorCashKey(b.evidence.intent.actor, c.destinationCurrencyId);
@@ -415,7 +435,8 @@ function matchActorIntents(
           const balance = actorCash.get(key)!;
           const remaining = remainingWallet.get(key) ?? balance;
           const total = (paidByWallet.get(key) ?? 0) + payment;
-          if (payment > buyerSpend.get(id)! || payment > remaining || total > balance) {
+          if (b.fill > buyerRemain.get(id)! || payment > buyerSpend.get(id)! ||
+              payment > remaining || total > balance) {
             fits = false;
             break;
           }
@@ -423,19 +444,20 @@ function matchActorIntents(
           paidByWallet.set(key, total);
         }
         if (fits) {
+          sellerFills = proposedSellers;
           buyerFills = fills;
           break;
         }
         quantity *= 1 - Number.EPSILON;
       }
       if (quantity <= quantityEpsilon || quantity < minimumPreviewShipment) continue;
-      if (!buyerFills) throw new Error("Phase-7 preview cannot safely round buyer payments");
+      if (!sellerFills || !buyerFills) throw new Error("Phase-7 preview cannot safely round actor debits");
       reservedBuyerCash = quantity * quote;
       if (!Number.isFinite(reservedBuyerCash) || (quote > 0 && reservedBuyerCash === 0)) {
         throw new Error("Phase-7 preview buyer cash lost numeric precision");
       }
     }
-    const sellerFills = proportional(sellers, quantity, quantityEpsilon);
+    sellerFills ??= proportional(sellers, quantity, quantityEpsilon);
     buyerFills ??= proportional(buyers, quantity, quantityEpsilon);
     // Stage every actor mutation in local copies. Nothing in canonical WorldState
     // or an external intent/budget Map changes on error.
