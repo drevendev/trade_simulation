@@ -7,6 +7,7 @@ import type { Phase7PreFxActorDemandLot } from "./phase7IntentMatching";
 import type { Phase7PreFxRankedCandidate } from "./tradeCandidateSelection";
 import type { Phase7DesiredFxFlow } from "./phase7AutoFxReservations";
 import { quoteFx } from "./fxWorldPoolAuthority";
+import { exactBinary64QuantityScaled } from "./marketClearing.exactBinary64Quantity";
 import type { WorldState } from "./worldState";
 
 export type Phase7ValuedPreFxDemandLot = Readonly<
@@ -53,7 +54,10 @@ export function valuePhase7PreFxActorDemand(
   if (quantityEpsilon === undefined || !Number.isFinite(quantityEpsilon) || quantityEpsilon < 0) {
     throw new Error("Phase-7 desired FX requires resolved quantity epsilon");
   }
-  const totalByPlan = new Map<string, number>();
+  // Sum represented quantities exactly; a small positive lot can disappear
+  // when added to a large Number before the absolute epsilon comparison.
+  const scaledEpsilon = exactBinary64QuantityScaled(quantityEpsilon);
+  const totalByPlan = new Map<string, bigint>();
   const seen = new Set<string>();
   return Object.freeze(lots.map(lot => {
     const candidate = byPlan.get(lot.tradePlanId);
@@ -69,8 +73,9 @@ export function valuePhase7PreFxActorDemand(
     seen.add(key);
     const quantity = positive(lot.desiredQuantity, "quantity");
     const bound = positive(candidate.desiredOwnQuantity, "candidate bound");
-    const total = (totalByPlan.get(lot.tradePlanId) ?? 0) + quantity;
-    if (!Number.isFinite(total) || total - bound > quantityEpsilon) {
+    const total = (totalByPlan.get(lot.tradePlanId) ?? 0n) +
+      exactBinary64QuantityScaled(quantity);
+    if (total > exactBinary64QuantityScaled(bound) + scaledEpsilon) {
       throw new Error("Phase-7 desired FX aggregate lots exceed candidate bound");
     }
     totalByPlan.set(lot.tradePlanId, total);

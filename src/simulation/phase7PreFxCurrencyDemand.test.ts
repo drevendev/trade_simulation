@@ -101,6 +101,32 @@ describe("M5 pre-FX actor demand currency valuation", () => {
     ], [candidate], pairs)).toThrow(/aggregate lots exceed candidate bound/);
   });
 
+  it("does not lose small lots against a large plan bound in either order", () => {
+    const { world, candidate, lot, pairs } = fixture();
+    const bound = 2 ** 30;
+    const largeCandidate = { ...candidate, desiredOwnQuantity: bound };
+    const large = { ...lot, desiredQuantity: bound };
+    const small = { ...lot, buyerIntentId: createMarketIntentId("mi:other"),
+      desiredQuantity: 2 ** -24 };
+    const epsilon = world.simulationConfig.numeric.quantityEpsilon!;
+    expect(small.desiredQuantity).toBeGreaterThan(epsilon);
+    expect(bound + small.desiredQuantity).toBe(bound);
+    const value = (lots: Phase7PreFxActorDemandLot[]) =>
+      valuePhase7PreFxActorDemand(world, 0, lots, [largeCandidate], pairs);
+    expect(value([large])).toHaveLength(1);
+    for (const lots of [[large, small], [small, large]]) {
+      expect(() => value(lots)).toThrow(/aggregate lots exceed candidate bound/);
+    }
+    // Inclusive absolute tolerance, without rounding the tolerance into bound.
+    for (const quantity of [epsilon / 2, epsilon]) {
+      const within = { ...small, desiredQuantity: quantity };
+      for (const lots of [[large, within], [within, large]]) {
+        expect(value(lots).map(v => v.desiredQuantity))
+          .toEqual(lots.map(v => v.desiredQuantity));
+      }
+    }
+  });
+
   it("rejects a known pool with wrong currencies and underflow of required input", () => {
     const { world, pool, owningAuthorityId, candidate, lot, pairs } = fixture();
     const wrong = "currency:other" as typeof lot.destinationCurrencyId;
