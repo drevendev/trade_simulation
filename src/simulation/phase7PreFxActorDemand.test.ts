@@ -147,6 +147,36 @@ describe("M5 pre-FX actor demand preview", () => {
     expect(JSON.stringify(Object.values(balance).map(map => [...map]))).toBe(before);
   });
 
+  it("rounds shared seller endpoint fills down without relaxing strict production", () => {
+    const a = seller("a"), rawB = seller("b"), rawC = seller("c");
+    const b = { ...rawB, intent: { ...rawB.intent, actor: a.intent.actor } };
+    const c = { ...rawC, intent: { ...rawC.intent, actor: a.intent.actor } };
+    const buyerIntent = buyer("buyer");
+    const stock = 1.05;
+    const balance = budgets([a, b, c], buyerIntent, stock, 100);
+    const before = JSON.stringify(Object.values(balance).map(map => [...map]));
+    const r = { ...request("foreign", a, buyerIntent), sellers: [c, a, b] };
+    const share = stock * (20 / 60);
+    const unsafe = (share + (stock - (share + share + share))) + share + share;
+    expect(unsafe).toBeGreaterThan(stock);
+    const lots = preview([r], balance);
+    expect(lots).toHaveLength(3);
+    const quantity = lots.reduce((sum, lot) => sum + lot.desiredQuantity, 0);
+    expect(quantity).toBeGreaterThanOrEqual(1);
+    expect(quantity).toBeCloseTo(stock, 12);
+    expect(quantity).toBeLessThanOrEqual(stock);
+    expect(preview([{ ...r, sellers: [a, b, c] }], balance)).toEqual(lots);
+    expect(preview([r], balance, unsafe)).toEqual([]);
+    expect(() => matchPhase7ActorIntents([{
+      ...r, reservation: {
+        tradePlanId: r.candidate.tradePlanId, linkId: r.candidate.linkId, goodId: good,
+        allocatedQuantity: unsafe, cargoWeightReserved: unsafe,
+        buyerCashReservedDest: unsafe, fxPoolOutputReservedSource: unsafe, refusal: null,
+      },
+    }], balance, eps, eps, eps)).toThrow("seller physical endpoint overdraw");
+    expect(JSON.stringify(Object.values(balance).map(map => [...map]))).toBe(before);
+  });
+
   it("never relaxes the production matcher's strict aggregate reservation", () => {
     const s = seller("s"), b = buyer("b");
     const balance = budgets([s], b, 3, 100);
