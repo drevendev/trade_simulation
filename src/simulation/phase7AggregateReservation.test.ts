@@ -489,11 +489,12 @@ describe("M5 #1204 pre-FX regional demand is not independent route demand", () =
   }
   function preview(requests: readonly Phase7AggregateReservationRequest[],
     quotes: readonly Phase7CandidateEvidence[], budgets: Phase7AggregateBudgets,
-    links: readonly TransportLinkState[], eligible = links.map(link => link.linkId)) {
+    links: readonly TransportLinkState[], eligible = links.map(link => link.linkId),
+    actorCeilings?: ReadonlyMap<string, number>) {
     return previewPhase7PreFxRegionalDemand(worldWith(...links), config, quotes, budgets,
       new Map(links.map(link => [link.linkId, 1])), new Set(eligible), policy,
       new Map(requests.flatMap(r => r.fxPoolPairId === undefined ? [] :
-        [[r.candidate.tradePlanId, r.fxPoolPairId] as const])));
+        [[r.candidate.tradePlanId, r.fxPoolPairId] as const])), actorCeilings);
   }
 
   it.each([
@@ -539,6 +540,65 @@ describe("M5 #1204 pre-FX regional demand is not independent route demand", () =
     }
   });
 
+
+  it.each([
+    { ceiling: 2, expected: [["a", 2], ["b", 6]] },
+    { ceiling: 0, expected: [["b", 8]] },
+    { ceiling: config.trade.shipmentMinimumQuantity! / 2, expected: [["b", 8]] },
+  ])("reclaims shared stock and demand under actor ceiling $ceiling", ({ ceiling, expected }) => {
+    const first = edge(foreign);
+    const second = { ...first, linkId: "link:actor-ceiling-alternate" as TransportLinkId };
+    const a = req("a", first, wood, 3, { fxPoolPairId: pair });
+    const b = req("b", second, wood, 2, { fxPoolPairId: pair });
+    const quotes = [evidence(a, 0, 10), evidence(b, 0, 5)];
+    const budgets = balances([a, b], 8, 8, 100, 0);
+    const before = JSON.stringify(Object.values(budgets).map(map => [...map]));
+    const limits = new Map([["a", ceiling], ["b", 8]]);
+    const links = [first, second];
+    const eligible = links.map(link => link.linkId);
+    const result = preview([a, b], quotes, budgets, links, eligible, limits);
+    expect(result.map(r => [r.tradePlanId, r.desiredRegionalQuantity])).toEqual(expected);
+    expect(preview([b, a], [...quotes].reverse(), budgets, [...links].reverse(),
+      [...eligible].reverse(), new Map([...limits].reverse()))).toEqual(result);
+    expect(preview([a, b], quotes, budgets, links)
+      .map(r => [r.tradePlanId, r.desiredRegionalQuantity])).toEqual([["a", 8]]);
+    expect(reserve([a, b], budgets, links).reservations.map(r => r.allocatedQuantity)).toEqual([0, 0]);
+    expect(JSON.stringify(Object.values(budgets).map(map => [...map]))).toBe(before);
+    expect([...limits]).toEqual([["a", ceiling], ["b", 8]]);
+  });
+
+  it.each([
+    { capacity: 8, cash: 100 },
+    { capacity: 100, cash: 16 },
+  ])("reclaims shared cargo or cash (capacity=$capacity, cash=$cash)", ({ capacity, cash }) => {
+    const link = edge(foreign, capacity);
+    const a = req("a", link, iron, 3, { fxPoolPairId: pair });
+    const b = req("b", link, wood, 2, { fxPoolPairId: pair });
+    const budgets = balances([a, b], 100, 100, cash, 0);
+    const quotes = [evidence(a, 0, 10), evidence(b, 0, 5)];
+    expect(preview([a, b], quotes, budgets, [link], [link.linkId],
+      new Map([["a", 3], ["b", 100]])).map(r => [r.tradePlanId, r.desiredRegionalQuantity]))
+      .toEqual([["a", 3], ["b", 5]]);
+    expect(preview([a, b], quotes, budgets, [link], [link.linkId],
+      new Map([["a", 0], ["b", 100]])).map(r => [r.tradePlanId, r.desiredRegionalQuantity]))
+      .toEqual([["b", 8]]);
+  });
+
+  it("requires exact ranked-plan coverage and finite nonnegative ceilings", () => {
+    const link = edge(foreign);
+    const a = req("a", link, wood, 3, { fxPoolPairId: pair });
+    const quotes = [evidence(a, 0, 10)];
+    const budgets = balances([a], 100, 100, 100, 0);
+    const run = (limits: ReadonlyMap<string, number>) =>
+      preview([a], quotes, budgets, [link], [link.linkId], limits);
+    expect(() => run(new Map())).toThrow(/missing explicit Phase-7 actor ceiling/);
+    expect(() => run(new Map([["a", 2], ["unknown", 0]]))).toThrow(/unranked plan/);
+    for (const invalid of [-1, NaN, Infinity, -Infinity]) {
+      expect(() => run(new Map([["a", invalid]]))).toThrow(/actor quantity ceiling/);
+    }
+    expect(run(new Map([["a", 100]])).map(r => r.desiredRegionalQuantity)).toEqual([8]);
+  });
+
   it("includes domestic competitors in ranked stock competition but not FX evidence", () => {
     const cross = edge(foreign);
     const source = baseline.regions.get(cross.fromRegionId)!;
@@ -555,5 +615,12 @@ describe("M5 #1204 pre-FX regional demand is not independent route demand", () =
       .toEqual([["foreign", 1]]);
     expect(preview([b], [evidence(b, 0, 5)], budgets, [cross])
       .map(r => r.desiredRegionalQuantity)).toEqual([8]);
+    const quotes = [evidence(a, 0, 10), evidence(b, 0, 5)];
+    const eligible = [local.linkId, cross.linkId];
+    expect(preview([a, b], quotes, budgets, [local, cross], eligible,
+      new Map([["domestic", 2], ["foreign", 8]]))
+      .map(r => [r.tradePlanId, r.desiredRegionalQuantity])).toEqual([["foreign", 7]]);
+    expect(() => preview([a, b], quotes, budgets, [local, cross], eligible,
+      new Map([["foreign", 8]]))).toThrow(/missing explicit Phase-7 actor ceiling/);
   });
 });
