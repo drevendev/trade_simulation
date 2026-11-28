@@ -170,6 +170,7 @@ function allocatePhase7AggregateTrades(
   infrastructureFactors: ReadonlyMap<TransportLinkId, number>,
   phase1EligibleDirectedLinks: ReadonlySet<TransportLinkId>,
   beforeFxRationing: boolean,
+  actorQuantityCeilings?: ReadonlyMap<string, number>,
 ): Phase7AggregateReservationResult {
   if (!budgets || !infrastructureFactors || !phase1EligibleDirectedLinks) {
     throw new Error("Phase-7 requires explicit shared budgets, infrastructure and frozen Phase-1 eligibility");
@@ -291,6 +292,7 @@ function allocatePhase7AggregateTrades(
     if (refusal === null) {
       quantity = Math.min(
         candidate.maximumOwnQuantity, stock, demand, capacity / weight,
+        actorQuantityCeilings?.get(candidate.tradePlanId) ?? Number.POSITIVE_INFINITY,
         unitCost > 0 ? cash / unitCost : Number.POSITIVE_INFINITY,
         sourceInvoicePerUnit > 0 ? fx / sourceInvoicePerUnit : Number.POSITIVE_INFINITY,
       );
@@ -400,7 +402,11 @@ export interface Phase7PreFxRegionalDemand {
  * Counterfactual regional allocation before FX rationing. Domestic candidates
  * participate in the same ranked competition. Only desired cross-currency
  * quantities escape this diagnostic: no reservation, residual, or settlement
- * authority. Actor-level feasibility and final FX amounts remain separate.
+ * authority. Optional actor ceilings must be independently established from
+ * the same frozen evidence and cover every ranked route, including domestic
+ * routes. Apply them before debiting shared regional resources, not by
+ * reranking or clipping the output. Independent ceilings do not prove shared
+ * actor feasibility; joint actor residual matching remains a separate step.
  */
 export function previewPhase7PreFxRegionalDemand(
   world: Pick<WorldState, "regions" | "transportLinks">,
@@ -411,9 +417,21 @@ export function previewPhase7PreFxRegionalDemand(
   phase1EligibleDirectedLinks: ReadonlySet<TransportLinkId>,
   policy: Phase7CandidateScorePolicy,
   fxPairIdByTradePlanId: ReadonlyMap<string, string>,
+  actorQuantityCeilings?: ReadonlyMap<string, number>,
 ): readonly Phase7PreFxRegionalDemand[] {
   const ranked = previewPhase7RankedCandidatesBeforeFx(world, config, evidence,
     infrastructureFactors, phase1EligibleDirectedLinks, policy);
+  const ceilings = actorQuantityCeilings === undefined ? undefined : new Map(actorQuantityCeilings);
+  if (ceilings !== undefined) {
+    const rankedIds = new Set(ranked.map(candidate => candidate.tradePlanId));
+    for (const [planId, ceiling] of ceilings) {
+      if (!rankedIds.has(planId)) throw new Error("Phase-7 actor ceiling for unranked plan " + planId);
+      nonnegative(ceiling, "Phase-7 actor quantity ceiling");
+    }
+    for (const planId of rankedIds) {
+      if (!ceilings.has(planId)) throw new Error("missing explicit Phase-7 actor ceiling for " + planId);
+    }
+  }
   const originals = new Map(evidence.map(entry => [entry.planId, entry]));
   const requests: Phase7AggregateReservationRequest[] = ranked.map(
     ({ desiredOwnQuantity, ...candidate }) => {
@@ -428,7 +446,7 @@ export function previewPhase7PreFxRegionalDemand(
     },
   );
   const result = allocatePhase7AggregateTrades(world, config, requests, budgets,
-    infrastructureFactors, phase1EligibleDirectedLinks, true);
+    infrastructureFactors, phase1EligibleDirectedLinks, true, ceilings);
   const byId = new Map(ranked.map(candidate => [candidate.tradePlanId, candidate]));
   return Object.freeze(result.reservations.flatMap(reservation => {
     const candidate = byId.get(reservation.tradePlanId)!;
